@@ -45,6 +45,8 @@ Mở `http://127.0.0.1:8000`. Demo dựng FTS từ `tests/fixtures/documents` v�
 2. **QA:** khi model QA đã sẵn sàng, hỏi nội dung từ nguồn đã lập chỉ mục. Đối chiếu câu trả lời với trích dẫn; thiếu nguồn hoặc model phải xử lý theo thông báo. Test mock không chứng minh độ chính xác model.
 3. **Lịch ảnh:** chọn ảnh thời khóa biểu, đọc bản nháp, chỉnh thông tin chưa rõ và xác nhận trước khi lưu/xuất lịch. Có ảnh tổng hợp ở `tests/fixtures/timetables`; không dùng lịch cá nhân làm dữ liệu training.
 
+Trong QA, chọn **Tóm tắt nhanh**, **Giải thích từng bước** hoặc **So sánh khái niệm** trước khi gửi. Lựa chọn áp dụng cho câu hỏi tiếp theo và được giữ đến khi đổi; giới hạn token cấu hình qua `ANSWER_QUICK_MAX_TOKENS`, `ANSWER_STEPS_MAX_TOKENS` và `ANSWER_COMPARE_MAX_TOKENS`. Khi chưa đủ căn cứ, phản hồi nêu trạng thái và phạm vi đã tìm; các nút mở rộng phạm vi sẽ giữ câu hỏi và gửi lại với phạm vi mới. Với phiên dài, ứng dụng báo khi một phần lịch sử không nằm trong ngữ cảnh lượt hiện tại. Có thể đưa câu hỏi gần nhất vào ô nhập hoặc chọn một trang đã được trích dẫn; việc chọn lại trang chỉ đặt phạm vi tìm kiếm, hệ thống vẫn truy xuất và kiểm tra citation mới cho câu hỏi hiện tại. Nút **Mới** bắt đầu chủ đề không kèm lịch sử phiên trước.
+
 Luồng tài liệu: nguồn → trích xuất/OCR → đoạn văn → FTS/vector → truy xuất → QA có nguồn. Luồng lịch: ảnh → bản nháp → người dùng xác nhận/chỉnh → lưu/xuất. Khi thêm nguồn riêng, dùng profile local và **Đồng bộ thư viện** theo hướng dẫn nền tảng; profile local không tự lập chỉ mục lúc khởi động.
 
 ## Cấu trúc và cấu hình

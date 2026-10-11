@@ -69,9 +69,9 @@ summarizer = TopicSummarizer(history_store=history_store, ollama=ollama)
 class ChatRequest(BaseModel):
     query: str = Field(max_length=4000)
     chat_history: Optional[List[Dict[str, str]]] = Field(default=None, max_length=32)
-    model: Optional[str] = DEFAULT_CHAT_MODEL
-    embed_model: Optional[str] = DEFAULT_EMBED_MODEL
-    top_k: Optional[int] = Field(default=DEFAULT_TOP_K, ge=1, le=12)
+    answer_mode: Literal["quick", "steps", "compare", "summary", "step_by_step", "comparison"] = "quick"
+    explanation_mode: Optional[Literal["quick", "steps", "compare", "summary", "step_by_step", "comparison"]] = None
+    isolate_context: Optional[bool] = False
     temperature: Optional[float] = Field(default=0.2, ge=0, le=1)
     save_history: Optional[bool] = True
     session_id: Optional[str] = None
@@ -81,8 +81,15 @@ class ChatRequest(BaseModel):
 
     @model_validator(mode='after')
     def paired_source(self):
-        if (self.source_document_id is None) != (self.source_page_num is None):
-            raise ValueError('Chọn cả tài liệu và trang nguồn.')
+        if self.source_page_num is not None and self.source_document_id is None:
+            raise ValueError('Chọn tài liệu cho trang nguồn.')
+        if self.explanation_mode:
+            self.answer_mode = self.explanation_mode
+        self.answer_mode = {
+            "summary": "quick",
+            "step_by_step": "steps",
+            "comparison": "compare",
+        }.get(self.answer_mode, self.answer_mode)
         return self
 
 
@@ -91,7 +98,6 @@ class PracticeGenerateRequest(BaseModel):
     source_page_num: int = Field(ge=1)
     source_chunk_id: Optional[int] = Field(default=None, ge=1)
     count: int = Field(default=3, ge=1, le=3)
-    model: Optional[str] = Field(default=DEFAULT_CHAT_MODEL, max_length=200)
 
 
 class PracticeAnswerRequest(BaseModel):
@@ -112,7 +118,7 @@ async def generate_practice(req: PracticeGenerateRequest):
                 doc_id=req.source_document_id,
                 page_num=req.source_page_num,
                 count=req.count,
-                model=req.model or DEFAULT_CHAT_MODEL,
+                model=DEFAULT_CHAT_MODEL,
                 source_chunk_id=req.source_chunk_id,
             )
 
@@ -161,13 +167,19 @@ async def answer_practice(req: PracticeAnswerRequest):
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-def requested_source_page(req):
+def requested_source_scope(req):
     if req.source_document_id is None:
-        return None
+        return None, None
     doc = document_lookup.document(req.source_document_id)
-    if not doc or req.source_page_num > doc['total_pages']:
-        raise HTTPException(status_code=404, detail='Không tìm thấy trang nguồn đã chọn.')
-    return req.source_document_id, req.source_page_num
+    if not doc or (req.source_page_num is not None and req.source_page_num > doc['total_pages']):
+        raise HTTPException(status_code=404, detail='Không tìm thấy tài liệu hoặc trang nguồn đã chọn.')
+    page = (req.source_document_id, req.source_page_num) if req.source_page_num is not None else None
+    return page, req.source_document_id
+
+
+def requested_source_page(req):
+    """Backward-compatible helper for callers that need only a page selection."""
+    return requested_source_scope(req)[0]
 
 class SessionCreateRequest(BaseModel):
     title: Optional[str] = None
@@ -176,12 +188,11 @@ class SessionRenameRequest(BaseModel):
     title: str
 
 class SessionSummarizeRequest(BaseModel):
-    model: Optional[str] = DEFAULT_CHAT_MODEL
+    pass
 
 class IndexRequest(BaseModel):
     force: bool = False
     ocr: bool = True
-    embed_model: Optional[str] = None
 
 class OCRReviewRequest(BaseModel):
     cache_key: str
@@ -733,11 +744,11 @@ async def get_index_status():
 @app.post("/api/index")
 async def trigger_indexing(req: IndexRequest):
     allowed, busy_msg = gpu_coordinator.check_inference_allowed()
-    if not allowed and req.embed_model != "none" and req.embed_model is not None:
+    if not allowed:
         raise HTTPException(status_code=503, detail=busy_msg)
     def run_index():
         with dialogue_gate.acquire(), gpu_coordinator.acquire_for_inference():
-            return indexer.index_all(force=req.force, ocr=req.ocr, embed_model=req.embed_model)
+            return indexer.index_all(force=req.force, ocr=req.ocr, embed_model=DEFAULT_EMBED_MODEL)
     try:
         report = await run_in_threadpool(run_index)
         return {"status": "success", "report": report}
@@ -763,22 +774,23 @@ def _chat_sync_locked(req):
 
 
 def _chat_sync(req):
-    source_page = requested_source_page(req)
+    source_page, source_document_id = requested_source_scope(req)
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Câu hỏi không được để trống")
 
     # 1. Resolve session and context
     target_session_id = req.session_id
+    sess = None
     if target_session_id:
         sess = history_store.get_session(target_session_id)
         if not sess:
             raise HTTPException(status_code=404, detail="Không tìm thấy phiên trò chuyện")
         # Store-authoritative durable server context bounded to last 4 turns
-        effective_history = history_store.get_session_context(target_session_id, max_turns=8)
+        effective_history = [] if req.isolate_context else history_store.get_session_context(target_session_id, max_turns=8)
         create_on_completion = False
     else:
         # Legacy client fallback or new chat without session ID
-        effective_history = req.chat_history or []
+        effective_history = [] if req.isolate_context else (req.chat_history or [])
         create_on_completion = bool(req.save_history)
 
     # 2. Idempotency replay check
@@ -792,6 +804,8 @@ def _chat_sync(req):
             return {
                 "answer": existing_turn["answer"],
                 "citations": existing_turn["citations"],
+                "answer_mode": existing_turn["answer_mode"],
+                "search_scope": existing_turn["search_scope"],
                 "model": existing_turn["model"],
                 "session_id": existing_turn["session_id"],
                 "turn_id": existing_turn["id"],
@@ -811,18 +825,21 @@ def _chat_sync(req):
             res = agent.process_query_sync(
                 query=req.query,
                 chat_history=effective_history,
-                model=req.model or DEFAULT_CHAT_MODEL,
-                embed_model=req.embed_model,
-                top_k=req.top_k or DEFAULT_TOP_K,
-                temperature=req.temperature if req.temperature is not None else 0.2
-                , **({'source_page':source_page} if source_page else {})
+                model=DEFAULT_CHAT_MODEL,
+                embed_model=DEFAULT_EMBED_MODEL,
+                top_k=DEFAULT_TOP_K,
+                temperature=req.temperature if req.temperature is not None else 0.2,
+                answer_mode=req.answer_mode,
+                source_document_id=source_document_id,
+                isolate_context=bool(req.isolate_context),
+                **({'source_page':source_page} if source_page else {})
             )
     except GPUBusyError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
     answer = res.get("answer", "")
     is_truncated = res.get("is_truncated", False)
-    if req.session_id:
+    if req.session_id and sess:
         omitted = max(0, len(sess.get("turns", [])) - 8)
         res.setdefault("context", {})["store_history_turns_omitted"] = omitted
 
@@ -837,15 +854,24 @@ def _chat_sync(req):
             question=req.query,
             answer=answer,
             citations=res.get("citations", []),
-            model=req.model or DEFAULT_CHAT_MODEL,
-            request_id=req.request_id
+            model=DEFAULT_CHAT_MODEL,
+            request_id=req.request_id,
+            answer_mode=req.answer_mode,
+            search_scope=res.get("search_scope", {}),
         )
         res["history_id"] = turn_info.get("legacy_id", turn_info["id"])
         res["turn_id"] = turn_info["id"]
         res["session_id"] = target_session_id
         res["turn_index"] = turn_info["turn_index"]
         res["session_title"] = turn_info.get("session_title")
-    res["model"] = req.model or DEFAULT_CHAT_MODEL
+
+    if target_session_id:
+        cur_sess = history_store.get_session(target_session_id)
+        if cur_sess and cur_sess.get("turns"):
+            res["recent_question"] = cur_sess["turns"][-1]["question"]
+            res["recent_source"] = cur_sess["turns"][-1]["citations"][0] if cur_sess["turns"][-1].get("citations") else None
+
+    res["model"] = DEFAULT_CHAT_MODEL
     return res
 
 
@@ -898,6 +924,9 @@ async def get_session(session_id: str):
     sess = history_store.get_session(session_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="Không tìm thấy phiên trò chuyện")
+    turns = sess.get("turns", [])
+    sess["recent_question"] = turns[-1]["question"] if turns else None
+    sess["recent_source"] = turns[-1]["citations"][0] if turns and turns[-1].get("citations") else None
     return sess
 
 
@@ -927,7 +956,7 @@ async def clear_all_sessions():
 
 @app.post("/api/sessions/{session_id}/summarize")
 async def summarize_session(session_id: str, req: Optional[SessionSummarizeRequest] = None):
-    model = (req.model if req and req.model else DEFAULT_CHAT_MODEL)
+    model = DEFAULT_CHAT_MODEL
     def run_summary():
         with dialogue_gate.acquire():
             return summarizer.summarize_session_sync(session_id=session_id, model=model)
@@ -942,7 +971,7 @@ async def summarize_session(session_id: str, req: Optional[SessionSummarizeReque
 
 @app.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest):
-    source_page = await run_in_threadpool(requested_source_page, req)
+    source_page, source_document_id = await run_in_threadpool(requested_source_scope, req)
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Câu hỏi không được để trống")
 
@@ -971,6 +1000,8 @@ async def chat_stream(req: ChatRequest):
                     "type": "done",
                     "answer": existing_turn["answer"],
                     "citations": existing_turn["citations"],
+                    "answer_mode": existing_turn["answer_mode"],
+                    "search_scope": existing_turn["search_scope"],
                     "model": existing_turn["model"],
                     "session_id": existing_turn["session_id"],
                     "turn_id": existing_turn["id"],
@@ -1010,12 +1041,15 @@ async def chat_stream(req: ChatRequest):
         nonlocal target_session_id
         answer_parts = []
         citations = []
+        search_scope = {}
         failed = False
         turn_committed = False
         try:
             with dialogue_gate.acquire(), gpu_coordinator.acquire_for_inference():
                 # Reload context only after exclusive admission; prior turn is committed.
-                if target_session_id:
+                if req.isolate_context:
+                    effective_history = []
+                elif target_session_id:
                     session_now = history_store.get_session(target_session_id)
                     if not session_now:
                         yield f"data: {json.dumps({'type': 'error', 'content': 'Phiên đã bị xóa; câu hỏi chưa được xử lý.'}, ensure_ascii=False)}\n\n"
@@ -1032,16 +1066,19 @@ async def chat_stream(req: ChatRequest):
                         if prior["question"] != req.query.strip() or (target_session_id and prior["session_id"] != target_session_id):
                             yield f"data: {json.dumps({'type': 'error', 'content': 'request_id đã thuộc câu hỏi hoặc phiên khác', 'code': 'request_conflict'})}\n\n"
                             return
-                        yield f"data: {json.dumps({'type': 'done', 'answer': prior['answer'], 'citations': prior['citations'], 'session_id': prior['session_id'], 'turn_id': prior['id'], 'cached_replay': True}, ensure_ascii=False)}\n\n"
+                        yield f"data: {json.dumps({'type': 'done', 'answer': prior['answer'], 'citations': prior['citations'], 'answer_mode': prior['answer_mode'], 'search_scope': prior['search_scope'], 'session_id': prior['session_id'], 'turn_id': prior['id'], 'cached_replay': True}, ensure_ascii=False)}\n\n"
                         return
                 for event in agent.process_query_stream(
                     query=req.query,
                     chat_history=effective_history,
-                    model=req.model or DEFAULT_CHAT_MODEL,
-                    embed_model=req.embed_model,
-                    top_k=req.top_k or DEFAULT_TOP_K,
-                    temperature=req.temperature if req.temperature is not None else 0.2
-                    , **({'source_page':source_page} if source_page else {})
+                    model=DEFAULT_CHAT_MODEL,
+                    embed_model=DEFAULT_EMBED_MODEL,
+                    top_k=DEFAULT_TOP_K,
+                    temperature=req.temperature if req.temperature is not None else 0.2,
+                    answer_mode=req.answer_mode,
+                    source_document_id=source_document_id,
+                    isolate_context=bool(req.isolate_context),
+                    **({'source_page':source_page} if source_page else {})
                 ):
                     if event.get("type") in ("token", "crisis"):
                         answer_parts.append(event.get("content", ""))
@@ -1050,6 +1087,8 @@ async def chat_stream(req: ChatRequest):
                     elif event.get("type") == "error":
                         failed = True
                     elif event.get("type") == "done":
+                        search_scope = event.get("search_scope", search_scope)
+                        event.setdefault("answer_mode", req.answer_mode)
                         # Fallback citations if not sent earlier
                         if not citations and event.get("citations"):
                             citations = event.get("citations", [])
@@ -1073,14 +1112,22 @@ async def chat_stream(req: ChatRequest):
                                 question=req.query,
                                 answer="".join(answer_parts),
                                 citations=citations,
-                                model=req.model or DEFAULT_CHAT_MODEL,
-                                request_id=req.request_id
+                                model=DEFAULT_CHAT_MODEL,
+                                request_id=req.request_id,
+                                answer_mode=req.answer_mode,
+                                search_scope=search_scope,
                             )
                             event["history_id"] = turn_info.get("legacy_id", turn_info["id"])
                             event["turn_id"] = turn_info["id"]
                             event["session_id"] = target_session_id
                             event["turn_index"] = turn_info["turn_index"]
                             event["session_title"] = turn_info.get("session_title")
+
+                        if target_session_id:
+                            cur_s = history_store.get_session(target_session_id)
+                            if cur_s and cur_s.get("turns"):
+                                event["recent_question"] = cur_s["turns"][-1]["question"]
+                                event["recent_source"] = cur_s["turns"][-1]["citations"][0] if cur_s["turns"][-1].get("citations") else None
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except DialogueBusyError as e:
             yield f"data: {json.dumps({'type': 'error', 'content': str(e), 'code': 'dialogue_busy', 'retryable': True}, ensure_ascii=False)}\n\n"

@@ -49,6 +49,7 @@ async function render(item) {
         fetch: async () => ({ ok: true, json: async () => ({ results: [item], method: 'fts' }) }),
     });
     ready();
+    document.getElementById('user-input');
     elements.get('document-query').value = 'trí nhớ';
     await elements.get('document-search-form').listeners.submit({ preventDefault() {} });
     const card = elements.get('document-results').children[0];
@@ -88,6 +89,19 @@ test('A source image without PDF metadata does not create a broken PDF link', as
     const { nodes } = await render({ ...source, pdf_url: null, page_image_url: '/source-image' });
     assert.equal(nodes.filter(node => node.tagName === 'a').length, 0);
     assert.equal(nodes.filter(node => node.tagName === 'img').length, 1);
+});
+
+test('Selecting a page for QA keeps the current question and requires an explicit send', async () => {
+    const { nodes, events, elements } = await render({ ...source, pdf_url: null, page_image_url: null });
+    const question = elements.get('user-input');
+    question.value = 'Quasar là gì?';
+    const useInQa = nodes.find(node => node.tagName === 'button' && node.textContent === 'Dùng trang làm phạm vi QA');
+    assert.ok(useInQa, 'Each source result should be selectable as a retrieval scope');
+    useInQa.listeners.click();
+    assert.equal(question.value, 'Quasar là gì?');
+    assert.deepEqual(events.map(event => event.type), ['app-source-selected']);
+    assert.equal(events[0].detail.doc_id, 2);
+    assert.equal(events[0].detail.page_num, 3);
 });
 
 test('A selected source can open the practice tab and start practice for that exact chunk', async () => {

@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-11T00:18:44.971807+07:00
-- Mục mới nhất: **[LOG-20261011-evaluation-execution05-codex](#log-log-20261011-evaluation-execution05-codex)**; mã YC mới nhất: **YC-190**.
-- Nhật ký chung có **26 mục**: 8 môi trường/chức năng (YC-167/170/173/175/177/185 và LOG-20261010-ui-pr6-fix-codex, LOG-20261011-evaluation-execution05-codex), 3 tổ chức/tài liệu (YC-168/172/179), 2 phát hành GitHub (YC-169/190), 6 rà soát/nghiệm thu (YC-171/174/178/181/184/186), 4 làm rõ quyền/quy trình (YC-176/182/183/188), 3 dữ liệu corpus/huấn luyện (YC-180/187/189). Các mã trùng YC-180–183 chứa cả mốc local và GitHub, không tính hai lần.
+- Cập nhật: 2026-10-11T10:27:08.062672+07:00
+- Mục mới nhất: **[YC-192](#yc-192)**.
+- Nhật ký chung có **29 mục**: 10 môi trường/chức năng (YC-167/170/173/175/177/185/192 và 3 LOG), 3 tổ chức/tài liệu, 2 phát hành GitHub, 6 rà soát/nghiệm thu, 5 làm rõ quyền/quy trình, 3 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -31,6 +31,8 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 | YC-180 hoàn tất corpus có thể đọc | Toàn bộ 1.064 trang có thể đọc mới đã review ảnh thật, nhúng vector; giữ 13 trang unresolved REPORT_ONLY | Hoàn tất 100% trang có thể đọc; sẵn sàng nghiệm thu. |
 | YC-187 nghiệm thu YC-180 | Audit live complete:false vì 13 trang chưa hoàn chỉnh; huấn luyện được yêu cầu sau khi corpus/dataset đạt | Quyết định phạm vi chờ được YC-188 giải quyết; snapshot audit này vẫn complete:false. |
 | YC-188 thay phạm vi cổng nguồn | Cho phép loại đúng 13 trang đã hash-bound, giữ toàn bộ nguồn gốc và nguồn còn lại phải được duyệt | Đã được người dùng chấp thuận; triển khai cổng/data/học còn cần kiểm chứng. |
+| YC-191 thay mốc chức năng học | Dữ liệu/đánh giá bám update-Agent và các chức năng mới | PR9 đã merge vào main; nhãn mới chưa duyệt. |
+| YC-192 cố định cấu hình trả lời | Máy chủ chọn model trả lời/nhúng và Top-K, bỏ lựa chọn trên UI | Mặc định 6; câu tổng hợp dùng 10 nội bộ; merge và đồng bộ sau kiểm chứng. |
 
 ## Mẫu mục mới
 
@@ -583,7 +585,6 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Phần/file sửa: chỉ bổ sung lịch sử gốc và STATE.md; không sửa mã, nguồn, DB/vector, dataset, adapter, cấu hình hoặc tiến trình.
 - Kiểm chứng: đối chiếu luồng source/hợp đồng PASS; bảo toàn mục cũ, ID/count và liên kết checkpoint PASS. Triển khai/handoff/RED-GREEN/build N/A vì chỉ giải thích và tài liệu; audit corpus live, thu thập, inference, training và nghiệm thu model NOT_RUN. Không suy complete:true hiện tại từ ghi chép YC-180.
 - Trạng thái: hoàn tất giải thích; snapshot/version workflow là đề xuất chưa áp dụng. Cập nhật 2026-10-10T17:15:37.047998+07:00.
-
 <a id="yc-187"></a>
 ### YC-187 - 10/10/2026 17:30 (UTC+07)
 
@@ -671,3 +672,44 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Phiên bản/phối hợp: main5d399d5 sau PR8 được chủ repo merge; PR9/update-Agent còn mở khi kiểm, có thay đổi QA/UI riêng. Bộ dữ liệu mới v18 đang sửa nhãn và nguồn; chưa chọn chức năng mới làm mốc học khi chưa kiểm chứng. Không ghi đè việc root hoặc nhánh khác.
 - Trạng thái: mã cổng/đánh giá đã review local; phát hành chọn lọc đang làm theo YC-190. Dataset, baseline thực, LoRA và paired evaluation mới NOT_RUN; adapter chưa kích hoạt. Cập nhật 2026-10-11T00:18:44.971807+07:00.
 - Giới hạn/bước tiếp: sửa và review toàn bộ nhãn v18, đóng băng holdout đúng mốc ứng dụng, kiểm nguồn/tài nguyên live rồi chạy baseline và học có giới hạn. Phần này chưa có chạy mô hình thật và chưa có kết quả tăng chất lượng.
+
+
+<a id="log-20261011-update-agent-ui-qa"></a>
+### LOG-20261011-update-agent-ui-qa - 11/10/2026 00:05 (UTC+07)
+
+- Người thực hiện / loại thay đổi: Bùi Minh Trí / chức năng QA và giao diện UI.
+- Lỗi hoặc mục tiêu (ý chính): Nâng cấp xử lý bộ ca testcase QA (C-F-G cases), đồng bộ giao diện người dùng (UI/Theme light-dark) và cập nhật test suite.
+- Trước / sau thay đổi: Trước chưa có bộ testcase QA riêng cho các câu hỏi phức tạp và giao diện bị lầm lẫn giữa các tab/OS dark mode; Sau thêm testcase `study_agent_c_f_g_cases.json`, tối ưu CSS theme và giao diện tập trung.
+- Phần/file sửa và cách xử lý: Sửa `.env.example`, `scripts/dev.py`, `README.md`, `app/config.py`, `app/history.py`, `app/rag_agent.py`, `app/searcher.py`, `app/server.py`, `pytest.windows.ini`, các file giao diện `static/` và bổ sung testcase trong `tests/`.
+- Log/phiên bản liên quan; lý do thay quyết định nếu có: Tiếp nối các cập nhật từ PR trước đó (`LOG-20261010-ui-pr6-fix-codex`).
+- Ảnh hưởng/phối hợp với phần còn lại: Tương thích ngược với luồng RAG và tra cứu tài liệu gốc, không làm ảnh hưởng đến dữ liệu thời khóa biểu (`timetable`).
+- Kiểm thử: Đã chạy `node --test tests/document_lookup_ui.test.cjs` và test suite QA local.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Chưa chạy thử nghiệm trên mô hình GPU thật.
+
+
+<a id="yc-191"></a>
+### YC-191 - 11/10/2026 00:21 (UTC+07)
+
+- Người quyết định: chủ dự án; Codex đối chiếu và điều phối; loại: làm rõ phạm vi chức năng huấn luyện.
+- Mục tiêu/quyết định: chuyển mốc dữ liệu và đánh giá từ main đã merge sang nhánh update-Agent có các chức năng mới. Tiếp nối YC-187/189/190; không thay quyết định13 ngoại lệ nguồn YC-188.
+- Trước/sau: bộ nháp đang sửa theo QA main; sau phải đối chiếu quick/steps/compare, ngân sách360/900/900, phạm vi tài liệu/trang, bằng chứng một phía, khôi phục phiên và ngữ cảnh cách ly của update-Agent. Giữ old28 và các nguồn đánh giá tách train.
+- Mốc đã đọc: update-Agent3c73ff4d528722ab12f46de98b2253221f0db8f2, PR9 đang mở; app/config.py, rag_agent.py, searcher.py, history.py, server.py, fixture QA và22 test mới. Toàn feature suite Python3.12.14 trên snapshot nhánh mới171 PASS/6warning. Test fixture không chứng minh câu trả lời model thật.
+- Phần đang làm: giữ đơn vị sửa nhãn Data06 đang chạy độc lập, chuẩn bị delta chuyển prompt/mode/feature holdout sau bàn giao terminal; không gửi chồng hoặc có hai writer. Bộ dữ liệu mới chưa được duyệt.
+- Giới hạn: chưa merge PR9, chưa chạy inference/LoRA/paired evaluation. Kiểm tích hợp evaluator/balance với nhánh được chọn đang thực hiện; không sao chép toàn nhánh vào root đang chỉnh.
+
+
+<a id="yc-192"></a>
+### YC-192 - 11/10/2026 10:10 (UTC+07)
+
+- Người thực hiện: Codex kiểm thử/review/tích hợp; loại: sửa tích hợp Git và cấu hình suy luận.
+- Mục tiêu: xử lý conflict PR10 sau PR9/update-Agent, ấn định model trả lời/nhúng và số đoạn trích phía máy chủ sau khi bỏ chọn trên giao diện; nghiên cứu và đo Top-K trên corpus thực. Merge PR10 sau kiểm chứng rồi đồng bộ main về máy, bảo toàn việc local.
+- Trước: main604f096 đã merge PR9; PR10 44b39d9 CI Windows/Mac/history PASS nhưng CONFLICTING. Hai conflict thực tại LICH_SU_DU_AN.md và pytest.windows.ini; các lựa chọn bị ẩn trong DOM nhưng client còn gửi và API còn dùng model/embed_model/top_k.
+- Hướng sửa/phạm vi: giữ cả nhật ký và cả nhóm kiểm thử, kiểm cấu hình API/QA/practice/summary/index và loại phụ thuộc DOM ẩn. Không đổi PDF/DB/vector/base model hoặc kích hoạt adapter. Mốc chức năng theo YC191.
+- Kiểm chứng/trạng thái: đang triển khai trên checkout cách ly; test hành vi, benchmark retrieval, CI bản sửa, merge và đồng bộ local còn NOT_RUN tại lúc lập mục. Data06 đã terminal; v18 và feature36 vẫn UNREVIEWED/DRAFT, chưa baseline hoặc học.
+- Giới hạn: Top-K không tự bảo đảm độ chính xác; cần tách kết quả tìm nguồn khỏi chất lượng trả lời thật. Backup/reconcile trước đồng bộ vì root đang có sửa chưa commit. Cập nhật 2026-10-11T10:12:39.856266+07:00.
+
+- Kiểm chứng bổ sung 2026-10-11T10:27:08.062672+07:00: Codex review độc lập bản triển khai; 211 kiểm thử Python3.12.14 PASS/6 warnings, 5 Node PASS, kiểm môi trường phát triển PASS. 13 hồi quy cấu hình cố định PASS sau baseline 10 FAIL/1 PASS; hai conflict được giữ đầy đủ nội dung hợp lệ. Thay đổi ở server/ollama_client và app.js/index.html; không thêm dependency.
+- Đo truy xuất: 168 lượt/28 câu với K2/4/6/8/10/12. K6 đạt 7/28 prompt có trang tham chiếu, bằng K8/K10; K12 đạt 6/28. Giữ K6 và câu tổng hợp K10 nội bộ. Đây là kiểm tìm nguồn, không phải độ chính xác trả lời; xếp hạng và chọn nguồn dưới ngân sách còn hạn chế. [Phương pháp và giới hạn](docs/team/CAU_HINH_TRA_LOI_VA_TOPK_YC192.md).
+- Bảo toàn local: đã lưu bản sao có hash của 211 file mã/tài liệu và Git metadata; DB/vector/weights giữ tại chỗ. CI bản sửa, merge và đồng bộ main đang chờ kiểm chứng.
+- Dữ liệu/huấn luyện: 28 kiểm thử hợp đồng nháp v18 PASS nhưng review nội dung tìm nhãn Vi tích phân không khớp nguồn và thiếu điều kiện Đại số; REJECT_PARTIAL_CONTENT_REVIEW, chưa review đủ toàn bộ. Cần sửa dữ liệu và chuyển bộ đánh giá sang prompt/mode của update-Agent trước học; không kích hoạt adapter.

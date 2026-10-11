@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "description": "Deterministic QA cases for answer modes, insufficient retrieval, and controlled session recovery.",
+  "cases": [
+    {
+      "id": "quick_formula_condition",
+      "function": "C",
+      "mode": "quick",
+      "query": "Ánh xạ tuyến tính cần điều kiện gì?",
+      "source_chunks": ["Ánh xạ tuyến tính f: V → W thỏa f(u+v)=f(u)+f(v) và f(αu)=αf(u), với u,v thuộc V và α thuộc trường vô hướng."],
+      "expected_evidence": ["f(u+v)=f(u)+f(v)", "f(αu)=αf(u)"],
+      "critical_conditions": ["u,v thuộc V", "α thuộc trường vô hướng"],
+      "expected_prompt_fragments": ["Tóm tắt nhanh", "Giữ mọi giả thiết, điều kiện áp dụng"]
+    },
+    {
+      "id": "steps_incomplete_procedure",
+      "function": "C",
+      "mode": "steps",
+      "query": "Quy trình kiểm tra ánh xạ tuyến tính gồm những bước nào?",
+      "source_chunks": ["Kiểm tra hai tính chất: f(u+v)=f(u)+f(v) và f(αu)=αf(u)."],
+      "expected_evidence": ["f(u+v)=f(u)+f(v)", "f(αu)=αf(u)"],
+      "critical_conditions": [],
+      "expected_prompt_fragments": ["Giải thích từng bước", "Nếu tài liệu chỉ cung cấp một phần quy trình"]
+    },
+    {
+      "id": "compare_one_sided_source",
+      "function": "C",
+      "mode": "compare",
+      "query": "Hệ thống 1 và Hệ thống 2 khác nhau thế nào?",
+      "source_chunks": ["Hệ thống 1 hoạt động nhanh và tự động trong nhiều tình huống quen thuộc."],
+      "expected_evidence": ["Hệ thống 1 hoạt động nhanh và tự động"],
+      "critical_conditions": [],
+      "unsupported_conclusions": ["Hệ thống 2 characteristics"],
+      "expected_prompt_fragments": ["So sánh", "chỉ cung cấp bằng chứng một phía"]
+    },
+    {
+      "id": "library_no_results",
+      "function": "F",
+      "query": "Khái niệm quasar không có trong sách",
+      "retrieval_state": "no_results",
+      "scope": {"kind": "library"},
+      "expected_reason": "no_results",
+      "expected_message_fragment": "thư viện tài liệu đã lập chỉ mục",
+      "expected_actions": ["rephrase_query", "select_other_document"]
+    },
+    {
+      "id": "document_low_relevance",
+      "function": "F",
+      "query": "Khái niệm quasar không có trong sách",
+      "retrieval_state": "low_relevance",
+      "scope": {"kind": "document", "document_id": 41},
+      "retrieved_chunks": ["Ghi chú về cây xanh và tưới nước."],
+      "expected_reason": "low_relevance",
+      "expected_message_fragment": "chưa đủ liên quan",
+      "expected_actions": ["expand_library", "select_other_document", "rephrase_query"]
+    },
+    {
+      "id": "selected_page_empty",
+      "function": "F",
+      "query": "Giải thích nội dung trang được chọn",
+      "retrieval_state": "no_results",
+      "scope": {"kind": "page", "document_id": 41, "page_num": 12},
+      "expected_reason": "page_empty",
+      "expected_message_fragment": "trang 12 của tài liệu đã chọn",
+      "expected_actions": ["expand_to_document", "select_other_page", "rephrase_query"]
+    },
+    {
+      "id": "selected_page_unrelated_results",
+      "function": "F",
+      "query": "Quasar là gì?",
+      "retrieval_state": "low_relevance",
+      "scope": {"kind": "page", "document_id": 41, "page_num": 12},
+      "retrieved_chunks": ["Ghi chú về cây xanh và tưới nước."],
+      "expected_reason": "page_scope_too_narrow",
+      "expected_message_fragment": "trang 12 của tài liệu đã chọn",
+      "expected_actions": ["expand_to_document", "select_other_page", "rephrase_query"]
+    },
+    {
+      "id": "comparison_partial_evidence",
+      "function": "F",
+      "query": "Hệ thống 1 và Hệ thống 2 khác nhau thế nào?",
+      "retrieval_state": "partial_evidence",
+      "scope": {"kind": "library"},
+      "retrieved_chunks": ["Hệ thống 1 hoạt động nhanh và tự động trong nhiều tình huống."],
+      "expected_reason": "partial_evidence",
+      "expected_message_fragment": "chỉ cung cấp bằng chứng cho một phần câu hỏi",
+      "expected_actions": ["focus_single_concept", "select_other_document", "rephrase_query"]
+    },
+    {
+      "id": "retrieval_technical_error",
+      "function": "F",
+      "query": "Trí nhớ là gì?",
+      "retrieval_state": "technical_error",
+      "scope": {"kind": "library"},
+      "expected_reason": "technical_error",
+      "expected_message_fragment": "Không thể truy cập hoặc xử lý tài liệu",
+      "expected_actions": ["retry", "select_other_document"]
+    },
+    {
+      "id": "previous_citation_is_not_current_evidence",
+      "function": "G",
+      "query": "Câu hỏi mới về một chủ đề khác",
+      "prior_answer": "Câu trả lời cũ dùng nguồn [S9].",
+      "current_source": "<document id=\"S1\">Nội dung mới</document>",
+      "expected_history_marker": "[nguồn ở lượt trước]",
+      "forbidden_current_source_id": "S9"
+    }
+  ]
+}

@@ -112,6 +112,8 @@ class HistoryStore:
                 model TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
                 request_id TEXT,
+                answer_mode TEXT NOT NULL DEFAULT 'quick',
+                search_scope_json TEXT NOT NULL DEFAULT '{}',
                 legacy_search_id INTEGER,
                 UNIQUE(session_id, turn_index),
                 UNIQUE(session_id, request_id)
@@ -127,6 +129,10 @@ class HistoryStore:
             turn_cols = [c[1] for c in db.execute("PRAGMA table_info(session_turns)").fetchall()]
             if "legacy_search_id" not in turn_cols and "id" in turn_cols:
                 db.execute("ALTER TABLE session_turns ADD COLUMN legacy_search_id INTEGER")
+            if "answer_mode" not in turn_cols and "id" in turn_cols:
+                db.execute("ALTER TABLE session_turns ADD COLUMN answer_mode TEXT NOT NULL DEFAULT 'quick'")
+            if "search_scope_json" not in turn_cols and "id" in turn_cols:
+                db.execute("ALTER TABLE session_turns ADD COLUMN search_scope_json TEXT NOT NULL DEFAULT '{}'")
 
             sess_cols = [c[1] for c in db.execute("PRAGMA table_info(sessions)").fetchall()]
             if "summarized_revision" not in sess_cols and "id" in sess_cols:
@@ -294,6 +300,8 @@ class HistoryStore:
                 "question": t["question"],
                 "answer": clean_answer(t["answer"]),
                 "citations": json.loads(t["citations_json"]),
+                "answer_mode": t["answer_mode"],
+                "search_scope": json.loads(t["search_scope_json"] or "{}"),
                 "model": t["model"],
                 "created_at": t["created_at"],
                 "request_id": t["request_id"],
@@ -406,6 +414,8 @@ class HistoryStore:
                 "question": row["question"],
                 "answer": row["answer"],
                 "citations": cits,
+                "answer_mode": row["answer_mode"],
+                "search_scope": json.loads(row["search_scope_json"] or "{}"),
                 "model": row["model"],
                 "created_at": row["created_at"],
                 "session_title": row["session_title"],
@@ -420,11 +430,19 @@ class HistoryStore:
         citations: list,
         model: str,
         request_id: Optional[str] = None,
+        answer_mode: str = "quick",
+        search_scope: Optional[dict] = None,
     ) -> dict:
         """Atomically add a completed turn to a session. Supports idempotency via request_id."""
         q_clean = question.strip()
         ans_clean = clean_answer(answer)
         cit_json = json.dumps(citations, ensure_ascii=False)
+        scope_json = json.dumps(search_scope or {}, ensure_ascii=False)
+        mode = {
+            "quick": "quick", "summary": "quick",
+            "steps": "steps", "step_by_step": "steps",
+            "compare": "compare", "comparison": "compare",
+        }.get(answer_mode, "quick")
         now = _now_iso()
 
         with self._connect() as db:
@@ -465,9 +483,9 @@ class HistoryStore:
 
             # Insert turn with legacy_search_id reference
             cursor = db.execute(
-                """INSERT INTO session_turns(session_id, turn_index, question, answer, citations_json, model, created_at, request_id, legacy_search_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (session_id, turn_idx, q_clean, ans_clean, cit_json, model, now, request_id, legacy_id),
+                """INSERT INTO session_turns(session_id, turn_index, question, answer, citations_json, model, created_at, request_id, answer_mode, search_scope_json, legacy_search_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, turn_idx, q_clean, ans_clean, cit_json, model, now, request_id, mode, scope_json, legacy_id),
             )
             turn_id = cursor.lastrowid
 
@@ -491,6 +509,8 @@ class HistoryStore:
             "turn_index": turn_idx,
             "session_title": current_title,
             "created_at": now,
+            "answer_mode": mode,
+            "search_scope": search_scope or {},
             "legacy_id": legacy_id,
             "is_duplicate": False,
         }

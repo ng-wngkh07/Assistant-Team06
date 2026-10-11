@@ -172,6 +172,20 @@ document.addEventListener("DOMContentLoaded", () => {
                     input.focus();
                 });
                 actions.appendChild(ask);
+                const useInQa = document.createElement("button");
+                useInQa.type = "button";
+                useInQa.className = "btn btn-outline btn-sm";
+                useInQa.textContent = "Dùng trang làm phạm vi QA";
+                useInQa.title = "Giữ nguyên câu hỏi trong ô nhập và truy xuất lại bằng chứng khi bạn gửi.";
+                useInQa.addEventListener("click", () => {
+                    document.dispatchEvent(new CustomEvent("app-source-selected", {detail:{
+                        doc_id:Number(item.doc_id), page_num:Number(item.page_num), chunk_id:Number(item.chunk_id),
+                        title:item.book_title || item.filename,
+                    }}));
+                    setMode("qa");
+                    document.getElementById("user-input")?.focus();
+                });
+                actions.appendChild(useInQa);
                 const practice = document.createElement("button");
                 practice.type = "button";
                 practice.className = "btn btn-outline btn-sm";

@@ -113,7 +113,7 @@ class HybridSearcher:
                     phrases.append(phrase)
         return " OR ".join('"' + phrase + '"' for phrase in phrases)
 
-    def search_fts(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+    def search_fts(self, query: str, limit: int = 20, document_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Perform Full-Text BM25 Search using SQLite FTS5 with heading demotion and document scope."""
         fts_query = self._clean_fts_query(query)
         if not fts_query:
@@ -136,8 +136,9 @@ class HybridSearcher:
                         SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num,
                                c.chunk_index, c.text, bm25(chunks_fts) as rank_score
                         FROM chunks_fts f JOIN chunks c ON f.rowid = c.id
-                        WHERE chunks_fts MATCH ? ORDER BY rank_score ASC LIMIT ?
-                    """, (phrase_query, fetch_limit)).fetchall()
+                    WHERE chunks_fts MATCH ? AND (? IS NULL OR c.doc_id = ?)
+                    ORDER BY rank_score ASC LIMIT ?
+                    """, (phrase_query, document_id, document_id, fetch_limit)).fetchall()
                 else:
                     phrase_rows = []
                 cursor = conn.execute("""
@@ -145,10 +146,10 @@ class HybridSearcher:
                            bm25(chunks_fts) as rank_score
                     FROM chunks_fts f
                     JOIN chunks c ON f.rowid = c.id
-                    WHERE chunks_fts MATCH ?
+                    WHERE chunks_fts MATCH ? AND (? IS NULL OR c.doc_id = ?)
                     ORDER BY rank_score ASC
                     LIMIT ?
-                """, (fts_query, fetch_limit))
+                """, (fts_query, document_id, document_id, fetch_limit))
                 
                 rows = phrase_rows + cursor.fetchall()
                 seen = set()
@@ -206,6 +207,9 @@ class HybridSearcher:
                     if words:
                         conditions = " OR ".join(["c.text LIKE ?" for _ in words])
                         params = [f"%{w}%" for w in words]
+                        if document_id is not None:
+                            conditions = f"({conditions}) AND c.doc_id = ?"
+                            params.append(document_id)
                         params.append(limit)
                         cursor = conn.execute(f"""
                             SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num, c.chunk_index, c.text
@@ -235,7 +239,8 @@ class HybridSearcher:
         self,
         query: str,
         embed_model: str = DEFAULT_EMBED_MODEL,
-        limit: int = 20
+        limit: int = 20,
+        document_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Perform semantic vector search using cosine similarity over embeddings."""
         from app.gpu_lock import gpu_coordinator
@@ -252,7 +257,10 @@ class HybridSearcher:
 
         results = []
         with self.get_connection() as conn:
-            cursor = conn.execute("SELECT id, doc_id, book_title, filename, page_num, chunk_index, text, embedding FROM chunks WHERE embedding IS NOT NULL")
+            if document_id is None:
+                cursor = conn.execute("SELECT id, doc_id, book_title, filename, page_num, chunk_index, text, embedding FROM chunks WHERE embedding IS NOT NULL")
+            else:
+                cursor = conn.execute("SELECT id, doc_id, book_title, filename, page_num, chunk_index, text, embedding FROM chunks WHERE embedding IS NOT NULL AND doc_id = ?", (document_id,))
             rows = cursor.fetchall()
             
             scored_rows = []
@@ -291,7 +299,8 @@ class HybridSearcher:
         top_k: int = DEFAULT_TOP_K,
         embed_model: Optional[str] = DEFAULT_EMBED_MODEL,
         is_broad: bool = False,
-        max_per_book: Optional[int] = None
+        max_per_book: Optional[int] = None,
+        document_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
         Execute Hybrid Search combining FTS5 and Vector Search via Reciprocal Rank Fusion (RRF).
@@ -301,10 +310,10 @@ class HybridSearcher:
         if not query_clean:
             return []
 
-        fts_results = self.search_fts(query_clean, limit=top_k * 3)
+        fts_results = self.search_fts(query_clean, limit=top_k * 3, document_id=document_id)
         semantic_results = []
         if embed_model:
-            semantic_results = self.search_semantic(query_clean, embed_model=embed_model, limit=top_k * 3)
+            semantic_results = self.search_semantic(query_clean, embed_model=embed_model, limit=top_k * 3, document_id=document_id)
 
         # Merge using Reciprocal Rank Fusion (RRF)
         # RRF_score(d) = sum( weight / (k + rank) )

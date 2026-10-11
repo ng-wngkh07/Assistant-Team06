@@ -2,6 +2,14 @@ import os
 import sys
 from pathlib import Path
 
+
+def _positive_int_setting(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
 # Base directories
 BASE_DIR = Path(__file__).resolve().parent.parent
 def _workspace_path(name: str, default: str) -> Path:
@@ -40,6 +48,15 @@ FTS_WEIGHT = 0.5
 SEMANTIC_WEIGHT = 0.5
 RRF_K = 60
 SIMILARITY_THRESHOLD = 0.15  # Minimum score before declaring lack of info
+
+# Reply-style limits remain configurable per deployment and are token ceilings,
+# not quality targets. Concise mode uses fewer tokens; instructional modes need
+# room for structure while remaining bounded.
+ANSWER_MODE_MAX_TOKENS = {
+    "quick": _positive_int_setting("ANSWER_QUICK_MAX_TOKENS", 360),
+    "steps": _positive_int_setting("ANSWER_STEPS_MAX_TOKENS", 900),
+    "compare": _positive_int_setting("ANSWER_COMPARE_MAX_TOKENS", 900),
+}
 
 # Server settings
 SERVER_HOST = os.getenv("HOST", "127.0.0.1")

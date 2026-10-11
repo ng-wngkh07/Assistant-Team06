@@ -15,8 +15,8 @@
             }
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=9-learning-tools">
-    <link rel="stylesheet" href="/static/theme.css?v=2-theme">
+    <link rel="stylesheet" href="/static/style.css?v=11-contrast-fix">
+    <link rel="stylesheet" href="/static/theme.css?v=3-contrast-fix">
 </head>
 <body>
     <div class="app-container">
@@ -85,36 +85,9 @@
                     </div>
                 </details>
 
-                <!-- Model Settings: ẩn khỏi giao diện (giữ trong DOM vì app.js đọc giá trị mặc định) -->
-                <details class="sidebar-card collapsible" hidden style="display:none" aria-hidden="true">
-                    <summary>⚙️ Cấu hình Mô hình</summary>
-                    <div class="collapsible-body">
-                        <div class="form-group">
-                            <label for="select-model">Mô hình suy luận:</label>
-                            <div class="input-with-status">
-                                <select id="select-model" class="form-select">
-                                    <option value="" selected>Đang kiểm tra mô hình…</option>
-                                </select>
-                            </div>
-                            <small class="text-muted field-hint">Mô hình được chọn theo cấu hình máy. Bản phát triển Ollama cần được kiểm thử riêng với bản MLX trên Mac.</small>
-                            <small id="ollama-status" class="status-indicator">Đang kiểm tra mô hình...</small>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="select-embed">Mô hình Embedding:</label>
-                            <select id="select-embed" class="form-select">
-                                <option value="bge-m3" selected>bge-m3 (Mặc định)</option>
-                                <option value="nomic-embed-text">nomic-embed-text</option>
-                                <option value="">Chỉ dùng Full-Text (FTS5 BM25)</option>
-                            </select>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="input-topk">Số đoạn trích (Top-K): <span id="topk-val">6</span></label>
-                            <input type="range" id="input-topk" min="2" max="15" value="6" class="form-range">
-                        </div>
-                    </div>
-                </details>
+                <div class="sidebar-status-box" style="padding: 8px 12px;">
+                    <small id="ollama-status" class="status-indicator">Đang kiểm tra mô hình...</small>
+                </div>
 
                 <!-- Disclaimer -->
                 <div class="sidebar-footer">
@@ -425,6 +398,8 @@
                     <button id="btn-rename-session" class="btn btn-sm btn-outline btn-mini" title="Đổi tên cuộc trò chuyện">✏️</button>
                 </div>
                 <div class="session-controls">
+                    <button type="button" id="btn-resume-last-question" class="btn btn-sm btn-outline btn-mini" hidden>↩ Mở câu hỏi gần nhất</button>
+                    <div id="resume-source-list" class="resume-source-list" hidden></div>
                     <button id="btn-summarize-session" class="btn btn-sm btn-outline btn-mini" title="Tổng hợp chủ đề chính">📝 Tóm tắt chủ đề</button>
                 </div>
             </div>
@@ -467,6 +442,15 @@
 
             <!-- Chat Input Area -->
             <div class="input-area">
+                <div class="qa-answer-mode">
+                    <label for="answer-mode">Cách trả lời</label>
+                    <select id="answer-mode" class="form-select">
+                        <option value="quick" selected>Tóm tắt nhanh</option>
+                        <option value="steps">Giải thích từng bước</option>
+                        <option value="compare">So sánh khái niệm</option>
+                    </select>
+                    <span>Áp dụng cho câu hỏi tiếp theo; giữ nguyên đến khi bạn đổi.</span>
+                </div>
                 <div id="qa-source-scope" hidden style="margin-bottom:8px; font-size:0.85rem;">
                     <span id="qa-source-label"></span>
                     <button type="button" id="qa-source-clear" class="btn btn-outline btn-sm">Tìm trong toàn bộ thư viện</button>
@@ -626,7 +610,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=8-learning-tools"></script>
+    <script src="/static/app.js?v=9-study-resume"></script>
     <script src="/static/document-lookup.js?v=3-learning-tools"></script>
     <script src="/static/timetable.js?v=5-literal-table"></script>
     <script src="/static/layout.js?v=1"></script>

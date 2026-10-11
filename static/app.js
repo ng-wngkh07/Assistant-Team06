@@ -1,21 +1,30 @@
 document.addEventListener("DOMContentLoaded", () => {
     let selectedSourcePage = null;
+    let selectedSourceMode = "page";
     const sourceScope = document.getElementById("qa-source-scope");
     const sourceLabel = document.getElementById("qa-source-label");
+    const sourceClearButton = document.getElementById("qa-source-clear");
+    function updateSourceScopeLabel() {
+        if (!selectedSourcePage || !sourceScope || !sourceLabel) return;
+        const range = selectedSourceMode === "document" ? "toàn tài liệu" : `trang ${selectedSourcePage.page_num}`;
+        sourceScope.hidden = false;
+        sourceLabel.textContent = `Nguồn đang chọn: ${selectedSourcePage.title} · ${range}. `;
+        if (sourceClearButton) sourceClearButton.textContent = "Tìm trong toàn bộ thư viện";
+    }
     function clearSourceScope() {
         selectedSourcePage = null;
+        selectedSourceMode = "page";
         if (sourceScope) sourceScope.hidden = true;
         document.dispatchEvent(new Event("app-source-cleared"));
     }
     document.addEventListener("app-source-selected", event => {
         selectedSourcePage = event.detail;
-        if (sourceScope && sourceLabel) {
-            sourceScope.hidden = false;
-            sourceLabel.textContent = `Nguồn đang chọn: ${event.detail.title} · trang ${event.detail.page_num}. `;
-        }
+        selectedSourceMode = "page";
+        updateSourceScopeLabel();
     });
     document.addEventListener("app-source-cleared", () => {
         selectedSourcePage = null;
+        selectedSourceMode = "page";
         if (sourceScope) sourceScope.hidden = true;
     });
     document.getElementById("qa-source-clear")?.addEventListener("click", clearSourceScope);
@@ -37,11 +46,70 @@ document.addEventListener("DOMContentLoaded", () => {
     const sessionSummaryBox = document.getElementById("session-summary-box");
     const sessionSummaryText = document.getElementById("session-summary-text");
     const btnCloseSummary = document.getElementById("btn-close-summary");
+    const btnResumeLastQuestion = document.getElementById("btn-resume-last-question");
+    const resumeSourceList = document.getElementById("resume-source-list");
+    const answerModeSelect = document.getElementById("answer-mode");
 
-    const selectModel = document.getElementById("select-model");
-    const selectEmbed = document.getElementById("select-embed");
-    const inputTopK = document.getElementById("input-topk");
-    const topKVal = document.getElementById("topk-val");
+    function renderResumeControls(turn, fallbackCitations = []) {
+        const previousCitations = latestRestorableTurn?.citations || [];
+        latestRestorableTurn = turn && turn.question ? {
+            ...turn,
+            citations: turn.citations?.length ? turn.citations : (fallbackCitations.length ? fallbackCitations : previousCitations),
+        } : null;
+        if (btnResumeLastQuestion) {
+            btnResumeLastQuestion.hidden = !latestRestorableTurn;
+            btnResumeLastQuestion.textContent = "↩ Mở câu hỏi gần nhất";
+        }
+        if (!resumeSourceList) return;
+        resumeSourceList.replaceChildren();
+        const citations = (latestRestorableTurn?.citations || []).filter(c => c && c.page_num && (c.doc_id || c.filename));
+        const unique = [];
+        const seen = new Set();
+        for (const citation of citations) {
+            const key = `${citation.doc_id || citation.filename}:${citation.page_num}`;
+            if (!seen.has(key)) { seen.add(key); unique.push(citation); }
+        }
+        if (!unique.length) {
+            resumeSourceList.hidden = true;
+            return;
+        }
+        const label = document.createElement("span");
+        label.className = "resume-source-label";
+        label.textContent = "Dùng lại nguồn gần nhất · tìm lại cho câu hỏi mới:";
+        resumeSourceList.appendChild(label);
+        for (const citation of unique) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "btn btn-sm btn-outline btn-mini";
+            button.textContent = `${citation.book_title || citation.filename || "Tài liệu"} · tr. ${citation.page_num}`;
+            button.title = "Giới hạn lượt tìm kiếm mới vào trang này; nội dung và citation sẽ được truy xuất lại.";
+            button.addEventListener("click", () => selectPreviousSource(citation));
+            resumeSourceList.appendChild(button);
+        }
+        resumeSourceList.hidden = false;
+    }
+
+    async function selectPreviousSource(citation) {
+        if (isGenerating) return;
+        const page = Number(citation.page_num);
+        let docId = Number(citation.doc_id);
+        if ((!Number.isInteger(docId) || docId < 1) && citation.filename && Number.isInteger(page) && page > 0) {
+            try {
+                const params = new URLSearchParams({ filename: citation.filename, page_num: String(page) });
+                const response = await fetch(`/api/documents/source-preview?${params}`);
+                if (response.ok) docId = Number((await response.json()).doc_id);
+            } catch (_) {}
+        }
+        if (!Number.isInteger(docId) || docId < 1 || !Number.isInteger(page) || page < 1) {
+            chatStatus.textContent = "Không thể khôi phục phạm vi nguồn này. Hãy chọn lại tài liệu trong thư viện.";
+            return;
+        }
+        const title = citation.book_title || citation.filename || "Tài liệu trước";
+        document.dispatchEvent(new CustomEvent("app-source-selected", {
+            detail: { doc_id: docId, page_num: page, title }
+        }));
+        chatStatus.textContent = "Đã chọn lại trang nguồn. Khi gửi câu hỏi mới, hệ thống sẽ truy xuất lại bằng chứng cho lượt đó.";
+    }
 
     // Stats
     const statDocs = document.getElementById("stat-docs");
@@ -72,6 +140,7 @@ document.addEventListener("DOMContentLoaded", () => {
     chatForm.insertAdjacentElement("afterend", chatStatus);
     let embeddingCoverage = 0;
     let clientChatHistory = [];
+    let latestRestorableTurn = null;
     let viewRevision = 0;
     let isLoadingSession = true;
     btnSend.disabled = true;
@@ -94,10 +163,6 @@ document.addEventListener("DOMContentLoaded", () => {
     setInterval(fetchKnowledgeBaseStatus, 5000);
 
     // Event Listeners
-    inputTopK.addEventListener("input", (e) => {
-        topKVal.textContent = e.target.value;
-    });
-
     userInput.addEventListener("input", () => {
         userInput.style.height = "auto";
         userInput.style.height = Math.min(userInput.scrollHeight, 140) + "px";
@@ -146,6 +211,29 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (btnSummarizeSession) {
         btnSummarizeSession.addEventListener("click", summarizeCurrentSession);
+    }
+
+    if (btnResumeLastQuestion) {
+        btnResumeLastQuestion.addEventListener("click", () => {
+            if (isGenerating || !latestRestorableTurn) return;
+            const draft = userInput.value.trim();
+            userInput.value = draft && draft !== latestRestorableTurn.question
+                ? `${draft}\n${latestRestorableTurn.question}`
+                : latestRestorableTurn.question;
+            userInput.dispatchEvent(new Event("input"));
+            userInput.focus();
+            chatStatus.textContent = "Câu hỏi gần nhất đã được đưa vào ô nhập; bấm Gửi nếu muốn chạy lại với nguồn và chế độ hiện tại.";
+        });
+    }
+
+    if (answerModeSelect) {
+        try {
+            const savedMode = localStorage.getItem("qa_answer_mode");
+            if (["quick", "steps", "compare"].includes(savedMode)) answerModeSelect.value = savedMode;
+        } catch (_) {}
+        answerModeSelect.addEventListener("change", () => {
+            try { localStorage.setItem("qa_answer_mode", answerModeSelect.value); } catch (_) {}
+        });
     }
 
     if (btnCloseSummary) {
@@ -204,7 +292,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch("/api/index", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ force: false, ocr: true, embed_model: selectEmbed.value || null })
+                body: JSON.stringify({ force: false, ocr: true })
             });
             const data = await res.json();
             if (res.ok) {
@@ -220,6 +308,93 @@ document.addEventListener("DOMContentLoaded", () => {
             reindexMsg.textContent = `❌ Lỗi kết nối: ${err.message}`;
         }
     });
+
+    function submitRecoveryQuery(query, nextScope, verifiedScope = {}) {
+        if (isGenerating) return;
+        if (nextScope === "library") {
+            clearSourceScope();
+        } else if ((nextScope === "document" || nextScope === "page") && verifiedScope.document_id) {
+            const current = selectedSourcePage;
+            selectedSourcePage = {
+                doc_id: Number(verifiedScope.document_id),
+                page_num: Number(verifiedScope.page_num || current?.page_num || 1),
+                title: current?.doc_id === Number(verifiedScope.document_id) ? current.title : `Tài liệu ${verifiedScope.document_id}`,
+            };
+            selectedSourceMode = nextScope;
+            updateSourceScopeLabel();
+        }
+        const draft = userInput.value;
+        userInput.value = query;
+        userInput.dispatchEvent(new Event("input"));
+        chatForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        if (draft && draft.trim() && draft.trim() !== query) {
+            userInput.value = draft;
+            userInput.dispatchEvent(new Event("input"));
+        }
+    }
+
+    function openSourceLookupWithQuestion(question) {
+        if (!userInput.value.trim()) userInput.value = question;
+        else if (userInput.value.trim() !== question) userInput.value = `${userInput.value.trim()}\n${question}`;
+        userInput.dispatchEvent(new Event("input"));
+        document.dispatchEvent(new CustomEvent("app-open-tool-tab", { detail: "practice" }));
+        const lookup = document.getElementById("document-query");
+        if (lookup && !lookup.value.trim()) lookup.value = question.slice(0, 500);
+        lookup?.focus();
+        chatStatus.textContent = "Tìm và chọn nguồn để giới hạn lượt truy xuất mới. Câu hỏi gốc vẫn được giữ trong ô nhập và chưa được gửi lại.";
+    }
+
+    function addRecoveryActions(assistantMsgEl, query, searchScope, options = {}) {
+        if (!assistantMsgEl || assistantMsgEl.querySelector(".qa-recovery-actions")) return;
+        const actions = document.createElement("div");
+        actions.className = "qa-recovery-actions";
+        const kind = searchScope?.kind || "library";
+        const addButton = (label, handler) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "btn btn-outline btn-sm";
+            button.textContent = label;
+            button.addEventListener("click", handler);
+            actions.appendChild(button);
+        };
+        const focusQuestionForEdit = () => {
+            if (!userInput.value.trim()) userInput.value = query;
+            else if (userInput.value.trim() !== query) userInput.value = `${userInput.value.trim()}\n${query}`;
+            userInput.dispatchEvent(new Event("input"));
+            userInput.focus();
+            chatStatus.textContent = "Hãy chỉnh câu hỏi trong ô nhập rồi bấm Gửi.";
+        };
+        const suggested = Array.isArray(options.suggestedActions) ? options.suggestedActions : [];
+        if (suggested.length) {
+            for (const item of suggested) {
+                const handler = {
+                    retry: () => submitRecoveryQuery(query, kind, searchScope || {}),
+                    expand_to_document: () => submitRecoveryQuery(query, "document", searchScope),
+                    expand_library: () => submitRecoveryQuery(query, "library", searchScope),
+                    select_other_document: () => openSourceLookupWithQuestion(query),
+                    select_other_page: () => openSourceLookupWithQuestion(query),
+                    rephrase_query: focusQuestionForEdit,
+                    focus_single_concept: focusQuestionForEdit,
+                }[item.action] || (() => openSourceLookupWithQuestion(query));
+                addButton(item.label || "Tiếp tục", handler);
+            }
+        } else if (options.technical) {
+            addButton("Thử lại câu hỏi", () => submitRecoveryQuery(query, kind, searchScope || {}));
+            addButton("Chọn tài liệu hoặc trang khác", () => openSourceLookupWithQuestion(query));
+        } else {
+            if (kind === "page") {
+                addButton("Mở rộng ra toàn tài liệu", () => submitRecoveryQuery(query, "document", searchScope));
+                addButton("Tìm trong toàn bộ thư viện", () => submitRecoveryQuery(query, "library", searchScope));
+            } else if (kind === "document") {
+                addButton("Mở rộng ra toàn bộ thư viện", () => submitRecoveryQuery(query, "library", searchScope));
+            }
+            addButton("Sửa câu hỏi rồi thử lại", () => {
+                focusQuestionForEdit();
+            });
+            addButton("Chọn trang hoặc tài liệu khác", () => openSourceLookupWithQuestion(query));
+        }
+        assistantMsgEl.querySelector(".message-body")?.appendChild(actions);
+    }
 
     // Chat form submit
     chatForm.addEventListener("submit", async (e) => {
@@ -259,20 +434,22 @@ document.addEventListener("DOMContentLoaded", () => {
         let completionReceived = false;
         let streamFailed = false;
         let finalCitations = [];
+        let responseKind = "";
+        let responseScope = {};
+        let historyWasTrimmed = false;
+        let passagesWereTrimmed = false;
 
         try {
             const reqBody = {
                 query: query,
-                model: selectModel.value,
-                embed_model: selectEmbed.value || null,
-                top_k: parseInt(inputTopK.value) || 6,
                 temperature: 0.2,
+                answer_mode: answerModeSelect?.value || "quick",
                 session_id: targetSessionId,
                 request_id: requestId
             };
             if (selectedSourcePage) {
                 reqBody.source_document_id = selectedSourcePage.doc_id;
-                reqBody.source_page_num = selectedSourcePage.page_num;
+                if (selectedSourceMode === "page") reqBody.source_page_num = selectedSourcePage.page_num;
             }
             if (!sessionsApiSupported && clientChatHistory.length > 0) {
                 reqBody.chat_history = clientChatHistory.slice(-6);
@@ -331,11 +508,12 @@ document.addEventListener("DOMContentLoaded", () => {
                                 assistantMsgEl.querySelector(".message-body").classList.add("crisis-box");
                                 contentDiv.innerHTML = renderMarkdown(accumulatedAnswer);
                             } else if (event.type === "context") {
-                                if (event.history_turns_omitted || event.passages_omitted) {
-                                    chatStatus.textContent = "Đã rút gọn ngữ cảnh để vừa cửa sổ mô hình. Nếu cần một ý cũ, hãy nêu lại chủ đề hoặc đoạn trích.";
-                                }
+                                if (event.history_turns_omitted || event.store_history_turns_omitted) historyWasTrimmed = true;
+                                if (event.passages_omitted) passagesWereTrimmed = true;
                             } else if (event.type === "done") {
                                 completionReceived = true;
+                                responseKind = event.response_kind || "";
+                                responseScope = event.search_scope || {};
                                 if (event.cached_replay && event.answer) {
                                     accumulatedAnswer = event.answer;
                                     contentDiv.innerHTML = renderMarkdown(accumulatedAnswer);
@@ -353,6 +531,19 @@ document.addEventListener("DOMContentLoaded", () => {
                                 if (finalCitations && finalCitations.length > 0) {
                                     renderCitations(assistantMsgEl, finalCitations);
                                 }
+                                if (responseKind === "insufficient_evidence") {
+                                    addRecoveryActions(assistantMsgEl, query, responseScope, {
+                                        suggestedActions: event.suggested_actions || [],
+                                    });
+                                }
+                                if (historyWasTrimmed || passagesWereTrimmed) {
+                                    const notice = document.createElement("div");
+                                    notice.className = "context-trim-notice";
+                                    notice.textContent = historyWasTrimmed
+                                        ? "Một phần lịch sử hội thoại đã không được đưa vào ngữ cảnh của lượt này. Nêu lại ý cần tiếp tục nếu thiếu thông tin; citation từ lượt trước không được dùng làm bằng chứng mới."
+                                        : "Một số đoạn truy xuất không vừa cửa sổ ngữ cảnh. Câu trả lời dùng các đoạn đã được đưa vào và kiểm tra trong lượt này.";
+                                    assistantMsgEl.querySelector(".message-body")?.appendChild(notice);
+                                }
                                 // Update session ID if newly created
                                 if (event.session_id) {
                                     currentSessionId = event.session_id;
@@ -364,11 +555,18 @@ document.addEventListener("DOMContentLoaded", () => {
                                     clientChatHistory.push({ role: "user", content: query });
                                     clientChatHistory.push({ role: "assistant", content: accumulatedAnswer });
                                 }
+                                renderResumeControls({ question: query, citations: finalCitations });
                             } else if (event.type === "error") {
                                 streamFailed = true;
                                 const prefix = event.gpu_busy ? "⚠️" : "❌ Lỗi:";
                                 accumulatedAnswer += `\n\n${prefix} ${event.content}`;
                                 contentDiv.innerHTML = renderMarkdown(accumulatedAnswer);
+                                responseKind = event.response_kind || "technical_error";
+                                responseScope = event.search_scope || {};
+                                addRecoveryActions(assistantMsgEl, query, responseScope, {
+                                    technical: true,
+                                    suggestedActions: event.suggested_actions || [],
+                                });
                             }
                         } catch (pe) {
                             streamFailed = true;
@@ -388,6 +586,12 @@ document.addEventListener("DOMContentLoaded", () => {
             errorText.className = isBusy ? "text-warning" : "text-danger";
             errorText.textContent = `${prefix} ${err.message}`;
             contentDiv.replaceChildren(errorText);
+            const failedScope = responseScope.kind ? responseScope : (selectedSourcePage ? {
+                kind: selectedSourceMode,
+                document_id: selectedSourcePage.doc_id,
+                ...(selectedSourceMode === "page" ? { page_num: selectedSourcePage.page_num } : {}),
+            } : { kind: "library" });
+            addRecoveryActions(assistantMsgEl, query, failedScope, { technical: true });
         } finally {
             isGenerating = false;
             if (streamFailed || !completionReceived) {
@@ -565,6 +769,8 @@ document.addEventListener("DOMContentLoaded", () => {
             // Render all turns in order
             messagesContainer.innerHTML = "";
             const turns = data.turns || [];
+            const latestCitedTurn = [...turns].reverse().find(turn => Array.isArray(turn.citations) && turn.citations.length);
+            renderResumeControls(turns.length ? turns[turns.length - 1] : null, latestCitedTurn?.citations || []);
             turns.forEach(turn => {
                 appendMessage("user", turn.question);
                 const asstEl = appendMessage("assistant", turn.answer);
@@ -598,6 +804,7 @@ document.addEventListener("DOMContentLoaded", () => {
         currentSessionId = null;
         sessionStorage.removeItem("active_session_id");
         clientChatHistory = [];
+        renderResumeControls(null);
         sessionBar.style.display = "none";
         sessionSummaryBox.style.display = "none";
         messagesContainer.innerHTML = `
@@ -681,7 +888,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch(`/api/sessions/${summarySessionId}/summarize`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: selectModel.value })
+                body: JSON.stringify({})
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
@@ -787,16 +994,20 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!msgBody) return;
         const citBox = document.createElement("div");
         citBox.className = "citations-block";
-        citBox.style.cssText = "margin-top: 10px; padding: 8px 12px; background: #f8fafc; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 0.82rem;";
         const heading = document.createElement("strong");
+        heading.className = "citations-heading";
         heading.textContent = "📚 Đối chiếu với ảnh trang gốc:";
         citBox.appendChild(heading);
         citations.forEach((c, index) => {
             const detail = document.createElement("details");
+            detail.className = "citation-detail";
             detail.open = index === 0;
             const summary = document.createElement("summary");
+            summary.className = "citation-summary";
             const page = Number(c.page_num || c.page);
-            summary.textContent = `[${c.id || 'S'}] ${c.book_title || c.book || ''} · trang ${page || '?'}`;
+            const isPdf = Boolean(c.filename && c.filename.toLowerCase().endsWith(".pdf"));
+            const unitLabel = isPdf ? "trang" : "phần";
+            summary.textContent = `[${c.id || 'S'}] ${c.book_title || c.filename || c.book || ''} · ${unitLabel} ${page || '?'}`;
             detail.appendChild(summary);
             async function attachOriginalPage() {
                 let id = Number(c.doc_id);
@@ -810,17 +1021,39 @@ document.addEventListener("DOMContentLoaded", () => {
                     } catch (_) { return; }
                 }
                 if (!Number.isInteger(id) || id < 1) return;
-                const link = document.createElement("a");
-                link.href = `/api/documents/${id}/pdf#page=${page}`;
-                link.target = "_blank"; link.rel = "noopener noreferrer";
-                const original = document.createElement("img");
-                original.src = `/api/documents/${id}/pages/${page}/image`;
-                original.alt = `Ảnh trang gốc ${page} — ${c.book_title || c.filename || ''}`;
-                original.loading = "lazy"; original.className = "source-page-image";
-                link.appendChild(original); detail.appendChild(link);
-                const hint = document.createElement("p");
-                hint.textContent = "Bấm ảnh để mở PDF đúng trang và đối chiếu công thức, ký hiệu, câu chữ.";
-                detail.appendChild(hint);
+
+                if (isPdf) {
+                    const link = document.createElement("a");
+                    link.className = "citation-preview-link";
+                    link.href = `/api/documents/${id}/pdf#page=${page}`;
+                    link.target = "_blank";
+                    link.rel = "noopener noreferrer";
+                    const original = document.createElement("img");
+                    original.src = `/api/documents/${id}/pages/${page}/image`;
+                    original.alt = `Ảnh trang gốc ${page} — ${c.book_title || c.filename || ''}`;
+                    original.loading = "lazy";
+                    original.className = "source-page-image";
+
+                    const hint = document.createElement("p");
+                    hint.className = "citation-hint";
+                    hint.textContent = "Bấm ảnh để mở PDF đúng trang và đối chiếu công thức, ký hiệu, câu chữ.";
+
+                    original.onerror = () => {
+                        original.remove();
+                        link.textContent = `📄 Mở trang PDF ${page} để đối chiếu`;
+                        link.style.padding = "8px 12px";
+                        link.style.display = "inline-block";
+                    };
+
+                    link.appendChild(original);
+                    detail.appendChild(link);
+                    detail.appendChild(hint);
+                } else {
+                    const textNotice = document.createElement("p");
+                    textNotice.className = "citation-text-fallback";
+                    textNotice.textContent = "📝 Trích đoạn từ tệp văn bản / Markdown nguồn (không có bản scan ảnh trang).";
+                    detail.appendChild(textNotice);
+                }
             }
             attachOriginalPage();
             citBox.appendChild(detail);
@@ -892,11 +1125,6 @@ document.addEventListener("DOMContentLoaded", () => {
             statChunks.textContent = kb.total_chunks || 0;
             statScanned.textContent = kb.scanned_documents || 0;
             embeddingCoverage = kb.total_chunks ? (kb.embedded_chunks || 0) / kb.total_chunks : 0;
-            if (embeddingCoverage < 0.99) selectEmbed.value = "";
-            else {
-                const bge = Array.from(selectEmbed.options).find(o => o.value.startsWith("bge-m3"));
-                if (bge) selectEmbed.value = bge.value;
-            }
 
             window.kbData = kb.documents || [];
         } catch (e) {
@@ -917,43 +1145,26 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!name) throw new Error("Chưa có cấu hình mô hình văn bản");
             const usesMlx = data.default_model_backend === "mlx";
             const adapted = data.model_mode !== "unadapted_base";
-            selectModel.innerHTML = "";
-            const baseOption = document.createElement("option");
-            baseOption.value = name;
-            baseOption.textContent = usesMlx
-                ? (adapted ? "Qwen2.5 3B · Đã huấn luyện và kiểm định" : "Qwen2.5 3B · Mô hình gốc")
-                : `${name} · Phát triển (Ollama)`;
-            selectModel.appendChild(baseOption);
-            selectModel.value = name;
-            if (data.default_model_available) {
-                ollamaStatus.textContent = usesMlx
-                    ? (adapted ? "🟢 Mô hình đã kiểm định sẵn sàng" : "🟢 Mô hình gốc sẵn sàng")
-                    : "🟢 Mô hình phát triển Ollama sẵn sàng";
-                ollamaStatus.className = "status-indicator connected";
-            } else {
-                ollamaStatus.textContent = "🟡 Mô hình văn bản chưa sẵn sàng";
-                ollamaStatus.className = "status-indicator";
+            if (ollamaStatus) {
+                if (data.default_model_available) {
+                    ollamaStatus.textContent = usesMlx
+                        ? (adapted ? "🟢 Mô hình đã kiểm định sẵn sàng" : "🟢 Mô hình gốc sẵn sàng")
+                        : "🟢 Mô hình phát triển Ollama sẵn sàng";
+                    ollamaStatus.className = "status-indicator connected";
+                } else {
+                    ollamaStatus.textContent = "🟡 Mô hình văn bản chưa sẵn sàng";
+                    ollamaStatus.className = "status-indicator";
+                }
             }
-            const embeddings = (data.models || []).filter(m => /(?:embed|bge|mxbai|all-minilm)/i.test(m.name || ""));
-            selectEmbed.innerHTML = "";
-            for (const model of embeddings) {
-                const option = document.createElement("option");
-                option.value = model.name;
-                option.textContent = model.name;
-                selectEmbed.appendChild(option);
-            }
-            const keywordOnly = document.createElement("option");
-            keywordOnly.value = "";
-            keywordOnly.textContent = "Chỉ dùng tìm kiếm từ khóa";
-            selectEmbed.appendChild(keywordOnly);
-            const bge = embeddings.find(m => m.name.startsWith("bge-m3"));
-            selectEmbed.value = bge && embeddingCoverage >= 0.99 ? bge.name : "";
         } catch (error) {
-            ollamaStatus.textContent = "🔴 Chưa đọc được trạng thái mô hình";
-            ollamaStatus.className = "status-indicator disconnected";
+            if (ollamaStatus) {
+                ollamaStatus.textContent = "🔴 Chưa đọc được trạng thái mô hình";
+                ollamaStatus.className = "status-indicator disconnected";
+            }
             console.error("Model status error", error);
         }
     }
+    const fetchModels = fetchOllamaModels;
 
     function renderKbTable() {
         const docs = window.kbData || [];

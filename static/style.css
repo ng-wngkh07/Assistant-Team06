@@ -675,6 +675,18 @@ body {
     padding: 12px 24px 16px;
 }
 
+.qa-answer-mode {
+    max-width: 860px;
+    margin: 0 auto 8px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+.qa-answer-mode label { color: var(--text-secondary); font-weight: 600; }
+.qa-answer-mode .form-select { width: auto; min-width: 190px; padding: 6px 30px 6px 10px; }
+
 /* Khung nhập: viền tím + ánh sáng như hình mẫu */
 .chat-form {
     max-width: 860px;
@@ -731,6 +743,21 @@ body {
     text-align: right;
 }
 .input-hint strong { color: var(--text-secondary); }
+
+.qa-recovery-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+.context-trim-notice {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
 
 /* ------------------------------- Modals ---------------------------------- */
 .modal {
@@ -1008,8 +1035,78 @@ body {
     margin: 10px 0;
     background: white;
 }
-.document-result details, .citations-block details { margin-top: 10px; }
-.document-result summary, .citations-block summary { cursor: pointer; }
+.document-result details { margin-top: 10px; }
+.document-result summary { cursor: pointer; }
+
+/* Khối trích dẫn đối chiếu nguồn trang - Chế độ tối mặc định */
+.citations-block {
+    margin-top: 12px;
+    padding: 12px 14px;
+    background-color: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--primary);
+    border-radius: 8px;
+    font-size: 0.84rem;
+    color: var(--text-primary);
+}
+.citations-block .citations-heading {
+    display: block;
+    font-weight: 600;
+    font-size: 0.88rem;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+.citations-block .citation-detail {
+    margin-top: 8px;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+}
+.citations-block .citation-summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--text-primary);
+    outline: none;
+    list-style-position: inside;
+}
+.citations-block .citation-summary:hover {
+    color: var(--primary);
+}
+.citations-block .citation-preview-link {
+    display: block;
+    margin-top: 8px;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: var(--bg-main);
+    color: var(--primary);
+    text-decoration: none;
+}
+.citations-block .citation-preview-link:hover {
+    border-color: var(--primary);
+}
+.citations-block .source-page-image {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+    background: var(--bg-card);
+}
+.citations-block .citation-hint {
+    margin-top: 6px;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+.citations-block .citation-text-fallback {
+    margin-top: 6px;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    background: var(--bg-main);
+    border: 1px dashed var(--border);
+    border-radius: 4px;
+    color: var(--text-secondary);
+}
 .timetable-header h2 {
     font-size: 20px;
     margin-bottom: 6px;
@@ -1407,6 +1504,8 @@ body.sidebar-collapsed #btn-open-sidebar { display: inline-flex; }
 .session-title-wrapper strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
 .session-bar-icon { color: var(--text-muted); }
 .session-controls { display: flex; align-items: center; gap: 8px; }
+.resume-source-list { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.resume-source-label { color: var(--text-muted); font-size: 0.75rem; }
 .btn-mini { padding: 3px 9px; font-size: 0.78rem; border-radius: 9px; }
 
 .session-summary-box {
@@ -1593,6 +1692,9 @@ body.sidebar-collapsed #btn-open-sidebar { display: inline-flex; }
     .chat-form { padding: 8px 8px 8px 14px; border-radius: 20px; }
     .chat-form textarea { min-width: 0; }
     .session-bar { padding: 8px 14px; }
+    .session-controls { flex-wrap: wrap; justify-content: flex-end; }
+    .qa-answer-mode { flex-wrap: wrap; }
+    .qa-answer-mode span { flex-basis: 100%; margin-left: 2px; }
     .session-summary-box, .training-banner { width: calc(100% - 28px); }
     .documents-panel, .timetable-panel { padding: 16px 12px; }
     .document-filters { flex-direction: column; align-items: stretch; }

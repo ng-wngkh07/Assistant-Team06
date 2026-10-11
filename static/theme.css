@@ -251,3 +251,44 @@ html[data-theme="light"] .welcome-card .chip:hover {
     border-color: var(--primary-border);
     box-shadow: 0 14px 34px -16px rgba(66, 37, 240, 0.5);
 }
+
+/* Khối trích dẫn đối chiếu nguồn trang - Chế độ sáng */
+html[data-theme="light"] .citations-block {
+    background-color: var(--bg-subtle);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--primary);
+    color: var(--text-primary);
+}
+html[data-theme="light"] .citations-block .citations-heading {
+    color: var(--text-primary);
+}
+html[data-theme="light"] .citations-block .citation-detail {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+}
+html[data-theme="light"] .citations-block .citation-summary {
+    color: var(--text-primary);
+}
+html[data-theme="light"] .citations-block .citation-summary:hover {
+    color: var(--primary);
+}
+html[data-theme="light"] .citations-block .citation-preview-link {
+    border-color: var(--border);
+    background: var(--bg-elev);
+    color: var(--primary);
+}
+html[data-theme="light"] .citations-block .citation-preview-link:hover {
+    border-color: var(--primary-border);
+}
+html[data-theme="light"] .citations-block .source-page-image {
+    background: #ffffff;
+}
+html[data-theme="light"] .citations-block .citation-hint {
+    color: var(--text-secondary);
+}
+html[data-theme="light"] .citations-block .citation-text-fallback {
+    background: #ffffff;
+    border-color: var(--border);
+    color: var(--text-secondary);
+}
+
