@@ -1,0 +1,350 @@
+{
+  "schema_version": 1,
+  "purpose": "public_functional_testing_only",
+  "training_allowed": false,
+  "quality_holdout": false,
+  "license": "CC0-1.0",
+  "topics": [
+    {
+      "id": "linear_algebra",
+      "title": "Đại số tuyến tính"
+    },
+    {
+      "id": "calculus",
+      "title": "Vi tích phân"
+    },
+    {
+      "id": "discrete_math",
+      "title": "Toán rời rạc"
+    },
+    {
+      "id": "oop",
+      "title": "Lập trình hướng đối tượng"
+    },
+    {
+      "id": "data_structures",
+      "title": "Cấu trúc dữ liệu"
+    },
+    {
+      "id": "physics",
+      "title": "Vật lý đại cương"
+    },
+    {
+      "id": "psychology",
+      "title": "Tâm lý học nhận thức"
+    },
+    {
+      "id": "game_theory",
+      "title": "Lý thuyết trò chơi"
+    },
+    {
+      "id": "habits",
+      "title": "Thói quen và học tập"
+    }
+  ],
+  "documents": [
+    {
+      "path": "yc194_linear_algebra_theory.pdf",
+      "topic": "linear_algebra",
+      "title": "Đại số tuyến tính",
+      "kind": "theory",
+      "pdf_pages": 1,
+      "sha256": "5f0432021de8a1156499b3fb23f66eb9fd7120f1ed6d265f7f204de5be7bfd96",
+      "bytes": 40093,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_linear_algebra_worked.pdf",
+      "topic": "linear_algebra",
+      "title": "Đại số tuyến tính",
+      "kind": "exercise_with_answer",
+      "pdf_pages": 3,
+      "sha256": "6320044d36e825a6ab0a4629ab0d5546b3dcf795013b41cc3a997068f73b5064",
+      "bytes": 44188,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_linear_algebra_unsolved.md",
+      "topic": "linear_algebra",
+      "title": "Đại số tuyến tính",
+      "kind": "exercise_without_answer",
+      "pdf_pages": null,
+      "sha256": "83d9938b4fc2af0469582ef0c567628030b280dcc88753087688ea24786bb4fb",
+      "bytes": 562,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_calculus_theory.pdf",
+      "topic": "calculus",
+      "title": "Vi tích phân",
+      "kind": "theory",
+      "pdf_pages": 1,
+      "sha256": "dbe5975a52819b9c5dc78ce5fd921934013a4828e96ac07e91b22a501f8f9713",
+      "bytes": 40249,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_calculus_worked.pdf",
+      "topic": "calculus",
+      "title": "Vi tích phân",
+      "kind": "exercise_with_answer",
+      "pdf_pages": 3,
+      "sha256": "16d8085b6db8a085d4d332e1305b3a75b44968b085e606555eb5355a0ea1feb4",
+      "bytes": 44910,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_calculus_unsolved.md",
+      "topic": "calculus",
+      "title": "Vi tích phân",
+      "kind": "exercise_without_answer",
+      "pdf_pages": null,
+      "sha256": "fcd84106e943743504183e662452ebdfee4fa1c310b0c5bd988c33914819af99",
+      "bytes": 541,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_discrete_math_theory.pdf",
+      "topic": "discrete_math",
+      "title": "Toán rời rạc",
+      "kind": "theory",
+      "pdf_pages": 1,
+      "sha256": "2c1da673cf308a83273da451723038f47f607f6ba547ee5b9c81acab74eaef52",
+      "bytes": 39778,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_discrete_math_worked.pdf",
+      "topic": "discrete_math",
+      "title": "Toán rời rạc",
+      "kind": "exercise_with_answer",
+      "pdf_pages": 3,
+      "sha256": "3230636e4d669de718c9fcce4da91099e15063ab28161c5ae0607994f2212527",
+      "bytes": 44603,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_discrete_math_unsolved.md",
+      "topic": "discrete_math",
+      "title": "Toán rời rạc",
+      "kind": "exercise_without_answer",
+      "pdf_pages": null,
+      "sha256": "a373fe900ca484f4804637201cd1594ffb627178c40afd0a58f8b560db84d465",
+      "bytes": 475,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_oop_theory.pdf",
+      "topic": "oop",
+      "title": "Lập trình hướng đối tượng",
+      "kind": "theory",
+      "pdf_pages": 1,
+      "sha256": "986d9617f8c41e41cb2d87729c30dba794a6c9eee0143162e85a6a1fcddb123a",
+      "bytes": 37538,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_oop_worked.pdf",
+      "topic": "oop",
+      "title": "Lập trình hướng đối tượng",
+      "kind": "exercise_with_answer",
+      "pdf_pages": 3,
+      "sha256": "8e650da70a1f86000a05fdd4a07694887b950f44da0f4ac2f782a64512562673",
+      "bytes": 42855,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_oop_unsolved.md",
+      "topic": "oop",
+      "title": "Lập trình hướng đối tượng",
+      "kind": "exercise_without_answer",
+      "pdf_pages": null,
+      "sha256": "f52dec48f83fa45baa2c30844e664f4d7eb06cc8322db913843f398216184b2a",
+      "bytes": 652,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_data_structures_theory.pdf",
+      "topic": "data_structures",
+      "title": "Cấu trúc dữ liệu",
+      "kind": "theory",
+      "pdf_pages": 1,
+      "sha256": "6ae465aa5fc86aa6ee6b0cc4e82a10b98e6ce6f5e93db319a3b3693e9854d63e",
+      "bytes": 39606,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_data_structures_worked.pdf",
+      "topic": "data_structures",
+      "title": "Cấu trúc dữ liệu",
+      "kind": "exercise_with_answer",
+      "pdf_pages": 3,
+      "sha256": "7b2a54ae0493af5b817d9241cafb0a6a8c7bb5a1577577648a65bbd02c2f6a24",
+      "bytes": 44692,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_data_structures_unsolved.md",
+      "topic": "data_structures",
+      "title": "Cấu trúc dữ liệu",
+      "kind": "exercise_without_answer",
+      "pdf_pages": null,
+      "sha256": "8b0a0a05c67798cefea0f22f3522f7452742a583c94b67798ee5dd12dc680070",
+      "bytes": 617,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_physics_theory.pdf",
+      "topic": "physics",
+      "title": "Vật lý đại cương",
+      "kind": "theory",
+      "pdf_pages": 1,
+      "sha256": "69292a12188fc69c1ec6380d2de24295d85be574012c618ce92b474ad399a9f1",
+      "bytes": 40358,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_physics_worked.pdf",
+      "topic": "physics",
+      "title": "Vật lý đại cương",
+      "kind": "exercise_with_answer",
+      "pdf_pages": 3,
+      "sha256": "67b2a4d5adf3df3af27b3c514d7b4378ad6842375427931d353a11973dfa0906",
+      "bytes": 45578,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_physics_unsolved.md",
+      "topic": "physics",
+      "title": "Vật lý đại cương",
+      "kind": "exercise_without_answer",
+      "pdf_pages": null,
+      "sha256": "83f84ff011704beec7c2a77e831cc536cd82aee94be6187cea02986226ef06aa",
+      "bytes": 684,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_psychology_theory.pdf",
+      "topic": "psychology",
+      "title": "Tâm lý học nhận thức",
+      "kind": "theory",
+      "pdf_pages": 1,
+      "sha256": "11fbef08059307a66f078643f2ff6d4184d6010cb78824227cf35a0e81f17b2a",
+      "bytes": 38034,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_psychology_worked.pdf",
+      "topic": "psychology",
+      "title": "Tâm lý học nhận thức",
+      "kind": "exercise_with_answer",
+      "pdf_pages": 3,
+      "sha256": "3601c42a5d2367dcdfe2be0b700660f20153ec13e6e4bfa9fa330c54a4a77ca2",
+      "bytes": 43142,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_psychology_unsolved.md",
+      "topic": "psychology",
+      "title": "Tâm lý học nhận thức",
+      "kind": "exercise_without_answer",
+      "pdf_pages": null,
+      "sha256": "ed8c4e9e079a45aed26cac148bee17b301705af715267443eae3509485eb464b",
+      "bytes": 718,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_game_theory_theory.pdf",
+      "topic": "game_theory",
+      "title": "Lý thuyết trò chơi",
+      "kind": "theory",
+      "pdf_pages": 1,
+      "sha256": "be8d00677784617bdf75a6a6bfd4d2b196b2f77caccd0b3a2d1ba18675f1d4f4",
+      "bytes": 39223,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_game_theory_worked.pdf",
+      "topic": "game_theory",
+      "title": "Lý thuyết trò chơi",
+      "kind": "exercise_with_answer",
+      "pdf_pages": 3,
+      "sha256": "ed1a873bfa9659bdfffd4063562e1206384ed787ecf76d8f6aa03dec60aff401",
+      "bytes": 44162,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_game_theory_unsolved.md",
+      "topic": "game_theory",
+      "title": "Lý thuyết trò chơi",
+      "kind": "exercise_without_answer",
+      "pdf_pages": null,
+      "sha256": "9a529892c53bc0868a3dbaae003eff3277a33bbaf70bc4cabde4e2129697ad37",
+      "bytes": 723,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_habits_theory.pdf",
+      "topic": "habits",
+      "title": "Thói quen và học tập",
+      "kind": "theory",
+      "pdf_pages": 1,
+      "sha256": "6e39abacfa44fabce5a31075647ad2f0e1bd143c7563bdf312323ef6352ba458",
+      "bytes": 38773,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_habits_worked.pdf",
+      "topic": "habits",
+      "title": "Thói quen và học tập",
+      "kind": "exercise_with_answer",
+      "pdf_pages": 3,
+      "sha256": "43352f870da10a25b00d1bda417033eb3548cd2a384faee765110d7992b46ffe",
+      "bytes": 43533,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    },
+    {
+      "path": "yc194_habits_unsolved.md",
+      "topic": "habits",
+      "title": "Thói quen và học tập",
+      "kind": "exercise_without_answer",
+      "pdf_pages": null,
+      "sha256": "ede2d2f18194d659a65fa587d75d8f01e15b37928bced5b3bfdb0e2c7817826a",
+      "bytes": 791,
+      "origin": "project_authored_synthetic",
+      "training_allowed": false
+    }
+  ],
+  "counts": {
+    "new_documents": 27,
+    "topics": 9,
+    "pdf_pages": 36,
+    "bytes": 757078
+  }
+}

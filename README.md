@@ -89,3 +89,6 @@ Node 22 dùng cho test giao diện, không cần để chạy web; cài từ [No
 CI/demo không nghiệm thu bộ cài full trên máy Windows mới, QA/VLM thật, corpus readiness hoặc training. MLX không cài trong môi trường Windows. Chỉ TV4 ghi corpus/index/vector chính và training; cần audit live `complete: true`, review/provenance toàn nguồn và đánh giá candidate độc lập trước kích hoạt. Các bước đã/chưa chạy ghi trong nhật ký và báo cáo nhóm.
 
 Mã nguồn theo [MIT](LICENSE). Giấy phép mã không cấp quyền chia sẻ sách, ảnh cá nhân hoặc model của bên thứ ba; kiểm quyền và giấy phép riêng của từng nguồn/model.
+
+
+Bản demo dùng [bộ 27 tài liệu kiểm thử / 9 chủ đề](tests/fixtures/PUBLIC_CORPUS.md) do dự án tự biên soạn, kèm manifest và ca kiểm tra; không chứa dữ liệu huấn luyện riêng.

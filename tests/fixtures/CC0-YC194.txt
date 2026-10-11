@@ -1,0 +1,5 @@
+The 27 yc194_* documents listed in public_corpus_yc194.json were independently authored for this project. To the extent possible under law, the authors dedicate these documents to the public domain under CC0 1.0 Universal.
+
+https://creativecommons.org/publicdomain/zero/1.0/
+
+This dedication applies only to the newly authored yc194_* documents. It does not alter licensing of existing fixtures, source code, private documents, model weights, or training data.

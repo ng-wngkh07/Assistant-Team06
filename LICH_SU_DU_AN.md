@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-11T10:27:08.062672+07:00
-- Mục mới nhất: **[YC-192](#yc-192)**.
-- Nhật ký chung có **29 mục**: 10 môi trường/chức năng (YC-167/170/173/175/177/185/192 và 3 LOG), 3 tổ chức/tài liệu, 2 phát hành GitHub, 6 rà soát/nghiệm thu, 5 làm rõ quyền/quy trình, 3 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
+- Cập nhật: 2026-10-11T12:48:26.666712+07:00
+- Mục mới nhất: **[LOG-20261011-shared-public-corpus-tv6](#log-20261011-shared-public-corpus-tv6)**.
+- Nhật ký chung có **30 mục**: 11 môi trường/chức năng (YC-167/170/173/175/177/185/192 và 4 LOG), 3 tổ chức/tài liệu, 2 phát hành GitHub, 6 rà soát/nghiệm thu, 5 làm rõ quyền/quy trình, 3 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -713,3 +713,14 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Đo truy xuất: 168 lượt/28 câu với K2/4/6/8/10/12. K6 đạt 7/28 prompt có trang tham chiếu, bằng K8/K10; K12 đạt 6/28. Giữ K6 và câu tổng hợp K10 nội bộ. Đây là kiểm tìm nguồn, không phải độ chính xác trả lời; xếp hạng và chọn nguồn dưới ngân sách còn hạn chế. [Phương pháp và giới hạn](docs/team/CAU_HINH_TRA_LOI_VA_TOPK_YC192.md).
 - Bảo toàn local: đã lưu bản sao có hash của 211 file mã/tài liệu và Git metadata; DB/vector/weights giữ tại chỗ. CI bản sửa, merge và đồng bộ main đang chờ kiểm chứng.
 - Dữ liệu/huấn luyện: 28 kiểm thử hợp đồng nháp v18 PASS nhưng review nội dung tìm nhãn Vi tích phân không khớp nguồn và thiếu điều kiện Đại số; REJECT_PARTIAL_CONTENT_REVIEW, chưa review đủ toàn bộ. Cần sửa dữ liệu và chuyển bộ đánh giá sang prompt/mode của update-Agent trước học; không kích hoạt adapter.
+
+
+<a id="log-20261011-shared-public-corpus-tv6"></a>
+### LOG-20261011-shared-public-corpus-tv6 - 11/10/2026 12:48 (UTC+07)
+
+- Người thực hiện: TV6/Codex; loại: môi trường/chức năng kiểm thử dùng chung.
+- Trước: demo có hai tài liệu, thiếu độ phủ chủ đề, bài tập thiếu đáp án và đáp án ở trang khác.
+- Sau: bổ sung 27 tài liệu độc lập thuộc 9 chủ đề, mỗi chủ đề có lý thuyết, bài kèm đáp án và bài chưa có đáp án; tổng demo 29 tài liệu. PDF mới 36 trang, toàn bộ mẫu mới dưới 1 MB. Không lấy corpus, nhãn, lịch sử hoặc model riêng.
+- File: tests/fixtures/documents/yc194_*, manifest public_corpus_yc194.json, PUBLIC_CORPUS.md, CC0-YC194.txt, test_public_corpus_yc194.py, pytest.windows.ini.
+- Ranh giới: nguồn mới do dự án tự biên soạn và công bố CC0-1.0; training_allowed=false, quality_holdout=false. Đây là kiểm thử chức năng, không phải phép đo độ đúng trên corpus riêng hoặc dữ liệu được duyệt để huấn luyện.
+- Kiểm chứng: hash/định dạng/số trang/độ phủ 1 kiểm thử PASS, 36 trang đã render và kiểm tra; demo lập chỉ mục và 212 kiểm thử Python3.12 PASS/6 cảnh báo phụ thuộc (bao gồm cách ly DB, API tra cứu và các tính năng cũ). Push/PR đang thực hiện; chưa merge.
