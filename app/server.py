@@ -69,9 +69,6 @@ summarizer = TopicSummarizer(history_store=history_store, ollama=ollama)
 class ChatRequest(BaseModel):
     query: str = Field(max_length=4000)
     chat_history: Optional[List[Dict[str, str]]] = Field(default=None, max_length=32)
-    model: Optional[str] = DEFAULT_CHAT_MODEL
-    embed_model: Optional[str] = DEFAULT_EMBED_MODEL
-    top_k: Optional[int] = Field(default=DEFAULT_TOP_K, ge=1, le=12)
     answer_mode: Literal["quick", "steps", "compare", "summary", "step_by_step", "comparison"] = "quick"
     explanation_mode: Optional[Literal["quick", "steps", "compare", "summary", "step_by_step", "comparison"]] = None
     isolate_context: Optional[bool] = False
@@ -101,7 +98,6 @@ class PracticeGenerateRequest(BaseModel):
     source_page_num: int = Field(ge=1)
     source_chunk_id: Optional[int] = Field(default=None, ge=1)
     count: int = Field(default=3, ge=1, le=3)
-    model: Optional[str] = Field(default=DEFAULT_CHAT_MODEL, max_length=200)
 
 
 class PracticeAnswerRequest(BaseModel):
@@ -122,7 +118,7 @@ async def generate_practice(req: PracticeGenerateRequest):
                 doc_id=req.source_document_id,
                 page_num=req.source_page_num,
                 count=req.count,
-                model=req.model or DEFAULT_CHAT_MODEL,
+                model=DEFAULT_CHAT_MODEL,
                 source_chunk_id=req.source_chunk_id,
             )
 
@@ -192,12 +188,11 @@ class SessionRenameRequest(BaseModel):
     title: str
 
 class SessionSummarizeRequest(BaseModel):
-    model: Optional[str] = DEFAULT_CHAT_MODEL
+    pass
 
 class IndexRequest(BaseModel):
     force: bool = False
     ocr: bool = True
-    embed_model: Optional[str] = None
 
 class OCRReviewRequest(BaseModel):
     cache_key: str
@@ -749,11 +744,11 @@ async def get_index_status():
 @app.post("/api/index")
 async def trigger_indexing(req: IndexRequest):
     allowed, busy_msg = gpu_coordinator.check_inference_allowed()
-    if not allowed and req.embed_model != "none" and req.embed_model is not None:
+    if not allowed:
         raise HTTPException(status_code=503, detail=busy_msg)
     def run_index():
         with dialogue_gate.acquire(), gpu_coordinator.acquire_for_inference():
-            return indexer.index_all(force=req.force, ocr=req.ocr, embed_model=req.embed_model)
+            return indexer.index_all(force=req.force, ocr=req.ocr, embed_model=DEFAULT_EMBED_MODEL)
     try:
         report = await run_in_threadpool(run_index)
         return {"status": "success", "report": report}
@@ -830,9 +825,9 @@ def _chat_sync(req):
             res = agent.process_query_sync(
                 query=req.query,
                 chat_history=effective_history,
-                model=req.model or DEFAULT_CHAT_MODEL,
-                embed_model=req.embed_model,
-                top_k=req.top_k or DEFAULT_TOP_K,
+                model=DEFAULT_CHAT_MODEL,
+                embed_model=DEFAULT_EMBED_MODEL,
+                top_k=DEFAULT_TOP_K,
                 temperature=req.temperature if req.temperature is not None else 0.2,
                 answer_mode=req.answer_mode,
                 source_document_id=source_document_id,
@@ -859,7 +854,7 @@ def _chat_sync(req):
             question=req.query,
             answer=answer,
             citations=res.get("citations", []),
-            model=req.model or DEFAULT_CHAT_MODEL,
+            model=DEFAULT_CHAT_MODEL,
             request_id=req.request_id,
             answer_mode=req.answer_mode,
             search_scope=res.get("search_scope", {}),
@@ -876,7 +871,7 @@ def _chat_sync(req):
             res["recent_question"] = cur_sess["turns"][-1]["question"]
             res["recent_source"] = cur_sess["turns"][-1]["citations"][0] if cur_sess["turns"][-1].get("citations") else None
 
-    res["model"] = req.model or DEFAULT_CHAT_MODEL
+    res["model"] = DEFAULT_CHAT_MODEL
     return res
 
 
@@ -961,7 +956,7 @@ async def clear_all_sessions():
 
 @app.post("/api/sessions/{session_id}/summarize")
 async def summarize_session(session_id: str, req: Optional[SessionSummarizeRequest] = None):
-    model = (req.model if req and req.model else DEFAULT_CHAT_MODEL)
+    model = DEFAULT_CHAT_MODEL
     def run_summary():
         with dialogue_gate.acquire():
             return summarizer.summarize_session_sync(session_id=session_id, model=model)
@@ -1076,9 +1071,9 @@ async def chat_stream(req: ChatRequest):
                 for event in agent.process_query_stream(
                     query=req.query,
                     chat_history=effective_history,
-                    model=req.model or DEFAULT_CHAT_MODEL,
-                    embed_model=req.embed_model,
-                    top_k=req.top_k or DEFAULT_TOP_K,
+                    model=DEFAULT_CHAT_MODEL,
+                    embed_model=DEFAULT_EMBED_MODEL,
+                    top_k=DEFAULT_TOP_K,
                     temperature=req.temperature if req.temperature is not None else 0.2,
                     answer_mode=req.answer_mode,
                     source_document_id=source_document_id,
@@ -1117,7 +1112,7 @@ async def chat_stream(req: ChatRequest):
                                 question=req.query,
                                 answer="".join(answer_parts),
                                 citations=citations,
-                                model=req.model or DEFAULT_CHAT_MODEL,
+                                model=DEFAULT_CHAT_MODEL,
                                 request_id=req.request_id,
                                 answer_mode=req.answer_mode,
                                 search_scope=search_scope,

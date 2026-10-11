@@ -50,11 +50,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const resumeSourceList = document.getElementById("resume-source-list");
     const answerModeSelect = document.getElementById("answer-mode");
 
-    const selectModel = document.getElementById("select-model");
-    const selectEmbed = document.getElementById("select-embed");
-    const inputTopK = document.getElementById("input-topk");
-    const topKVal = document.getElementById("topk-val");
-
     function renderResumeControls(turn, fallbackCitations = []) {
         const previousCitations = latestRestorableTurn?.citations || [];
         latestRestorableTurn = turn && turn.question ? {
@@ -168,10 +163,6 @@ document.addEventListener("DOMContentLoaded", () => {
     setInterval(fetchKnowledgeBaseStatus, 5000);
 
     // Event Listeners
-    inputTopK.addEventListener("input", (e) => {
-        topKVal.textContent = e.target.value;
-    });
-
     userInput.addEventListener("input", () => {
         userInput.style.height = "auto";
         userInput.style.height = Math.min(userInput.scrollHeight, 140) + "px";
@@ -301,7 +292,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch("/api/index", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ force: false, ocr: true, embed_model: selectEmbed.value || null })
+                body: JSON.stringify({ force: false, ocr: true })
             });
             const data = await res.json();
             if (res.ok) {
@@ -451,9 +442,6 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const reqBody = {
                 query: query,
-                model: selectModel.value,
-                embed_model: selectEmbed.value || null,
-                top_k: parseInt(inputTopK.value) || 6,
                 temperature: 0.2,
                 answer_mode: answerModeSelect?.value || "quick",
                 session_id: targetSessionId,
@@ -900,7 +888,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch(`/api/sessions/${summarySessionId}/summarize`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: selectModel.value })
+                body: JSON.stringify({})
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
@@ -1137,11 +1125,6 @@ document.addEventListener("DOMContentLoaded", () => {
             statChunks.textContent = kb.total_chunks || 0;
             statScanned.textContent = kb.scanned_documents || 0;
             embeddingCoverage = kb.total_chunks ? (kb.embedded_chunks || 0) / kb.total_chunks : 0;
-            if (embeddingCoverage < 0.99) selectEmbed.value = "";
-            else {
-                const bge = Array.from(selectEmbed.options).find(o => o.value.startsWith("bge-m3"));
-                if (bge) selectEmbed.value = bge.value;
-            }
 
             window.kbData = kb.documents || [];
         } catch (e) {
@@ -1162,43 +1145,26 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!name) throw new Error("Chưa có cấu hình mô hình văn bản");
             const usesMlx = data.default_model_backend === "mlx";
             const adapted = data.model_mode !== "unadapted_base";
-            selectModel.innerHTML = "";
-            const baseOption = document.createElement("option");
-            baseOption.value = name;
-            baseOption.textContent = usesMlx
-                ? (adapted ? "Qwen2.5 3B · Đã huấn luyện và kiểm định" : "Qwen2.5 3B · Mô hình gốc")
-                : `${name} · Phát triển (Ollama)`;
-            selectModel.appendChild(baseOption);
-            selectModel.value = name;
-            if (data.default_model_available) {
-                ollamaStatus.textContent = usesMlx
-                    ? (adapted ? "🟢 Mô hình đã kiểm định sẵn sàng" : "🟢 Mô hình gốc sẵn sàng")
-                    : "🟢 Mô hình phát triển Ollama sẵn sàng";
-                ollamaStatus.className = "status-indicator connected";
-            } else {
-                ollamaStatus.textContent = "🟡 Mô hình văn bản chưa sẵn sàng";
-                ollamaStatus.className = "status-indicator";
+            if (ollamaStatus) {
+                if (data.default_model_available) {
+                    ollamaStatus.textContent = usesMlx
+                        ? (adapted ? "🟢 Mô hình đã kiểm định sẵn sàng" : "🟢 Mô hình gốc sẵn sàng")
+                        : "🟢 Mô hình phát triển Ollama sẵn sàng";
+                    ollamaStatus.className = "status-indicator connected";
+                } else {
+                    ollamaStatus.textContent = "🟡 Mô hình văn bản chưa sẵn sàng";
+                    ollamaStatus.className = "status-indicator";
+                }
             }
-            const embeddings = (data.models || []).filter(m => /(?:embed|bge|mxbai|all-minilm)/i.test(m.name || ""));
-            selectEmbed.innerHTML = "";
-            for (const model of embeddings) {
-                const option = document.createElement("option");
-                option.value = model.name;
-                option.textContent = model.name;
-                selectEmbed.appendChild(option);
-            }
-            const keywordOnly = document.createElement("option");
-            keywordOnly.value = "";
-            keywordOnly.textContent = "Chỉ dùng tìm kiếm từ khóa";
-            selectEmbed.appendChild(keywordOnly);
-            const bge = embeddings.find(m => m.name.startsWith("bge-m3"));
-            selectEmbed.value = bge && embeddingCoverage >= 0.99 ? bge.name : "";
         } catch (error) {
-            ollamaStatus.textContent = "🔴 Chưa đọc được trạng thái mô hình";
-            ollamaStatus.className = "status-indicator disconnected";
+            if (ollamaStatus) {
+                ollamaStatus.textContent = "🔴 Chưa đọc được trạng thái mô hình";
+                ollamaStatus.className = "status-indicator disconnected";
+            }
             console.error("Model status error", error);
         }
     }
+    const fetchModels = fetchOllamaModels;
 
     function renderKbTable() {
         const docs = window.kbData || [];

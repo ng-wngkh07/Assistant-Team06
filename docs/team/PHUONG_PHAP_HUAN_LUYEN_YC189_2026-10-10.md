@@ -1,8 +1,8 @@
 # Đối chiếu phương pháp huấn luyện với Agent Học Tập
 
-Cập nhật: 10/10/2026. Phạm vi YC-189, tiếp nối YC-187/188; kết quả GitHub YC-190.
+Cập nhật: 11/10/2026 00:07 (UTC+07). Phạm vi YC-189, tiếp nối YC-187/188; kết quả GitHub YC-190.
 
-Ưu tiên hiện tại là sửa chất lượng dữ liệu và đo đúng hành vi ứng dụng. Bản nháp 216 mẫu có đủ sáu môn nhưng chưa được phép huấn luyện: chia cùng họ tài liệu vào train/valid, nhãn kiểm trắc nghiệm sai và một số đáp án bổ sung thông tin ngoài đoạn trích. Số lượng mẫu hoặc loss không giải quyết được các lỗi này.
+Ưu tiên hiện tại là sửa chất lượng dữ liệu và đo đúng hành vi ứng dụng. Bản nháp 216 mẫu có đủ sáu môn nhưng chưa được phép huấn luyện. Data03 bị loại vì chia lẫn họ nguồn và nhãn sai; Data04 đã cải thiện liên kết nguồn nhưng vẫn cần sửa ngôn ngữ trả lời, nhãn kiểm định và điều kiện bị lược bỏ. Số lượng mẫu hoặc loss không giải quyết được các lỗi này.
 
 ## Nguồn nghiên cứu và quyết định áp dụng
 
@@ -23,16 +23,20 @@ Cập nhật: 10/10/2026. Phạm vi YC-189, tiếp nối YC-187/188; kết quả
 
 - Môi trường học: mlx-lm0.31.3, mlx0.32.2, transformers5.17.0 trên Python3.13. Môi trường web local Python3.14.8; GitHub CI Python3.12.
 - Base được pin revision4f83f8f146fdf28b512a06562b671d7af4fab457, đã lưu SHA các file trọng số/tokenizer/config để kiểm trước chạy. Không tiếp tục từ adapter đã bị loại.
-- Corpus trước bổ sung nguồn:154 tài liệu/22.705 trang, scope22.692 trang sau đúng13 ngoại lệ được người dùng duyệt. complete:true chỉ theo phạm vi này; whole-source vẫn false. Cần audit live lại sau mỗi bổ sung.
+- Corpus sau bổ sung ba PDF MIT/Cornell: audit độc lập 157 tài liệu/22.711 trang, scope22.698 trang sau đúng13 ngoại lệ được người dùng duyệt; complete:true, failures rỗng. complete:true chỉ theo phạm vi này; whole-source vẫn false. Các hàng cũ của năm bảng dữ liệu đã được so sánh với backup và giữ nguyên. Cần audit live lại trước huấn luyện.
 - Data03:144 train/72 valid,216 mẫu,36 đoạn nguồn×6 tác vụ. Review độc lập đủ36 đoạn: REJECT. Ví dụ source C++ gọi createNode(v) nhưng nhãn thay thành new Node(v); đoạn Rogers bị gán thành cognitive dissonance; nhiều explanation gọi câu nằm ngoài span là nguyên văn.
 - Bốn ca hồi quy mới tái hiện lỗi: cờ kiểm trắc nghiệm không độc lập, thiếu yêu cầu nhãn verifier được tác giả duyệt, summary dùng PDF ngoài hội thoại runtime, chia lẫn bốn họ nguồn đã đối chiếu.
 - Timetable dùng VLM riêng. LoRA văn bản bao gồm hỏi đáp có nguồn/thiếu nguồn, sinh câu hỏi, kiểm câu đúng/sai và summary; lookup, chấm điểm, lưu hội thoại và xuất lịch được kiểm qua hồi quy chức năng.
 
 ## Thay đổi đã áp dụng và phần đang làm
 
-Đã triển khai cổng phạm vi nguồn gắn manifest/hash, kiểm admission cả train/valid và chặn nguồn/trang/alias không hợp lệ. PR8 đã sửa thiếu import annotation qua ca tái hiện độc lập; CI Windows/Mac Python3.12 PASS trên commit3c221ed. Đây là kiểm chứng mã, không phải nghiệm thu nhãn hay mô hình.
+Đã triển khai cổng phạm vi nguồn gắn manifest/hash, kiểm admission cả train/valid và chặn nguồn/trang/alias không hợp lệ. PR8 đã sửa thiếu import annotation qua ca tái hiện độc lập; CI cuối Windows/Mac Python3.12 và history PASS trên commitf88b135; PR8 được chủ repo merge vào main5d399d5. Đây là kiểm chứng mã, không phải nghiệm thu nhãn hay mô hình.
 
-Đã giữ bản nháp bị loại và review theo từng đoạn để sửa có bằng chứng, thêm kiểm thử ngữ nghĩa tái hiện trước sửa. Hai trang nguồn vật lý MIT độc lập đã được xem toàn bộ ảnh, lưu transcript/hash; đang bổ sung có giới hạn vào canonical index với backup và kiểm bảo toàn mọi rows cũ. Nguồn kiểm tra mới không được chia lẫn với VLDC1.
+Đã giữ bản nháp bị loại và review theo từng đoạn để sửa có bằng chứng, thêm kiểm thử ngữ nghĩa tái hiện trước sửa. Ba PDF độc lập mới gồm MIT8.01L2005 hai trang, CornellCS2800 một trang và CornellMATH1110 ba trang đã được xem ảnh, lưu transcript/hash và bổ sung vào canonical index với backup và kiểm bảo toàn mọi rows cũ. Một PDF bài giải Cornell khác có đạo hàm sai đã bị giữ ngoài corpus/dữ liệu. Nguồn kiểm tra mới không được chia lẫn với VLDC1.
+
+Data04: Codex kiểm độc lập đủ36 ngữ cảnh và bộ36 ca chức năng nháp. Offset/trích dẫn/hash nguồn khớp nhưng16 ngữ cảnh học còn nhãn tiếng Anh, kiểm định tự điền và một số phát biểu vượt đoạn nguồn. 46 kiểm thử độc lập đạt40, còn6 lỗi tại bộ sinh nhãn, evaluator và consumer balance. Token audit đúng tokenizer đo216 mẫu, tối đa848/1024 token, không cắt target; đây chỉ là khả năng chạy kỹ thuật. Bộ hỏi đáp thực tế có SYSTEM936 token và một prompt ngắn1216 token: học dùng hướng dẫn rút gọn có đủ quy tắc, đánh giá dùng đầy đủ hướng dẫn ứng dụng và đóng băng riêng. Không sửa giới hạn bộ nhớ hoặc bỏ quy tắc để vượt cổng.
+
+Đường đánh giá và consumer balance đã sửa qua execution05:27 hồi quy độc lập PASS, tích hợp main176 test Python3.12.14 và4 Node PASS. Đầu vào/decoding được giữ nguyên, metric và lý do dừng đọc từ stream; hash base/suite và review được kiểm trước sử dụng tài nguyên. Đây là kiểm chứng mã bằng fixture, chưa chạy mô hình thật. CI được bổ sung cả27 hồi quy. PR9/update-Agent đang mở có các chế độ QA mới; mốc học hiện giữ main đã merge trong khi chờ lựa chọn chức năng.
 
 Tiếp theo: sửa builder để dùng nhãn verifier riêng được duyệt cho từng trường; summary chỉ đọc bản ghi giới hạn như runtime; giữ đầy đủ phòng vệ trong prompt; chọn lại đoạn có công thức/điều kiện rõ và nguồn độc lập. Bộ đánh giá phải đóng băng trước học, pin byte đầu vào/base/tokenizer và ghi lý do dừng sinh thực, không tự gán stop khi thiếu dữ liệu. Baseline và candidate dùng cùng đầu vào, không chạy baseline trên bộ chưa duyệt.
 

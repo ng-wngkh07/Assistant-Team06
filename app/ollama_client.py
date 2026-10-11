@@ -125,11 +125,11 @@ class OllamaClient:
     def find_best_chat_model(self, preferred: Optional[str] = None) -> str:
         """Find best available chat model locally."""
         avail = self.get_available_model_names()
-        if preferred and any(preferred in m for m in avail):
-            for m in avail:
-                if preferred in m:
-                    return m
-        if preferred and preferred in avail:
+        if preferred:
+            if preferred in avail:
+                return preferred
+            if ":" not in preferred and f"{preferred}:latest" in avail:
+                return f"{preferred}:latest"
             return preferred
         # Look for common models
         for cand in ["qwen2.5:7b", "qwen2.5:3b", "qwen3:4b", "llama3.2:3b", "mistral", "gemma2"]:
@@ -143,10 +143,12 @@ class OllamaClient:
     def find_best_embed_model(self, preferred: Optional[str] = None) -> Optional[str]:
         """Find best available embedding model locally."""
         avail = self.get_available_model_names()
-        if preferred and any(preferred in m for m in avail):
-            for m in avail:
-                if preferred in m:
-                    return m
+        if preferred:
+            if preferred in avail:
+                return preferred
+            if ":" not in preferred and f"{preferred}:latest" in avail:
+                return f"{preferred}:latest"
+            return None
         for cand in ["bge-m3", "nomic-embed-text", "all-minilm", "mxbai-embed-large"]:
             for m in avail:
                 if cand in m:

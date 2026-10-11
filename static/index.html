@@ -85,36 +85,9 @@
                     </div>
                 </details>
 
-                <!-- Model Settings: ẩn khỏi giao diện (giữ trong DOM vì app.js đọc giá trị mặc định) -->
-                <details class="sidebar-card collapsible" hidden style="display:none" aria-hidden="true">
-                    <summary>⚙️ Cấu hình Mô hình</summary>
-                    <div class="collapsible-body">
-                        <div class="form-group">
-                            <label for="select-model">Mô hình suy luận:</label>
-                            <div class="input-with-status">
-                                <select id="select-model" class="form-select">
-                                    <option value="" selected>Đang kiểm tra mô hình…</option>
-                                </select>
-                            </div>
-                            <small class="text-muted field-hint">Mô hình được chọn theo cấu hình máy. Bản phát triển Ollama cần được kiểm thử riêng với bản MLX trên Mac.</small>
-                            <small id="ollama-status" class="status-indicator">Đang kiểm tra mô hình...</small>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="select-embed">Mô hình Embedding:</label>
-                            <select id="select-embed" class="form-select">
-                                <option value="bge-m3" selected>bge-m3 (Mặc định)</option>
-                                <option value="nomic-embed-text">nomic-embed-text</option>
-                                <option value="">Chỉ dùng Full-Text (FTS5 BM25)</option>
-                            </select>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="input-topk">Số đoạn trích (Top-K): <span id="topk-val">6</span></label>
-                            <input type="range" id="input-topk" min="2" max="15" value="6" class="form-range">
-                        </div>
-                    </div>
-                </details>
+                <div class="sidebar-status-box" style="padding: 8px 12px;">
+                    <small id="ollama-status" class="status-indicator">Đang kiểm tra mô hình...</small>
+                </div>
 
                 <!-- Disclaimer -->
                 <div class="sidebar-footer">
