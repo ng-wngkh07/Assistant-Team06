@@ -31,3 +31,7 @@ Huấn luyện trial02 YC-196 hoàn tất nhưng đánh giá nội dung chưa đ
 Không đưa PDF/corpus thật, DB/vector, weights/adapter, bộ nhãn/dataset hoặc cấu hình cá nhân lên GitHub. OCR/VLM ảnh thật, bộ gõ hệ điều hành, context 32K và cài Windows đầy đủ/model thật trên máy sạch còn NOT_RUN trong lượt này. CI DemoOnly không thay các nghiệm thu đó.
 
 Rollback: bỏ branch/đóng PR trước merge, hoặc revert commit tích hợp sau khi nhóm đã merge. Không cần migration corpus/model; không tự đổi adapter registry hay provider. Checkout chính và runtime đã đóng băng trước học được giữ để đối chiếu.
+
+## Công bố GitHub
+
+Đã push commit mã `fd3d777` lên branch riêng và tạo [PR nháp #12](https://github.com/ng-wngkh07/Study-Agent/pull/12). Readback remote SHA/head/branch đúng. `gitleaks` quét commit tích hợp không có rò rỉ; cổng lịch sử và diff whitespace đạt. CI history đã PASS, jobs Windows/macOS đang chạy tại thời điểm ghi; kết quả mới nhất xem checks của PR. Main chưa merge, adapter chưa kích hoạt.

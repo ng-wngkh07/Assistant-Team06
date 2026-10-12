@@ -2,7 +2,7 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-12T12:17:45.651072+07:00
+- Cập nhật: 2026-10-12T12:20:01.360907+07:00
 - Mục mới nhất: **[YC-198](#yc-198)**.
 - Nhật ký chung có **36 mục**: 13 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195 và 4 LOG), 3 tổ chức/tài liệu, 2 phát hành GitHub, 9 rà soát/nghiệm thu, 5 làm rõ quyền/quy trình, 4 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
@@ -837,9 +837,9 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Mục tiêu: rà lại các lỗi, sửa và đưa mã/thay đổi đã kiểm chứng lên branch riêng để nhóm review.
 - Trước: root có validator/escaping/Unicodefix, mã UI/học tập/security/context còn bản thử, hai adapter chưa đạt chất lượng; chưa có branch tổng hợp.
 - Phạm vi: ghép thay đổi ứng dụng/test/tài liệu từ YC-193–197 với main hiện hành trên checkout cách ly; giữ dữ liệu/corpus/base/adapter/source riêng. Không merge hoặc kích hoạt adapter.
-- Branch: `codex/fix/shared/yc198-reviewed-changes-tv6` từ main `af4933a`; chuẩn bị công bố để nhóm review, chưa merge.
+- Branch: `codex/fix/shared/yc198-reviewed-changes-tv6` từ main `af4933a`; đã công bố để nhóm review, chưa merge.
 - Phần/file: UI/học tập/QA/input/security/history/context/Unicode/binding, launcher/CI/test và tài liệu YC-195–198. Sửa receipt auditor, cache bốn asset, prompt practice dùng chung, fixture config/tokenizer/422, quyền đọc nhãn local tường minh và chặn holdout rỗng.
 - Kiểm chứng: portable440PASS12SKIP, Node20PASS, hồi quy YC19815PASS; toàn repo788PASS49FAIL15SKIP trên host, không có ID lỗi mới so main. 49 lỗi cần corpus/model/hồ sơ riêng còn chưa đạt; không tắt test. UI bản tích hợp tìm1bài/trang2/nguồn→QA, lịch nhập tay/ICS trên DB demo riêng đạt; model demo3B chưa khả dụng.
 - Review: Antigravity terminal/trả quyền bảy file; Codex đọc diff/caller và sửa thêm cổng holdout; không công bố nhãn/source/trích đoạn riêng. Hiệu chỉnh YC193 bỏ đường dẫn máy thử khỏi lịch sử chung, giữ ý nghĩa và kết quả, tại 2026-10-12T12:17:45.651072+07:00.
-- Trạng thái: mã/tài liệu đã kiểm lại, chờ push/readback CI; chất lượng adapter DO_NOT_PROMOTE và OCR/VLM thật/IME/32K/Windows máy sạch chưa nghiệm thu. Báo cáo: [Bản tích hợp YC-198](docs/team/BAN_TICH_HOP_VA_SUA_LOI_YC198.md).
-- Cập nhật: 2026-10-12T12:17:45.651072+07:00.
+- Trạng thái: đã push commit `fd3d777` và tạo [PR nháp #12](https://github.com/ng-wngkh07/Study-Agent/pull/12), readback remote/head trùng; CI đang chạy, history CI đã PASS; chất lượng adapter DO_NOT_PROMOTE và OCR/VLM thật/IME/32K/Windows máy sạch chưa nghiệm thu. Báo cáo: [Bản tích hợp YC-198](docs/team/BAN_TICH_HOP_VA_SUA_LOI_YC198.md).
+- Cập nhật: 2026-10-12T12:20:01.360907+07:00.
