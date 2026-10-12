@@ -448,6 +448,12 @@ document.addEventListener("DOMContentLoaded", () => {
         userInput.value = "";
         userInput.style.height = "auto";
 
+        // Remove welcome card and exit welcome-mode
+        const welcomeCard = messagesContainer.querySelector(".welcome-card");
+        if (welcomeCard) welcomeCard.remove();
+        const qaPanel = document.getElementById("qa-panel");
+        if (qaPanel) qaPanel.classList.remove("welcome-mode");
+
         // Append User Message
         appendMessage("user", query);
 
@@ -837,6 +843,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
             // Render all turns in order
             messagesContainer.innerHTML = "";
+            const qaPanel = document.getElementById("qa-panel");
+            if (qaPanel) qaPanel.classList.remove("welcome-mode");
             const turns = data.turns || [];
             const latestCitedTurn = [...turns].reverse().find(turn => Array.isArray(turn.citations) && turn.citations.length);
             renderResumeControls(turns.length ? turns[turns.length - 1] : null, latestCitedTurn?.citations || []);
@@ -882,20 +890,15 @@ document.addEventListener("DOMContentLoaded", () => {
         renderResumeControls(null);
         sessionBar.style.display = "none";
         sessionSummaryBox.style.display = "none";
+        const qaPanel = document.getElementById("qa-panel");
+        if (qaPanel) qaPanel.classList.add("welcome-mode");
         messagesContainer.innerHTML = initialWelcomeHTML || `
             <div class="message assistant welcome-card">
-                <div class="message-avatar">🧠</div>
+                <div class="message-avatar">
+                    <img src="/static/logo.jpg" alt="BaMiTiKa AI" class="hero-avatar-img">
+                </div>
                 <div class="message-body">
-                    <h3>Xin chào! Bạn muốn tìm hiểu hoặc tra cứu nội dung gì hôm nay?</h3>
-                    <p>Tôi tìm các đoạn phù hợp trong thư viện tài liệu (Đại số tuyến tính, Lập trình hướng đối tượng, Tâm lý học, Khoa học dữ liệu, v.v.) để hỗ trợ câu trả lời và dẫn nguồn rõ ràng. Mở Công cụ học tập để tạo câu hỏi, ôn tập hoặc tìm bài tập mẫu từ tài liệu gốc.</p>
-
-                    <div class="suggestion-chips">
-                        <span class="suggestion-title">Gợi ý câu hỏi đa lĩnh vực:</span>
-                        <button class="chip" data-query="Ánh xạ tuyến tính là gì? Nêu hai tính chất trong tài liệu Chương 4 Anh xa tuyen tinh.">Ánh xạ tuyến tính & 2 tính chất (Đại số)</button>
-                        <button class="chip" data-query="Đa kế thừa trong C++ được định nghĩa thế nào và hàm ảo hoạt động ra sao?">Đa kế thừa & Hàm ảo C++ (OOP)</button>
-                        <button class="chip" data-query="Hệ thống 1 và Hệ thống 2 trong cuốn Tư duy nhanh và chậm hoạt động như thế nào?">Hệ thống 1 & 2 (Tâm lý học nhận thức)</button>
-                        <button class="chip" data-query="Vòng lặp thói quen gồm những yếu tố nào trong Sức mạnh của thói quen?">Vòng lặp thói quen (Habit Loop)</button>
-                    </div>
+                    <h3>Xin chào! Bạn muốn học gì hôm nay?</h3>
                 </div>
             </div>
         `;
