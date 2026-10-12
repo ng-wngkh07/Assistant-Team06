@@ -103,6 +103,9 @@ class TrainedModelClient:
             "messages": ([{"role": "system", "content": system_prompt}] if system_prompt else []) + messages,
             "max_tokens": tokens_limit,
         }
+        num_ctx = kwargs.get("num_ctx")
+        if num_ctx is not None:
+            request["num_ctx"] = int(num_ctx)
         temp = temperature if temperature is not None else kwargs.get("temperature")
         if temp is not None:
             request["temperature"] = temp

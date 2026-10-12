@@ -6,7 +6,7 @@ import re
 from contextlib import contextmanager
 from pathlib import Path
 
-from app.config import BASE_DIR, DATA_DIR, MLX_MODEL_DIR, TRAINED_MODEL_NAME
+from app.config import BASE_DIR, DATA_DIR, MLX_MODEL_DIR, TRAINED_MODEL_NAME, MLX_CONTEXT_TOKENS
 from app.query_normalizer import normalize_query
 
 
@@ -79,7 +79,14 @@ def context_capacity(model):
         limit = int(config["max_position_embeddings"])
         if limit < 2048:
             raise ValueError("insufficient window")
-        return min(8192, limit)
+        setting = globals().get("MLX_CONTEXT_TOKENS", MLX_CONTEXT_TOKENS)
+        try:
+            req = int(setting)
+            if not (2048 <= req <= 32768):
+                req = 8192
+        except (TypeError, ValueError):
+            req = 8192
+        return min(req, limit)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise ContextLimitError("Chưa xác minh được giới hạn ngữ cảnh của mô hình đã huấn luyện.") from exc
 
@@ -99,7 +106,18 @@ def build_context(system, current, passages, history, capacity=8192, output_rese
         raise ContextLimitError("Câu hỏi quá dài cho cửa sổ ngữ cảnh. Hãy chia thành các câu hỏi ngắn hơn; câu hỏi chưa được xử lý.")
     selected = []
     passage_limit = limit - min(1600, max(0, (limit - base) // 3)) if history else limit
-    for passage in passages:
+    for raw_passage in passages:
+        # Disarm raw markup and ChatML in body while keeping trusted outer document tags
+        m = re.match(r'^(<document\s+id="S\d+"[^>]*>\s*)(.*?)(\s*</document>)$', raw_passage, re.DOTALL)
+        if m:
+            open_tag, body, close_tag = m.groups()
+            body = re.sub(r"<\|([^|>]+)\|>", r"&lt;|\1|&gt;", body)
+            body = body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            passage = f"{open_tag}\n{body}\n{close_tag}"
+        else:
+            p = re.sub(r"<\|([^|>]+)\|>", r"&lt;|\1|&gt;", raw_passage)
+            passage = p.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
         if base + size(passage) <= passage_limit:
             selected.append(passage)
             base += size(passage)
@@ -110,11 +128,12 @@ def build_context(system, current, passages, history, capacity=8192, output_rese
         role, content = msg.get("role"), msg.get("content")
         if not isinstance(content, str):
             continue
+        clean_content = re.sub(r"<\|([^|>]+)\|>", r"&lt;|\1|&gt;", content)
         if role == "user":
-            pending = content
+            pending = clean_content
         elif role == "assistant" and pending is not None:
             # Citation IDs only refer to the current retrieval, never old turns.
-            answer = re.sub(r"\[S\d+\]", "[nguồn ở lượt trước]", content, flags=re.I)
+            answer = re.sub(r"\[S\d+\]", "[nguồn ở lượt trước]", clean_content, flags=re.I)
             pairs.append({"question": pending, "answer": answer})
             total_pairs += 1
             pending = None

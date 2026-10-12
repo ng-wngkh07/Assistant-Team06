@@ -71,24 +71,24 @@ test('Markdown and missing PDF metadata keep text readable without a PDF action'
     }
 });
 
-test('PDF retains source image and the correct numeric PDF page link', async () => {
+test('PDF provides the correct page link without downloading preview images', async () => {
     const { nodes } = await render({ ...source, filename: 'book.pdf',
         pdf_url: 'https://untrusted.example/wrong', page_image_url: 'https://untrusted.example/image' });
     const links = nodes.filter(node => node.tagName === 'a');
-    assert.equal(links.length, 2);
+    assert.ok(links.length >= 1);
     for (const link of links) {
         assert.equal(link.href, '/api/documents/2/pdf#page=3');
         assert.equal(link.rel, 'noopener noreferrer');
     }
-    assert.equal(nodes.find(node => node.tagName === 'img').src, '/api/documents/2/pages/3/image');
+    assert.equal(nodes.filter(node => node.tagName === 'img').length, 0);
     assert.equal(nodes.find(node => node.className === 'document-page').textContent, 'Trang PDF 3');
     assert.equal(nodes.find(node => node.tagName === 'button').textContent, 'Hỏi về trang này');
 });
 
-test('A source image without PDF metadata does not create a broken PDF link', async () => {
+test('Image metadata alone creates neither an image nor a broken PDF link', async () => {
     const { nodes } = await render({ ...source, pdf_url: null, page_image_url: '/source-image' });
     assert.equal(nodes.filter(node => node.tagName === 'a').length, 0);
-    assert.equal(nodes.filter(node => node.tagName === 'img').length, 1);
+    assert.equal(nodes.filter(node => node.tagName === 'img').length, 0);
 });
 
 test('Selecting a page for QA keeps the current question and requires an explicit send', async () => {

@@ -94,7 +94,7 @@ Cài [Node 22](https://nodejs.org/en/download) nếu đóng góp UI. Chạy từ
 
 ```bash
 .venv/bin/python -m pytest -c pytest.windows.ini
-node --test tests/document_lookup_ui.test.cjs
+node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs
 ```
 
 | Hiện tượng | Kiểm tra/cách xử lý |

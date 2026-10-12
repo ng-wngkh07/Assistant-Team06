@@ -91,4 +91,5 @@ def test_selected_source_page_is_content_context_not_title_guess(content_library
     prompt='\n'.join(m['content'] for m in model.messages)
     assert 'quasar quasar' in prompt
     assert 'Nothing about planets' not in prompt
-    assert result['citations'][0]['page_image_url']=='/api/documents/2/pages/2/image'
+    assert result['citations'][0]['pdf_url']=='/api/documents/2/pdf#page=2'
+    assert result['citations'][0].get('page_image_url') is None

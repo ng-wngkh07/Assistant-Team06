@@ -365,8 +365,9 @@ def test_summarizer_successful_json_parse(temp_history_store, monkeypatch):
         "title": "Nỗ Lực Nhận Thức & Đồng Tử",
         "summary": "Phiên thảo luận về thí nghiệm Add-1 của Kahneman đo lường kích thước đồng tử."
     })
-    # Use real chat_complete method
+    # Completed model fixture; production requires an explicit stop finish.
     monkeypatch.setattr(summarizer.ollama, "chat_complete", lambda **kwargs: mock_json_str)
+    monkeypatch.setattr(summarizer.ollama, "last_done_reason", "stop")
 
     res = summarizer.summarize_session_sync(sid, model="qwen2.5:7b")
     assert res["status"] == "completed"
@@ -391,6 +392,7 @@ def test_summarizer_rejects_malformed_json_without_synthesizing(temp_history_sto
 
     # Malformed text lacking proper JSON schema
     monkeypatch.setattr(summarizer.ollama, "chat_complete", lambda **kwargs: "Đây là câu trả lời không có định dạng JSON hợp lệ.")
+    monkeypatch.setattr(summarizer.ollama, "last_done_reason", "stop")
 
     res = summarizer.summarize_session_sync(sid, model="qwen2.5:7b")
     assert res["status"] == "failed"

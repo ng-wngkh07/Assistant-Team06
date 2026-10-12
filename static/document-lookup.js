@@ -121,38 +121,29 @@ document.addEventListener("DOMContentLoaded", () => {
                 heading.textContent = item.book_title || item.filename;
                 const page = document.createElement("p");
                 page.className = "document-page";
-                const hasPdf = Boolean(item.pdf_url);
+                const docId = Number(item.doc_id);
+                const pageNum = Number(item.page_num);
+                const docName = (item.filename || item.book_title || "").toLowerCase();
+                const hasPdf = Boolean(Number.isInteger(docId) && docId > 0 && Number.isInteger(pageNum) && pageNum > 0 && docName.endsWith(".pdf"));
                 const sourceUnit = hasPdf ? "trang" : "phần";
-                page.textContent = hasPdf ? `Trang PDF ${item.page_num}` : `Phần ${item.page_num}`;
+                page.textContent = hasPdf ? `Trang PDF ${pageNum}` : `Phần ${pageNum}`;
                 const passage = document.createElement("div");
-                if (item.page_image_url) {
-                    const originalImage = document.createElement("img");
-                    originalImage.src = `/api/documents/${Number(item.doc_id)}/pages/${Number(item.page_num)}/image`;
-                    originalImage.alt = `Ảnh trang gốc ${item.page_num} — ${item.book_title || item.filename}`;
-                    originalImage.loading = "lazy"; originalImage.className = "source-page-image";
-                    if (hasPdf) {
-                        const imageLink = document.createElement("a");
-                        imageLink.href = `/api/documents/${Number(item.doc_id)}/pdf#page=${Number(item.page_num)}`;
-                        imageLink.target = "_blank"; imageLink.rel = "noopener noreferrer";
-                        imageLink.appendChild(originalImage); passage.appendChild(imageLink);
-                    } else {
-                        passage.appendChild(originalImage);
-                    }
-                }
                 const extracted = document.createElement("details");
-                extracted.open = !item.page_image_url;
+                extracted.open = true;
                 const summary = document.createElement("summary");
                 summary.textContent = "Bản chữ dùng để tìm kiếm (có thể lỗi định dạng)";
                 const rawText = document.createElement("p");
-                rawText.className = "document-passage"; rawText.textContent = item.text;
-                extracted.append(summary, rawText); passage.appendChild(extracted);
+                rawText.className = "document-passage";
+                rawText.textContent = item.text;
+                extracted.append(summary, rawText);
+                passage.appendChild(extracted);
                 const actions = document.createElement("div");
                 actions.className = "document-result-actions";
                 if (hasPdf) {
                     const pdf = document.createElement("a");
                     pdf.className = "btn btn-outline btn-sm";
                     // Construct from numeric IDs, never a returned arbitrary URL.
-                    pdf.href = `/api/documents/${Number(item.doc_id)}/pdf#page=${Number(item.page_num)}`;
+                    pdf.href = `/api/documents/${docId}/pdf#page=${pageNum}`;
                     pdf.target = "_blank";
                     pdf.rel = "noopener noreferrer";
                     pdf.textContent = "Mở PDF đúng trang ↗";
@@ -164,8 +155,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 ask.textContent = `Hỏi về ${sourceUnit} này`;
                 ask.addEventListener("click", () => {
                     const input = document.getElementById("user-input");
-                    const draft = `Hãy giải thích nội dung ${sourceUnit} ${item.page_num} trong tài liệu «${item.book_title || item.filename}».`;
-                    document.dispatchEvent(new CustomEvent("app-source-selected", {detail:{doc_id:Number(item.doc_id), page_num:Number(item.page_num), chunk_id:Number(item.chunk_id), title:item.book_title || item.filename}}));
+                    const draft = `Hãy giải thích nội dung ${sourceUnit} ${pageNum} trong tài liệu «${item.book_title || item.filename}».`;
+                    document.dispatchEvent(new CustomEvent("app-source-selected", {detail:{doc_id:docId, page_num:pageNum, chunk_id:Number(item.chunk_id), title:item.book_title || item.filename}}));
                     input.value = input.value.trim() ? `${input.value}\n\n${draft}` : draft;
                     setMode("qa");
                     input.dispatchEvent(new Event("input"));
@@ -179,7 +170,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 useInQa.title = "Giữ nguyên câu hỏi trong ô nhập và truy xuất lại bằng chứng khi bạn gửi.";
                 useInQa.addEventListener("click", () => {
                     document.dispatchEvent(new CustomEvent("app-source-selected", {detail:{
-                        doc_id:Number(item.doc_id), page_num:Number(item.page_num), chunk_id:Number(item.chunk_id),
+                        doc_id:docId, page_num:pageNum, chunk_id:Number(item.chunk_id),
                         title:item.book_title || item.filename,
                     }}));
                     setMode("qa");
@@ -192,7 +183,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 practice.textContent = "Tạo câu hỏi từ đoạn này";
                 practice.addEventListener("click", () => {
                     document.dispatchEvent(new CustomEvent("app-source-selected", {detail:{
-                        doc_id:Number(item.doc_id), page_num:Number(item.page_num), chunk_id:Number(item.chunk_id),
+                        doc_id:docId, page_num:pageNum, chunk_id:Number(item.chunk_id),
                         title:item.book_title || item.filename,
                     }}));
                     document.dispatchEvent(new CustomEvent("app-open-tool-tab", {detail:"practice"}));

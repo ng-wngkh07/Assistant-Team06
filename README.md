@@ -45,7 +45,11 @@ Mở `http://127.0.0.1:8000`. Demo dựng FTS từ `tests/fixtures/documents` v�
 2. **QA:** khi model QA đã sẵn sàng, hỏi nội dung từ nguồn đã lập chỉ mục. Đối chiếu câu trả lời với trích dẫn; thiếu nguồn hoặc model phải xử lý theo thông báo. Test mock không chứng minh độ chính xác model.
 3. **Lịch ảnh:** chọn ảnh thời khóa biểu, đọc bản nháp, chỉnh thông tin chưa rõ và xác nhận trước khi lưu/xuất lịch. Có ảnh tổng hợp ở `tests/fixtures/timetables`; không dùng lịch cá nhân làm dữ liệu training.
 
-Trong QA, chọn **Tóm tắt nhanh**, **Giải thích từng bước** hoặc **So sánh khái niệm** trước khi gửi. Lựa chọn áp dụng cho câu hỏi tiếp theo và được giữ đến khi đổi; giới hạn token cấu hình qua `ANSWER_QUICK_MAX_TOKENS`, `ANSWER_STEPS_MAX_TOKENS` và `ANSWER_COMPARE_MAX_TOKENS`. Khi chưa đủ căn cứ, phản hồi nêu trạng thái và phạm vi đã tìm; các nút mở rộng phạm vi sẽ giữ câu hỏi và gửi lại với phạm vi mới. Với phiên dài, ứng dụng báo khi một phần lịch sử không nằm trong ngữ cảnh lượt hiện tại. Có thể đưa câu hỏi gần nhất vào ô nhập hoặc chọn một trang đã được trích dẫn; việc chọn lại trang chỉ đặt phạm vi tìm kiếm, hệ thống vẫn truy xuất và kiểm tra citation mới cho câu hỏi hiện tại. Nút **Mới** bắt đầu chủ đề không kèm lịch sử phiên trước.
+Trong QA, chọn mức xử lý **Tự động**, **Thông thường** hoặc **Kiểm tra kỹ**. Tự động chọn theo câu hỏi; Kiểm tra kỹ thêm bước đối chiếu nhận định với nguồn, có thể trả trạng thái chưa kiểm chứng khi model không hoàn tất hoặc thiếu căn cứ. So sánh được xác định từ nội dung câu hỏi. Mức xử lý là quy trình ứng dụng, không bảo đảm model luôn trả đúng.
+
+Trong công cụ học, nhập/chọn chủ đề để tạo tối đa ba câu hỏi từ lý thuyết, tìm bài tập/đáp án có sẵn hoặc tạo câu ôn tập. Nguồn đề và nguồn đáp án được hiển thị riêng; chọn cách xem trước khi mở đáp án/lời giải. Câu sai hoặc “Chưa chắc” được lưu để ôn trên trình duyệt hiện tại. Khi chưa đủ căn cứ, QA nêu trạng thái và phạm vi đã tìm; các nút mở rộng giữ câu hỏi và gửi lại với phạm vi mới. Với phiên dài, ứng dụng báo khi một phần lịch sử không nằm trong ngữ cảnh lượt hiện tại. Chọn trang từ trích dẫn chỉ đặt phạm vi tìm kiếm, hệ thống truy xuất và kiểm citation mới cho lượt tiếp theo. Nút **Mới** bắt đầu chủ đề không kèm lịch sử phiên trước.
+
+Xem [bản tích hợp YC-198](docs/team/BAN_TICH_HOP_VA_SUA_LOI_YC198.md) về sửa lỗi, kiểm thử và giới hạn; [ngữ cảnh MLX](docs/team/NGU_CANH_VA_DU_LIEU_HUAN_LUYEN_YC196.md) về mặc định 8K và lựa chọn local.
 
 Luồng tài liệu: nguồn → trích xuất/OCR → đoạn văn → FTS/vector → truy xuất → QA có nguồn. Luồng lịch: ảnh → bản nháp → người dùng xác nhận/chỉnh → lưu/xuất. Khi thêm nguồn riêng, dùng profile local và **Đồng bộ thư viện** theo hướng dẫn nền tảng; profile local không tự lập chỉ mục lúc khởi động.
 
@@ -77,7 +81,7 @@ Trên Mac:
 ```bash
 .venv/bin/python -m pip check
 .venv/bin/python -m pytest -c pytest.windows.ini
-node --test tests/document_lookup_ui.test.cjs
+node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs
 ```
 
 Node 22 dùng cho test giao diện, không cần để chạy web; cài từ [Node.js](https://nodejs.org/en/download). Windows dùng `test_windows.ps1` và lệnh Node tương tự. CI [Team feature checks](https://github.com/ng-wngkh07/Study-Agent/actions/workflows/team-checks.yml) kiểm Python 3.12 Windows/Mac, demo, feature tests, test giao diện; Windows thêm PowerShell/installer DemoOnly. PR kiểm nhật ký mới.

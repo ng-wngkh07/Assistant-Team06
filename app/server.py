@@ -4,7 +4,8 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Literal
 
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, Response
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, Response, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, FileResponse
@@ -20,17 +21,87 @@ from app.rag_agent import PsychologyAgent
 from app.ollama_client import OllamaClient
 from app.trained_client import TrainedModelClient
 from app.history import HistoryStore
+
 from app.topic_summarizer import TopicSummarizer
 from app.gpu_lock import gpu_coordinator, GPUBusyError
 from app.document_lookup import DocumentLookup
 from app.dialogue import dialogue_gate, DialogueBusyError, BUSY_TEXT
 from app import timetable_store, timetable_vision, timetable_ics
 from app.practice import PracticeGenerationError, PracticeService, PracticeSessionNotFound
+from app.learning import LearningService
+from app.input_policy import (
+    validate_query_text,
+    validate_chat_history,
+    validate_identifier,
+    validate_topic_input,
+)
 
 logger = logging.getLogger("psychology_agent")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 app = FastAPI(title="Local Multi-domain Study Agent", version="1.0.0")
+
+@app.exception_handler(RequestValidationError)
+async def custom_validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Sanitize error messages so invalid Unicode surrogates or raw malicious input never fail JSON encoding."""
+    def _sanitize(val: Any) -> Any:
+        if isinstance(val, str):
+            return val.encode("utf-8", "replace").decode("utf-8", "replace")
+        elif isinstance(val, (list, tuple)):
+            return [_sanitize(x) for x in val]
+        elif isinstance(val, dict):
+            return {k: _sanitize(v) for k, v in val.items()}
+        return val
+
+    safe_errors = []
+    for err in exc.errors():
+        safe_errors.append({
+            "type": _sanitize(err.get("type", "value_error")),
+            "loc": _sanitize(err.get("loc", ())),
+            "msg": _sanitize(str(err.get("msg", "Dữ liệu đầu vào không hợp lệ."))),
+        })
+    return JSONResponse(status_code=422, content={"detail": safe_errors})
+
+MAX_POST_BODY_BYTES = 128 * 1024  # 128 KiB limit for chat and learning endpoints
+
+@app.middleware("http")
+async def limit_json_body_middleware(request, call_next):
+    path = request.url.path
+    if request.method == "POST" and (path.startswith("/api/chat") or path.startswith("/api/learning")):
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > MAX_POST_BODY_BYTES:
+                    return JSONResponse(status_code=413, content={"detail": "Dung lượng yêu cầu vượt quá giới hạn 128 KiB."})
+            except ValueError:
+                pass
+        receive_ = request._receive
+        total_received = 0
+        chunks = []
+        while True:
+            msg = await receive_()
+            if msg["type"] == "http.request":
+                chunk = msg.get("body", b"")
+                total_received += len(chunk)
+                if total_received > MAX_POST_BODY_BYTES:
+                    return JSONResponse(status_code=413, content={"detail": "Dung lượng yêu cầu vượt quá giới hạn 128 KiB."})
+                chunks.append(chunk)
+                if not msg.get("more_body", False):
+                    break
+            elif msg["type"] == "http.disconnect":
+                break
+
+        full_body = b"".join(chunks)
+        delivered = False
+        async def replayed_receive():
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": full_body, "more_body": False}
+            return await receive_()
+        request._receive = replayed_receive
+        return await call_next(request)
+    return await call_next(request)
 
 # Mount static files
 STATIC_DIR = BASE_DIR / "static"
@@ -42,6 +113,7 @@ searcher = HybridSearcher()
 document_lookup = DocumentLookup()
 agent = PsychologyAgent(searcher=searcher)
 practice_service = PracticeService(searcher=searcher, document_lookup=document_lookup)
+learning_service = LearningService(document_lookup=document_lookup, practice_service=practice_service, searcher=searcher)
 import os
 
 _history_store: Optional[HistoryStore] = None
@@ -64,20 +136,41 @@ class _LazyHistoryStore:
 
 history_store = _LazyHistoryStore()
 ollama = OllamaClient()
-summarizer = TopicSummarizer(history_store=history_store, ollama=ollama)
+summarizer = TopicSummarizer(history_store=history_store)
 
 class ChatRequest(BaseModel):
-    query: str = Field(max_length=4000)
-    chat_history: Optional[List[Dict[str, str]]] = Field(default=None, max_length=32)
-    answer_mode: Literal["quick", "steps", "compare", "summary", "step_by_step", "comparison"] = "quick"
-    explanation_mode: Optional[Literal["quick", "steps", "compare", "summary", "step_by_step", "comparison"]] = None
+    query: str
+    chat_history: Optional[List[Dict[str, Any]]] = None
+    processing_level: Literal["auto", "standard", "careful"] = "auto"
+    answer_mode: Literal["quick", "steps", "compare", "summary", "step_by_step", "comparison", "normal"] = "quick"
+    explanation_mode: Optional[Literal["quick", "steps", "compare", "summary", "step_by_step", "comparison", "normal"]] = None
     isolate_context: Optional[bool] = False
     temperature: Optional[float] = Field(default=0.2, ge=0, le=1)
     save_history: Optional[bool] = True
     session_id: Optional[str] = None
-    request_id: Optional[str] = Field(default=None, max_length=128)
+    request_id: Optional[str] = None
     source_document_id: Optional[int] = Field(default=None, ge=1)
     source_page_num: Optional[int] = Field(default=None, ge=1)
+
+    @field_validator("query")
+    @classmethod
+    def check_query(cls, v: str) -> str:
+        return validate_query_text(v)
+
+    @field_validator("chat_history")
+    @classmethod
+    def check_chat_history(cls, v: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, str]]]:
+        return validate_chat_history(v)
+
+    @field_validator("session_id")
+    @classmethod
+    def check_session_id(cls, v: Optional[str]) -> Optional[str]:
+        return validate_identifier(v, "session_id")
+
+    @field_validator("request_id")
+    @classmethod
+    def check_request_id(cls, v: Optional[str]) -> Optional[str]:
+        return validate_identifier(v, "request_id")
 
     @model_validator(mode='after')
     def paired_source(self):
@@ -165,6 +258,103 @@ async def answer_practice(req: PracticeAnswerRequest):
         return practice_service.answer(req.practice_id, req.question_id, req.answer)
     except PracticeSessionNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+class LearningGenerateRequest(BaseModel):
+    topic: str
+    count: int = Field(default=3, ge=1, le=3)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+    purpose: Literal["practice", "review"] = "practice"
+    weak_topics: Optional[list[str]] = None
+    model: Optional[str] = None
+
+    @field_validator("topic")
+    @classmethod
+    def validate_topic(cls, v: str) -> str:
+        return validate_topic_input(v)
+
+    @field_validator("weak_topics")
+    @classmethod
+    def validate_weak_topics(cls, v: Optional[list[str]]) -> Optional[list[str]]:
+        if v is not None:
+            if len(v) > 20:
+                raise ValueError("Danh sách chủ đề còn yếu tối đa 20 mục.")
+            return [validate_topic_input(item) for item in v]
+        return v
+
+
+class LearningExercisesRequest(BaseModel):
+    topic: str
+    limit: int = Field(default=10, ge=1, le=20)
+    solve_missing: bool = False
+    model: Optional[str] = None
+
+    @field_validator("topic")
+    @classmethod
+    def validate_topic(cls, v: str) -> str:
+        return validate_topic_input(v)
+
+
+@app.get("/api/learning/topics")
+async def get_learning_topics():
+    return await run_in_threadpool(learning_service.topics)
+
+
+@app.post("/api/learning/generate")
+async def generate_learning(req: LearningGenerateRequest):
+    def run_generation():
+        with dialogue_gate.acquire(), gpu_coordinator.acquire_for_inference():
+            return learning_service.generate(
+                topic=req.topic,
+                count=req.count,
+                difficulty=req.difficulty,
+                purpose=req.purpose,
+                weak_topics=req.weak_topics,
+                model=DEFAULT_CHAT_MODEL,
+            )
+
+    try:
+        return await run_in_threadpool(run_generation)
+    except DialogueBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
+    except GPUBusyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
+    except PracticeGenerationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Không tạo được bộ câu hỏi theo chủ đề")
+        raise HTTPException(status_code=502, detail="Không tạo được câu hỏi lúc này. Hãy thử lại sau.") from exc
+
+
+@app.post("/api/learning/exercises")
+async def list_learning_exercises(req: LearningExercisesRequest):
+    def run_exercises():
+        if req.solve_missing:
+            with dialogue_gate.acquire(), gpu_coordinator.acquire_for_inference():
+                return learning_service.exercises(
+                    topic=req.topic,
+                    limit=req.limit,
+                    solve_missing=req.solve_missing,
+                    model=DEFAULT_CHAT_MODEL,
+                )
+        return learning_service.exercises(
+            topic=req.topic,
+            limit=req.limit,
+            solve_missing=req.solve_missing,
+            model=DEFAULT_CHAT_MODEL,
+        )
+
+    try:
+        return await run_in_threadpool(run_exercises)
+    except DialogueBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
+    except GPUBusyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
+    except PracticeGenerationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Không trích xuất được bài tập theo chủ đề")
+        raise HTTPException(status_code=502, detail="Không trích xuất được bài tập lúc này. Hãy thử lại sau.") from exc
 
 
 def requested_source_scope(req):
@@ -785,8 +975,8 @@ def _chat_sync(req):
         sess = history_store.get_session(target_session_id)
         if not sess:
             raise HTTPException(status_code=404, detail="Không tìm thấy phiên trò chuyện")
-        # Store-authoritative durable server context bounded to last 4 turns
-        effective_history = [] if req.isolate_context else history_store.get_session_context(target_session_id, max_turns=8)
+        # Store-authoritative durable server context bounded to last 8 turns with bounded original-turn recall
+        effective_history = [] if req.isolate_context else history_store.get_session_context(target_session_id, max_turns=8, query=req.query)
         create_on_completion = False
     else:
         # Legacy client fallback or new chat without session ID
@@ -832,6 +1022,7 @@ def _chat_sync(req):
                 answer_mode=req.answer_mode,
                 source_document_id=source_document_id,
                 isolate_context=bool(req.isolate_context),
+                processing_level=req.processing_level,
                 **({'source_page':source_page} if source_page else {})
             )
     except GPUBusyError as e:
@@ -844,7 +1035,13 @@ def _chat_sync(req):
         res.setdefault("context", {})["store_history_turns_omitted"] = omitted
 
     # Do not save truncated or failed turns
-    if answer and req.save_history and not is_truncated and not res.get("error"):
+    if (
+        answer
+        and req.save_history
+        and not is_truncated
+        and not res.get("error")
+        and res.get("response_kind") not in {"generation_failed", "technical_error"}
+    ):
         if create_on_completion and not target_session_id:
             new_sess = history_store.create_session()
             target_session_id = new_sess["id"]
@@ -872,6 +1069,10 @@ def _chat_sync(req):
             res["recent_source"] = cur_sess["turns"][-1]["citations"][0] if cur_sess["turns"][-1].get("citations") else None
 
     res["model"] = DEFAULT_CHAT_MODEL
+    res["processing_level"] = req.processing_level
+    res["resolved_processing_level"] = res.get("resolved_processing_level", req.processing_level)
+    res["generation_calls"] = res.get("generation_calls", 1)
+    res["check_status"] = res.get("check_status", "not_checked")
     return res
 
 
@@ -981,10 +1182,10 @@ async def chat_stream(req: ChatRequest):
         sess = history_store.get_session(target_session_id)
         if not sess:
             raise HTTPException(status_code=404, detail="Không tìm thấy phiên trò chuyện")
-        effective_history = history_store.get_session_context(target_session_id, max_turns=8)
+        effective_history = [] if req.isolate_context else history_store.get_session_context(target_session_id, max_turns=8, query=req.query)
         create_on_completion = False
     else:
-        effective_history = req.chat_history or []
+        effective_history = [] if req.isolate_context else (req.chat_history or [])
         create_on_completion = bool(req.save_history)
 
     # 2. Idempotency replay check
@@ -1054,7 +1255,7 @@ async def chat_stream(req: ChatRequest):
                     if not session_now:
                         yield f"data: {json.dumps({'type': 'error', 'content': 'Phiên đã bị xóa; câu hỏi chưa được xử lý.'}, ensure_ascii=False)}\n\n"
                         return
-                    effective_history = history_store.get_session_context(target_session_id, max_turns=8)
+                    effective_history = history_store.get_session_context(target_session_id, max_turns=8, query=req.query)
                     omitted = max(0, len(session_now.get("turns", [])) - 8)
                     if omitted:
                         yield f"data: {json.dumps({'type': 'context', 'history_turns_omitted': omitted, 'scope': 'stored_history_window'}, ensure_ascii=False)}\n\n"
@@ -1078,6 +1279,7 @@ async def chat_stream(req: ChatRequest):
                     answer_mode=req.answer_mode,
                     source_document_id=source_document_id,
                     isolate_context=bool(req.isolate_context),
+                    processing_level=req.processing_level,
                     **({'source_page':source_page} if source_page else {})
                 ):
                     if event.get("type") in ("token", "crisis"):
@@ -1089,6 +1291,7 @@ async def chat_stream(req: ChatRequest):
                     elif event.get("type") == "done":
                         search_scope = event.get("search_scope", search_scope)
                         event.setdefault("answer_mode", req.answer_mode)
+                        event.setdefault("processing_level", req.processing_level)
                         # Fallback citations if not sent earlier
                         if not citations and event.get("citations"):
                             citations = event.get("citations", [])
@@ -1101,6 +1304,7 @@ async def chat_stream(req: ChatRequest):
                             and not failed
                             and not is_truncated
                             and not turn_committed
+                            and event.get("response_kind") not in {"generation_failed", "technical_error"}
                         ):
                             turn_committed = True
                             if create_on_completion and not target_session_id:

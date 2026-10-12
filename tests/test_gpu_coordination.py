@@ -11,7 +11,7 @@ Tests:
    - Non-GPU endpoints (/, /api/health, /api/status, /api/history) return 200.
    - /api/chat returns 503 with clear Vietnamese message.
    - /api/chat/stream yields busy event.
-   - Blank query returns 400.
+   - Blank query returns 422.
 """
 
 import multiprocessing
@@ -435,9 +435,9 @@ def test_web_endpoints_during_gpu_training(tmp_path, monkeypatch):
     r_index = client.get("/")
     assert r_index.status_code == 200
 
-    # 2. Blank question returns 400 regardless of GPU
+    # 2. Blank question returns 422 regardless of GPU
     r_blank = client.post("/api/chat", json={"query": "   "})
-    assert r_blank.status_code == 400
+    assert r_blank.status_code == 422
 
     # 3. Acquire GPU training lock on isolated coordinator
     with isolated_coordinator.acquire_for_training(timeout=5.0, evict_ollama=False):
@@ -456,8 +456,8 @@ def test_web_endpoints_during_gpu_training(tmp_path, monkeypatch):
         r_index_busy = client.get("/")
         assert r_index_busy.status_code == 200
 
-        # Blank query still returns 400
-        assert client.post("/api/chat", json={"query": ""}).status_code == 400
+        # Blank query still returns 422
+        assert client.post("/api/chat", json={"query": ""}).status_code == 422
 
         # Chat endpoint must return 503 with Vietnamese message
         r_chat_busy = client.post("/api/chat", json={"query": "Tâm lý học là gì?"})

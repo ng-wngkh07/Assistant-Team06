@@ -69,7 +69,7 @@ Mac từ gốc repo:
 ```bash
 .venv/bin/python -m pip check
 .venv/bin/python -m pytest -c pytest.windows.ini
-node --test tests/document_lookup_ui.test.cjs
+node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs
 ```
 
 Windows:
@@ -77,7 +77,7 @@ Windows:
 ```powershell
 .venv\Scripts\python.exe -m pip check
 .\test_windows.ps1
-node --test tests/document_lookup_ui.test.cjs
+node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs
 ```
 
 Feature suite dùng nguồn/data tạm/mock; không cần corpus/model cá nhân. Chạy thêm test
