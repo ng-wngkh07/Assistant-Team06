@@ -1025,16 +1025,28 @@ body {
 }
 .practice-review-link { justify-content: space-between; font-size: 0.78rem; }
 .study-dialog {
+    position: fixed;
+    inset: 0;
+    margin: auto;
     width: min(760px, calc(100vw - 32px));
     max-height: min(86vh, 900px);
+    display: flex;
+    flex-direction: column;
     padding: 0;
     border: 1px solid var(--border);
     border-radius: 14px;
     color: var(--text-primary);
     background: var(--bg-card);
     box-shadow: 0 24px 70px rgba(15, 23, 42, .28);
+    z-index: 1000;
 }
-.study-dialog::backdrop { background: rgba(15, 23, 42, .5); }
+.study-dialog:not([open]) {
+    display: none;
+}
+.study-dialog::backdrop {
+    background: rgba(8, 8, 12, .65);
+    backdrop-filter: blur(4px);
+}
 .study-dialog-header {
     display: flex;
     justify-content: space-between;
@@ -1046,7 +1058,12 @@ body {
 .study-dialog-header h2 { margin: 0; font-size: 1.15rem; }
 .study-dialog-header p { margin: 5px 0 0; font-size: .82rem; }
 .study-dialog-header .btn-close-modal { flex: 0 0 auto; }
-.study-dialog-body { padding: 18px 22px 22px; overflow-y: auto; }
+.study-dialog-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 18px 22px 22px;
+    overflow-y: auto;
+}
 .study-dialog-actions { justify-content: flex-start; }
 .study-dialog-actions button { min-height: 38px; }
 .study-dialog-actions .btn-primary { margin-left: auto; }

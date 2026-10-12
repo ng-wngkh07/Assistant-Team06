@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-12T22:25:00+07:00
-- Mục mới nhất: **[YC-199](#yc-199)**.
-- Nhật ký chung có **37 mục**: 14 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/199 và 4 LOG), 3 tổ chức/tài liệu, 2 phát hành GitHub, 9 rà soát/nghiệm thu, 5 làm rõ quyền/quy trình, 4 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
+- Cập nhật: 2026-10-12T23:40:00+07:00
+- Mục mới nhất: **[YC-200](#yc-200)**.
+- Nhật ký chung có **38 mục**: 15 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/199/200 và 4 LOG), 3 tổ chức/tài liệu, 2 phát hành GitHub, 9 rà soát/nghiệm thu, 5 làm rõ quyền/quy trình, 4 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -853,5 +853,16 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Sau: cố định Dark Mode toàn diện với ánh sáng nền ambient glow hồng rose; căn giữa khối chào đón và ô nhập prompt theo cả 2 trục; căn đều 2 bên thanh chuyển chế độ trên header; ẩn triệt để khung Hỏi đáp khi sang Công cụ học tập và Thời khóa biểu; chuẩn hóa kích thước, padding và gradient các nút bấm và form nhập liệu; cập nhật logo thương hiệu.
 - Phần/file sửa: `static/index.html`, `static/style.css`, `static/theme.css`, `static/app.js`, `static/logo.jpg`.
 - Kiểm thử: 12/12 UI contract tests đạt PASS, homepage endpoint đạt PASS, scripts/check_history.py đạt PASS.
+- Trạng thái: PASS.
+
+<a id="yc-200"></a>
+### YC-200 - 12/10/2026 23:40 (UTC+07)
+
+- Người thực hiện: Antigravity; loại: giao diện người dùng và sửa lỗi bố cục.
+- Mục tiêu: sửa lỗi khung thông báo chức năng ôn tập (`#practice-dialog` / `.study-dialog`) bị lệch góc trên bên trái về chính giữa màn hình.
+- Trước: `.study-dialog` bị reset toàn cục `* { margin: 0; }` ghi đè `margin: auto` của thẻ `<dialog>`, dẫn đến khi mở hộp thoại bị ghim ở góc trên bên trái `(top: 0, left: 0)`.
+- Sau: bổ sung `position: fixed; inset: 0; margin: auto;` vào `.study-dialog` để căn chính giữa màn hình theo cả 2 trục; cấu hình flex column và overflow cuộn nội dung độc lập; cập nhật lớp nền `::backdrop` mờ kính tối đồng bộ giao diện.
+- Phần/file sửa: `static/style.css`, `LICH_SU_DU_AN.md`.
+- Kiểm thử: `test_learning_tools_ui_contract.py` PASS (6/6), `document_lookup_ui.test.cjs` PASS (5/5), toàn bộ `pytest.windows.ini` PASS (439 passed, 13 skipped), `check_history.py` PASS.
 - Trạng thái: PASS.
 
