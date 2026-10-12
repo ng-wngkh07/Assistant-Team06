@@ -30,10 +30,16 @@ QUY TẮC BẢO MẬT & AN TOÀN TUYỆT ĐỐI:
 """
 
 
+if not hasattr(OllamaClient, "last_done_reason"):
+    OllamaClient.last_done_reason = None
+
+
 class TopicSummarizer:
     def __init__(self, history_store: Optional[HistoryStore] = None, ollama: Optional[OllamaClient] = None):
         self.history_store = history_store or HistoryStore()
         self.ollama = ollama or OllamaClient()
+        if not hasattr(self.ollama, "last_done_reason"):
+            self.ollama.last_done_reason = None
         self._client_injected = ollama is not None
         self._active_sessions: Set[str] = set()
 
@@ -123,8 +129,10 @@ class TopicSummarizer:
             for t in selected_turns:
                 clean_q = t["question"][:300].replace("\n", " ").strip()
                 clean_a = t["answer"][:400].replace("\n", " ").strip()
-                transcript_lines.append(f"Người dùng: {clean_q}")
-                transcript_lines.append(f"Trợ lý: {clean_a}")
+                esc_q = clean_q.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                esc_a = clean_a.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                transcript_lines.append(f"Người dùng: {esc_q}")
+                transcript_lines.append(f"Trợ lý: {esc_a}")
 
             transcript_block = "\n".join(transcript_lines)
             user_message = (
@@ -167,14 +175,15 @@ class TopicSummarizer:
                         "error": raw_text,
                     }
 
-                if getattr(selected_client, "last_done_reason", None) == "length":
-                    logger.warning("Summarization response truncated by token limit")
+                done_reason = getattr(selected_client, "last_done_reason", None)
+                if done_reason != "stop":
+                    logger.warning("Summarization response did not finish with 'stop' (reason: %r)", done_reason)
                     self.history_store.set_summary_status(session_id, "pending")
                     return {
                         "status": "failed",
                         "title": session.get("title") or fallback_title,
                         "summary": session.get("summary"),
-                        "reason": "Tóm tắt đạt giới hạn sinh; chưa lưu nội dung không hoàn chỉnh.",
+                        "reason": "Tóm tắt đạt giới hạn sinh hoặc chưa hoàn tất; chưa lưu nội dung.",
                     }
 
                 parsed = self._parse_summary_response(raw_text)

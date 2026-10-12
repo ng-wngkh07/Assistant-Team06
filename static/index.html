@@ -15,7 +15,7 @@
             }
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=11-contrast-fix">
+    <link rel="stylesheet" href="/static/style.css?v=yc198-release01">
     <link rel="stylesheet" href="/static/theme.css?v=3-contrast-fix">
 </head>
 <body>
@@ -131,32 +131,69 @@
                     <button id="btn-tool-tab-examples" class="tool-tab-button" type="button" role="tab" tabindex="-1" aria-label="Trích xuất bài tập mẫu" aria-selected="false" aria-controls="tool-tab-examples" data-tool-tab="examples">Trích xuất bài tập mẫu</button>
                 </nav>
                 <section id="tool-tab-practice" class="tool-tab-panel" role="tabpanel" aria-labelledby="btn-tool-tab-practice">
-                    <div class="tool-practice-scope">
-                        <div>
-                            <h2>Tạo câu hỏi từ tài liệu</h2>
-                            <p class="text-muted">Câu hỏi do AI tạo từ nguồn đã chọn; từng câu có trang và trích dẫn để đối chiếu.</p>
-                            <p id="practice-scope-label" class="text-muted">Tìm và chọn một trích đoạn bên dưới, hoặc chọn một trang từ phần Hỏi đáp.</p>
+                    <div class="learning-topic-card">
+                        <div class="tool-panel-header">
+                            <div>
+                                <h2>Tạo câu hỏi theo chủ đề</h2>
+                                <p class="text-muted">Câu hỏi do AI tạo từ tài liệu trong thư viện; từng câu có trang và trích dẫn để đối chiếu.</p>
+                            </div>
                         </div>
-                        <div class="tool-practice-actions">
-                            <button type="button" id="btn-clear-practice-scope" class="btn btn-outline btn-sm" disabled>Bỏ chọn nguồn</button>
-                            <button type="button" id="btn-practice-current" class="btn btn-primary btn-sm" disabled>📝 Tạo câu hỏi từ nội dung này</button>
+                        <div class="learning-generate-form">
+                            <div class="form-row">
+                                <div class="form-group flex-2">
+                                    <label for="learning-topic">Chủ đề câu hỏi</label>
+                                    <input id="learning-topic" class="form-input" list="learning-topic-list" placeholder="Nhập hoặc chọn chủ đề (VD: Trí nhớ, Ánh xạ tuyến tính...)" required>
+                                    <datalist id="learning-topic-list"></datalist>
+                                </div>
+                                <div class="form-group flex-1">
+                                    <label for="learning-count">Số câu (1–3)</label>
+                                    <input id="learning-count" type="number" class="form-input" min="1" max="3" value="1" required>
+                                </div>
+                                <div class="form-group flex-1">
+                                    <label for="learning-difficulty">Độ khó</label>
+                                    <select id="learning-difficulty" class="form-select">
+                                        <option value="easy">Dễ</option>
+                                        <option value="medium" selected>Trung bình</option>
+                                        <option value="hard">Khó</option>
+                                    </select>
+                                </div>
+                                <div class="form-group form-actions">
+                                    <button type="button" id="btn-learning-generate" class="btn btn-primary">Tạo câu hỏi</button>
+                                </div>
+                            </div>
+                            <p id="learning-generate-status" class="tool-status text-muted" role="status" aria-live="polite">Chọn hoặc nhập chủ đề để bắt đầu luyện tập (tối đa 3 câu để giảm thời gian phản hồi).</p>
                         </div>
                     </div>
-                    <section id="documents-panel" class="documents-panel" aria-label="Chọn nguồn để luyện tập">
-                <h2>Tìm đoạn nguồn</h2>
-                <p class="lookup-description">Tìm đoạn trong thư viện, xem nội dung gốc và chọn đúng đoạn/trang để luyện tập.</p>
-                <form id="document-search-form" class="document-search-form">
-                    <label for="document-query">Từ khóa hoặc chủ đề</label>
-                    <input id="document-query" class="form-input" maxlength="500" required placeholder="Ví dụ: trí nhớ, thói quen, attachment…">
-                    <div class="document-filters">
-                        <div><label for="document-book">Tìm trong sách</label><select id="document-book" class="form-select"><option value="">Tất cả tài liệu</option></select></div>
-                        <div><label for="document-method">Cách tìm</label><select id="document-method" class="form-select"><option value="fts">Từ khóa</option><option value="hybrid">Ngữ nghĩa và từ khóa</option></select></div>
-                        <button class="btn btn-primary" type="submit">Tìm tài liệu</button>
-                    </div>
-                </form>
-                <p id="document-search-status" role="status" aria-live="polite">Nhập từ khóa để bắt đầu. Trích đoạn được giữ nguyên ngôn ngữ của sách.</p>
-                <div id="document-results" class="document-results"></div>
-            </section>
+
+                    <details class="advanced-source-selection">
+                        <summary>Nâng cao: Chọn trích đoạn cụ thể để luyện tập</summary>
+                        <div class="tool-practice-scope">
+                            <div>
+                                <h3>Tạo câu hỏi từ tài liệu đã chọn</h3>
+                                <p class="text-muted">Câu hỏi do AI tạo từ nguồn đã chọn; từng câu có trang và trích dẫn để đối chiếu.</p>
+                                <p id="practice-scope-label" class="text-muted">Tìm và chọn một trích đoạn bên dưới, hoặc chọn một trang từ phần Hỏi đáp.</p>
+                            </div>
+                            <div class="tool-practice-actions">
+                                <button type="button" id="btn-clear-practice-scope" class="btn btn-outline btn-sm" disabled>Bỏ chọn nguồn</button>
+                                <button type="button" id="btn-practice-current" class="btn btn-primary btn-sm" disabled>📝 Tạo câu hỏi từ nội dung này</button>
+                            </div>
+                        </div>
+                        <section id="documents-panel" class="documents-panel" aria-label="Chọn nguồn để luyện tập">
+                            <h2>Tìm đoạn nguồn</h2>
+                            <p class="lookup-description">Tìm đoạn trong thư viện, xem nội dung gốc và chọn đúng đoạn/trang để luyện tập.</p>
+                            <form id="document-search-form" class="document-search-form">
+                                <label for="document-query">Từ khóa hoặc chủ đề</label>
+                                <input id="document-query" class="form-input" maxlength="500" required placeholder="Ví dụ: trí nhớ, thói quen, attachment…">
+                                <div class="document-filters">
+                                    <div><label for="document-book">Tìm trong sách</label><select id="document-book" class="form-select"><option value="">Tất cả tài liệu</option></select></div>
+                                    <div><label for="document-method">Cách tìm</label><select id="document-method" class="form-select"><option value="fts">Từ khóa</option><option value="hybrid">Ngữ nghĩa và từ khóa</option></select></div>
+                                    <button class="btn btn-primary" type="submit">Tìm tài liệu</button>
+                                </div>
+                            </form>
+                            <p id="document-search-status" role="status" aria-live="polite">Nhập từ khóa để bắt đầu. Trích đoạn được giữ nguyên ngôn ngữ của sách.</p>
+                            <div id="document-results" class="document-results"></div>
+                        </section>
+                    </details>
                 </section>
                 <section id="tool-tab-review" class="tool-tab-panel" role="tabpanel" aria-labelledby="btn-tool-tab-review" hidden>
                     <div class="tool-panel-header">
@@ -166,37 +203,72 @@
                         </div>
                         <button type="button" id="btn-clear-review" class="btn btn-outline btn-sm">Xóa toàn bộ tiến độ</button>
                     </div>
+                    <div class="learning-review-generator">
+                        <div class="form-row">
+                            <div class="form-group flex-2">
+                                <label for="review-topic">Chủ đề ôn tập</label>
+                                <input id="review-topic" class="form-input" list="learning-topic-list" placeholder="Nhập chủ đề cần ôn tập (VD: Trí nhớ...)">
+                            </div>
+                            <div class="form-group form-actions">
+                                <button type="button" id="btn-review-generate" class="btn btn-primary">Tạo câu hỏi ôn tập</button>
+                            </div>
+                        </div>
+                        <p id="review-generate-status" class="tool-status text-muted" role="status" aria-live="polite">Bạn có thể tạo câu hỏi ôn tập theo chủ đề bất kỳ lúc nào ngay cả khi chưa có câu sai.</p>
+                    </div>
                     <div id="review-list" class="review-list"></div>
                 </section>
                 <section id="tool-tab-examples" class="tool-tab-panel" role="tabpanel" aria-labelledby="btn-tool-tab-examples" hidden>
                     <div class="tool-panel-header">
                         <div>
                             <h2>Bài tập trích từ tài liệu</h2>
-                            <p class="text-muted">Chỉ hiển thị đoạn bài tập có sẵn trong nguồn; nội dung không được AI viết lại. Lời giải AI chưa được bật.</p>
+                            <p class="text-muted">Chỉ hiển thị đoạn bài tập có sẵn trong nguồn; nội dung không được AI viết lại.</p>
                         </div>
                     </div>
-                    <form id="practice-examples-form" class="practice-examples-form">
-                        <div>
-                            <label for="practice-examples-document">Tài liệu</label>
-                            <select id="practice-examples-document" class="form-select" required><option value="">Đang tải danh sách…</option></select>
+                    <div class="learning-exercise-search">
+                        <div class="form-row">
+                            <div class="form-group flex-2">
+                                <label for="exercise-topic">Chủ đề bài tập</label>
+                                <input id="exercise-topic" class="form-input" list="learning-topic-list" placeholder="Ví dụ: Phép cộng, Cơ học, Ánh xạ...">
+                            </div>
+                            <div class="form-group form-actions">
+                                <button type="button" id="btn-learning-exercises" class="btn btn-primary">Tìm bài tập</button>
+                            </div>
                         </div>
-                        <div>
-                            <label for="practice-examples-page-from">Từ trang</label>
-                            <input id="practice-examples-page-from" type="number" class="form-input" min="1" value="1" required>
+                        <div class="form-row checkbox-row">
+                            <label class="checkbox-label" for="exercise-solve-missing">
+                                <input type="checkbox" id="exercise-solve-missing">
+                                <span>Giải bài tập chưa có đáp án bằng AI (kèm kiểm định hai bước)</span>
+                            </label>
                         </div>
-                        <div>
-                            <label for="practice-examples-page-to">Đến trang</label>
-                            <input id="practice-examples-page-to" type="number" class="form-input" min="1" required>
-                        </div>
-                        <div class="practice-examples-topic">
-                            <label for="practice-examples-topic">Chủ đề (không bắt buộc)</label>
-                            <input id="practice-examples-topic" class="form-input" maxlength="120" placeholder="Ví dụ: trí nhớ, ánh xạ tuyến tính">
-                        </div>
-                        <button type="submit" class="btn btn-primary">Tìm bài tập mẫu</button>
-                    </form>
-                    <p id="practice-examples-status" class="tool-status" role="status" aria-live="polite">Chọn tài liệu và khoảng trang để tìm bài tập có sẵn.</p>
-                    <p class="source-extraction-warning">Bản trích có thể mất định dạng OCR hoặc công thức. Hãy đối chiếu trang gốc nếu ký hiệu hay nội dung chưa rõ.</p>
-                    <div id="practice-examples-results" class="document-results"></div>
+                        <p id="learning-exercise-status" class="tool-status text-muted" role="status" aria-live="polite">Nhập chủ đề để tìm bài tập có sẵn trong thư viện tài liệu.</p>
+                        <div id="learning-exercise-results" class="document-results"></div>
+                    </div>
+
+                    <details class="advanced-source-selection">
+                        <summary>Nâng cao: Trích xuất theo tài liệu và khoảng trang</summary>
+                        <form id="practice-examples-form" class="practice-examples-form">
+                            <div>
+                                <label for="practice-examples-document">Tài liệu</label>
+                                <select id="practice-examples-document" class="form-select" required><option value="">Đang tải danh sách…</option></select>
+                            </div>
+                            <div>
+                                <label for="practice-examples-page-from">Từ trang</label>
+                                <input id="practice-examples-page-from" type="number" class="form-input" min="1" value="1" required>
+                            </div>
+                            <div>
+                                <label for="practice-examples-page-to">Đến trang</label>
+                                <input id="practice-examples-page-to" type="number" class="form-input" min="1" required>
+                            </div>
+                            <div class="practice-examples-topic">
+                                <label for="practice-examples-topic">Chủ đề (không bắt buộc)</label>
+                                <input id="practice-examples-topic" class="form-input" maxlength="120" placeholder="Ví dụ: trí nhớ, ánh xạ tuyến tính">
+                            </div>
+                            <button type="submit" class="btn btn-primary">Tìm bài tập mẫu</button>
+                        </form>
+                        <p id="practice-examples-status" class="tool-status" role="status" aria-live="polite">Chọn tài liệu và khoảng trang để tìm bài tập có sẵn.</p>
+                        <p class="source-extraction-warning">Bản trích có thể mất định dạng OCR hoặc công thức. Hãy đối chiếu trang gốc nếu ký hiệu hay nội dung chưa rõ.</p>
+                        <div id="practice-examples-results" class="document-results"></div>
+                    </details>
                 </section>
             </section>
             <section id="timetable-panel" class="timetable-panel" aria-label="Thời khóa biểu từ ảnh" hidden>
@@ -220,9 +292,9 @@
                             </div>
 
                             <div id="timetable-preview-container" class="timetable-preview-container" style="display: none; margin-top: 12px;">
-                                <div class="preview-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                    <span id="timetable-filename" style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
-                                    <button id="btn-reupload-image" class="btn btn-sm btn-outline">Chọn ảnh khác</button>
+                                <div class="preview-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+                                    <span id="timetable-filename" style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary); max-width: 100%; min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
+                                    <button id="btn-reupload-image" class="btn btn-sm btn-outline" style="flex-shrink: 0;">Chọn ảnh khác</button>
                                 </div>
                                 <div class="preview-img-box" style="border: 1px solid var(--border); border-radius: 8px; overflow: hidden; max-height: 400px; display: flex; justify-content: center; background: #0f172a;">
                                     <img id="timetable-preview-img" src="" alt="Thời khóa biểu" style="max-width: 100%; max-height: 400px; object-fit: contain;">
@@ -230,7 +302,7 @@
                                 <div id="timetable-image-meta" style="font-size: 0.78rem; color: var(--text-muted); margin-top: 6px;"></div>
                             </div>
 
-                            <div id="timetable-extract-loading" class="timetable-loading-box" style="display: none; text-align: center; padding: 20px; margin-top: 12px; background: #f8fafc; border-radius: 8px; border: 1px dashed var(--border);">
+                            <div id="timetable-extract-loading" class="timetable-loading-box" style="display: none;">
                                 <div class="spinner" style="margin: 0 auto 10px auto;"></div>
                                 <strong id="timetable-extract-status" style="display: block; font-size: 0.9rem;">Đang phân tích ảnh bằng Qwen2.5-VL 3B cục bộ...</strong>
                                 <small class="text-muted" style="display: block; margin-top: 4px;">Ảnh được phân tích trên máy này. Vui lòng chờ.</small>
@@ -242,12 +314,12 @@
                             <h3>⏰ Công cụ điền giờ theo tiết học</h3>
                             <p class="text-muted" style="font-size: 0.8rem; margin-bottom: 10px;">Nếu thời khóa biểu ghi theo tiết (Tiết 1, Tiết 2-4...), bạn có thể áp dụng khung giờ học do bạn nhập:</p>
                             <div style="display: flex; flex-direction: column; gap: 8px;">
-                                <div style="display: flex; gap: 6px; align-items: center; margin-top: 4px;">
-                                    <input type="text" id="map-period-code" placeholder="Tiết (VD: 1-3)" class="form-input" style="width: 100px; font-size: 0.82rem; padding: 4px 8px;">
-                                    <input type="time" id="map-start-time" class="form-input" style="width: 95px; font-size: 0.82rem; padding: 4px 6px;">
+                                <div class="timetable-period-tool" style="display: flex; gap: 6px; align-items: center; margin-top: 4px; flex-wrap: wrap;">
+                                    <input type="text" id="map-period-code" placeholder="Tiết (VD: 1-3)" class="form-input" style="flex: 1 1 80px; min-width: 70px; font-size: 0.82rem; padding: 4px 8px;">
+                                    <input type="time" id="map-start-time" class="form-input" style="flex: 1 1 80px; min-width: 70px; font-size: 0.82rem; padding: 4px 6px;">
                                     <span style="font-size: 0.82rem;">-</span>
-                                    <input type="time" id="map-end-time" class="form-input" style="width: 95px; font-size: 0.82rem; padding: 4px 6px;">
-                                    <button type="button" id="btn-apply-period-map" class="btn btn-sm btn-secondary">Áp dụng</button>
+                                    <input type="time" id="map-end-time" class="form-input" style="flex: 1 1 80px; min-width: 70px; font-size: 0.82rem; padding: 4px 6px;">
+                                    <button type="button" id="btn-apply-period-map" class="btn btn-sm btn-secondary" style="flex: 0 0 auto;">Áp dụng</button>
                                 </div>
                             </div>
                         </div>
@@ -257,7 +329,7 @@
                     <div class="timetable-col-right">
                         <!-- Draft Card (Visible upon extraction) -->
                         <div id="timetable-draft-card" class="timetable-card" style="display: none;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
                                 <div>
                                     <span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; border: 1px solid #fde68a;">BẢN NHÁP — BẮT BUỘC KIỂM TRA TRƯỚC KHI LƯU</span>
                                     <h3 style="margin: 6px 0 0 0;">Dữ liệu trích xuất từ ảnh</h3>
@@ -267,7 +339,7 @@
 
                             <div id="timetable-uncertainties" style="display: none; margin-bottom: 12px; padding: 10px 14px; background: #fffbeb; border: 1px solid #fef3c7; border-radius: 6px; font-size: 0.82rem; color: #b45309;"></div>
 
-                            <div class="table-responsive" style="max-height: 380px; overflow-y: auto;">
+                            <div class="table-responsive" style="max-height: 380px; overflow-x: auto; overflow-y: auto; min-width: 0;">
                                 <table class="kb-table timetable-editor-table" id="draft-table">
                                     <thead>
                                         <tr>
@@ -289,7 +361,7 @@
                                     <input type="checkbox" id="check-replace-existing">
                                     <span>Ghi đè toàn bộ lịch học đang lưu (bỏ chọn để ghép thêm các môn mới)</span>
                                 </label>
-                                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                                <div style="display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap;">
                                     <button id="btn-discard-draft" class="btn btn-sm btn-secondary">Hủy bản nháp</button>
                                     <button id="btn-confirm-draft" class="btn btn-sm btn-primary">💾 Xác nhận & Lưu vào lịch học</button>
                                 </div>
@@ -299,24 +371,24 @@
 
                         <!-- Confirmed Schedule Card -->
                         <div class="timetable-card" style="margin-top: 16px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                                <div>
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+                                <div style="min-width: 0; flex: 1 1 180px;">
                                     <h3 style="margin: 0;">📋 Lịch học đã lưu</h3>
                                     <p class="text-muted" style="margin: 2px 0 0 0; font-size: 0.78rem;">Lịch học được lưu trên máy này và giữ lại khi mở ứng dụng lần sau.</p>
                                 </div>
-                                <div style="display: flex; gap: 6px;">
+                                <div style="display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap;">
                                     <button id="btn-toggle-manual" class="btn btn-sm btn-outline">＋ Nhập tay</button>
                                     <button id="btn-clear-confirmed" class="btn btn-sm btn-outline" style="color: #dc2626;">🗑 Xóa hết</button>
                                 </div>
                             </div>
 
                             <!-- Manual Add Row Subform -->
-                            <form id="form-manual-entry" style="display: none; background: #f8fafc; padding: 12px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 12px;">
+                            <form id="form-manual-entry" class="form-manual-entry" style="display: none;">
                                 <strong style="font-size: 0.85rem; display: block; margin-bottom: 8px;">Thêm buổi học thủ công:</strong>
-                                <div style="display: grid; grid-template-columns: 110px 1fr 100px 100px 90px; gap: 8px; align-items: center;">
+                                <div class="form-manual-grid">
                                     <div>
                                         <label for="manual-weekday" style="font-size: 0.75rem; display: block;">Thứ</label>
-                                        <select id="manual-weekday" class="form-input" style="font-size: 0.8rem; padding: 4px;">
+                                        <select id="manual-weekday" class="form-input" style="font-size: 0.8rem; padding: 4px; width: 100%;">
                                             <option value="1">Thứ 2</option>
                                             <option value="2">Thứ 3</option>
                                             <option value="3">Thứ 4</option>
@@ -328,29 +400,29 @@
                                     </div>
                                     <div>
                                         <label for="manual-course" style="font-size: 0.75rem; display: block;">Tên môn học</label>
-                                        <input type="text" id="manual-course" required placeholder="Đại số tuyến tính" class="form-input" style="font-size: 0.8rem; padding: 4px 6px;">
+                                        <input type="text" id="manual-course" required placeholder="Đại số tuyến tính" class="form-input" style="font-size: 0.8rem; padding: 4px 6px; width: 100%;">
                                     </div>
                                     <div>
                                         <label for="manual-start" style="font-size: 0.75rem; display: block;">Bắt đầu</label>
-                                        <input type="time" id="manual-start" required class="form-input" style="font-size: 0.8rem; padding: 4px 6px;">
+                                        <input type="time" id="manual-start" required class="form-input" style="font-size: 0.8rem; padding: 4px 6px; width: 100%;">
                                     </div>
                                     <div>
                                         <label for="manual-end" style="font-size: 0.75rem; display: block;">Kết thúc</label>
-                                        <input type="time" id="manual-end" required class="form-input" style="font-size: 0.8rem; padding: 4px 6px;">
+                                        <input type="time" id="manual-end" required class="form-input" style="font-size: 0.8rem; padding: 4px 6px; width: 100%;">
                                     </div>
                                     <div>
                                         <label for="manual-room" style="font-size: 0.75rem; display: block;">Phòng</label>
-                                        <input type="text" id="manual-room" placeholder="C301" class="form-input" style="font-size: 0.8rem; padding: 4px 6px;">
+                                        <input type="text" id="manual-room" placeholder="C301" class="form-input" style="font-size: 0.8rem; padding: 4px 6px; width: 100%;">
                                     </div>
                                 </div>
-                                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; flex-wrap: wrap;">
                                     <button type="button" id="btn-cancel-manual" class="btn btn-sm btn-secondary">Đóng</button>
                                     <button type="submit" class="btn btn-sm btn-primary">Lưu môn học</button>
                                 </div>
                                 <p id="manual-status" style="margin: 6px 0 0 0; font-size: 0.8rem;"></p>
                             </form>
 
-                            <div class="table-responsive" style="max-height: 280px; overflow-y: auto;">
+                            <div class="table-responsive" style="max-height: 280px; overflow-x: auto; overflow-y: auto; min-width: 0;">
                                 <table class="kb-table" id="confirmed-table">
                                     <thead>
                                         <tr>
@@ -368,19 +440,19 @@
                             </div>
 
                             <!-- Semester Export Card -->
-                            <div style="margin-top: 16px; padding: 12px 14px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px;">
-                                <strong style="color: #166534; font-size: 0.88rem; display: block; margin-bottom: 4px;">📅 Xuất lịch sang Google Calendar / Apple Calendar (.ics)</strong>
-                                <p style="font-size: 0.78rem; color: #166534; margin: 0 0 10px 0;">Nhập ngày bắt đầu và kết thúc học kỳ để tạo các sự kiện lặp lại hàng tuần (múi giờ Asia/Ho_Chi_Minh):</p>
+                            <div class="timetable-export-card" style="margin-top: 16px; padding: 12px 14px; border-radius: 8px;">
+                                <strong class="timetable-export-title" style="font-size: 0.88rem; display: block; margin-bottom: 4px;">📅 Xuất lịch sang Google Calendar / Apple Calendar (.ics)</strong>
+                                <p style="font-size: 0.78rem; color: var(--text-secondary); margin: 0 0 10px 0;">Nhập ngày bắt đầu và kết thúc học kỳ để tạo các sự kiện lặp lại hàng tuần (múi giờ Asia/Ho_Chi_Minh):</p>
                                 <form id="form-export-ics" style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
-                                    <div>
-                                        <label for="export-start-date" style="font-size: 0.75rem; color: #166534; display: block; margin-bottom: 2px;">Ngày bắt đầu kỳ:</label>
-                                        <input type="date" id="export-start-date" required class="form-input" style="font-size: 0.82rem; padding: 4px 8px;">
+                                    <div style="flex: 1 1 130px; min-width: 120px;">
+                                        <label for="export-start-date" style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 2px;">Ngày bắt đầu kỳ:</label>
+                                        <input type="date" id="export-start-date" required class="form-input" style="width: 100%; font-size: 0.82rem; padding: 4px 8px;">
                                     </div>
-                                    <div>
-                                        <label for="export-end-date" style="font-size: 0.75rem; color: #166534; display: block; margin-bottom: 2px;">Ngày kết thúc kỳ:</label>
-                                        <input type="date" id="export-end-date" required class="form-input" style="font-size: 0.82rem; padding: 4px 8px;">
+                                    <div style="flex: 1 1 130px; min-width: 120px;">
+                                        <label for="export-end-date" style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 2px;">Ngày kết thúc kỳ:</label>
+                                        <input type="date" id="export-end-date" required class="form-input" style="width: 100%; font-size: 0.82rem; padding: 4px 8px;">
                                     </div>
-                                    <button type="submit" class="btn btn-sm btn-primary" style="background: #16a34a; border-color: #16a34a;">📥 Tải tệp .ics</button>
+                                    <button type="submit" class="btn btn-sm btn-primary" style="background: #16a34a; border-color: #16a34a; flex: 0 0 auto;">📥 Tải tệp .ics</button>
                                 </form>
                                 <p id="export-status" style="margin: 6px 0 0 0; font-size: 0.8rem;"></p>
                             </div>
@@ -442,14 +514,15 @@
 
             <!-- Chat Input Area -->
             <div class="input-area">
-                <div class="qa-answer-mode">
-                    <label for="answer-mode">Cách trả lời</label>
-                    <select id="answer-mode" class="form-select">
-                        <option value="quick" selected>Tóm tắt nhanh</option>
-                        <option value="steps">Giải thích từng bước</option>
-                        <option value="compare">So sánh khái niệm</option>
+                <div class="qa-processing-level">
+                    <label for="processing-level">Mức xử lý</label>
+                    <select id="processing-level" class="form-select">
+                        <option value="auto" selected>Tự động</option>
+                        <option value="standard">Thông thường</option>
+                        <option value="careful">Kiểm tra kỹ</option>
                     </select>
                     <span>Áp dụng cho câu hỏi tiếp theo; giữ nguyên đến khi bạn đổi.</span>
+                    <p class="qa-level-help text-muted" style="font-size: 0.8rem; margin: 4px 0 0 0;">Tự động chọn cách xử lý theo câu hỏi. Thông thường trả lời bám sát nguồn. Kiểm tra kỹ đối chiếu thêm câu trả lời với tài liệu và có thể mất nhiều thời gian hơn.</p>
                 </div>
                 <div id="qa-source-scope" hidden style="margin-bottom:8px; font-size:0.85rem;">
                     <span id="qa-source-label"></span>
@@ -540,12 +613,12 @@
                 <p class="modal-desc">
                     Bản chép cần đối chiếu trang gốc trước khi dùng để huấn luyện. Vui lòng rà soát, sửa lỗi và xác nhận nội dung từng trang đối chiếu với ảnh chụp.
                 </p>
-                <form id="ocr-run-page-form" style="display: flex; gap: 8px; align-items: flex-end; margin-bottom: 14px; padding: 10px; background: #f8fafc; border-radius: 6px; border: 1px solid var(--border);">
-                    <div style="flex: 2;">
+                <form id="ocr-run-page-form" class="ocr-run-form" style="display: flex; gap: 8px; align-items: flex-end; margin-bottom: 14px; padding: 10px; border-radius: 6px; border: 1px solid var(--border); flex-wrap: wrap;">
+                    <div style="flex: 2; min-width: 140px;">
                         <label for="ocr-run-filename" style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 3px;">Tài liệu nguồn:</label>
                         <select id="ocr-run-filename" class="form-input" style="width: 100%; font-size: 0.82rem;"></select>
                     </div>
-                    <div style="flex: 1; max-width: 90px;">
+                    <div style="flex: 1; max-width: 90px; min-width: 70px;">
                         <label for="ocr-run-page" style="font-size: 0.8rem; font-weight: 600; display: block; margin-bottom: 3px;">Trang:</label>
                         <input type="number" id="ocr-run-page" min="1" value="1" class="form-input" style="width: 100%; font-size: 0.82rem;">
                     </div>
@@ -580,8 +653,8 @@
                     <div style="margin-bottom: 8px;">
                         <span id="ocr-editor-docinfo" style="font-weight: 600; font-size: 0.85rem;"></span>
                     </div>
-                    <div style="display: flex; gap: 12px; margin-bottom: 8px;">
-                        <div style="flex: 1; max-width: 45%; border: 1px solid var(--border); border-radius: 4px; padding: 4px; text-align: center; background: #fafafa;">
+                    <div style="display: flex; gap: 12px; margin-bottom: 8px; flex-wrap: wrap;">
+                        <div class="ocr-preview-box" style="flex: 1; max-width: 45%; min-width: 200px; border: 1px solid var(--border); border-radius: 4px; padding: 4px; text-align: center;">
                             <div style="font-size: 0.78rem; font-weight: 600; margin-bottom: 4px; color: var(--text-muted);">Ảnh trang gốc</div>
                             <img id="ocr-preview-img" src="" alt="Ảnh trang gốc" style="max-width: 100%; max-height: 280px; object-fit: contain; border-radius: 2px;">
                         </div>
@@ -610,11 +683,11 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=9-study-resume"></script>
-    <script src="/static/document-lookup.js?v=3-learning-tools"></script>
-    <script src="/static/timetable.js?v=5-literal-table"></script>
-    <script src="/static/layout.js?v=1"></script>
-    <script src="/static/theme.js?v=1-theme"></script>
-    <script src="/static/practice.js?v=2-learning-tools"></script>
+    <script src="/static/app.js?v=yc198-release01"></script>
+    <script src="/static/document-lookup.js?v=yc198-release01"></script>
+    <script src="/static/timetable.js?v=yc195-02"></script>
+    <script src="/static/layout.js?v=yc195-02"></script>
+    <script src="/static/theme.js?v=yc195-02"></script>
+    <script src="/static/practice.js?v=yc198-release01"></script>
 </body>
 </html>

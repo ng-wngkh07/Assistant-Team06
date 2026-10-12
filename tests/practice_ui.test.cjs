@@ -48,6 +48,7 @@ function findButton(node, label) {
 
 async function createApp(seed = [], options = {}) {
     const exampleItems = options.exampleItems || [];
+    const validationError = options.validationError || false;
     class Storage {
         constructor() { this.data = new Map(seed.length ? [['study-agent-review-v1', JSON.stringify(seed)]] : []); }
         getItem(key) { return this.data.has(key) ? this.data.get(key) : null; }
@@ -58,6 +59,7 @@ async function createApp(seed = [], options = {}) {
     const elements = new Map();
     const events = [];
     const exampleRequests = [];
+    const learningRequests = [];
     const documentListeners = {};
     let ready;
     const document = {
@@ -78,6 +80,10 @@ async function createApp(seed = [], options = {}) {
     };
     let answerCalls = 0;
     const fetch = async (url, options = {}) => {
+        if (url === '/api/learning/topics') return { ok: true, json: async () => ({ topics: [{ id: 'Trí nhớ', label: 'Trí nhớ', document_count: 3 }] }) };
+        if (url === '/api/learning/exercises') { learningRequests.push({url, body: JSON.parse(options.body)}); return { ok: true, json: async () => ({items: exampleItems}) }; }
+        if (url === '/api/learning/generate') learningRequests.push({url, body: JSON.parse(options.body)});
+        if (url === '/api/learning/generate' && validationError) return { ok: false, status: 422, json: async () => ({detail:[{msg:'Value error, Chủ đề không hợp lệ.'}]}) };
         if (url === '/api/documents') return { ok: true, json: async () => ({ documents: [
             { id: 4, filename: 'algebra.pdf', clean_title: 'Đại số tuyến tính', total_pages: 8 },
         ] }) };
@@ -85,7 +91,7 @@ async function createApp(seed = [], options = {}) {
             exampleRequests.push(url);
             return { ok: true, json: async () => ({ items: exampleItems }) };
         }
-        if (url === '/api/practice/generate') return { ok: true, json: async () => ({
+        if (url === '/api/practice/generate' || url === '/api/learning/generate') return { ok: true, json: async () => ({
             practice_id: 'session-123456789012345',
             questions: [{
                 id: 'q1', question: 'Trong điều kiện A, hiện tượng X có thể xảy ra như thế nào?',
@@ -113,7 +119,7 @@ async function createApp(seed = [], options = {}) {
     });
     ready();
     await Promise.resolve();
-    return { document, elements, events, exampleRequests, localStorage, get answerCalls() { return answerCalls; } };
+    return { document, elements, events, exampleRequests, learningRequests, localStorage, get answerCalls() { return answerCalls; } };
 }
 
 function sampleReview(id = 'saved-1') {
@@ -229,4 +235,108 @@ test('An empty exercise search explains that the selected source has no matching
     await app.elements.get('practice-examples-form').listeners.submit[0]({ preventDefault() {} });
     assert.equal(app.elements.get('practice-examples-results').children.length, 0);
     assert.match(app.elements.get('practice-examples-status').textContent, /Không tìm thấy đoạn có dấu hiệu bài tập/);
+});
+
+
+test('Practice starts from a topic without selecting a document or page', async () => {
+    const app = await createApp();
+    app.elements.get('learning-topic').value = 'Trí nhớ';
+    app.elements.get('learning-count').value = '1';
+    app.elements.get('learning-difficulty').value = 'medium';
+    await app.elements.get('btn-learning-generate').click();
+    assert.equal(app.learningRequests.length, 1);
+    const body = app.learningRequests[0].body;
+    assert.equal(body.topic, 'Trí nhớ');
+    assert.equal(body.purpose, 'practice');
+    assert.equal(body.count, 1);
+    assert.equal(body.difficulty, 'medium');
+    assert.equal(body.source_document_id, undefined);
+    assert.match(textOf(app.elements.get('practice-body')), /điều kiện A/);
+    assert.doesNotMatch(textOf(app.elements.get('practice-body')), /Nguồn chỉ cho phép/);
+});
+
+test('Review can generate new questions when no previous mistakes exist', async () => {
+    const app = await createApp();
+    app.elements.get('review-topic').value = 'Trí nhớ';
+    await app.elements.get('btn-review-generate').click();
+    assert.equal(app.learningRequests.length, 1);
+    assert.equal(app.learningRequests[0].body.purpose, 'review');
+    assert.equal(app.learningRequests[0].body.topic, 'Trí nhớ');
+});
+
+test('Automatic exercise search returns individual questions and separate source answers', async () => {
+    const app = await createApp([], {exampleItems: [{question:'Bài 1: Tính 2+3.', answer:'5', answer_status:'source_document',
+        source:{doc_id:1, page_num:2, filename:'math.pdf', title:'Toán'}, answer_source:{doc_id:1,page_num:3,filename:'math.pdf',title:'Toán'}}]});
+    app.elements.get('exercise-topic').value = 'Phép cộng';
+    await app.elements.get('btn-learning-exercises').click();
+    assert.equal(app.learningRequests.length, 1);
+    assert.equal(app.learningRequests[0].url, '/api/learning/exercises');
+    assert.equal(app.learningRequests[0].body.topic, 'Phép cộng');
+    assert.equal(app.learningRequests[0].body.solve_missing, false);
+    const text = textOf(app.elements.get('learning-exercise-results'));
+    assert.match(text, /Tính 2\+3/);
+    assert.match(text, /Chỉ đáp án/);
+    assert.doesNotMatch(text, /Đáp án từ tài liệu:/);
+    await findButton(app.elements.get('learning-exercise-results'), 'Chỉ đáp án').click();
+    const links = descendants(app.elements.get('learning-exercise-results')).filter(node => node.tagName === 'a');
+    assert.ok(links.some(node => node.href === '/api/documents/1/pdf#page=2'));
+    assert.ok(links.some(node => node.href === '/api/documents/1/pdf#page=3'));
+});
+
+test('Review passes the explicit topic of saved mistakes without sending answer text as a topic', async () => {
+    const saved = { ...sampleReview(), topic: 'Trí nhớ' };
+    const app = await createApp([saved]);
+    app.elements.get('review-topic').value = 'Trí nhớ';
+    await app.elements.get('btn-review-generate').click();
+    const body = app.learningRequests[0].body;
+    assert.deepEqual(JSON.parse(JSON.stringify(body.weak_topics)), ['Trí nhớ']);
+    assert.ok(!body.weak_topics.includes(saved.question));
+    assert.ok(!body.weak_topics.includes(saved.explanation));
+});
+
+test('Text exercise sources show their passage without offering a nonexistent PDF', async () => {
+    const app = await createApp([], { exampleItems: [{ question: 'Bài 2. Nêu ví dụ.',
+        source: { doc_id: 28, page_num: 6, filename: 'memory.md', title: 'Trí nhớ', pdf_url: null, snippet: 'Bài 2. Nêu ví dụ.' },
+        answer: null, answer_status: 'missing', answer_source: null }] });
+    app.elements.get('exercise-topic').value = 'Trí nhớ';
+    await app.elements.get('btn-learning-exercises').click();
+    const results = app.elements.get('learning-exercise-results');
+    assert.equal(descendants(results).filter(n => n.tagName === 'a' && /\/pdf/.test(n.href || '')).length, 0);
+    assert.match(textOf(results), /đoạn|phần/i);
+});
+
+test('A failed AI solution is explicitly unverified instead of presented as an absent source answer', async () => {
+    const app = await createApp([], { exampleItems: [{ question: 'Bài 2. Nêu ví dụ.',
+        source: { doc_id: 28, page_num: 6, filename: 'memory.md', pdf_url: null },
+        answer: null, answer_status: 'unverified', answer_source: null }] });
+    app.elements.get('exercise-topic').value = 'Trí nhớ';
+    app.elements.get('exercise-solve-missing').checked = true;
+    await app.elements.get('btn-learning-exercises').click();
+    assert.match(textOf(app.elements.get('learning-exercise-results')), /chưa.*(xác minh|kiểm chứng)/i);
+});
+
+test('Exercise answers and answer snippets stay hidden until the learner selects a view', async () => {
+    const app = await createApp([], {exampleItems: [{question:'Bài 1: Tính 2+3.', answer:'5', answer_status:'source_document',
+        source:{doc_id:1,page_num:2,filename:'math.pdf'}, answer_source:{doc_id:1,page_num:3,filename:'math.md',snippet:'Kết quả cần giấu: 5'}}]});
+    app.elements.get('exercise-topic').value = 'Phép cộng';
+    await app.elements.get('btn-learning-exercises').click();
+    const body = app.elements.get('learning-exercise-results');
+    assert.doesNotMatch(textOf(body), /Kết quả cần giấu|Đáp án từ tài liệu/);
+    await findButton(body,'Giải chi tiết').click();
+    assert.match(textOf(body), /Chưa có lời giải chi tiết/);
+    await findButton(body,'Chỉ đáp án').click();
+    assert.match(textOf(body), /Đáp án từ tài liệu:  5/);
+    assert.match(textOf(body), /Kết quả cần giấu/);
+});
+
+
+test('Learning validation errors display a readable message instead of an object', async () => {
+    const app = await createApp([], {validationError:true});
+    app.elements.get('learning-topic').value = '???';
+    app.elements.get('learning-count').value = '1';
+    app.elements.get('learning-difficulty').value = 'medium';
+    await app.elements.get('btn-learning-generate').click();
+    const message=textOf(app.elements.get('practice-body'));
+    assert.match(message,/Chủ đề không hợp lệ/);
+    assert.doesNotMatch(message,/\[object Object\]/);
 });

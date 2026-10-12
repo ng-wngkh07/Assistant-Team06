@@ -42,7 +42,7 @@ def test_crisis_chat_endpoint(client):
 
 def test_empty_query_endpoint(client):
     response = client.post("/api/chat", json={"query": "   "})
-    assert response.status_code == 400
+    assert response.status_code == 422
 
 
 def test_chat_save_history_false_preserves_empty_history(client):

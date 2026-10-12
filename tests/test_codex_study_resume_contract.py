@@ -106,11 +106,14 @@ def test_missing_original_cannot_be_authorized_by_old_ocr_cache(tmp_path, monkey
 def test_mlx_inference_applies_requested_sampler_and_seed(monkeypatch, tmp_path, capsys):
     request = {"model_path": str(tmp_path), "messages": [{"role": "user", "content": "Hello"}],
                "temperature": 0.17, "seed": 37, "max_tokens": 19}
+    (tmp_path / "config.json").write_text(json.dumps({"max_position_embeddings": 32768}))
     seen = {}
     sampler = object()
     class Tokenizer:
         def apply_chat_template(self, messages, **kwargs): return "prompt"
         def encode(self, text): return [1]
+    monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(
+        AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *a, **k: Tokenizer())))
     def generate(model, tokenizer, **kwargs):
         seen["generate"] = kwargs
         return "answer"
@@ -241,14 +244,33 @@ def _bound_registry_fixture(tmp_path):
 
 
 def test_canonical_positive_control_agrees_with_independent_oracle(tmp_path):
-    import importlib.util
     ar, adapter, data, persist = _bound_registry_fixture(tmp_path)
     dossier = persist()
-    spec = importlib.util.spec_from_file_location('codex_independent_paired_oracle', '/private/tmp/codex_study_paired_oracle.py')
-    oracle = importlib.util.module_from_spec(spec); spec.loader.exec_module(oracle)
     paths = {k: Path(v["path"]) for k,v in dossier["bindings"].items()}
-    expected = oracle.assess(paths, adapter)
-    assert expected["promoted"] is True
+    # Independent arithmetic and input checks live with this test. A temporary
+    # script outside the repository must not determine whether it can run.
+    load = lambda key: json.loads(paths[key].read_text())
+    suite, baseline, candidate = load("suite"), load("baseline_review"), load("candidate_review")
+    frozen = {c["id"]: c for c in suite["cases"]}
+    raw = load("candidate_raw")
+    assert len(frozen) == len(raw["cases"]) == len(candidate["cases"]) == 28
+    assert set(frozen) == {c["id"] for c in raw["cases"]} == set(candidate["cases"])
+    assert candidate["raw_output_sha256"] == digest(paths["candidate_raw"].read_bytes())
+    assert raw["baseline_raw_sha256"] == digest(paths["baseline_raw"].read_bytes())
+    for case in raw["cases"]:
+        assert case["messages"] == frozen[case["id"]]["messages"]
+    rates = {}
+    for kind in ("target", "retention"):
+        ids = [cid for cid, c in frozen.items() if c["kind"] == kind]
+        assert ids
+        rates[kind] = tuple(sum(review["cases"][cid]["grade"] == "pass" for cid in ids) / len(ids)
+                            for review in (baseline, candidate))
+    assert rates["target"][1] == 1.0
+    assert rates["target"][1] - rates["target"][0] == pytest.approx(0.35)
+    assert rates["retention"][1] == 1.0
+    assert rates["retention"][0] - rates["retention"][1] == pytest.approx(-0.625)
+    assert all(c["grade"] == "pass" for c in candidate["cases"].values())
+    # This is a hypothetical registry contract control, never model acceptance.
     assert ar._is_valid_evidence_payload(dossier, tmp_path, adapter, ROOT / "data/models/qwen2.5-3b-4bit")
 
 

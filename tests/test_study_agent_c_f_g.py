@@ -67,35 +67,34 @@ def make_chunk(text, semantic_score=0.9, doc_id=41, page_num=12):
     }
 
 
-def test_three_answer_modes_share_retrieval_and_enforce_distinct_prompt_guidance():
+def test_legacy_modes_preserve_full_source_conditions_without_forced_presentation():
     query = "Ánh xạ tuyến tính cần điều kiện gì?"
     source = "Ánh xạ tuyến tính f: V → W thỏa f(u+v)=f(u)+f(v) và f(αu)=αf(u), với u,v thuộc V và α thuộc trường vô hướng."
     calls = []
     for mode, expected in [
-        ("quick", "Tóm tắt nhanh"),
-        ("steps", "Giải thích từng bước"),
-        ("compare", "So sánh"),
+        ("quick", "câu trả lời đầy đủ"),
+        ("steps", "câu trả lời đầy đủ"),
     ]:
         searcher = RecordingSearcher([make_chunk(source)])
-        model = RecordingModel()
+        model = RecordingModel("- Hai điều kiện tuyến tính, với u,v thuộc V và α thuộc trường vô hướng. [S1]" if mode == "quick" else "Mục tiêu: Kiểm tra ánh xạ tuyến tính.\n1. Kiểm tra f(u+v)=f(u)+f(v), với u,v thuộc V. [S1]\n2. Kiểm tra f(αu)=αf(u), với α thuộc trường vô hướng và u thuộc V. [S1]")
         agent = PsychologyAgent(searcher=searcher, ollama=model, translator=NoTranslation())
-        result = agent.process_query_sync(query, embed_model=None, model="test-ollama", answer_mode=mode)
+        result = agent.process_query_sync(query, embed_model=None, model="test-ollama", answer_mode=mode, processing_level="standard")
         prompt = "\n".join(message["content"] for message in model.calls[0]["messages"])
         assert expected.casefold() in prompt.casefold()
         assert "f(u+v)=f(u)+f(v)" in prompt and "α thuộc trường vô hướng" in prompt
-        assert model.calls[0]["num_predict"] == ANSWER_MODE_MAX_TOKENS[mode]
+        assert model.calls[0]["num_predict"] == 900
         assert result["answer_mode"] == mode
         assert len(result["citations"]) == 1
         calls.append(searcher.calls[0]["query"])
-    assert calls == [calls[0]] * 3
+    assert calls == [calls[0]] * 2
 
 
 @pytest.mark.parametrize("case_id", ["compare_one_sided_source", "steps_incomplete_procedure"])
 def test_dataset_cases_keep_mode_specific_limits_explicit(case_id):
     case = next(item for item in QA_CASES if item["id"] == case_id)
-    from app.rag_agent import answer_mode_instruction
+    from app.rag_agent import answer_mode_instruction, extract_compare_concepts
 
-    actual = answer_mode_instruction(case["mode"])
+    actual = answer_mode_instruction(case["mode"], compare_concepts=extract_compare_concepts(case["query"]))
     assert all(fragment.casefold() in actual.casefold() for fragment in case["expected_prompt_fragments"])
     source = " ".join(case["source_chunks"])
     assert all(evidence in source for evidence in case["expected_evidence"])
@@ -192,7 +191,9 @@ def test_answer_mode_token_ceiling_and_truncated_generation_are_reported():
         ollama=model, translator=NoTranslation(),
     )
     result = agent.process_query_sync("Quasar là gì?", embed_model=None, model="test-ollama", answer_mode="quick")
-    assert model.calls[0]["num_predict"] == ANSWER_MODE_MAX_TOKENS["quick"]
+    assert model.calls[0]["num_predict"] == 900
+    assert result["response_kind"] == "generation_failed"
+    assert result["citations"] == []
     assert result["is_truncated"] is True
 
 
@@ -306,11 +307,11 @@ def test_chat_api_propagates_scope_and_persists_selected_mode(tmp_path, monkeypa
         assert session["turns"][1]["search_scope"] == {"kind": "page", "document_id": 41, "page_num": 12}
 
 
-def test_ui_exposes_three_modes_and_real_recovery_controls():
+def test_ui_exposes_processing_levels_and_real_recovery_controls():
     html = (ROOT / "static/index.html").read_text(encoding="utf-8")
     js = (ROOT / "static/app.js").read_text(encoding="utf-8")
-    assert all(f'value="{mode}"' in html for mode in ("quick", "steps", "compare"))
-    assert "answer_mode: answerModeSelect" in js
+    assert all(f'value="{mode}"' in html for mode in ("auto", "standard", "careful"))
+    assert "processing_level: processingLevelSelect" in js
     assert "submitRecoveryQuery(query, \"document\", searchScope)" in js
     assert "submitRecoveryQuery(query, \"library\", searchScope)" in js
     assert "suggestedActions: event.suggested_actions" in js

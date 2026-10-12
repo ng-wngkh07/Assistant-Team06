@@ -10,6 +10,16 @@ def _positive_int_setting(name: str, default: int) -> int:
         return default
     return value if value > 0 else default
 
+
+def _context_tokens_setting(name: str, default: int = 8192, min_val: int = 2048, max_val: int = 32768) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    if min_val <= value <= max_val:
+        return value
+    return default
+
 # Base directories
 BASE_DIR = Path(__file__).resolve().parent.parent
 def _workspace_path(name: str, default: str) -> Path:
@@ -32,6 +42,7 @@ TRAINED_MODEL_NAME = os.getenv("TRAINED_MODEL_NAME", "qwen2.5-3b-4bit")
 OLLAMA_AUX_CHAT_MODEL = os.getenv("OLLAMA_AUX_CHAT_MODEL", "qwen2.5vl:3b")
 MLX_MODEL_DIR = DATA_DIR / "models" / "qwen2.5-3b-4bit"
 MLX_ADAPTER_DIR = DATA_DIR / "adapters" / "psychology-v1"
+MLX_CONTEXT_TOKENS = _context_tokens_setting("MLX_CONTEXT_TOKENS", 8192, 2048, 32768)
 # Unified single base model for training and inference based on real 16GB RAM profile:
 TRAINING_MODEL_DIR = Path(os.getenv("TRAINING_MODEL_DIR", str(MLX_MODEL_DIR)))
 TRAINING_MODEL_REPO = "mlx-community/Qwen2.5-3B-Instruct-4bit"

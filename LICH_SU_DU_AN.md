@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-11T12:48:26.666712+07:00
-- Mục mới nhất: **[LOG-20261011-shared-public-corpus-tv6](#log-20261011-shared-public-corpus-tv6)**.
-- Nhật ký chung có **30 mục**: 11 môi trường/chức năng (YC-167/170/173/175/177/185/192 và 4 LOG), 3 tổ chức/tài liệu, 2 phát hành GitHub, 6 rà soát/nghiệm thu, 5 làm rõ quyền/quy trình, 3 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
+- Cập nhật: 2026-10-12T12:17:45.651072+07:00
+- Mục mới nhất: **[YC-198](#yc-198)**.
+- Nhật ký chung có **36 mục**: 13 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195 và 4 LOG), 3 tổ chức/tài liệu, 2 phát hành GitHub, 9 rà soát/nghiệm thu, 5 làm rõ quyền/quy trình, 4 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -33,6 +33,7 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 | YC-188 thay phạm vi cổng nguồn | Cho phép loại đúng 13 trang đã hash-bound, giữ toàn bộ nguồn gốc và nguồn còn lại phải được duyệt | Đã được người dùng chấp thuận; triển khai cổng/data/học còn cần kiểm chứng. |
 | YC-191 thay mốc chức năng học | Dữ liệu/đánh giá bám update-Agent và các chức năng mới | PR9 đã merge vào main; nhãn mới chưa duyệt. |
 | YC-192 cố định cấu hình trả lời | Máy chủ chọn model trả lời/nhúng và Top-K, bỏ lựa chọn trên UI | Mặc định 6; câu tổng hợp dùng 10 nội bộ; merge và đồng bộ sau kiểm chứng. |
+| YC-195 thay phân chia mode YC-191/194 | QA đầy đủ, tự so sánh theo câu hỏi; từng bước chuyển sang bài tập; mức xử lý phải phù hợp model hiện tại | Đang triển khai/đo; không suy chất lượng từ độ dài hay thời gian. |
 
 ## Mẫu mục mới
 
@@ -714,6 +715,41 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Bảo toàn local: đã lưu bản sao có hash của 211 file mã/tài liệu và Git metadata; DB/vector/weights giữ tại chỗ. CI bản sửa, merge và đồng bộ main đang chờ kiểm chứng.
 - Dữ liệu/huấn luyện: 28 kiểm thử hợp đồng nháp v18 PASS nhưng review nội dung tìm nhãn Vi tích phân không khớp nguồn và thiếu điều kiện Đại số; REJECT_PARTIAL_CONTENT_REVIEW, chưa review đủ toàn bộ. Cần sửa dữ liệu và chuyển bộ đánh giá sang prompt/mode của update-Agent trước học; không kích hoạt adapter.
 
+- Hoàn tất tích hợp 2026-10-11T10:34:09.381040+07:00: [PR10](https://github.com/ng-wngkh07/Study-Agent/pull/10) MERGED lúc 11/10/2026 10:30:37 (UTC+07), commit main `6824f411e9c8be404023a8c14955b2bb6e8acfda`. CI [38108470080](https://github.com/ng-wngkh07/Study-Agent/actions/runs/38108470080) trên đúng head `59f771a` PASS Windows/macOS/history: mỗi OS 211 Python + 5 Node; local bổ sung 4 Node luyện tập PASS. Không thay bảo vệ nhánh.
+- Đồng bộ máy: main local và origin/main cùng `6824f41`, cập nhật fast-forward từ `871d4dc`; mã tracked khớp main trước cập nhật kết quả nhật ký này. Bản sao 211 file/Git metadata đã xác minh hash; giữ stash khôi phục và phục hồi 7 file chuẩn bị dữ liệu/test chưa công bố. DB corpus, manifest 13 ngoại lệ, config/tokenizer/trọng số base và indexer được so SHA256 trước/sau: giữ nguyên.
+- Smoke local: mở main với corpus thật tại http://127.0.0.1:8768, không thay phiên ứng dụng cũ cổng8000. Health/models/timetable HTTP200; UI model sẵn sàng và không có lựa chọn model/nhúng/Top-K. Demo kiểm ba chế độ, 0 lỗi JS trước dừng; sau mở lại local không có lỗi JS mới. Một câu QA có phạm vi trang thật HTTP200 trong17,79 giây, dùng qwen2.5-3b-4bit dù payload yêu cầu7B; trả hai điều kiện tuyến tính khớp nguồn, có citation và không cắt đầu ra. Chỉ là smoke một câu, không phải nghiệm thu độ chính xác tổng thể.
+- Giới hạn môi trường: lần smoke đầu trong sandbox không truy cập được Metal và trả500; phiên kiểm tra được mở lại với quyền GPU, smoke sau đạt. Chưa kiểm QA model thật trên Windows hoặc luyện tập/summary/VLM thật toàn bộ. Huấn luyện v18 còn bị chặn bởi nhãn sai và bộ đánh giá chưa chuyển đủ mốc YC191; không học/kích hoạt. Trạng thái YC192: sửa conflict/cấu hình/merge/đồng bộ PASS; chất lượng truy xuất cần cải thiện tiếp. Kết quả sau merge được ghi local, chưa đưa phần cập nhật nhật ký này lên GitHub.
+
+
+<a id="yc-193"></a>
+### YC-193 - 11/10/2026 10:39 (UTC+07)
+
+- Người thực hiện: Codex; loại: rà soát/nghiệm thu giao diện và thao tác người dùng.
+- Mục tiêu: kiểm toàn bộ màn hình, luồng hỏi đáp/tra cứu/luyện tập/ôn tập/hội thoại/lịch học, lỗi nhập liệu, lưu sau tải lại, sáng–tối và màn hình nhỏ.
+- Baseline: main6824f411e9c8be404023a8c14955b2bb6e8acfda, tiếp nối YC-192; giữ cấu hình mô hình cố định.
+- Phạm vi: bản chụp mã main cách ly, DB và trình duyệt kiểm thử riêng; giữ dữ liệu, lịch sử, lịch học và các file huấn luyện đang chỉnh ở checkout chính.
+- Kiểm chứng/trạng thái: đang kiểm tra; chưa có kết luận nghiệm thu. Bằng chứng local data/evaluation/ui-audit-yc193/. Không chạy huấn luyện hoặc tự phát hành GitHub.
+
+
+<a id="yc-194"></a>
+### YC-194 - 11/10/2026 12:35 (UTC+07)
+
+- Người thực hiện: Codex; loại: tái cấu trúc chức năng học tập và sửa hỏi đáp.
+- Mục tiêu: tiếp tục YC-193; sửa sót từ cuối ô nhập, phân biệt tóm tắt/từng bước/so sánh, truy xuất phù hợp từng chế độ và chuyển nguồn sang đường dẫn trang. Công cụ tự tìm bài tập/đáp án và tạo câu hỏi từ lý thuyết theo chủ đề; người dùng không cần chọn tài liệu/trang. Ôn tập tự tạo/lựa chọn câu hỏi và theo dõi phần chưa nắm.
+- Phạm vi bổ sung: nghiên cứu nguồn chính thức OpenAI/Google DeepMind/Anthropic và nền tảng học tập; bộ mẫu chia sẻ độc lập ít nhất một tài liệu mỗi chủ đề, tránh công bố corpus/nhãn/trọng số huấn luyện. Người dùng yêu cầu đưa thêm dữ liệu kiểm thử lên GitHub; mã sản phẩm được sửa local, chưa tự suy quyền merge mới.
+- Trước: mode chỉ thêm hướng dẫn trình bày, lọc từ khóa có thể tính cả từ yêu cầu; practice bắt chọn trang, ví dụ trả trích đoạn tìm kiếm, ôn tập chỉ chứa câu sai đã lưu. Ô nhập gửi Enter không có chặn IME đang ghép chữ (giả thuyết lỗi sót chữ cần tái hiện).
+- Triển khai: snapshot YC-193 được tái dùng sau khi xác minh hai gói Antigravity đã terminal; Codex giữ test/review/nguồn, không cạnh tranh writer. Dữ liệu và model thật bảo toàn.
+- Triển khai/kiểm chứng 2026-10-11T13:05:23.112330+07:00: đã đọc nguồn công khai về hướng dẫn theo nhiệm vụ của OpenAI/Google/Anthropic và LearnLM/NotebookLM, lập thiết kế và tiêu chí dữ liệu/nghiệm thu. Ô nhập được chặn Enter trong IME; nguồn QA/tra cứu bỏ ảnh, dẫn trang PDF. 12 Node PASS sau sửa; bộ gõ hệ điều hành thật chưa kiểm. Browser giữ bản nháp4001 ký tự, báo giới hạn trước gửi và tạo hội thoại mới giữ hướng dẫn đa lĩnh vực.
+- Học tập: gói backend đầu đã terminal, Codex kiểm độc lập68 PASS nhưng phát hiện4 lỗi biên mới và một lỗi lấy trang đầu sách thay chủ đề ở trang sau; đang sửa và triển khai giao diện theo chủ đề. Không suy chất lượng mô hình thật từ stub test. Phân biệt nguồn đề/nguồn đáp án, cấm ghép khóa trùng và kiểm đáp án AI bằng bước thứ hai với điều kiện/đáp án nhất quán.
+- Tài liệu: docs/project/learning-restructure-yc194/THIET_KE.md và HUAN_LUYEN_VA_NGHIEM_THU.md. Bộ mẫu công khai đã đưa PR11 theo LOG cùng ngày; mã sản phẩm còn trong snapshot để review/tích hợp. Huấn luyện chưa chạy: nhãn v18 vẫn bị từ chối nội dung; cần bộ dữ liệu đúng, holdout theo nguồn và đánh giá base/adapter trước kích hoạt. Không dùng fine-tuning để cam kết mọi đáp án đều đúng. Trạng thái YC194: đang làm.
+
+
+- Kiểm độc lập tiếp 2026-10-11T13:25:53.704926+07:00: backend/giao diện theo chủ đề75 Python +16 Node PASS. Bổ sung ca thực tế tìm bài ở trang215, khóa đáp án trùng ở cuối sách, nguồn Markdown không có PDF và lời giải AI chưa xác minh:4 ca RED, đang sửa. Ba câu Trí nhớ trên model base thật có nguồn nhưng chưa đạt: tóm tắt thêm nhận định, từng bước bỏ giới hạn, so sánh chưa theo bảng; đang đơn giản hóa hợp đồng/prompt rồi đo lại. Ca Cấu trúc dữ liệu cần dùng tên khái niệm có trong mẫu, không suy chất lượng từ alias vắng trong nguồn. Kết quả bản runtime rỗng do sao chép sai tên DB đã hủy, không dùng làm bằng chứng sản phẩm. Mã sản phẩm chưa tích hợp root; training vẫn NOT_RUN.
+
+
+- Review tiếp 2026-10-11T14:04:14.454555+07:00: gói Learning06–08 đã terminal/trả quyền; Codex kiểm248 Python/18 Node PASS sau sửa giới hạn ngữ cảnh retry và metadata nguồn PDF (Markdown không có link PDF/ảnh giả). Bộ base thật6ca Learning06 chưa đạt kết hợp nội dung/mode; thử JSON/fewshot đều từ chối, không áp vào ứng dụng. Browser tìm bài theo chủ đề trả đề và nguồn đáp án riêng đúng trang, ôn tập khi0câu sai đã chạy nhưng câu hỏi bị chặn vì quote không khớp. Đã sửa thông báo để thử lại/đổi chủ đề thay bắt chọn trang; đang chạy lại base Learning08, chưa nghiệm thu chất lượng.
+- Dữ liệu: Codex đối chiếu36context/216target v18, ghi28context cần sửa tại data/evaluation/learning-restructure-yc194/v18-semantic-label-review.json; trạng thái CONTENT_REJECTED. Audit corpus live mới complete:true theo scope157nguồn/22.711trang/22.698trang trong phạm vi,13ngoại lệ,52.612vector,0failure; không suy dataset đã đủ từ gate nguồn. Đã giao Data07 tạo bản nháp sửa nhãn/mode trong vùng cách ly, không học/kích hoạt; root chưa nhận mã sản phẩm.
+
 
 <a id="log-20261011-shared-public-corpus-tv6"></a>
 ### LOG-20261011-shared-public-corpus-tv6 - 11/10/2026 12:48 (UTC+07)
@@ -723,4 +759,87 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Sau: bổ sung 27 tài liệu độc lập thuộc 9 chủ đề, mỗi chủ đề có lý thuyết, bài kèm đáp án và bài chưa có đáp án; tổng demo 29 tài liệu. PDF mới 36 trang, toàn bộ mẫu mới dưới 1 MB. Không lấy corpus, nhãn, lịch sử hoặc model riêng.
 - File: tests/fixtures/documents/yc194_*, manifest public_corpus_yc194.json, PUBLIC_CORPUS.md, CC0-YC194.txt, test_public_corpus_yc194.py, pytest.windows.ini.
 - Ranh giới: nguồn mới do dự án tự biên soạn và công bố CC0-1.0; training_allowed=false, quality_holdout=false. Đây là kiểm thử chức năng, không phải phép đo độ đúng trên corpus riêng hoặc dữ liệu được duyệt để huấn luyện.
-- Kiểm chứng: hash/định dạng/số trang/độ phủ 1 kiểm thử PASS, 36 trang đã render và kiểm tra; demo lập chỉ mục và 212 kiểm thử Python3.12 PASS/6 cảnh báo phụ thuộc (bao gồm cách ly DB, API tra cứu và các tính năng cũ). Push/PR đang thực hiện; chưa merge.
+- Kiểm chứng: hash/định dạng/số trang/độ phủ PASS; 36 trang PDF đã render và kiểm tra. Bộ feature local 212 Python + 5 Node PASS; lịch sử/diff và quét bí mật PASS. Thư viện kiểm thử cách ly lập chỉ mục đủ 29 tài liệu, 90 phần mới/90 chunk mới, không lỗi; vector chưa tạo, không dùng dữ liệu này cho huấn luyện.
+- GitHub: commit e71b4b1796018688fae993ad3bd1e4b4cbb47b70 đã push trên codex/public-learning-test-corpus, [PR11](https://github.com/ng-wngkh07/Study-Agent/pull/11) OPEN/MERGEABLE; CI [38116110648](https://github.com/ng-wngkh07/Study-Agent/actions/runs/38116110648) Windows/macOS/history PASS trên đúng head. PR chỉ chứa 34 file dữ liệu kiểm thử/tài liệu/test, không có mã sản phẩm hay corpus/model riêng; chưa merge.
+- Hiệu chỉnh giờ lập mục từ12:52 thành12:48 để khớp mục đã công bố; cập nhật kết quả 11/10/2026 13:01 (UTC+07).
+
+
+<a id="yc-195"></a>
+### YC-195 - 11/10/2026 17:41 (UTC+07)
+
+- Người thực hiện: Codex phân tích/kiểm chứng, Antigravity triển khai cách ly; loại: chức năng hỏi đáp, bài tập và bảo vệ suy luận.
+- Mục tiêu: thay ba lựa chọn trình bày quick/steps/compare bằng mức xử lý có ích cho model hiện tại; QA trả đầy đủ, tự so sánh khi câu hỏi cần. Bài tập cho chọn đáp án hoặc lời giải chi tiết. Nghiên cứu huấn luyện, ảo giác, ngữ cảnh dài và trường hợp biên/bảo mật; áp dụng có đo thực tế.
+- Quyết định thay thế: yêu cầu ép định dạng ba mode trong YC-191/194 đã được thay thế; giữ những sửa nguồn/truy xuất/IME và lịch sử thử nghiệm cũ. Nhãn mode v19 cũ không vào bộ học mới.
+- Baseline: root main6824f41; snapshot YC193 đã kiểm249 Python/18 Node. Sáu ca model thật Learning08 chưa đạt nội dung kết hợp nguồn; thử lâu hơn không cấp bằng chứng đúng hơn.
+- Chẩn đoán: API thiếu chặn ký hiệu/ký tự vô hình/control/lịch sử client dài hoặc role system; test mới12 FAIL/9 PASS trên baseline trước sửa. Giữ toán/mã/đa ngôn ngữ hợp lệ. Model ứng dụng Qwen2.5-3B-Instruct không có native reasoning_effort; mức mới là workflow có giới hạn, cần đo riêng.
+- Phạm vi: snapshot app/server.py, rag_agent.py, dialogue.py, static/app.js/index.html/practice.js; helper admission/policy nếu cần. Không đổi provider/baseweights/PDF/DB/vector/13 ngoại lệ; chưa học/kích hoạt.
+- Trạng thái: đang triển khai; input/security sau sửa, browser, model thật, ngữ cảnh dài và nội dung nhãn mới chưa nghiệm thu. Nguồn nghiên cứu và tiêu chí tại docs/project/reasoning-security-yc195/BAO_CAO.md.
+- Cập nhật: 2026-10-11T18:02:06.787254+07:00.
+
+- Kết quả review bổ sung 2026-10-11T18:02:06.787254+07:00: v19 còn lỗi rationale/quote và báo cáo all-theory;36binding live/split/holdout/exclusion kiểm độc lập đạt. Giữ v19 và lập v20 nhãn sửa trong data local, chưa đủ phủ chức năng hoặc duyệt học. Test body/chunked, failed history, auditor schema/coverage, inference budget và phân loại lý thuyết có RED riêng; không dùng số test baseline thành nghiệm thu bản mới.
+
+- Tiến độ 2026-10-11T18:27:04.099712+07:00: bộ sửa backend vòng hai đang chạy trong snapshot riêng, sau vòng một terminal; chưa tích hợp root hoặc nghiệm thu model thật. Giao diện bài tập đã giấu đáp án/nguồn đáp án trước khi chọn cách xem, 19 Node PASS; không tự suy lời giải chi tiết từ khóa đáp án ngắn. V20 có37bài nháp với provenance, 1bài số học được thế lại nghiệm; chưa đủ phủ nhiệm vụ hoặc đủ điều kiện học. Bổ sung RED cho tokenizer-window và ranh giới Checkpoint/heading; Top-K keyword smoke không thay benchmark model. RAM16GiB được xác nhận, chưa đánh giá tài nguyên học live.
+
+- Đối chiếu phát hành 2026-10-11T18:38:03.349703+07:00: PR11 được chủ repo merge lúc13:01:13 UTC+07, mainaf4933a; Codex không thực hiện merge này. Diff chỉ34file dữ liệu kiểm thử công khai/tài liệu/test, mã sản phẩm không đổi. Dữ liệu bài tập nháp mở rộng45case, chưa cho học.
+
+- Kiểm chứng 2026-10-11T18:46:58.397453+07:00: vòng sửa hai đã hoàn tất; review riêng phát hiện4lỗi phủ nhận định (đảo nguyên nhân/kết quả, mọi/một số, công thức ngắn) còn được chứng nhận sai. Đang thay so từ gần giống bằng kiểm đúng nhận định, chưa nghiệm thu model thật. Fixture final-answer thêm citation hợp lệ và expected câu rỗng422 theo hợp đồng mới; không bỏ cổng nguồn để làm test xanh. CI mở rộng8file YC195. Main local đã fast-forward lênaf4933a, giữ7file người dùng và31file mẫu công khai nguyên hash; bản sao và stash giữ lại. Sản phẩm mới chưa tích hợp, không học.
+
+- YC-195 cập nhật 2026-10-11T19:04:27.657486+07:00: review62ca đối chiếu/queryPASS; bổ sung4RED về phân biệt biến toán học và ranh giới nguồn/lịch sử. Hai ca nhớ lượt gốc và hai ca summary cònFAIL, đang triển khai có quyền ghi riêng. Sửa practicecode-fence không kín,50ca liên quanPASS. Product vẫn trong snapshot, chưa nghiệm thu model thật hoặc huấn luyện.
+
+
+<a id="yc-196"></a>
+### YC-196 - 11/10/2026 22:45 (UTC+07)
+
+- Người thực hiện: Codex kiểm chứng, Antigravity triển khai theo quyền ghi riêng; loại: mở rộng ngữ cảnh và chuẩn bị/huấn luyện model.
+- Mục tiêu: tiếp tục YC-195 và thực hiện yêu cầu mới nhất chưa xử lý do phiên cũ hết hạn mức; nghiên cứu phương pháp mở rộng ngữ cảnh, chuẩn bị dữ liệu đúng runtime mới và chạy huấn luyện sau các cổng nguồn/dataset/tài nguyên.
+- Trước: gói04 đã hoàn tất nhưng checkpoint còn RUNNING; mã mới ở snapshot, cửa sổ vận hành8.192/model32.768, v20 vẫn nháp chưa đủ nhiệm vụ.
+- Đối chiếu hiện tại: UI xác nhận task04 terminal và trả toàn bộ quyền ghi; kiểm Codex357PythonPASS/8FAIL và20NodePASS. Có lỗi bằng chứng so sánh định danh có số và fixture/hợp đồng mode cũ cần phân loại; test chọn cửa sổ16K/32K và so sánh mới3FAIL/2PASS.
+- Phạm vi: snapshot riêng, cấu hình ngữ cảnh local có giới hạn, kiểm model thật, đóng băng prompt và dữ liệu mới; giữ nguyên corpus/PDF/weights/13ngoại lệ/model/provider. Chưa tự commit/push/kích hoạt adapter.
+- Trạng thái hiện tại: hai lượt huấn luyện đã hoàn tất nhưng chưa đạt chất lượng; giữ giới hạn mặc định và model nền đang dùng. Nguồn yêu cầu được đối chiếu trực tiếp ở chat cũ và lệnh tiếp tục hiện tại; không sao chép hội thoại vào nhật ký chung.
+- Cập nhật: 2026-10-11T22:45:43.316670+07:00.
+
+- Kiểm chứng tiếp 2026-10-11T23:13:26.933366+07:00: bản ngữ cảnh opt-in8K/16K/32K và worker exact-token fail-closed đã qua Codex373featurePython,17boundary và20NodePASS. Đóng băng29tài liệu/95chunk công khai để đo model thật; không sao corpus riêng. Benchmark nhớ thông tin tổng hợp8K/16K mỗi mức3/3đúng,16K chậm khoảng2,3lần/đỉnhMLX2,70GiB; chưa đo32K và không suy thành độ chính xác kiến thức.
+- Dữ liệu mới:36nguồn đã đối chiếu live,45bài nháp được review; capture396mẫu/11loại lời gọi thật,264train132valid,không chạy model để tự sinh nhãn.73mẫu quá1024token,72QA mất toàn bộ nhãn nếu cắt.Đang giảm phần hướng dẫn lặp trong snapshot, giữ nguồn/điều kiện/cổng bảo vệ; bản thử650..820token chưa áp vào sản phẩm. Huấn luyện/kích hoạt NOT_RUN; label serialized/baseline/protocol còn chờ nghiệm thu.
+
+- Kiểm chứng tiếp 2026-10-11T23:25:38.117649+07:00: prompt gọn đã được capture thành v22/396mẫu,256..903token,0mẫu quá1024 và0target bị mất; giữ nguyên nguồn và nhãn. Tuy nhiên model thật trên6ca QA đều bỏ mã nguồn nên bị từ chối; prompt chưa được nghiệm thu. Đang thử hướng dẫn trích dẫn cụ thể và bổ sung validator versioned để đối chiếu nguồn trong đúng trường dữ liệu đã escape, thay vì tìm chuỗi nguồn ở bất kỳ đâu. Baseline/serialized content review/protocol/huấn luyện vẫn chưa duyệt; không tự bỏ cổng để học.
+
+- Kết quả tiếp 2026-10-11T23:51:15.304767+07:00: dữ liệu v27 gồm264train132valid/11nhiệm vụ,18nhóm nguồn tách3nhóm holdout;396mẫu256..892token,không cắt. Đã sửa nhãn auditor âm/quote và summary từ dialog; nguồn/target/input-field/balance/manualreview đều PASS. Auditlive157docs22711trang22698scope13ngoại lệ52612vectors0fail. Base18ca đã sinh/chấm:0PASS4partial14fail ở runtimepromptgọn; không suy độ chính xác toàncorpus. Cổng corrective3B và preflight4.56GiB đạt; đã giao lượt thử80bước qua bộ thực thi có khóa/monitor, chưa xác nhận bước học bắt đầu. Tích hợp local chỉ validator cùng escaping phụ thuộc, có backup;229root/395snapshotPythonPASS. Promptgọn/phầnUI còn snapshot,chưa nghiệm thuđể triển khai;kích hoạtNOT_RUN.
+
+- Huấn luyện thực tế 2026-10-12T00:03:37.898378+07:00: run-20261011-165538-85ce94 đã bắt đầu qua app.fine_tune với Python điều phối hiện có và MLX child .train-venv; cấu hình80bước/4lớp/1024token/batch1. Đã tới50/80, checkpoint40 đã ghi; validationloss1.158→0.387, MLXpeak3.192GiB. Trạng tháiRUNNING, chưa dùng loss để nghiệm thu chất lượng; Antigravity giữ adapter/ledger/GPU tới terminal, Codex chỉ kiểm đọc và hồ sơ.
+
+- Nghiệm thu lượt thử01 2026-10-12T00:16:58.528524+07:00: 80/80 bước hoàn tất, returncode0,685giây, finalvalidationloss0,458; monitor không abort, RAM khả dụng tối thiểu1,75GiB/MLXpeak3,332GiB. Adapter cuối hash0b2c1aca…; cấu trúc/finite và10binding dữ liệu sau họcPASS, trọng số nền/nguyên nguồn giữ nguyên. Paired18 cùng input/decoding chạy143,46giây,18stop; Codex chấm0PASS3partial15FAIL (base0/4/14). Hai nhóm lỗi đều0% đạt, qualitydecisionREJECTED/DO_NOT_PROMOTE; auditor5/6nhận định âm vẫn chứng nhận sai, quote không nguyên văn và QA thiếu nguồn/điều kiện. Không kích hoạt; đang chẩn đoán fit trên6mẫu train. Tệp bằng chứng private: holdout-runtime-v1/candidate-review.json và quality-decision.json.
+
+- Chẩn đoán và đối chứng 2026-10-12T00:21:44.464715+07:00: 6mẫu train thực được sinh/chấm1PASS1partial4FAIL; hai auditor âm vẫn supported sai. Bộ MLX đi qua80/264mẫu nên đang kiểm giả thuyết chưa đủ lượt học, chưa coi là nguyên nhân đã xác nhận. V28 giữ nguyên396mẫu/hash/nhãn/nguồn; kế hoạch mới chỉ tăng264bước để đi qua toàn264train, không resume, output mới trial02. Cổng hash/manual/source/token/balance/PDF và RAM4,79GiBPASS; đã giao một lần, chưa xác nhận bắt đầu. Bộ18 đã quan sát trở thành development diagnostic; không dùng để tuyên bố tổng quát hóa/kích hoạt, kể cả nếu lần sau đạt.
+
+- Tiến độ đối chứng 2026-10-12T00:33:09.256210+07:00: run-20261011-172153-7db8ea bắt đầu00:22:14 qua MLX, đã tới75/264; Antigravity giữ output/GPU. Chuẩn bị thêm18ca từ6PDF chưa dùng train/valid và bộ cũ, kiểm hashPDF/trang/span/vectorPASS. Bộ mới đóng băng sau lúc học bắt đầu nhưng trước xem đầu ra candidate; chỉ QA/auditor, không tuyên bố độc lập toàn họ nguồn hoặc nghiệm thu11nhiệm vụ. Chờ terminal/integrity/pairedmanual, chưa kích hoạt.
+
+- Kết quả đối chứng264bước 2026-10-12T07:18:26.841290+07:00: run-20261011-172153-7db8ea hoàn tất00:47:33/264bước/1519giây/returncode0; terminal/nhường quyền và artifactfinite/hash dữ liệu/base đã đối chiếu. Validationloss cuối0,614/MLXpeak3,391GiB/RAMmin1,72GiB; không nghiệm thu bằng loss. Bộ18phát triển1PASS2partial15FAIL; bộ18mới từ6PDF chưa train/valid2PASS2partial14FAIL (base0/5/13), QA mục tiêu2/3/auditor0/6; REJECTED_QUALITY/DO_NOT_PROMOTE. Constructor trảvoid sai, quote không nguyên văn và3/6auditorâm mới sai. Học đủ264mẫu không chữa hết lỗi; không chạy lặp cấu hình trial03. Bộ mới đóng băng sau start/trước xem output, không độc lập toàn họ nguồn; metadata protocol kế thừa đã hiệu chỉnh đúng thời điểm/đường dẫn, giữ tiêu chí. Giới hạn/bằng chứng trong docs/team/RA_SOAT_TOAN_BO_CHUC_NANG_YC197.md.
+
+<a id="yc-197"></a>
+### YC-197 - 12/10/2026 00:35 (UTC+07)
+
+- Người thực hiện: Codex kiểm chứng, Antigravity tiếp tục huấn luyện; loại: rà soát/nghiệm thu.
+- Mục tiêu: tiếp tục tác vụ đang chạy, tái kiểm toàn bộ chức năng và tiếp tục huấn luyện theo YC-196.
+- Trước: lượt264bước đang RUNNING; các kiểm tra trước tập trung phần thay đổi, chưa có tái kiểm toàn bộ ở lượt hiện tại.
+- Phạm vi: toàn bộ test ứng dụng/root, chức năng mới trong snapshot, giao diện/luồng sử dụng, pipeline và model thật khi GPU được bàn giao; giữ code người dùng/PDF/corpus/base/provider, không kích hoạt chỉ vì test/loss.
+- Kiểm chứng: đã chạy bộ toàn repo, snapshot, Node, các luồng UI và model thật sau khi Antigravity trả quyền; dùng DB thử tách biệt. Kết quả và giới hạn ở báo cáo YC-197.
+- Trạng thái: đã hoàn thành lượt rà soát và sửa hai lỗi đã tái hiện; chất lượng adapter chưa đạt, một số phép nghiệm thu thực tế chưa chạy. Nguồn yêu cầu: người dùng trong chat hiện tại; không sao hội thoại vào hồ sơ chung.
+- Cập nhật: 2026-10-12T07:28:19.598582+07:00.
+
+- Tái kiểm tiếp 2026-10-12T07:18:26.841290+07:00: root659PASS12SKIP sau sửa, snapshot398PASS1SKIP và Node20PASS; runtimebinding17PASS riêng với396mẫu v28 giải quyết skip do chưa chọn dataset. Sửa hai harness cũ (citationfixture/oracle tệp tạm), giữ cổng/mức chấp nhận; lỗi sandbox đọc process/RAM được kiểm lại trên host. Phát hiện/sửa SQL bỏ tiêu đề BÀI TẬP/NBSP/tab,4caRED→GREEN và hơn2000dòng không khớp trước bài vẫn tìm đúng; UI doc20/trang2 trả1bài/chọn nguồnQA và lịch thủ công/ICSđạt trên DBriêng. Phát hiện ô Đến trang bị cắt390px; đang sửa CSSsnapshot/kiểm responsive. Đang so model thật đủ11nhiệm vụ trên1nguồn valid, chỉ diagnostic; preflight3,39GiB từ chối, giải phóng tài nguyên thử đạt3,73GiB mới chạy. OCRVLMthật/IMEhệđiềuhành/32K/Windowsmáysạch chưa tái nghiệm thu.
+
+- Chốt kết quả 2026-10-12T07:28:19.598582+07:00: CSS snapshot đã sửa và kiểm UI thực ở 320/390/768/1280px, 20/20 biên điều khiển nằm trong màn hình; tìm bài tại390px trả đúng1bài/trang2. Node sau sửa20PASS. Cache CSS cũ trên origin thử được giữ bằng chứng FAIL; bản mới kiểm qua origin sạch đạt, cần xét phiên bản asset khi tích hợp. Lưu213file mã đã review kèm hash tại data/evaluation/full-function-yc197/runtime-reviewed, không sửa runtime đóng băng đã dùng huấn luyện. Phép model thật11nhiệm vụ trên1nguồn valid: base3PASS3partial5FAIL, candidate3PASS1partial7FAIL; xác minh đáp án đúng chuyển PASS→FAIL, quote auditor vẫn không hợp lệ. Đây là diagnostic đã nhìn validation, không phải holdout độc lập. Không kích hoạt adapter hoặc chạy trial03 cùng cấu hình. Toàn bộ gói Antigravity terminal/trả quyền, tiến trình học/inference đã kết thúc, phiên UI thử đã đóng. Báo cáo: [Rà soát YC-197](docs/team/RA_SOAT_TOAN_BO_CHUC_NANG_YC197.md). OCR/VLM thật, IME hệ điều hành, 32K và Windows cài đầy đủ trên máy sạch chưa kiểm.
+
+<a id="yc-198"></a>
+### YC-198 - 12/10/2026 09:07 (UTC+07)
+
+- Người thực hiện: Codex kiểm chứng/tích hợp, Antigravity sửa mã theo phạm vi; loại: rà soát/nghiệm thu và bàn giao GitHub.
+- Mục tiêu: rà lại các lỗi, sửa và đưa mã/thay đổi đã kiểm chứng lên branch riêng để nhóm review.
+- Trước: root có validator/escaping/Unicodefix, mã UI/học tập/security/context còn bản thử, hai adapter chưa đạt chất lượng; chưa có branch tổng hợp.
+- Phạm vi: ghép thay đổi ứng dụng/test/tài liệu từ YC-193–197 với main hiện hành trên checkout cách ly; giữ dữ liệu/corpus/base/adapter/source riêng. Không merge hoặc kích hoạt adapter.
+- Branch: `codex/fix/shared/yc198-reviewed-changes-tv6` từ main `af4933a`; chuẩn bị công bố để nhóm review, chưa merge.
+- Phần/file: UI/học tập/QA/input/security/history/context/Unicode/binding, launcher/CI/test và tài liệu YC-195–198. Sửa receipt auditor, cache bốn asset, prompt practice dùng chung, fixture config/tokenizer/422, quyền đọc nhãn local tường minh và chặn holdout rỗng.
+- Kiểm chứng: portable440PASS12SKIP, Node20PASS, hồi quy YC19815PASS; toàn repo788PASS49FAIL15SKIP trên host, không có ID lỗi mới so main. 49 lỗi cần corpus/model/hồ sơ riêng còn chưa đạt; không tắt test. UI bản tích hợp tìm1bài/trang2/nguồn→QA, lịch nhập tay/ICS trên DB demo riêng đạt; model demo3B chưa khả dụng.
+- Review: Antigravity terminal/trả quyền bảy file; Codex đọc diff/caller và sửa thêm cổng holdout; không công bố nhãn/source/trích đoạn riêng. Hiệu chỉnh YC193 bỏ đường dẫn máy thử khỏi lịch sử chung, giữ ý nghĩa và kết quả, tại 2026-10-12T12:17:45.651072+07:00.
+- Trạng thái: mã/tài liệu đã kiểm lại, chờ push/readback CI; chất lượng adapter DO_NOT_PROMOTE và OCR/VLM thật/IME/32K/Windows máy sạch chưa nghiệm thu. Báo cáo: [Bản tích hợp YC-198](docs/team/BAN_TICH_HOP_VA_SUA_LOI_YC198.md).
+- Cập nhật: 2026-10-12T12:17:45.651072+07:00.

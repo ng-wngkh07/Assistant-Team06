@@ -54,6 +54,25 @@ def generate_fallback_title(question: str, max_chars: int = 45) -> str:
 
     # Capitalize first character
     return q[0].upper() + q[1:]
+HISTORY_RECALL_FILLERS = {
+    "quay", "lại", "trở", "về", "tiếp", "tục", "nhắc", "đến", "nói",
+    "cho", "ví", "dụ", "nêu", "hãy", "thêm", "nữa", "hỏi", "xin",
+    "là", "gì", "như", "thế", "nào", "sao", "vì", "tại",
+    "của", "và", "trong", "có", "không", "được", "các", "những",
+    "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín", "mười",
+    "này", "đó", "kia", "đã", "đang", "sẽ", "phải", "thì", "mà", "ở", "với",
+    "tôi", "bạn", "mình", "em", "anh", "chị", "giúp", "biết",
+    "chi", "tiết", "rõ", "hơn", "ngắn", "gọn", "tóm", "tắt", "đoạn",
+    "trước", "sau", "vừa", "rồi", "lúc", "nãy", "câu", "lượt", "hồi",
+    "a", "an", "the", "and", "or", "to", "in", "on", "of", "for", "with",
+}
+
+
+def _extract_topic_tokens(text: str) -> set:
+    if not text:
+        return set()
+    words = re.findall(r"\b\w+\b", text.lower())
+    return {w for w in words if w not in HISTORY_RECALL_FILLERS and len(w) > 1}
 
 
 
@@ -515,16 +534,58 @@ class HistoryStore:
             "is_duplicate": False,
         }
 
-    def get_session_context(self, session_id: str, max_turns: int = 4) -> List[Dict[str, str]]:
-        """Retrieve the last max_turns completed turns from the session formatted for rag_agent chat_history."""
+    def get_session_context(
+        self,
+        session_id: str,
+        max_turns: int = 4,
+        query: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
+        """Retrieve completed turns from the session formatted for rag_agent chat_history.
+
+        Supports bounded original-turn recall: when query mentions an earlier topic,
+        retrieves matching older turns within the session while always preserving recent context.
+        """
         with self._connect() as db:
             rows = db.execute(
-                "SELECT question, answer FROM session_turns WHERE session_id=? ORDER BY turn_index DESC LIMIT ?",
-                (session_id, max_turns),
+                "SELECT turn_index, question, answer FROM session_turns WHERE session_id=? ORDER BY turn_index DESC LIMIT 512",
+                (session_id,),
             ).fetchall()
 
+        if not rows:
+            return []
+
+        if len(rows) <= max_turns:
+            selected_rows = list(reversed(rows))
+        elif not query or not query.strip():
+            selected_rows = list(reversed(rows[:max_turns]))
+        else:
+            query_tokens = _extract_topic_tokens(query)
+            if len(query_tokens) < 2:
+                selected_rows = list(reversed(rows[:max_turns]))
+            else:
+                recent_pool = rows[:max_turns]
+                older_pool = rows[max_turns:]
+                scored_older = []
+                for r in older_pool:
+                    r_tokens = _extract_topic_tokens(r["question"])
+                    overlap = len(query_tokens & r_tokens)
+                    if overlap >= 2:
+                        scored_older.append((overlap, r["turn_index"], r))
+
+                if scored_older:
+                    scored_older.sort(key=lambda x: (x[0], x[1]), reverse=True)
+                    max_older = min(2, max_turns // 2)
+                    chosen_older = [x[2] for x in scored_older[:max_older]]
+                    needed_recent = max_turns - len(chosen_older)
+                    chosen_recent = recent_pool[:needed_recent]
+                    all_chosen = chosen_older + chosen_recent
+                    all_chosen.sort(key=lambda r: r["turn_index"])
+                    selected_rows = all_chosen
+                else:
+                    selected_rows = list(reversed(rows[:max_turns]))
+
         messages = []
-        for r in reversed(rows):
+        for r in selected_rows:
             messages.append({"role": "user", "content": r["question"]})
             messages.append({"role": "assistant", "content": clean_answer(r["answer"])})
         return messages

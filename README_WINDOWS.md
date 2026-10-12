@@ -78,7 +78,7 @@ Cài [Node 22](https://nodejs.org/en/download) nếu đóng góp UI; Node không
 ```powershell
 .venv\Scripts\python.exe -m pip check
 .\test_windows.ps1
-node --test tests/document_lookup_ui.test.cjs
+node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs
 ```
 
 `test_windows.ps1` chạy tập Python; lệnh Node kiểm giao diện riêng. CI chạy cả hai. Bộ phiên bản Python được cố định bằng constraints; khi nâng thư viện phải cập nhật cùng kiểm chứng Windows/Mac. Không tự thêm MLX vào profile Windows.

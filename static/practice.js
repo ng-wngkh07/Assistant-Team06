@@ -15,6 +15,22 @@ document.addEventListener("DOMContentLoaded", () => {
     const examplesTopic = document.getElementById("practice-examples-topic");
     const examplesStatus = document.getElementById("practice-examples-status");
     const examplesResults = document.getElementById("practice-examples-results");
+    const learningTopic = document.getElementById("learning-topic");
+    const learningCount = document.getElementById("learning-count");
+    const learningDifficulty = document.getElementById("learning-difficulty");
+    const btnLearningGenerate = document.getElementById("btn-learning-generate");
+    const learningTopicList = document.getElementById("learning-topic-list");
+    const learningGenerateStatus = document.getElementById("learning-generate-status");
+
+    const reviewTopic = document.getElementById("review-topic");
+    const btnReviewGenerate = document.getElementById("btn-review-generate");
+    const reviewGenerateStatus = document.getElementById("review-generate-status");
+
+    const exerciseTopic = document.getElementById("exercise-topic");
+    const exerciseSolveMissing = document.getElementById("exercise-solve-missing");
+    const btnLearningExercises = document.getElementById("btn-learning-exercises");
+    const learningExerciseStatus = document.getElementById("learning-exercise-status");
+    const learningExerciseResults = document.getElementById("learning-exercise-results");
     let selectedScope = null;
     let practiceSession = null;
     let questionIndex = 0;
@@ -40,6 +56,9 @@ document.addEventListener("DOMContentLoaded", () => {
     practiceButton?.addEventListener("click", startPractice);
     document.addEventListener("app-start-practice", startPractice);
     clearScopeButton?.addEventListener("click", () => document.dispatchEvent(new CustomEvent("app-source-cleared")));
+    btnLearningGenerate?.addEventListener("click", startLearningGenerate);
+    btnReviewGenerate?.addEventListener("click", startReviewGenerate);
+    btnLearningExercises?.addEventListener("click", searchLearningExercises);
 
     function updateSelectedScope() {
         if (practiceButton) practiceButton.disabled = !selectedScope;
@@ -93,7 +112,11 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         let result = {};
         try { result = await response.json(); } catch (_) {}
-        if (!response.ok) throw new Error(result.detail || `Yêu cầu thất bại (${response.status}).`);
+        if (!response.ok) {
+            const detail = typeof result.detail === "string" ? result.detail
+                : Array.isArray(result.detail) ? result.detail.map(item => item?.msg).filter(Boolean).join(" ") : "";
+            throw new Error(detail || `Yêu cầu thất bại (${response.status}).`);
+        }
         return result;
     }
 
@@ -121,6 +144,7 @@ document.addEventListener("DOMContentLoaded", () => {
             };
             if (scope.source_chunk_id) request.source_chunk_id = scope.source_chunk_id;
             practiceSession = await postJson("/api/practice/generate", request);
+            if (practiceSession) practiceSession.topic = scope.title;
             questionIndex = 0;
             renderQuestion();
         } catch (error) {
@@ -210,7 +234,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function makeReviewEntry(question, submitted, feedback, practiceId) {
         const submittedChoice = question.choices.find(choice => choice.label === submitted);
-        return {
+        const topic = question.topic || (practiceSession ? practiceSession.topic : "") || (selectedScope ? selectedScope.title : "");
+        const entry = {
             id: `${practiceId}:${question.id}`,
             question: question.question,
             choices: question.choices,
@@ -224,6 +249,8 @@ document.addEventListener("DOMContentLoaded", () => {
             reviewed_at: null,
             last_review_correct: null,
         };
+        if (topic) entry.topic = topic;
+        return entry;
     }
 
     function saveReviewEntry(entry) {
@@ -559,8 +586,332 @@ document.addEventListener("DOMContentLoaded", () => {
         return button;
     }
 
+    async function loadLearningTopics() {
+        if (!learningTopicList) return;
+        try {
+            const response = await fetch("/api/learning/topics");
+            if (!response.ok) return;
+            const data = await response.json();
+            const topics = data.topics || [];
+            learningTopicList.replaceChildren();
+            for (const t of topics) {
+                const opt = document.createElement("option");
+                opt.value = t.label || t.id;
+                learningTopicList.appendChild(opt);
+            }
+        } catch (_) {}
+    }
+
+    async function startLearningGenerate() {
+        const topic = (learningTopic?.value || "").trim();
+        if (!topic) {
+            if (learningGenerateStatus) learningGenerateStatus.textContent = "Vui lòng nhập hoặc chọn chủ đề câu hỏi.";
+            return;
+        }
+        const rawCount = parseInt(learningCount?.value, 10);
+        const count = Number.isInteger(rawCount) && rawCount >= 1 && rawCount <= 3 ? rawCount : 1;
+        const difficulty = ["easy", "medium", "hard"].includes(learningDifficulty?.value) ? learningDifficulty.value : "medium";
+        if (requestPending) return;
+        requestPending = true;
+        if (btnLearningGenerate) btnLearningGenerate.disabled = true;
+        practiceDialog.showModal();
+        practiceSubtitle.textContent = `Chủ đề: ${topic} · ${difficulty === "easy" ? "Dễ" : difficulty === "hard" ? "Khó" : "Trung bình"}`;
+        practiceSession = null;
+        quizResults = [];
+        showMessage(`Đang tạo ${count} câu hỏi từ tài liệu về «${topic}»…`);
+        try {
+            const body = {
+                topic,
+                count,
+                difficulty,
+                purpose: "practice",
+                weak_topics: [],
+            };
+            practiceSession = await postJson("/api/learning/generate", body);
+            if (practiceSession) practiceSession.topic = topic;
+            questionIndex = 0;
+            renderQuestion();
+        } catch (error) {
+            showMessage(error.message, true);
+        } finally {
+            requestPending = false;
+            if (btnLearningGenerate) btnLearningGenerate.disabled = false;
+        }
+    }
+
+    async function startReviewGenerate() {
+        let topic = (reviewTopic?.value || "").trim();
+        if (!topic) {
+            const savedWithTopic = reviewItems.find(item => item.topic && typeof item.topic === "string" && item.topic.trim());
+            if (savedWithTopic) topic = savedWithTopic.topic.trim();
+        }
+        if (!topic) {
+            if (reviewGenerateStatus) reviewGenerateStatus.textContent = "Vui lòng nhập chủ đề cần ôn tập.";
+            return;
+        }
+        const weakTopics = Array.from(new Set(
+            reviewItems
+                .map(item => item.topic)
+                .filter(t => typeof t === "string" && t.trim().length > 0)
+        )).slice(0, 20);
+
+        if (requestPending) return;
+        requestPending = true;
+        if (btnReviewGenerate) btnReviewGenerate.disabled = true;
+        practiceDialog.showModal();
+        practiceSubtitle.textContent = `Ôn tập: ${topic}`;
+        practiceSession = null;
+        quizResults = [];
+        showMessage(`Đang tạo câu hỏi ôn tập về «${topic}»…`);
+        try {
+            const body = {
+                topic,
+                count: 1,
+                difficulty: "medium",
+                purpose: "review",
+                weak_topics: weakTopics,
+            };
+            practiceSession = await postJson("/api/learning/generate", body);
+            if (practiceSession) practiceSession.topic = topic;
+            questionIndex = 0;
+            renderQuestion();
+        } catch (error) {
+            showMessage(error.message, true);
+        } finally {
+            requestPending = false;
+            if (btnReviewGenerate) btnReviewGenerate.disabled = false;
+        }
+    }
+
+    async function searchLearningExercises() {
+        const topic = (exerciseTopic?.value || "").trim();
+        if (!topic) {
+            if (learningExerciseStatus) learningExerciseStatus.textContent = "Vui lòng nhập chủ đề bài tập.";
+            return;
+        }
+        const solveMissing = !!(exerciseSolveMissing && exerciseSolveMissing.checked);
+        if (requestPending) return;
+        requestPending = true;
+        if (btnLearningExercises) btnLearningExercises.disabled = true;
+        if (learningExerciseStatus) learningExerciseStatus.textContent = `Đang tìm bài tập cho chủ đề «${topic}»…`;
+        learningExerciseResults?.replaceChildren();
+        try {
+            const body = {
+                topic,
+                limit: 20,
+                solve_missing: solveMissing,
+            };
+            const data = await postJson("/api/learning/exercises", body);
+            const items = data.items || [];
+            if (!items.length) {
+                if (learningExerciseStatus) learningExerciseStatus.textContent = `Không tìm thấy bài tập nào cho chủ đề «${topic}» trong thư viện tài liệu.`;
+            } else {
+                if (learningExerciseStatus) learningExerciseStatus.textContent = `Tìm thấy ${items.length} bài tập cho chủ đề «${topic}».`;
+                for (const item of items) {
+                    learningExerciseResults.appendChild(renderLearningExercise(item));
+                }
+            }
+        } catch (error) {
+            if (learningExerciseStatus) learningExerciseStatus.textContent = error.message;
+        } finally {
+            requestPending = false;
+            if (btnLearningExercises) btnLearningExercises.disabled = false;
+        }
+    }
+
+    function renderLearningExercise(item) {
+        const card = document.createElement("article");
+        card.className = "document-result learning-exercise-card";
+
+        const qHeading = document.createElement("h3");
+        qHeading.className = "exercise-question-title";
+        qHeading.textContent = item.question || "Bài tập";
+        card.appendChild(qHeading);
+
+        if (item.source) {
+            const isPdf = Boolean(
+                (item.source.filename && item.source.filename.toLowerCase().endsWith(".pdf")) ||
+                (item.source.pdf_url && typeof item.source.pdf_url === "string" && item.source.pdf_url.toLowerCase().includes(".pdf"))
+            );
+            const docId = Number(item.source.doc_id);
+            const pageNum = Number(item.source.page_num);
+            const title = item.source.title || item.source.filename || "Tài liệu";
+
+            const srcInfo = document.createElement("p");
+            srcInfo.className = "document-page text-muted";
+            if (isPdf) {
+                srcInfo.textContent = `Nguồn: ${title} · trang ${pageNum}`;
+            } else {
+                srcInfo.textContent = `Nguồn: ${title} · đoạn ${pageNum}`;
+            }
+            card.appendChild(srcInfo);
+
+            if (isPdf && Number.isInteger(docId) && docId > 0 && Number.isInteger(pageNum) && pageNum > 0) {
+                const link = document.createElement("a");
+                link.href = `/api/documents/${docId}/pdf#page=${pageNum}`;
+                link.target = "_blank";
+                link.rel = "noopener noreferrer";
+                link.textContent = "Mở trang câu hỏi trong PDF";
+                card.appendChild(link);
+            } else if (!isPdf && item.source.snippet) {
+                const snippetEl = document.createElement("div");
+                snippetEl.className = "document-passage";
+                snippetEl.textContent = item.source.snippet;
+                card.appendChild(snippetEl);
+            }
+        }
+
+        const answerSection = document.createElement("div");
+        answerSection.className = "exercise-answer-section";
+
+        if (item.answer) {
+            let bareAnswer = item.answer;
+            let detailedSolution = item.solution || null;
+
+            const ansMatch = item.answer.match(/(?:^|\n)\s*(?:đáp án|kết quả|final answer)\s*:\s*([\s\S]+)$/i);
+            if (ansMatch) {
+                bareAnswer = ansMatch[1].trim();
+                const prefix = item.answer.slice(0, ansMatch.index).trim();
+                if (prefix) {
+                    detailedSolution = prefix;
+                }
+            } else if (item.answer.includes("\n") || item.answer.length > 80) {
+                detailedSolution = item.answer;
+            }
+
+            const toggleContainer = document.createElement("div");
+            toggleContainer.className = "exercise-view-toggle";
+            if (toggleContainer.style) toggleContainer.style.cssText = "margin: 6px 0; display: flex; gap: 6px;";
+
+            const btnBare = document.createElement("button");
+            btnBare.type = "button";
+            btnBare.className = "btn btn-outline btn-sm";
+            btnBare.textContent = "Chỉ đáp án";
+
+            const btnDetailed = document.createElement("button");
+            btnDetailed.type = "button";
+            btnDetailed.className = "btn btn-outline btn-sm";
+            btnDetailed.textContent = "Giải chi tiết";
+
+            toggleContainer.append(btnBare, btnDetailed);
+            answerSection.appendChild(toggleContainer);
+
+            const contentContainer = document.createElement("div");
+            contentContainer.className = "exercise-view-content";
+            const answerSourceContainer = document.createElement("div");
+            answerSourceContainer.className = "exercise-answer-source";
+            function showAnswerSource() {
+                if (answerSourceContainer.parentNode !== answerSection) {
+                    answerSection.appendChild(answerSourceContainer);
+                }
+            }
+
+            function renderBareView() {
+                btnBare.className = "btn btn-outline btn-sm active";
+                btnDetailed.className = "btn btn-outline btn-sm";
+                contentContainer.replaceChildren();
+                showAnswerSource();
+
+                const ansTitle = document.createElement("strong");
+                ansTitle.className = "exercise-answer-label";
+                if (item.answer_status === "source_document") {
+                    ansTitle.textContent = "Đáp án từ tài liệu: ";
+                } else if (item.answer_status === "model_verified") {
+                    ansTitle.textContent = "Đáp án (Lời giải AI đã qua kiểm tra mô hình - sàng lọc tự động, không bảo đảm tuyệt đối): ";
+                } else if (item.answer_status === "unverified") {
+                    ansTitle.textContent = "Đáp án (Chưa xác minh): ";
+                } else {
+                    ansTitle.textContent = "Đáp án: ";
+                }
+                const ansText = document.createElement("span");
+                ansText.className = "exercise-answer-text";
+                ansText.textContent = bareAnswer;
+                contentContainer.append(ansTitle, ansText);
+            }
+
+            function renderDetailedView() {
+                btnBare.className = "btn btn-outline btn-sm";
+                btnDetailed.className = "btn btn-outline btn-sm active";
+                contentContainer.replaceChildren();
+                showAnswerSource();
+
+                if (detailedSolution) {
+                    const solTitle = document.createElement("strong");
+                    solTitle.className = "exercise-solution-label";
+                    solTitle.textContent = item.answer_status === "source_document"
+                        ? "Lời giải từ tài liệu: "
+                        : item.answer_status === "model_verified"
+                            ? "Lời giải AI đã qua đối chiếu tự động: "
+                            : "Lời giải chưa xác minh: ";
+                    const solText = document.createElement("div");
+                    solText.className = "exercise-solution-text";
+                    if (solText.style) solText.style.whiteSpace = "pre-wrap";
+                    solText.textContent = detailedSolution;
+                    contentContainer.append(solTitle, solText);
+                } else {
+                    const notice = document.createElement("p");
+                    notice.className = "text-muted exercise-no-detailed-solution";
+                    notice.textContent = "Chưa có lời giải chi tiết cho bài tập này.";
+                    contentContainer.appendChild(notice);
+                }
+            }
+
+            btnBare.addEventListener("click", renderBareView);
+            btnDetailed.addEventListener("click", renderDetailedView);
+
+            const viewNotice = document.createElement("p");
+            viewNotice.textContent = "Chọn cách xem đáp án trước khi mở lời giải.";
+            contentContainer.appendChild(viewNotice);
+            answerSection.appendChild(contentContainer);
+
+            if (item.answer_source) {
+                const isPdfAnswer = Boolean(
+                    (item.answer_source.filename && item.answer_source.filename.toLowerCase().endsWith(".pdf")) ||
+                    (item.answer_source.pdf_url && typeof item.answer_source.pdf_url === "string" && item.answer_source.pdf_url.toLowerCase().includes(".pdf"))
+                );
+                const ansDocId = Number(item.answer_source.doc_id);
+                const ansPageNum = Number(item.answer_source.page_num);
+                const ansTitleText = item.answer_source.title || item.answer_source.filename || "Tài liệu";
+
+                if (isPdfAnswer && Number.isInteger(ansDocId) && ansDocId > 0 && Number.isInteger(ansPageNum) && ansPageNum > 0) {
+                    const ansLink = document.createElement("a");
+                    ansLink.href = `/api/documents/${ansDocId}/pdf#page=${ansPageNum}`;
+                    ansLink.target = "_blank";
+                    ansLink.rel = "noopener noreferrer";
+                    ansLink.textContent = "Mở trang đáp án trong PDF";
+                    answerSourceContainer.appendChild(ansLink);
+                } else if (!isPdfAnswer) {
+                    const ansTextSource = document.createElement("p");
+                    ansTextSource.className = "document-page text-muted";
+                    ansTextSource.textContent = `Nguồn đáp án: ${ansTitleText} · đoạn ${ansPageNum}`;
+                    answerSourceContainer.appendChild(ansTextSource);
+                    if (item.answer_source.snippet) {
+                        const ansSnippet = document.createElement("div");
+                        ansSnippet.className = "document-passage";
+                        ansSnippet.textContent = item.answer_source.snippet;
+                        answerSourceContainer.appendChild(ansSnippet);
+                    }
+                }
+            }
+        } else if (item.answer_status === "unverified") {
+            const unverifiedNotice = document.createElement("p");
+            unverifiedNotice.className = "text-warning exercise-unverified-notice";
+            unverifiedNotice.textContent = "Lời giải AI chưa được xác minh (không đạt kiểm định với tài liệu).";
+            answerSection.appendChild(unverifiedNotice);
+        } else {
+            const noAns = document.createElement("p");
+            noAns.className = "text-muted exercise-no-answer";
+            noAns.textContent = "Tài liệu nguồn không kèm đáp án cho bài tập này.";
+            answerSection.appendChild(noAns);
+        }
+
+        card.appendChild(answerSection);
+        return card;
+    }
+
     updateSelectedScope();
     updateReviewCount();
     renderReviewList();
     loadExampleDocuments();
+    loadLearningTopics();
 });

@@ -129,6 +129,7 @@ def test_ollama_base_summary_does_not_require_mlx(tmp_path, monkeypatch):
     monkeypatch.setattr(summarizer.ollama, "check_health", lambda: True)
     monkeypatch.setattr(summarizer.ollama, "chat_complete", lambda **kw:
         '{"title":"Trí nhớ làm việc","summary":"Hỏi về trí nhớ ngắn hạn."}')
+    monkeypatch.setattr(summarizer.ollama, "last_done_reason", "stop")
     result = summarizer.summarize_session_sync(sid, model="qwen2.5:3b")
     assert result["status"] == "completed"
 

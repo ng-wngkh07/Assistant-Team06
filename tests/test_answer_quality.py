@@ -66,7 +66,7 @@ class RelevantSearcher:
 
 def test_document_qa_states_insufficient_evidence_without_book_excerpt():
     agent = PsychologyAgent(searcher=EmptySearcher(), ollama=StubModel(), translator=StubTranslator())
-    result = agent.process_query_sync("Lo âu ảnh hưởng giấc ngủ như thế nào?", embed_model=None)
+    result = agent.process_query_sync("Lo âu ảnh hưởng giấc ngủ như thế nào?", model="test-model", embed_model=None)
     assert "chưa tìm thấy đủ căn cứ" in result["answer"]
     assert result["citations"] == []
 
@@ -77,7 +77,7 @@ def test_substantial_language_drift_is_not_delivered_as_an_answer():
             yield "Đây là kết luận. 这些说法没有充分依据而且不能用来判断个人的心理状况。"
 
     agent = PsychologyAgent(searcher=RelevantSearcher(), ollama=MixedModel(), translator=StubTranslator())
-    result = agent.process_query_sync("Lo âu ảnh hưởng giấc ngủ như thế nào?", embed_model=None)
+    result = agent.process_query_sync("Lo âu ảnh hưởng giấc ngủ như thế nào?", model="test-model", embed_model=None)
     assert "chưa tạo được câu trả lời tiếng Việt" in result["answer"]
     assert "这些" not in result["answer"]
     assert result["citations"] == []
@@ -91,11 +91,13 @@ def test_short_quoted_han_name_does_not_block_vietnamese_answer():
 def test_hidden_reasoning_language_does_not_reject_a_valid_final_answer():
     class ReasoningModel:
         def chat_stream(self, **kwargs):
-            yield "<think>这些说法没有充分依据而且不能用来判断个人的心理状况。</think><final>Lo âu có thể ảnh hưởng giấc ngủ, nhưng mức độ thay đổi tùy người.</final>"
+            yield "<think>这些说法没有充分依据而且不能用来判断个人的心理状况。</think><final>Lo âu có thể ảnh hưởng giấc ngủ, nhưng mức độ thay đổi tùy người [S1].</final>"
 
     agent = PsychologyAgent(searcher=RelevantSearcher(), ollama=ReasoningModel(), translator=StubTranslator())
-    result = agent.process_query_sync("Lo âu ảnh hưởng giấc ngủ như thế nào?", embed_model=None)
+    result = agent.process_query_sync("Lo âu ảnh hưởng giấc ngủ như thế nào?", model="test-model", embed_model=None)
     assert result["answer"].startswith("Lo âu có thể")
+    assert result["citations"]
+    assert "<think>" not in result["answer"]
 
 
 def test_cli_shows_only_final_answer_even_when_internal_sources_exist(monkeypatch, capsys):

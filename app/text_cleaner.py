@@ -97,16 +97,6 @@ def sanitize_for_prompt_context(text: str) -> str:
     if not text:
         return ""
     
-    # Disarm XML/tag breakout attempts
-    sanitized = text.replace("<context>", "&lt;context&gt;")
-    sanitized = sanitized.replace("</context>", "&lt;/context&gt;")
-    sanitized = sanitized.replace("<document>", "&lt;document&gt;")
-    sanitized = sanitized.replace("</document>", "&lt;/document&gt;")
-    sanitized = sanitized.replace("<system>", "&lt;system&gt;")
-    sanitized = sanitized.replace("</system>", "&lt;/system&gt;")
-    sanitized = sanitized.replace("<instruction>", "&lt;instruction&gt;")
-    sanitized = sanitized.replace("</instruction>", "&lt;/instruction&gt;")
-    
     # Neutralize common indirect jailbreak trigger phrases
     jailbreak_patterns = [
         r"(?i)ignore\s+(?:all\s+)?(?:(?:previous|prior|above)\s+)?instructions",
@@ -115,7 +105,14 @@ def sanitize_for_prompt_context(text: str) -> str:
         r"(?i)bỏ\s+qua\s+(?:tất\s+cả\s+)?(?:các\s+)?hướng\s+dẫn(?:\s+trước)?",
         r"(?i)từ\s+bây\s+giờ\s+hãy\s+đóng\s+vai",
     ]
+    sanitized = text
     for pat in jailbreak_patterns:
         sanitized = re.sub(pat, "[Bị vô hiệu hóa: Cụm từ chỉ dẫn không an toàn]", sanitized)
-        
+
+    # Neutralize ChatML tokens
+    sanitized = re.sub(r"<\|([^|>]+)\|>", r"&lt;|\1|&gt;", sanitized)
+
+    # Broad HTML/XML escaping to disarm all tag injection and breakout attempts
+    sanitized = sanitized.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     return sanitized

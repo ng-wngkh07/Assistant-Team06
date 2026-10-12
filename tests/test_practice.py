@@ -50,6 +50,7 @@ class FakeOllama:
 
     def chat_complete(self, messages, **kwargs):
         self.prompts.append(messages[0]["content"])
+        self.last_done_reason = "stop"
         return json.dumps(self.responses.pop(0), ensure_ascii=False)
 
 

@@ -47,8 +47,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const sessionSummaryText = document.getElementById("session-summary-text");
     const btnCloseSummary = document.getElementById("btn-close-summary");
     const btnResumeLastQuestion = document.getElementById("btn-resume-last-question");
-    const resumeSourceList = document.getElementById("resume-source-list");
     const answerModeSelect = document.getElementById("answer-mode");
+    const processingLevelSelect = document.getElementById("processing-level");
 
     function renderResumeControls(turn, fallbackCitations = []) {
         const previousCitations = latestRestorableTurn?.citations || [];
@@ -138,6 +138,7 @@ document.addEventListener("DOMContentLoaded", () => {
     chatStatus.setAttribute("aria-live", "polite");
     chatStatus.style.cssText = "font-size:0.85rem; margin:8px 0; color:var(--text-muted);";
     chatForm.insertAdjacentElement("afterend", chatStatus);
+    const initialWelcomeHTML = messagesContainer ? messagesContainer.innerHTML : "";
     let embeddingCoverage = 0;
     let clientChatHistory = [];
     let latestRestorableTurn = null;
@@ -151,7 +152,7 @@ document.addEventListener("DOMContentLoaded", () => {
     loadSessions().then(() => {
         const savedSessionId = sessionStorage.getItem("active_session_id");
         if (savedSessionId && sessionsApiSupported) {
-            return openSession(savedSessionId).catch(() => {
+            return openSession(savedSessionId, { autoRestore: true }).catch(() => {
                 sessionStorage.removeItem("active_session_id");
                 currentSessionId = null;
             });
@@ -168,8 +169,25 @@ document.addEventListener("DOMContentLoaded", () => {
         userInput.style.height = Math.min(userInput.scrollHeight, 140) + "px";
     });
 
+    let isComposing = false;
+    userInput.addEventListener("compositionstart", () => {
+        isComposing = true;
+    });
+    userInput.addEventListener("compositionend", () => {
+        isComposing = false;
+    });
+    userInput.addEventListener("blur", () => {
+        isComposing = false;
+    });
+
     userInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
+        if (e.key === "Enter") {
+            if (e.shiftKey) {
+                return;
+            }
+            if (isComposing || e.isComposing || e.keyCode === 229) {
+                return;
+            }
             e.preventDefault();
             chatForm.dispatchEvent(new Event("submit"));
         }
@@ -226,7 +244,15 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    if (answerModeSelect) {
+    if (processingLevelSelect) {
+        try {
+            const savedLevel = localStorage.getItem("qa_processing_level");
+            if (["auto", "standard", "careful"].includes(savedLevel)) processingLevelSelect.value = savedLevel;
+        } catch (_) {}
+        processingLevelSelect.addEventListener("change", () => {
+            try { localStorage.setItem("qa_processing_level", processingLevelSelect.value); } catch (_) {}
+        });
+    } else if (answerModeSelect) {
         try {
             const savedMode = localStorage.getItem("qa_answer_mode");
             if (["quick", "steps", "compare"].includes(savedMode)) answerModeSelect.value = savedMode;
@@ -399,12 +425,18 @@ document.addEventListener("DOMContentLoaded", () => {
     // Chat form submit
     chatForm.addEventListener("submit", async (e) => {
         e.preventDefault();
+        if (isComposing) return;
         const query = userInput.value.trim();
         if (isGenerating) {
             chatStatus.textContent = "Đang xử lý câu hỏi trước. Câu mới được giữ trong ô nhập; bạn gửi lại sau khi câu trước hoàn tất.";
             return;
         }
         if (!query || isLoadingSession) return;
+        if (query.length > 4000) {
+            chatStatus.textContent = `Câu hỏi dài ${query.length.toLocaleString("vi-VN")} ký tự, vượt quá giới hạn 4.000 ký tự. Vui lòng rút ngắn câu hỏi trước khi gửi.`;
+            userInput.focus();
+            return;
+        }
         chatStatus.textContent = "";
         viewRevision += 1;
 
@@ -443,10 +475,13 @@ document.addEventListener("DOMContentLoaded", () => {
             const reqBody = {
                 query: query,
                 temperature: 0.2,
-                answer_mode: answerModeSelect?.value || "quick",
+                processing_level: processingLevelSelect?.value || "auto",
                 session_id: targetSessionId,
                 request_id: requestId
             };
+            if (answerModeSelect?.value) {
+                reqBody.answer_mode = answerModeSelect.value;
+            }
             if (selectedSourcePage) {
                 reqBody.source_document_id = selectedSourcePage.doc_id;
                 if (selectedSourceMode === "page") reqBody.source_page_num = selectedSourcePage.page_num;
@@ -467,6 +502,15 @@ document.addEventListener("DOMContentLoaded", () => {
                     try {
                         const errData = await response.json();
                         if (errData.detail) errMsg = errData.detail;
+                    } catch (_) {}
+                    throw new Error(errMsg);
+                }
+                if (response.status === 422) {
+                    let errMsg = "Câu hỏi vượt quá giới hạn 4.000 ký tự hoặc dữ liệu không hợp lệ. Vui lòng kiểm tra lại.";
+                    try {
+                        const errData = await response.json();
+                        if (typeof errData.detail === "string") errMsg = errData.detail;
+                        else if (Array.isArray(errData.detail) && errData.detail[0]?.msg) errMsg = errData.detail[0].msg;
                     } catch (_) {}
                     throw new Error(errMsg);
                 }
@@ -530,6 +574,23 @@ document.addEventListener("DOMContentLoaded", () => {
                                 }
                                 if (finalCitations && finalCitations.length > 0) {
                                     renderCitations(assistantMsgEl, finalCitations);
+                                }
+                                if (event.resolved_processing_level) {
+                                    const metaBox = document.createElement("div");
+                                    metaBox.className = "processing-meta text-muted";
+                                    metaBox.style.cssText = "margin-top: 6px; font-size: 0.8rem; color: var(--text-muted, #6b7280);";
+                                    const levelLabel = event.resolved_processing_level === "careful" ? "Kiểm tra kỹ" : "Thông thường";
+                                    let statusText = "";
+                                    if (event.check_status === "verified") {
+                                        statusText = " · Đã qua đối chiếu tự động";
+                                    } else if (event.check_status === "partially_verified") {
+                                        statusText = " · Đối chiếu một phần";
+                                    } else if (event.check_status === "unverified") {
+                                        statusText = " · Chưa xác minh";
+                                    }
+                                    const callsText = event.generation_calls ? ` (${event.generation_calls} lượt xử lý)` : "";
+                                    metaBox.textContent = `Mức xử lý: ${levelLabel}${statusText}${callsText}`;
+                                    assistantMsgEl.querySelector(".message-body")?.appendChild(metaBox);
                                 }
                                 if (responseKind === "insufficient_evidence") {
                                     addRecoveryActions(assistantMsgEl, query, responseScope, {
@@ -731,12 +792,16 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    async function openSession(sessionId) {
-        document.dispatchEvent(new Event("app-show-qa"));
+    async function openSession(sessionId, options = {}) {
+        const autoRestore = Boolean(options && options.autoRestore);
+        if (!autoRestore) {
+            document.dispatchEvent(new Event("app-show-qa"));
+        }
         if (isGenerating) {
             alert("Đang tạo câu trả lời, vui lòng chờ hoàn tất trước khi chuyển cuộc trò chuyện.");
             return;
         }
+        const draftText = userInput.value;
         const requestedView = ++viewRevision;
         isLoadingSession = true;
         btnSend.disabled = true;
@@ -747,7 +812,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (res.status === 404) {
                     sessionStorage.removeItem("active_session_id");
                     currentSessionId = null;
-                    startNewChat();
+                    if (!autoRestore) {
+                        startNewChat();
+                    } else {
+                        startNewChat({ autoRestore: true });
+                    }
                 }
                 throw new Error("Không thể tải cuộc trò chuyện");
             }
@@ -784,6 +853,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 el.classList.toggle("active", el.dataset.sessionId === currentSessionId);
             });
             scrollToBottom();
+            if (autoRestore && draftText && !userInput.value) {
+                userInput.value = draftText;
+            }
         } catch (err) {
             console.error("Open session error:", err);
         } finally {
@@ -794,8 +866,11 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    function startNewChat() {
-        document.dispatchEvent(new Event("app-show-qa"));
+    function startNewChat(options = {}) {
+        const autoRestore = Boolean(options && options.autoRestore);
+        if (!autoRestore) {
+            document.dispatchEvent(new Event("app-show-qa"));
+        }
         if (isGenerating) return;
         chatStatus.textContent = "";
         viewRevision += 1;
@@ -807,24 +882,27 @@ document.addEventListener("DOMContentLoaded", () => {
         renderResumeControls(null);
         sessionBar.style.display = "none";
         sessionSummaryBox.style.display = "none";
-        messagesContainer.innerHTML = `
+        messagesContainer.innerHTML = initialWelcomeHTML || `
             <div class="message assistant welcome-card">
                 <div class="message-avatar">🧠</div>
                 <div class="message-body">
-                    <h3>Xin chào! Tôi có thể giúp gì cho bạn về tâm lý học?</h3>
-                    <p>Tôi tìm và đối chiếu các đoạn trong tài liệu để trả lời. Nếu chưa đủ nguồn hoặc câu hỏi mơ hồ, tôi sẽ nói rõ và hỏi thêm một câu ngắn.</p>
+                    <h3>Xin chào! Bạn muốn tìm hiểu hoặc tra cứu nội dung gì hôm nay?</h3>
+                    <p>Tôi tìm các đoạn phù hợp trong thư viện tài liệu (Đại số tuyến tính, Lập trình hướng đối tượng, Tâm lý học, Khoa học dữ liệu, v.v.) để hỗ trợ câu trả lời và dẫn nguồn rõ ràng. Mở Công cụ học tập để tạo câu hỏi, ôn tập hoặc tìm bài tập mẫu từ tài liệu gốc.</p>
+
                     <div class="suggestion-chips">
-                        <span class="suggestion-title">Gợi ý câu hỏi:</span>
-                        <button class="chip" data-query="Hệ thống 1 và Hệ thống 2 trong cuốn Tư duy nhanh và chậm hoạt động như thế nào?">Hệ thống 1 và 2 (Tư duy nhanh & chậm)</button>
-                        <button class="chip" data-query="Khái niệm Cái bóng (Shadow) theo Carl Jung là gì và cách nhận diện?">Khái niệm Cái bóng - Carl Jung</button>
-                        <button class="chip" data-query="Sang chấn tâm lý ảnh hưởng như thế nào đến cơ thể và não bộ?">Sang chấn tâm lý & cơ thể</button>
+                        <span class="suggestion-title">Gợi ý câu hỏi đa lĩnh vực:</span>
+                        <button class="chip" data-query="Ánh xạ tuyến tính là gì? Nêu hai tính chất trong tài liệu Chương 4 Anh xa tuyen tinh.">Ánh xạ tuyến tính & 2 tính chất (Đại số)</button>
+                        <button class="chip" data-query="Đa kế thừa trong C++ được định nghĩa thế nào và hàm ảo hoạt động ra sao?">Đa kế thừa & Hàm ảo C++ (OOP)</button>
+                        <button class="chip" data-query="Hệ thống 1 và Hệ thống 2 trong cuốn Tư duy nhanh và chậm hoạt động như thế nào?">Hệ thống 1 & 2 (Tâm lý học nhận thức)</button>
                         <button class="chip" data-query="Vòng lặp thói quen gồm những yếu tố nào trong Sức mạnh của thói quen?">Vòng lặp thói quen (Habit Loop)</button>
                     </div>
                 </div>
             </div>
         `;
         document.querySelectorAll(".session-item").forEach(el => el.classList.remove("active"));
-        userInput.focus();
+        if (!autoRestore) {
+            userInput.focus();
+        }
     }
 
     async function renameSessionPrompt(sid, oldTitle) {
@@ -996,7 +1074,7 @@ document.addEventListener("DOMContentLoaded", () => {
         citBox.className = "citations-block";
         const heading = document.createElement("strong");
         heading.className = "citations-heading";
-        heading.textContent = "📚 Đối chiếu với ảnh trang gốc:";
+        heading.textContent = "📚 Đối chiếu với tài liệu gốc:";
         citBox.appendChild(heading);
         citations.forEach((c, index) => {
             const detail = document.createElement("details");
@@ -1009,6 +1087,12 @@ document.addEventListener("DOMContentLoaded", () => {
             const unitLabel = isPdf ? "trang" : "phần";
             summary.textContent = `[${c.id || 'S'}] ${c.book_title || c.filename || c.book || ''} · ${unitLabel} ${page || '?'}`;
             detail.appendChild(summary);
+            if (typeof c.snippet === "string" && c.snippet.trim()) {
+                const quote = document.createElement("blockquote");
+                quote.className = "citation-snippet";
+                quote.textContent = c.snippet.trim();
+                detail.appendChild(quote);
+            }
             async function attachOriginalPage() {
                 let id = Number(c.doc_id);
                 if (!Number.isInteger(page) || page < 1) return;
@@ -1028,26 +1112,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     link.href = `/api/documents/${id}/pdf#page=${page}`;
                     link.target = "_blank";
                     link.rel = "noopener noreferrer";
-                    const original = document.createElement("img");
-                    original.src = `/api/documents/${id}/pages/${page}/image`;
-                    original.alt = `Ảnh trang gốc ${page} — ${c.book_title || c.filename || ''}`;
-                    original.loading = "lazy";
-                    original.className = "source-page-image";
-
-                    const hint = document.createElement("p");
-                    hint.className = "citation-hint";
-                    hint.textContent = "Bấm ảnh để mở PDF đúng trang và đối chiếu công thức, ký hiệu, câu chữ.";
-
-                    original.onerror = () => {
-                        original.remove();
-                        link.textContent = `📄 Mở trang PDF ${page} để đối chiếu`;
-                        link.style.padding = "8px 12px";
-                        link.style.display = "inline-block";
-                    };
-
-                    link.appendChild(original);
+                    link.textContent = `📄 Mở trang PDF ${page} để đối chiếu`;
                     detail.appendChild(link);
-                    detail.appendChild(hint);
                 } else {
                     const textNotice = document.createElement("p");
                     textNotice.className = "citation-text-fallback";
@@ -1064,7 +1130,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function appendMessage(role, text) {
         const msgDiv = document.createElement("div");
         msgDiv.className = `message ${role}`;
-        
+
         const avatar = role === "user" ? "👤" : "🧠";
         msgDiv.innerHTML = `
             <div class="message-avatar">${avatar}</div>
