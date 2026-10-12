@@ -3,43 +3,572 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BaMiTiKa AI - Tra cứu tài liệu và hỏi đáp đa lĩnh vực</title>
+    <title>BaMiTiKa AI - Trợ Lý Học Tập Cục Bộ</title>
     <script>
-        /* Áp dụng giao diện đã lưu trước khi vẽ trang để không bị nháy màu */
+        /* Giao diện tối cố định (Dark Mode Only) */
         (function () {
-            try {
-                var t = localStorage.getItem("theme");
-                document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
-            } catch (e) {
-                document.documentElement.setAttribute("data-theme", "dark");
-            }
+            document.documentElement.setAttribute("data-theme", "dark");
+            try { localStorage.setItem("theme", "dark"); } catch (e) {}
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=yc198-release01">
+    <link rel="stylesheet" href="/static/style.css?v=yc198-release02">
     <link rel="stylesheet" href="/static/theme.css?v=3-contrast-fix">
+    <style>
+        /* Ambient gradient glowing orbs */
+        .ambient-glow {
+            position: fixed;
+            border-radius: 9999px;
+            filter: blur(140px);
+            pointer-events: none;
+            z-index: 0;
+        }
+        .glow-1 {
+            top: 4%;
+            right: 16%;
+            width: 620px;
+            height: 620px;
+            background: radial-gradient(circle, rgba(244, 63, 94, 0.24) 0%, rgba(225, 29, 72, 0.14) 40%, transparent 70%);
+        }
+        .glow-2 {
+            bottom: 6%;
+            right: 10%;
+            width: 650px;
+            height: 650px;
+            background: radial-gradient(circle, rgba(251, 113, 133, 0.18) 0%, rgba(244, 63, 94, 0.08) 45%, transparent 70%);
+        }
+        .glow-3 {
+            top: 36%;
+            left: 20%;
+            width: 480px;
+            height: 480px;
+            background: radial-gradient(circle, rgba(244, 63, 94, 0.09) 0%, transparent 65%);
+        }
+
+        /* Body obsidian background with subtle radial gradient haze */
+        body {
+            background-color: #0b0d14 !important;
+            background-image: radial-gradient(circle at 82% 14%, rgba(244, 63, 94, 0.18) 0%, transparent 45%),
+                              radial-gradient(circle at 86% 80%, rgba(251, 113, 133, 0.14) 0%, transparent 48%),
+                              radial-gradient(circle at 22% 48%, rgba(244, 63, 94, 0.06) 0%, transparent 40%) !important;
+        }
+
+        /* Ensure containers are transparent to allow ambient glows to shine through */
+        .app-container,
+        .main-content,
+        .messages-container,
+        .qa-panel,
+        .input-area {
+            background: transparent !important;
+        }
+
+        /* Glassmorphic header */
+        .chat-header {
+            display: flex !important;
+            justify-content: center !important;
+            align-items: center !important;
+            padding: 10px 24px !important;
+            position: relative !important;
+            min-height: 58px !important;
+            background: rgba(12, 15, 22, 0.72) !important;
+            backdrop-filter: blur(20px) !important;
+            -webkit-backdrop-filter: blur(20px) !important;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+        }
+        .chat-header .header-left {
+            position: absolute !important;
+            left: 20px !important;
+            display: flex !important;
+            align-items: center !important;
+        }
+        .chat-header .mode-switch {
+            margin: 0 auto !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: space-between !important;
+            gap: 6px !important;
+            max-width: 560px !important;
+            width: 100% !important;
+            padding: 4px 6px !important;
+            background: rgba(22, 26, 35, 0.8) !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            border-radius: 9999px !important;
+        }
+
+        /* Glassmorphic sidebar */
+        .sidebar {
+            background: rgba(12, 15, 22, 0.90) !important;
+            backdrop-filter: blur(24px) !important;
+            -webkit-backdrop-filter: blur(24px) !important;
+            border-right: 1px solid rgba(255, 255, 255, 0.06) !important;
+        }
+
+        /* Mode buttons in top header - evenly distributed on both sides */
+        .mode-button {
+            flex: 1 1 0 !important;
+            text-align: center !important;
+            justify-content: center !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            border-radius: 9999px !important;
+            font-size: 13px !important;
+            font-weight: 500 !important;
+            padding: 7px 12px !important;
+            white-space: nowrap !important;
+            transition: all 0.25s ease !important;
+        }
+        .mode-button:not(.active) {
+            background: rgba(255, 255, 255, 0.05) !important;
+            border: 1px solid rgba(255, 255, 255, 0.07) !important;
+            color: #94a3b8 !important;
+        }
+        .mode-button:not(.active):hover {
+            background: rgba(255, 255, 255, 0.09) !important;
+            color: #f1f5f9 !important;
+        }
+        .mode-button.active, #mode-qa.active {
+            background: linear-gradient(135deg, #f43f5e 0%, #fb7185 100%) !important;
+            border: 1px solid rgba(251, 113, 133, 0.45) !important;
+            color: #ffffff !important;
+            font-weight: 600 !important;
+            box-shadow: 0 0 20px 2px rgba(244, 63, 94, 0.55), 0 4px 12px rgba(244, 63, 94, 0.4) !important;
+        }
+
+        /* Send button vibrant glowing gradient */
+        .btn-send {
+            background: linear-gradient(135deg, #f43f5e 0%, #fb7185 100%) !important;
+            border: 1px solid rgba(251, 113, 133, 0.45) !important;
+            color: #ffffff !important;
+            box-shadow: 0 0 18px 3px rgba(244, 63, 94, 0.65), 0 4px 12px rgba(244, 63, 94, 0.45) !important;
+        }
+        .btn-send:hover:not(:disabled) {
+            filter: brightness(1.15) !important;
+            transform: scale(1.06) !important;
+            box-shadow: 0 0 24px 4px rgba(244, 63, 94, 0.8), 0 6px 18px rgba(251, 113, 133, 0.6) !important;
+        }
+
+        /* Primary button gradient */
+        .btn-primary {
+            background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%) !important;
+            box-shadow: 0 4px 16px -4px rgba(244, 63, 94, 0.5) !important;
+        }
+        .btn-primary:hover {
+            filter: brightness(1.1) !important;
+            box-shadow: 0 6px 20px -4px rgba(244, 63, 94, 0.7) !important;
+        }
+
+        /* Sidebar active session item */
+        .session-item.active {
+            background: linear-gradient(90deg, rgba(244, 63, 94, 0.16) 0%, rgba(244, 63, 94, 0.02) 100%) !important;
+            border-left: 3px solid #f43f5e !important;
+        }
+
+        /* Chat input container liquid glass */
+        .input-area {
+            background: transparent !important;
+            border-top: none !important;
+            padding: 0 24px 32px 24px !important;
+            max-width: 760px !important;
+            width: 100% !important;
+            margin: 0 auto !important;
+        }
+        .chat-form {
+            background: rgba(18, 22, 32, 0.82) !important;
+            backdrop-filter: blur(24px) !important;
+            -webkit-backdrop-filter: blur(24px) !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5) !important;
+            border-radius: 20px !important;
+            padding: 14px 16px 12px 18px !important;
+        }
+        .chat-form textarea {
+            width: 100% !important;
+            background: transparent !important;
+            color: #ffffff !important;
+            font-size: 14.5px !important;
+            line-height: 1.5 !important;
+            border: none !important;
+            outline: none !important;
+            resize: none !important;
+            min-height: 48px !important;
+        }
+        .chat-form textarea::placeholder {
+            color: #64748b !important;
+        }
+
+        /* ================= Mode Panels Visibility ================= */
+        [hidden],
+        .qa-panel[hidden],
+        .learning-tools-panel[hidden],
+        .timetable-panel[hidden],
+        .tool-tab-panel[hidden] {
+            display: none !important;
+        }
+
+        /* QA Panel layout - perfectly centered hero & input on welcome screen */
+        .qa-panel:not([hidden]) {
+            display: flex !important;
+            flex-direction: column !important;
+            flex: 1 1 0% !important;
+            min-height: 0 !important;
+            height: 100% !important;
+            position: relative !important;
+        }
+
+        .qa-panel.welcome-mode,
+        .qa-panel:has(.welcome-card) {
+            justify-content: center !important;
+            align-items: center !important;
+        }
+
+        .qa-panel.welcome-mode .messages-container,
+        .qa-panel:has(.welcome-card) .messages-container {
+            flex: 0 0 auto !important;
+            overflow: visible !important;
+            padding: 0 !important;
+            width: 100% !important;
+            max-width: 760px !important;
+        }
+
+        /* Centered welcome greeting hero card */
+        .welcome-card {
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            text-align: center !important;
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            margin: 0 auto 28px auto !important;
+        }
+        .welcome-card .message-avatar {
+            margin: 0 auto 16px auto !important;
+            display: flex !important;
+            justify-content: center !important;
+            align-items: center !important;
+        }
+        .welcome-card .hero-avatar-img {
+            width: 80px !important;
+            height: 80px !important;
+            border-radius: 50% !important;
+            border: 2px solid rgba(251, 113, 133, 0.45) !important;
+            box-shadow: 0 0 30px rgba(244, 63, 94, 0.45), 0 0 60px rgba(251, 113, 133, 0.25) !important;
+        }
+        .welcome-card .message-body {
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            text-align: center !important;
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            width: 100% !important;
+        }
+        .welcome-card h3 {
+            font-size: 28px !important;
+            font-weight: 700 !important;
+            color: #ffffff !important;
+            margin: 0 !important;
+            letter-spacing: -0.01em !important;
+        }
+
+        .qa-panel.welcome-mode .input-area,
+        .qa-panel:has(.welcome-card) .input-area {
+            padding: 0 24px !important;
+            margin: 0 auto !important;
+            max-width: 760px !important;
+            width: 100% !important;
+            transform: translateY(-16px) !important;
+        }
+
+        /* ================= Learning Tools & Timetable Panels ================= */
+        .learning-tools-panel:not([hidden]) {
+            display: flex !important;
+            flex-direction: column !important;
+            flex: 1 1 0% !important;
+            min-height: 0 !important;
+            height: 100% !important;
+            overflow-y: auto !important;
+            padding: 24px max(24px, calc((100% - 1100px) / 2)) 40px !important;
+            background: transparent !important;
+        }
+
+        .timetable-panel:not([hidden]) {
+            display: block !important;
+            flex: 1 1 0% !important;
+            min-height: 0 !important;
+            height: 100% !important;
+            overflow-y: auto !important;
+            padding: 24px max(24px, calc((100% - 1180px) / 2)) 40px !important;
+            background: transparent !important;
+        }
+
+        /* Tool Tabs Header (Sub-navigation) */
+        .tool-tabs {
+            display: flex !important;
+            gap: 8px !important;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+            margin: 0 0 22px 0 !important;
+            padding-bottom: 10px !important;
+            flex-wrap: wrap !important;
+        }
+        .tool-tab-button {
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            border-radius: 9999px !important;
+            background: rgba(255, 255, 255, 0.04) !important;
+            color: #94a3b8 !important;
+            padding: 8px 18px !important;
+            font-size: 13px !important;
+            font-weight: 500 !important;
+            cursor: pointer !important;
+            transition: all 0.2s ease !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 6px !important;
+        }
+        .tool-tab-button:hover:not(.active) {
+            background: rgba(255, 255, 255, 0.09) !important;
+            color: #f1f5f9 !important;
+        }
+        .tool-tab-button.active {
+            background: linear-gradient(135deg, #f43f5e 0%, #fb7185 100%) !important;
+            color: #ffffff !important;
+            font-weight: 600 !important;
+            box-shadow: 0 0 16px 2px rgba(244, 63, 94, 0.45) !important;
+            border-color: rgba(251, 113, 133, 0.35) !important;
+        }
+        .tool-tab-button span {
+            background: rgba(255, 255, 255, 0.2) !important;
+            color: #ffffff !important;
+            border-radius: 9999px !important;
+            padding: 1px 7px !important;
+            font-size: 11px !important;
+        }
+
+        /* Learning Tools Cards & Forms */
+        .learning-topic-card,
+        .learning-review-generator,
+        .learning-exercise-search,
+        .timetable-card,
+        .source-exercise-card {
+            background: rgba(22, 26, 35, 0.75) !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            border-radius: 20px !important;
+            padding: 22px 24px !important;
+            backdrop-filter: blur(16px) !important;
+            -webkit-backdrop-filter: blur(16px) !important;
+            margin-bottom: 20px !important;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25) !important;
+        }
+        .timetable-card h3,
+        .learning-topic-card h2,
+        .learning-review-generator h2,
+        .learning-exercise-search h2 {
+            font-size: 18px !important;
+            font-weight: 700 !important;
+            color: #ffffff !important;
+            margin: 0 0 6px 0 !important;
+            letter-spacing: -0.01em !important;
+        }
+
+        /* Form Row Layout in Learning Tools */
+        .learning-tools-panel .form-row {
+            display: flex !important;
+            gap: 14px !important;
+            align-items: flex-end !important;
+            flex-wrap: wrap !important;
+            margin-bottom: 14px !important;
+        }
+        .learning-tools-panel .form-group {
+            display: flex !important;
+            flex-direction: column !important;
+            min-width: 0 !important;
+            gap: 6px !important;
+        }
+        .learning-tools-panel .form-group.flex-2 {
+            flex: 2 1 240px !important;
+        }
+        .learning-tools-panel .form-group.flex-1 {
+            flex: 1 1 120px !important;
+        }
+        .learning-tools-panel .form-group.form-actions {
+            flex: 0 0 auto !important;
+        }
+        .learning-tools-panel .form-group label,
+        .timetable-panel label {
+            font-size: 12.5px !important;
+            font-weight: 500 !important;
+            color: #94a3b8 !important;
+        }
+        .learning-tools-panel .form-input,
+        .learning-tools-panel .form-select,
+        .timetable-panel .form-input,
+        .timetable-panel .form-select {
+            background: rgba(15, 18, 25, 0.85) !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            color: #f8fafc !important;
+            border-radius: 12px !important;
+            padding: 8px 14px !important;
+            min-height: 42px !important;
+            font-size: 13.5px !important;
+            outline: none !important;
+            box-sizing: border-box !important;
+            transition: border-color 0.2s, box-shadow 0.2s !important;
+        }
+        .learning-tools-panel .form-input:focus,
+        .learning-tools-panel .form-select:focus,
+        .timetable-panel .form-input:focus,
+        .timetable-panel .form-select:focus {
+            border-color: rgba(251, 113, 133, 0.5) !important;
+            box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.2) !important;
+        }
+
+        /* Buttons in Learning Tools and Timetable */
+        .btn {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            padding: 9px 20px !important;
+            min-height: 42px !important;
+            font-size: 13.5px !important;
+            font-weight: 600 !important;
+            border-radius: 12px !important;
+            white-space: nowrap !important;
+            transition: all 0.25s ease !important;
+            cursor: pointer !important;
+            text-decoration: none !important;
+        }
+        .btn-sm, .btn.btn-sm {
+            padding: 6px 14px !important;
+            min-height: 32px !important;
+            font-size: 12px !important;
+            border-radius: 10px !important;
+        }
+        .btn-mini, .btn.btn-mini {
+            padding: 3px 9px !important;
+            min-height: 24px !important;
+            font-size: 11px !important;
+            border-radius: 8px !important;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%) !important;
+            box-shadow: 0 4px 16px -4px rgba(244, 63, 94, 0.5) !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(251, 113, 133, 0.35) !important;
+        }
+        .btn-primary:hover:not(:disabled) {
+            filter: brightness(1.12) !important;
+            box-shadow: 0 6px 22px -4px rgba(244, 63, 94, 0.7) !important;
+            transform: translateY(-1px) !important;
+        }
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.08) !important;
+            border: 1px solid rgba(255, 255, 255, 0.12) !important;
+            color: #e2e8f0 !important;
+        }
+        .btn-secondary:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.14) !important;
+            color: #ffffff !important;
+        }
+        .btn-outline {
+            background: transparent !important;
+            border: 1px solid rgba(255, 255, 255, 0.15) !important;
+            color: #cbd5e1 !important;
+        }
+        .btn-outline:hover:not(:disabled) {
+            background: rgba(244, 63, 94, 0.12) !important;
+            border-color: rgba(251, 113, 133, 0.4) !important;
+            color: #ffffff !important;
+        }
+
+        /* Details collapsible */
+        details.advanced-source-selection {
+            background: rgba(22, 26, 35, 0.5) !important;
+            border: 1px solid rgba(255, 255, 255, 0.06) !important;
+            border-radius: 16px !important;
+            padding: 14px 18px !important;
+            margin-top: 16px !important;
+        }
+        details.advanced-source-selection > summary {
+            cursor: pointer !important;
+            font-weight: 600 !important;
+            color: #e2e8f0 !important;
+            outline: none !important;
+        }
+
+        /* Timetable Specific Enhancements */
+        .timetable-dropzone {
+            border: 2px dashed rgba(251, 113, 133, 0.35) !important;
+            border-radius: 16px !important;
+            padding: 28px 16px !important;
+            text-align: center !important;
+            background: rgba(15, 18, 25, 0.6) !important;
+            cursor: pointer !important;
+            transition: all 0.2s ease !important;
+        }
+        .timetable-dropzone:hover, .timetable-dropzone.drag-over {
+            border-color: #f43f5e !important;
+            background: rgba(244, 63, 94, 0.08) !important;
+        }
+        .timetable-panel .table-responsive {
+            border-radius: 14px !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            background: rgba(15, 18, 25, 0.7) !important;
+        }
+        .timetable-panel .kb-table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+        }
+        .timetable-panel .kb-table th {
+            background: rgba(255, 255, 255, 0.04) !important;
+            color: #94a3b8 !important;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+            padding: 10px 12px !important;
+            font-size: 12.5px !important;
+            text-align: left !important;
+        }
+        .timetable-panel .kb-table td {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04) !important;
+            padding: 9px 12px !important;
+            color: #f1f5f9 !important;
+            font-size: 13px !important;
+        }
+        .timetable-card [style*="#fef3c7"],
+        #timetable-draft-card span[style*="#fef3c7"] {
+            background: rgba(245, 158, 11, 0.15) !important;
+            color: #fde68a !important;
+            border: 1px solid rgba(245, 158, 11, 0.3) !important;
+            padding: 3px 10px !important;
+            border-radius: 6px !important;
+        }
+        .timetable-export-card {
+            background: rgba(15, 18, 25, 0.6) !important;
+            border: 1px solid rgba(255, 255, 255, 0.06) !important;
+            border-radius: 14px !important;
+        }
+    </style>
 </head>
 <body>
-    <div class="app-container">
+    <div class="ambient-glow glow-1"></div>
+    <div class="ambient-glow glow-2"></div>
+    <div class="ambient-glow glow-3"></div>
+    <div class="app-container" style="position: relative; z-index: 1;">
         <!-- Sidebar / Navigation -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-top">
                 <div class="brand">
-                    <div class="brand-icon">📚</div>
+                    <div class="brand-icon">
+                        <img src="/static/logo.jpg" alt="BaMiTiKa AI Logo" class="brand-avatar-img">
+                    </div>
                     <div class="brand-text">
                         <h2>BaMiTiKa AI</h2>
-                        <span class="badge local">100% Cục bộ & Miễn phí</span>
                     </div>
                 </div>
                 <button type="button" id="btn-collapse-sidebar" class="icon-btn" title="Thu gọn thanh bên" aria-label="Thu gọn thanh bên">‹</button>
             </div>
 
-            <button id="btn-new-chat-sidebar" class="new-chat-btn" title="Bắt đầu cuộc trò chuyện mới">➕ Mới</button>
-
-            <nav class="mode-switch" aria-label="Chế độ ứng dụng">
-                <button id="mode-qa" class="mode-button active" aria-pressed="true" aria-controls="qa-panel">💬 Hỏi đáp dựa trên tài liệu</button>
-                <button id="mode-tools" class="mode-button" aria-pressed="false" aria-controls="learning-tools-panel">🧰 Công cụ học tập</button>
-                <button id="mode-timetable" class="mode-button" aria-pressed="false" aria-controls="timetable-panel">📅 Thời khóa biểu từ ảnh</button>
-            </nav>
+            <button id="btn-new-chat-sidebar" class="new-chat-btn" title="Bắt đầu cuộc trò chuyện mới">➕ Cuộc trò chuyện mới</button>
 
             <section class="sidebar-section history-card">
                 <div class="history-heading">
@@ -49,7 +578,6 @@
                 <div class="session-search-wrapper">
                     <input type="text" id="input-session-search" placeholder="🔍 Tìm cuộc trò chuyện..." class="form-input">
                 </div>
-                <p class="history-note">Lưu trên máy này.</p>
                 <div id="history-list" class="history-list">Đang tải cuộc trò chuyện...</div>
             </section>
 
@@ -85,8 +613,8 @@
                     </div>
                 </details>
 
-                <div class="sidebar-status-box" style="padding: 8px 12px;">
-                    <small id="ollama-status" class="status-indicator">Đang kiểm tra mô hình...</small>
+                <div class="sidebar-status-box" style="display: none;">
+                    <small id="ollama-status" class="status-indicator"></small>
                 </div>
 
                 <!-- Disclaimer -->
@@ -104,24 +632,12 @@
             <header class="chat-header">
                 <div class="header-left">
                     <button type="button" id="btn-open-sidebar" class="icon-btn" title="Mở thanh bên" aria-label="Mở thanh bên">☰</button>
-                    <div class="header-info">
-                        <h1>Trợ Lý Học Tập Cục Bộ</h1>
-                        <p class="subtitle">Tra cứu nguồn và hỏi đáp đa lĩnh vực từ thư viện tài liệu</p>
-                    </div>
                 </div>
-                <div class="header-actions">
-                    <button type="button" id="theme-toggle" class="theme-toggle" role="switch" aria-checked="false" aria-label="Chuyển giao diện sáng / tối" title="Chuyển giao diện sáng / tối">
-                        <span class="knob">
-                            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
-                                <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/>
-                                <path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.9 1.9M16.8 16.8l1.9 1.9M5.3 18.7l1.9-1.9M16.8 7.2l1.9-1.9"/>
-                            </svg>
-                            <svg class="icon-moon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                                <path d="M20.5 14.2A8.5 8.5 0 0 1 9.8 3.5a.6.6 0 0 0-.8-.7A9.5 9.5 0 1 0 21.2 15a.6.6 0 0 0-.7-.8z"/>
-                            </svg>
-                        </span>
-                    </button>
-                </div>
+                <nav class="mode-switch" aria-label="Chế độ ứng dụng">
+                    <button id="mode-qa" class="mode-button active" aria-pressed="true" aria-controls="qa-panel">💬 Hỏi đáp tài liệu</button>
+                    <button id="mode-tools" class="mode-button" aria-pressed="false" aria-controls="learning-tools-panel">🧰 Công cụ học tập</button>
+                    <button id="mode-timetable" class="mode-button" aria-pressed="false" aria-controls="timetable-panel">📅 Thời khóa biểu từ ảnh</button>
+                </nav>
             </header>
 
             <section id="learning-tools-panel" class="learning-tools-panel" aria-label="Công cụ học tập" hidden>
@@ -460,7 +976,7 @@
                     </div>
                 </div>
             </section>
-            <section id="qa-panel" class="qa-panel" aria-label="Hỏi đáp dựa trên tài liệu">
+            <section id="qa-panel" class="qa-panel welcome-mode" aria-label="Hỏi đáp dựa trên tài liệu">
 
             <!-- Active Session Bar -->
             <div id="session-bar" class="session-bar" style="display: none;">
@@ -496,34 +1012,17 @@
             <div class="messages-container" id="messages-container">
                 <!-- Welcome greeting -->
                 <div class="message assistant welcome-card">
-                    <div class="message-avatar">🧠</div>
+                    <div class="message-avatar">
+                        <img src="/static/logo.jpg" alt="BaMiTiKa AI" class="hero-avatar-img">
+                    </div>
                     <div class="message-body">
-                        <h3>Xin chào! Bạn muốn tìm hiểu hoặc tra cứu nội dung gì hôm nay?</h3>
-                        <p>Tôi tìm các đoạn phù hợp trong thư viện tài liệu (Đại số tuyến tính, Lập trình hướng đối tượng, Tâm lý học, Khoa học dữ liệu, v.v.) để hỗ trợ câu trả lời và dẫn nguồn rõ ràng. Mở Công cụ học tập để tạo câu hỏi, ôn tập hoặc tìm bài tập mẫu từ tài liệu gốc.</p>
-                        
-                        <div class="suggestion-chips">
-                            <span class="suggestion-title">Gợi ý câu hỏi đa lĩnh vực:</span>
-                            <button class="chip" data-query="Ánh xạ tuyến tính là gì? Nêu hai tính chất trong tài liệu Chương 4 Anh xa tuyen tinh.">Ánh xạ tuyến tính & 2 tính chất (Đại số)</button>
-                            <button class="chip" data-query="Đa kế thừa trong C++ được định nghĩa thế nào và hàm ảo hoạt động ra sao?">Đa kế thừa & Hàm ảo C++ (OOP)</button>
-                            <button class="chip" data-query="Hệ thống 1 và Hệ thống 2 trong cuốn Tư duy nhanh và chậm hoạt động như thế nào?">Hệ thống 1 & 2 (Tâm lý học nhận thức)</button>
-                            <button class="chip" data-query="Vòng lặp thói quen gồm những yếu tố nào trong Sức mạnh của thói quen?">Vòng lặp thói quen (Habit Loop)</button>
-                        </div>
+                        <h3>Xin chào! Bạn muốn học gì hôm nay?</h3>
                     </div>
                 </div>
             </div>
 
             <!-- Chat Input Area -->
             <div class="input-area">
-                <div class="qa-processing-level">
-                    <label for="processing-level">Mức xử lý</label>
-                    <select id="processing-level" class="form-select">
-                        <option value="auto" selected>Tự động</option>
-                        <option value="standard">Thông thường</option>
-                        <option value="careful">Kiểm tra kỹ</option>
-                    </select>
-                    <span>Áp dụng cho câu hỏi tiếp theo; giữ nguyên đến khi bạn đổi.</span>
-                    <p class="qa-level-help text-muted" style="font-size: 0.8rem; margin: 4px 0 0 0;">Tự động chọn cách xử lý theo câu hỏi. Thông thường trả lời bám sát nguồn. Kiểm tra kỹ đối chiếu thêm câu trả lời với tài liệu và có thể mất nhiều thời gian hơn.</p>
-                </div>
                 <div id="qa-source-scope" hidden style="margin-bottom:8px; font-size:0.85rem;">
                     <span id="qa-source-label"></span>
                     <button type="button" id="qa-source-clear" class="btn btn-outline btn-sm">Tìm trong toàn bộ thư viện</button>
@@ -531,18 +1030,32 @@
                 <form id="chat-form" class="chat-form">
                     <textarea 
                         id="user-input" 
-                        placeholder="Đặt câu hỏi học tập (VD: Ánh xạ tuyến tính là gì? / Đa kế thừa trong C++ là gì?)..." 
+                        placeholder="Đặt câu hỏi học tập..." 
                         rows="2"
                         required
                     ></textarea>
-                    <button type="submit" id="btn-send" class="btn btn-primary btn-send">
-                        <span class="send-icon">➤</span>
-                        <span class="send-text">Gửi</span>
-                    </button>
+                    <div class="chat-form-bottom">
+                        <div class="chat-form-controls">
+                            <div class="processing-level-pill" title="Mức xử lý câu hỏi">
+                                <span class="pill-icon">🧠</span>
+                                <select id="processing-level" class="pill-select" aria-label="Mức xử lý">
+                                    <option value="auto" selected>Tự động</option>
+                                    <option value="standard">Thông thường</option>
+                                    <option value="careful">Kiểm tra kỹ</option>
+                                </select>
+                            </div>
+                            <span class="scope-pill active" title="Tìm trong toàn bộ thư viện tài liệu">
+                                <span class="pill-icon">📚</span>
+                                <span>Thư viện tài liệu</span>
+                            </span>
+                        </div>
+                        <div class="chat-form-actions">
+                            <button type="submit" id="btn-send" class="btn btn-primary btn-send" title="Gửi câu hỏi (Enter)">
+                                <span class="send-icon">↑</span>
+                            </button>
+                        </div>
+                    </div>
                 </form>
-                <div class="input-hint">
-                    <span>Nhấn <strong>Enter</strong> để gửi, <strong>Shift + Enter</strong> để xuống dòng</span>
-                </div>
             </div>
             </section>
         </main>

@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-12T12:20:01.360907+07:00
-- Mục mới nhất: **[YC-198](#yc-198)**.
-- Nhật ký chung có **36 mục**: 13 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195 và 4 LOG), 3 tổ chức/tài liệu, 2 phát hành GitHub, 9 rà soát/nghiệm thu, 5 làm rõ quyền/quy trình, 4 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
+- Cập nhật: 2026-10-12T22:25:00+07:00
+- Mục mới nhất: **[YC-199](#yc-199)**.
+- Nhật ký chung có **37 mục**: 14 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/199 và 4 LOG), 3 tổ chức/tài liệu, 2 phát hành GitHub, 9 rà soát/nghiệm thu, 5 làm rõ quyền/quy trình, 4 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -843,3 +843,15 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Review: Antigravity terminal/trả quyền bảy file; Codex đọc diff/caller và sửa thêm cổng holdout; không công bố nhãn/source/trích đoạn riêng. Hiệu chỉnh YC193 bỏ đường dẫn máy thử khỏi lịch sử chung, giữ ý nghĩa và kết quả, tại 2026-10-12T12:17:45.651072+07:00.
 - Trạng thái: đã push commit `fd3d777` và tạo [PR nháp #12](https://github.com/ng-wngkh07/Study-Agent/pull/12), readback remote/head trùng; CI đang chạy, history CI đã PASS; chất lượng adapter DO_NOT_PROMOTE và OCR/VLM thật/IME/32K/Windows máy sạch chưa nghiệm thu. Báo cáo: [Bản tích hợp YC-198](docs/team/BAN_TICH_HOP_VA_SUA_LOI_YC198.md).
 - Cập nhật: 2026-10-12T12:20:01.360907+07:00.
+
+<a id="yc-199"></a>
+### YC-199 - 12/10/2026 22:25 (UTC+07)
+
+- Người thực hiện: Antigravity; loại: giao diện người dùng và sửa lỗi hiển thị.
+- Mục tiêu: thiết kế lại giao diện Dark Mode Liquid Glass, căn giữa màn hình chào đón và sửa lỗi hiển thị các chế độ.
+- Trước: giao diện chuyển đổi giữa light/dark mode; khi chọn Công cụ học tập hoặc Thời khóa biểu thì khung chat Hỏi đáp không ẩn đi do CSS !important; nút Tạo câu hỏi bị co rút thiếu padding; hero chào đón bị lệch xuống dưới.
+- Sau: cố định Dark Mode toàn diện với ánh sáng nền ambient glow hồng rose; căn giữa khối chào đón và ô nhập prompt theo cả 2 trục; căn đều 2 bên thanh chuyển chế độ trên header; ẩn triệt để khung Hỏi đáp khi sang Công cụ học tập và Thời khóa biểu; chuẩn hóa kích thước, padding và gradient các nút bấm và form nhập liệu; cập nhật logo thương hiệu.
+- Phần/file sửa: `static/index.html`, `static/style.css`, `static/theme.css`, `static/app.js`, `static/logo.jpg`.
+- Kiểm thử: 12/12 UI contract tests đạt PASS, homepage endpoint đạt PASS, scripts/check_history.py đạt PASS.
+- Trạng thái: PASS.
+
