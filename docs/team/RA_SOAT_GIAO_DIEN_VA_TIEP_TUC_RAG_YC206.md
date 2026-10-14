@@ -1,6 +1,6 @@
 # Rà soát giao diện và tiếp tục RAG — YC-206
 
-Cập nhật 2026-10-14T21:47:45.640776+07:00. Main local đồng bộ `099c769` (PR13/14), bảo toàn thay đổi local và backup.
+Cập nhật 2026-10-14T21:54:13.628006+07:00. Main local đồng bộ `099c769` (PR13/14), bảo toàn thay đổi local và backup.
 
 Đã sửa năm lỗi: thiếu `resumeSourceList` làm chat mới/mở phiên lỗi; tự chèn lại câu đã gửi sau lỗi; danh sách ôn tập không cập nhật ngay; hộp đồng bộ thư viện không đóng được sau lỗi; thiếu cảnh báo trang nguồn chưa được duyệt cạnh trích dẫn. Giao diện dùng asset `yc206-ui04`, bài tập `yc206-ui02`.
 
@@ -44,3 +44,5 @@ Bằng chứng local: `data/evaluation/ui-audit-yc206/` (matrix/log/ảnh); `dat
 Kiểm cuối:497PASS/12SKIP sau cách ly khóa dialogue trong fixture (giữ cơ chế khóa thật ở thư mục tạm); không còn để kiểm API mô phỏng tranh khóa inference đang chạy. Node27PASS tái sử dụng vì ba asset không thay sau lượt kiểm. Consumer24PASS. 32file dùng chung đã quét bí mật và whitespace trước push; PR để draft do nguồn và chất lượng mô hình chưa đạt toàn bộ.
 
 CI Windows thật phát hiện công cụ đồng bộ nguồn import POSIX fcntl trực tiếp. Đã thay bằng app.file_lock sẵn có sau thiết lập ROOT/sys.path; thêm hồi quy import không có fcntl, giữ đầy đủ các ca bảo toàn review nguồn printed/visual. Local497PASS12SKIP; chờ CI sau push sửa Windows. Có33file thay đổi dùng chung so main; không đổi logic cổng nguồn/học.
+
+Kết quả phát hành và local: mã2619c1a đã được remote xác nhận; CI Windows/macOS đạt trên đúng head (push38583738297), history PR đạt. PR15 còn draft/chưa merge; main099c769. Đã tải lại đúng dịch vụ local; health healthy, bốn asset served khớp mã, mọi bảng kho tài liệu/lịch sử/lịch và registry trước/sau nguyên vẹn. Browser thật mở lại phiên cũ rồi tạo chat mới: màn hình bắt đầu và ô nhập trống, lịch sử được giữ. Shadowv5 vẫn chưa thay production. Cập nhật tài liệu này được push theo YC207; huấn luyện vẫn NOT_RUN do nguồn/chất lượng chưa đạt. Các trạng thái chờ CI/tải lại ở trên là snapshot các vòng trước, được kết quả này thay thế.

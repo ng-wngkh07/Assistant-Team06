@@ -2,7 +2,7 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-14T21:47:45.640776+07:00
+- Cập nhật: 2026-10-14T21:54:13.628006+07:00
 - Mục mới nhất: **[YC-207](#yc-207)**.
 - Nhật ký chung có **47 mục**: 17 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206 và 6 LOG), 3 tổ chức/tài liệu, 3 phát hành/đồng bộ GitHub, 12 rà soát/nghiệm thu, 7 làm rõ kiến trúc/quyền/quy trình, 5 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
@@ -1028,3 +1028,5 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Công bố và sửa kiểm thử CI 2026-10-14T21:39:10.580450+07:00: đã push fc47329ca16c2bdc629fe639867387bc7176aeae và mở [PR15](https://github.com/ng-wngkh07/Study-Agent/pull/15) nháp trên nhánh codex/fix/shared/yc205-yc206-tv6, chưa merge main. CI macOS ban đầu có2FAIL vì hai ca ngân sách đọc config mô hình private trước gọi stub; đã tái hiện khi config vắng, cung cấp metadata8192 riêng trong thư mục thử, giữ nguyên mọi assertion và production guard. Local kiểm lại496PASS12SKIP; không tải weights vào CI. Đang đẩy bản sửa harness và chờ CI trên head mới; nguồn/chất lượng chưa đạt, huấn luyện NOT_RUN.
 
 - Sửa tương thích Windows 2026-10-14T21:47:45.640776+07:00: CI Windows thật còn2FAIL ở đồng bộ nguồn do scripts/complete_corpus.py import POSIX fcntl. Antigravity windows07 sửa tối thiểu trong snapshot rồi terminal/trả quyền; Codex đối chiếu diff/hash và tích hợp from app import file_lock as fcntl sau ROOT/sys.path. Thêm ca tái hiện import không có fcntl RED→GREEN; portable497PASS12SKIP, không bỏ hai ca printed/visual review. Khóa native Unix và adapter LockFileEx Windows được tái dùng; không sửa dữ liệu nguồn/cổng học. CI head mới đang chờ; dịch vụ local còn chờ tải lại sau CI.
+
+- Nghiệm thu phần mềm local/GitHub 2026-10-14T21:54:13.628006+07:00: remote xác nhận2619c1a1f19c8705c5adea08bb0e1225181b54d5; CI push38583738297 Windows/macOS SUCCESS trên đúng head, history PR SUCCESS. PR15 vẫn draft/chưa merge, main099c769 giữ nguyên. Đã restart đúng web23992/supervisor24004 về dịch vụ mới, health healthy/inference_ready; bốn asset served hash khớp. So mọi bảng kho knowledge/history/timetable và registry trước/sau: nguyên vẹn, SQLite integrityok; không publish shadowv5. Browser mở phiên cũ rồi chat mới: về màn hình bắt đầu, ô nhập trống và lịch sử vẫn còn. Ảnh/evidence local data/evaluation/ui-audit-yc206; backup data/backups/yc207-service-restart. Mã sửa đã xuất bản và kiểm chứng, cập nhật tài liệu đợt này cũng được push; cổng nguồn7918fail và chất lượng model chưa đạt nên huấn luyện NOT_RUN, adapteractive:null. Windows máy thật/mobile/IME/OCR/VLM toàn bộ chưa nghiệm thu.
