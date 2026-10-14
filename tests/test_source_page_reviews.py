@@ -115,7 +115,16 @@ def test_invalid_visual_evidence_cannot_authorize_training(tmp_path, fault):
 
 
 def test_matching_hash_of_unpublished_text_is_insufficient(tmp_path):
-    reviewed_corpus(tmp_path)
+    idx, _, _, _ = reviewed_corpus(tmp_path)
+    # Reindexing now honors the review; explicitly simulate a stale published page
+    # whose own text/vector hashes are internally consistent but not the review.
+    with idx.get_connection() as db:
+        db.execute("UPDATE chunks SET text='Original native text to check.'")
+        texts = [r['text'] for r in db.execute('SELECT text FROM chunks ORDER BY chunk_index')]
+        db.execute('UPDATE corpus_source_pages SET chunks_sha256=?',
+                   (hashlib.sha256(json.dumps(texts,ensure_ascii=False).encode()).hexdigest(),))
+        db.execute('UPDATE corpus_vector_provenance SET text_sha256=?',
+                   (hashlib.sha256(texts[0].encode()).hexdigest(),))
     report = audit_corpus(tmp_path)
     assert not report['complete']
     assert any(f['kind']=='review_text_not_indexed' for f in report['failures'])

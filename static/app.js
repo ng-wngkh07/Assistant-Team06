@@ -47,6 +47,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const sessionSummaryText = document.getElementById("session-summary-text");
     const btnCloseSummary = document.getElementById("btn-close-summary");
     const btnResumeLastQuestion = document.getElementById("btn-resume-last-question");
+    const resumeSourceList = document.getElementById("resume-source-list");
     const answerModeSelect = document.getElementById("answer-mode");
     const processingLevelSelect = document.getElementById("processing-level");
 
@@ -126,6 +127,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnReindex = document.getElementById("btn-reindex");
     const reindexModal = document.getElementById("reindex-modal");
     const reindexMsg = document.getElementById("reindex-msg");
+    const reindexSpinner = document.getElementById("reindex-spinner");
+    const btnCloseReindex = document.getElementById("btn-close-reindex");
 
     // State
     let currentSessionId = null;
@@ -206,9 +209,23 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // New Chat buttons
-    if (btnClear) btnClear.addEventListener("click", startNewChat);
+    if (btnClear) {
+        btnClear.addEventListener("click", () => {
+            if (isGenerating) {
+                chatStatus.textContent = "Đang tạo câu trả lời, vui lòng chờ hoàn tất trước khi mở cuộc trò chuyện mới.";
+                return;
+            }
+            startNewChat();
+        });
+    }
     if (btnNewChatSidebar) {
-        btnNewChatSidebar.addEventListener("click", startNewChat);
+        btnNewChatSidebar.addEventListener("click", () => {
+            if (isGenerating) {
+                chatStatus.textContent = "Đang tạo câu trả lời, vui lòng chờ hoàn tất trước khi mở cuộc trò chuyện mới.";
+                return;
+            }
+            startNewChat();
+        });
     }
 
     if (btnRenameSession) {
@@ -309,8 +326,16 @@ document.addEventListener("DOMContentLoaded", () => {
         if (e.target === kbModal) kbModal.classList.remove("active");
     });
 
+    btnCloseReindex.addEventListener("click", () => {
+        if (!btnCloseReindex.disabled) reindexModal.classList.remove("active");
+    });
+
     btnReindex.addEventListener("click", async () => {
+        if (btnReindex.disabled) return;
         if (!confirm("Quá trình tái lập chỉ mục sẽ quét lại toàn bộ PDF và bổ sung embedding. Bạn có muốn tiếp tục?")) return;
+        btnReindex.disabled = true;
+        btnCloseReindex.disabled = true;
+        reindexSpinner.style.display = "";
         reindexModal.classList.add("active");
         reindexMsg.textContent = "Đang gửi yêu cầu lập chỉ mục tới máy chủ...";
 
@@ -332,6 +357,10 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (err) {
             reindexMsg.textContent = `❌ Lỗi kết nối: ${err.message}`;
+        } finally {
+            reindexSpinner.style.display = "none";
+            btnCloseReindex.disabled = false;
+            btnReindex.disabled = false;
         }
     });
 
@@ -406,6 +435,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } else if (options.technical) {
             addButton("Thử lại câu hỏi", () => submitRecoveryQuery(query, kind, searchScope || {}));
+            addButton("Sửa câu hỏi rồi thử lại", focusQuestionForEdit);
             addButton("Chọn tài liệu hoặc trang khác", () => openSourceLookupWithQuestion(query));
         } else {
             if (kind === "page") {
@@ -465,8 +495,14 @@ document.addEventListener("DOMContentLoaded", () => {
         isGenerating = true;
         chatStatus.textContent = "Đang xử lý một câu hỏi. Bạn có thể soạn câu tiếp theo; câu đó chưa được gửi.";
         btnSend.disabled = true;
-        if (btnClear) btnClear.disabled = true;
-        if (btnNewChatSidebar) btnNewChatSidebar.disabled = true;
+        if (btnClear) {
+            btnClear.disabled = true;
+            btnClear.title = "Đang tạo câu trả lời, vui lòng chờ hoàn tất trước khi mở cuộc trò chuyện mới.";
+        }
+        if (btnNewChatSidebar) {
+            btnNewChatSidebar.disabled = true;
+            btnNewChatSidebar.title = "Đang tạo câu trả lời, vui lòng chờ hoàn tất trước khi mở cuộc trò chuyện mới.";
+        }
 
         let accumulatedAnswer = "";
         let completionReceived = false;
@@ -529,6 +565,125 @@ document.addEventListener("DOMContentLoaded", () => {
             const decoder = new TextDecoder("utf-8");
             let buffer = "";
 
+            function handleEvent(event) {
+                if (event.type === "token") {
+                    if (accumulatedAnswer === "") {
+                        contentDiv.innerHTML = "";
+                    }
+                    accumulatedAnswer += event.content;
+                    contentDiv.innerHTML = renderMarkdown(accumulatedAnswer);
+                    scrollToBottom();
+                } else if (event.type === "citations") {
+                    finalCitations = event.citations || [];
+                } else if (event.type === "crisis") {
+                    accumulatedAnswer = event.content;
+                    assistantMsgEl.querySelector(".message-body")?.classList.add("crisis-box");
+                    contentDiv.innerHTML = renderMarkdown(accumulatedAnswer);
+                } else if (event.type === "context") {
+                    if (event.history_turns_omitted || event.store_history_turns_omitted) historyWasTrimmed = true;
+                    if (event.passages_omitted) passagesWereTrimmed = true;
+                } else if (event.type === "done") {
+                    completionReceived = true;
+                    responseKind = event.response_kind || "";
+                    responseScope = event.search_scope || {};
+                    if (event.cached_replay && event.answer) {
+                        accumulatedAnswer = event.answer;
+                        contentDiv.innerHTML = renderMarkdown(accumulatedAnswer);
+                    }
+                    if (!finalCitations.length && event.citations) {
+                        finalCitations = event.citations;
+                    }
+                    if (event.is_truncated) {
+                        const truncNotice = document.createElement("div");
+                        truncNotice.className = "truncation-warning";
+                        truncNotice.style.cssText = "margin-top: 8px; font-size: 0.85rem; color: #b45309; background: #fef3c7; border: 1px solid #fde68a; border-radius: 6px; padding: 4px 8px;";
+                        truncNotice.textContent = "⚠️ Câu trả lời đạt giới hạn token tối đa nên có thể chưa hoàn tất trọn vẹn.";
+                        assistantMsgEl.querySelector(".message-body")?.appendChild(truncNotice);
+                    }
+                    if (finalCitations && finalCitations.length > 0) {
+                        renderCitations(assistantMsgEl, finalCitations);
+                    }
+                    if (event.resolved_processing_level) {
+                        const metaBox = document.createElement("div");
+                        metaBox.className = "processing-meta text-muted";
+                        metaBox.style.cssText = "margin-top: 6px; font-size: 0.8rem; color: var(--text-muted, #6b7280);";
+                        const levelLabel = event.resolved_processing_level === "careful" ? "Kiểm tra kỹ" : "Thông thường";
+                        let statusText = "";
+                        if (event.check_status === "verified") {
+                            statusText = " · Đã qua đối chiếu tự động";
+                        } else if (event.check_status === "partially_verified") {
+                            statusText = " · Đối chiếu một phần";
+                        } else if (event.check_status === "unverified") {
+                            statusText = " · Chưa xác minh";
+                        }
+                        const callsText = event.generation_calls ? ` (${event.generation_calls} lượt xử lý)` : "";
+                        metaBox.textContent = `Mức xử lý: ${levelLabel}${statusText}${callsText}`;
+                        assistantMsgEl.querySelector(".message-body")?.appendChild(metaBox);
+                    }
+                    if (responseKind === "insufficient_evidence") {
+                        addRecoveryActions(assistantMsgEl, query, responseScope, {
+                            suggestedActions: event.suggested_actions || [],
+                        });
+                    }
+                    if (historyWasTrimmed || passagesWereTrimmed) {
+                        const notice = document.createElement("div");
+                        notice.className = "context-trim-notice";
+                        notice.textContent = historyWasTrimmed
+                            ? "Một phần lịch sử hội thoại đã không được đưa vào ngữ cảnh của lượt này. Nêu lại ý cần tiếp tục nếu thiếu thông tin; citation từ lượt trước không được dùng làm bằng chứng mới."
+                            : "Một số đoạn truy xuất không vừa cửa sổ ngữ cảnh. Câu trả lời dùng các đoạn đã được đưa vào và kiểm tra trong lượt này.";
+                        assistantMsgEl.querySelector(".message-body")?.appendChild(notice);
+                    }
+                    // Update session ID if newly created
+                    if (event.session_id) {
+                        currentSessionId = event.session_id;
+                        sessionStorage.setItem("active_session_id", event.session_id);
+                        if (sessionActiveTitle) sessionActiveTitle.textContent = event.session_title || "Cuộc trò chuyện";
+                        if (sessionBar) sessionBar.style.display = "flex";
+                        loadSessions(inputSessionSearch ? inputSessionSearch.value.trim() : "");
+                    } else if (!sessionsApiSupported) {
+                        clientChatHistory.push({ role: "user", content: query });
+                        clientChatHistory.push({ role: "assistant", content: accumulatedAnswer });
+                    }
+                    try {
+                        renderResumeControls({ question: query, citations: finalCitations });
+                    } catch (rcErr) {
+                        console.error("renderResumeControls error:", rcErr);
+                    }
+                } else if (event.type === "error") {
+                    streamFailed = true;
+                    const prefix = event.gpu_busy ? "⚠️" : "❌ Lỗi:";
+                    accumulatedAnswer += `\n\n${prefix} ${event.content}`;
+                    contentDiv.innerHTML = renderMarkdown(accumulatedAnswer);
+                    responseKind = event.response_kind || "technical_error";
+                    responseScope = event.search_scope || {};
+                    addRecoveryActions(assistantMsgEl, query, responseScope, {
+                        technical: true,
+                        suggestedActions: event.suggested_actions || [],
+                    });
+                }
+            }
+
+            function processRawLine(line) {
+                if (!line.startsWith("data: ")) return;
+                const jsonStr = line.replace(/^data: /, "").trim();
+                if (!jsonStr) return;
+                let event;
+                try {
+                    event = JSON.parse(jsonStr);
+                } catch (pe) {
+                    console.error("Parse event error:", pe);
+                    return;
+                }
+                try {
+                    handleEvent(event);
+                } catch (handlerErr) {
+                    console.error("Event handler error:", handlerErr);
+                    if (!completionReceived) {
+                        streamFailed = true;
+                    }
+                }
+            }
+
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
@@ -538,108 +693,15 @@ document.addEventListener("DOMContentLoaded", () => {
                 buffer = lines.pop();
 
                 for (const line of lines) {
-                    if (line.startsWith("data: ")) {
-                        const jsonStr = line.replace(/^data: /, "").trim();
-                        if (!jsonStr) continue;
-                        try {
-                            const event = JSON.parse(jsonStr);
+                    processRawLine(line);
+                }
+            }
 
-                            if (event.type === "token") {
-                                if (accumulatedAnswer === "") {
-                                    contentDiv.innerHTML = "";
-                                }
-                                accumulatedAnswer += event.content;
-                                contentDiv.innerHTML = renderMarkdown(accumulatedAnswer);
-                                scrollToBottom();
-                            } else if (event.type === "citations") {
-                                finalCitations = event.citations || [];
-                            } else if (event.type === "crisis") {
-                                accumulatedAnswer = event.content;
-                                assistantMsgEl.querySelector(".message-body").classList.add("crisis-box");
-                                contentDiv.innerHTML = renderMarkdown(accumulatedAnswer);
-                            } else if (event.type === "context") {
-                                if (event.history_turns_omitted || event.store_history_turns_omitted) historyWasTrimmed = true;
-                                if (event.passages_omitted) passagesWereTrimmed = true;
-                            } else if (event.type === "done") {
-                                completionReceived = true;
-                                responseKind = event.response_kind || "";
-                                responseScope = event.search_scope || {};
-                                if (event.cached_replay && event.answer) {
-                                    accumulatedAnswer = event.answer;
-                                    contentDiv.innerHTML = renderMarkdown(accumulatedAnswer);
-                                }
-                                if (!finalCitations.length && event.citations) {
-                                    finalCitations = event.citations;
-                                }
-                                if (event.is_truncated) {
-                                    const truncNotice = document.createElement("div");
-                                    truncNotice.className = "truncation-warning";
-                                    truncNotice.style.cssText = "margin-top: 8px; font-size: 0.85rem; color: #b45309; background: #fef3c7; border: 1px solid #fde68a; border-radius: 6px; padding: 4px 8px;";
-                                    truncNotice.textContent = "⚠️ Câu trả lời đạt giới hạn token tối đa nên có thể chưa hoàn tất trọn vẹn.";
-                                    assistantMsgEl.querySelector(".message-body").appendChild(truncNotice);
-                                }
-                                if (finalCitations && finalCitations.length > 0) {
-                                    renderCitations(assistantMsgEl, finalCitations);
-                                }
-                                if (event.resolved_processing_level) {
-                                    const metaBox = document.createElement("div");
-                                    metaBox.className = "processing-meta text-muted";
-                                    metaBox.style.cssText = "margin-top: 6px; font-size: 0.8rem; color: var(--text-muted, #6b7280);";
-                                    const levelLabel = event.resolved_processing_level === "careful" ? "Kiểm tra kỹ" : "Thông thường";
-                                    let statusText = "";
-                                    if (event.check_status === "verified") {
-                                        statusText = " · Đã qua đối chiếu tự động";
-                                    } else if (event.check_status === "partially_verified") {
-                                        statusText = " · Đối chiếu một phần";
-                                    } else if (event.check_status === "unverified") {
-                                        statusText = " · Chưa xác minh";
-                                    }
-                                    const callsText = event.generation_calls ? ` (${event.generation_calls} lượt xử lý)` : "";
-                                    metaBox.textContent = `Mức xử lý: ${levelLabel}${statusText}${callsText}`;
-                                    assistantMsgEl.querySelector(".message-body")?.appendChild(metaBox);
-                                }
-                                if (responseKind === "insufficient_evidence") {
-                                    addRecoveryActions(assistantMsgEl, query, responseScope, {
-                                        suggestedActions: event.suggested_actions || [],
-                                    });
-                                }
-                                if (historyWasTrimmed || passagesWereTrimmed) {
-                                    const notice = document.createElement("div");
-                                    notice.className = "context-trim-notice";
-                                    notice.textContent = historyWasTrimmed
-                                        ? "Một phần lịch sử hội thoại đã không được đưa vào ngữ cảnh của lượt này. Nêu lại ý cần tiếp tục nếu thiếu thông tin; citation từ lượt trước không được dùng làm bằng chứng mới."
-                                        : "Một số đoạn truy xuất không vừa cửa sổ ngữ cảnh. Câu trả lời dùng các đoạn đã được đưa vào và kiểm tra trong lượt này.";
-                                    assistantMsgEl.querySelector(".message-body")?.appendChild(notice);
-                                }
-                                // Update session ID if newly created
-                                if (event.session_id) {
-                                    currentSessionId = event.session_id;
-                                    sessionStorage.setItem("active_session_id", event.session_id);
-                                    sessionActiveTitle.textContent = event.session_title || "Cuộc trò chuyện";
-                                    sessionBar.style.display = "flex";
-                                    loadSessions(inputSessionSearch ? inputSessionSearch.value.trim() : "");
-                                } else if (!sessionsApiSupported) {
-                                    clientChatHistory.push({ role: "user", content: query });
-                                    clientChatHistory.push({ role: "assistant", content: accumulatedAnswer });
-                                }
-                                renderResumeControls({ question: query, citations: finalCitations });
-                            } else if (event.type === "error") {
-                                streamFailed = true;
-                                const prefix = event.gpu_busy ? "⚠️" : "❌ Lỗi:";
-                                accumulatedAnswer += `\n\n${prefix} ${event.content}`;
-                                contentDiv.innerHTML = renderMarkdown(accumulatedAnswer);
-                                responseKind = event.response_kind || "technical_error";
-                                responseScope = event.search_scope || {};
-                                addRecoveryActions(assistantMsgEl, query, responseScope, {
-                                    technical: true,
-                                    suggestedActions: event.suggested_actions || [],
-                                });
-                            }
-                        } catch (pe) {
-                            streamFailed = true;
-                            console.error("Parse event error:", pe);
-                        }
-                    }
+            buffer += decoder.decode();
+            if (buffer.trim()) {
+                const remainingLines = buffer.split("\n\n");
+                for (const line of remainingLines) {
+                    processRawLine(line);
                 }
             }
 
@@ -647,31 +709,44 @@ document.addEventListener("DOMContentLoaded", () => {
                 throw new Error("Kết nối kết thúc trước khi câu trả lời hoàn tất. Kết quả chưa được xác nhận; hãy mở lại phiên để kiểm tra trước khi gửi lại.");
             }
         } catch (err) {
-            const isBusy = err.message.includes("GPU") || err.message.includes("bận");
-            const prefix = isBusy ? "⚠️" : "❌";
-            const errorText = document.createElement("p");
-            errorText.className = isBusy ? "text-warning" : "text-danger";
-            errorText.textContent = `${prefix} ${err.message}`;
-            contentDiv.replaceChildren(errorText);
-            const failedScope = responseScope.kind ? responseScope : (selectedSourcePage ? {
-                kind: selectedSourceMode,
-                document_id: selectedSourcePage.doc_id,
-                ...(selectedSourceMode === "page" ? { page_num: selectedSourcePage.page_num } : {}),
-            } : { kind: "library" });
-            addRecoveryActions(assistantMsgEl, query, failedScope, { technical: true });
+            if (!completionReceived) {
+                const isBusy = err.message.includes("GPU") || err.message.includes("bận");
+                const prefix = isBusy ? "⚠️" : "❌";
+                const errorText = document.createElement("p");
+                errorText.className = isBusy ? "text-warning" : "text-danger";
+                errorText.textContent = `${prefix} ${err.message}`;
+                contentDiv.replaceChildren(errorText);
+                const failedScope = responseScope.kind ? responseScope : (selectedSourcePage ? {
+                    kind: selectedSourceMode,
+                    document_id: selectedSourcePage.doc_id,
+                    ...(selectedSourceMode === "page" ? { page_num: selectedSourcePage.page_num } : {}),
+                } : { kind: "library" });
+                addRecoveryActions(assistantMsgEl, query, failedScope, { technical: true });
+            } else {
+                console.error("Post-completion stream error:", err);
+            }
         } finally {
             isGenerating = false;
-            if (streamFailed || !completionReceived) {
-                if (!userInput.value.trim()) userInput.value = query;
-                chatStatus.textContent = "Lượt xử lý gặp lỗi. Đã giữ câu hỏi trong ô nhập; hãy kiểm tra phiên rồi thử lại.";
+            if (!completionReceived) {
+                if (userInput.value.trim()) {
+                    chatStatus.textContent = "Lượt xử lý gặp lỗi. Câu bạn đang soạn được giữ nguyên; dùng các nút bên dưới câu trả lời để thử lại hoặc sửa câu trước.";
+                } else {
+                    chatStatus.textContent = "Lượt xử lý gặp lỗi. Dùng các nút bên dưới câu trả lời để thử lại, sửa câu hỏi hoặc chọn nguồn khác.";
+                }
             } else if (userInput.value.trim()) {
                 chatStatus.textContent = "Câu trước đã hoàn tất. Câu bạn đang soạn chưa được gửi.";
             } else {
                 chatStatus.textContent = "";
             }
             btnSend.disabled = false;
-            if (btnClear) btnClear.disabled = false;
-            if (btnNewChatSidebar) btnNewChatSidebar.disabled = false;
+            if (btnClear) {
+                btnClear.disabled = false;
+                btnClear.title = "Bắt đầu cuộc trò chuyện mới";
+            }
+            if (btnNewChatSidebar) {
+                btnNewChatSidebar.disabled = false;
+                btnNewChatSidebar.title = "Bắt đầu cuộc trò chuyện mới";
+            }
             userInput.focus();
         }
     });
@@ -879,8 +954,10 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!autoRestore) {
             document.dispatchEvent(new Event("app-show-qa"));
         }
-        if (isGenerating) return;
-        chatStatus.textContent = "";
+        if (isGenerating) {
+            chatStatus.textContent = "Đang tạo câu trả lời, vui lòng chờ hoàn tất trước khi mở cuộc trò chuyện mới.";
+            return;
+        }
         viewRevision += 1;
         isLoadingSession = false;
         btnSend.disabled = false;
@@ -888,21 +965,29 @@ document.addEventListener("DOMContentLoaded", () => {
         sessionStorage.removeItem("active_session_id");
         clientChatHistory = [];
         renderResumeControls(null);
-        sessionBar.style.display = "none";
-        sessionSummaryBox.style.display = "none";
+        clearSourceScope();
+        if (sessionActiveTitle) sessionActiveTitle.textContent = "Cuộc trò chuyện";
+        if (sessionBar) sessionBar.style.display = "none";
+        if (sessionSummaryBox) sessionSummaryBox.style.display = "none";
+        if (sessionSummaryText) sessionSummaryText.textContent = "";
         const qaPanel = document.getElementById("qa-panel");
         if (qaPanel) qaPanel.classList.add("welcome-mode");
-        messagesContainer.innerHTML = initialWelcomeHTML || `
-            <div class="message assistant welcome-card">
-                <div class="message-avatar">
-                    <img src="/static/logo.jpg" alt="BaMiTiKa AI" class="hero-avatar-img">
+        if (messagesContainer) {
+            messagesContainer.innerHTML = initialWelcomeHTML || `
+                <div class="message assistant welcome-card">
+                    <div class="message-avatar">
+                        <img src="/static/logo.jpg" alt="BaMiTiKa AI" class="hero-avatar-img">
+                    </div>
+                    <div class="message-body">
+                        <h3>Xin chào! Bạn muốn học gì hôm nay?</h3>
+                    </div>
                 </div>
-                <div class="message-body">
-                    <h3>Xin chào! Bạn muốn học gì hôm nay?</h3>
-                </div>
-            </div>
-        `;
+            `;
+        }
         document.querySelectorAll(".session-item").forEach(el => el.classList.remove("active"));
+        userInput.value = "";
+        userInput.style.height = "auto";
+        chatStatus.textContent = "";
         if (!autoRestore) {
             userInput.focus();
         }
@@ -1090,6 +1175,12 @@ document.addEventListener("DOMContentLoaded", () => {
             const unitLabel = isPdf ? "trang" : "phần";
             summary.textContent = `[${c.id || 'S'}] ${c.book_title || c.filename || c.book || ''} · ${unitLabel} ${page || '?'}`;
             detail.appendChild(summary);
+            if (c.page_quality?.needs_review) {
+                const notice = document.createElement("p");
+                notice.className = "source-review-notice context-trim-notice";
+                notice.textContent = "Trang nguồn này chưa được duyệt đầy đủ. Cần đối chiếu với tài liệu gốc, nhất là hình, bảng và công thức.";
+                detail.appendChild(notice);
+            }
             if (typeof c.snippet === "string" && c.snippet.trim()) {
                 const quote = document.createElement("blockquote");
                 quote.className = "citation-snippet";

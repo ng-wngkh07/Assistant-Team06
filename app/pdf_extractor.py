@@ -14,6 +14,7 @@ import pymupdf
 from app.config import DATA_DIR, MIN_TEXT_PER_PAGE
 from app.text_cleaner import normalize_vietnamese_text
 from app.vision_ocr import VisionOCRManager, BACKEND_TESSERACT
+from app.source_quality import PIPELINE_VERSION, inspect_page_quality
 
 
 class PDFExtractionResult:
@@ -36,6 +37,10 @@ class PDFExtractionResult:
         self.ocr_pages: int = 0
         self.handwriting_suspected: bool = False
         self.needs_review: bool = False
+        self.pipeline_version: str = PIPELINE_VERSION
+        self.quality_warnings: List[str] = []
+        self.raw_capture: Dict[str, Any] = {}
+        self.source_quality: Optional[Dict[str, Any]] = None
 
     @staticmethod
     def _clean_title(filename: str) -> str:
@@ -132,7 +137,7 @@ class PDFExtractor:
 
     @classmethod
     def extract_pdf(cls, filepath: Path, ocr: bool = False, force_ocr: bool = False, rel_path: Optional[str] = None, max_pages: int = 0) -> PDFExtractionResult:
-        """Extract text from a single PDF page by page."""
+        """Extract text from a single PDF page by page while preserving raw capture and typed positional blocks."""
         from app.config import SRC_DIR
         try:
             if rel_path:
@@ -172,8 +177,22 @@ class PDFExtractor:
             for page_num in range(1, limit_pages + 1):
                 try:
                     page = doc[page_num - 1]
-                    raw_text = page.get_text() or ""
-                    if force_ocr or (ocr and len(raw_text.strip()) < MIN_TEXT_PER_PAGE):
+                    native_raw_text = page.get_text() or ""
+
+                    # Extract typed positional blocks and assess quality indicators
+                    quality_report = inspect_page_quality(page, native_raw_text, page_num)
+                    page_warnings = list(quality_report.get("warnings", []))
+                    page_needs_review = quality_report.get("needs_review", False)
+                    page_blocks = quality_report.get("blocks", [])
+
+                    # OCR fallback only if native text is minimal or force_ocr is explicitly requested.
+                    # Complete native text is NEVER silently discarded or replaced with OCR text.
+                    native_char_count = len(native_raw_text.strip())
+                    ocr_run = False
+                    ocr_text = ""
+                    ocr_capture = None
+                    if force_ocr or (ocr and native_char_count < MIN_TEXT_PER_PAGE):
+                        ocr_run = True
                         try:
                             ocr_info = cls._ocr_page(
                                 page, result.file_hash, page_num,
@@ -184,43 +203,80 @@ class PDFExtractor:
                             ocr_info = cls._ocr_page(page, result.file_hash, page_num)
 
                         if isinstance(ocr_info, dict):
-                            raw_text = ocr_info.get("text", "")
+                            ocr_text = ocr_info.get("text", "")
                             if ocr_info.get("handwriting_suspected"):
                                 result.handwriting_suspected = True
                             if ocr_info.get("needs_review"):
-                                result.needs_review = True
+                                page_needs_review = True
+                            ocr_capture = {
+                                "ocr_text": ocr_text,
+                                "char_count": len(ocr_text),
+                                "has_text": len(ocr_text.strip()) > 0,
+                                "needs_review": bool(ocr_info.get("needs_review")),
+                            }
                         else:
-                            raw_text = str(ocr_info or "")
+                            ocr_text = str(ocr_info or "")
+                            ocr_capture = {
+                                "ocr_text": ocr_text,
+                                "char_count": len(ocr_text),
+                                "has_text": len(ocr_text.strip()) > 0,
+                                "needs_review": False,
+                            }
 
                         result.ocr_pages += 1
-                    cleaned_text = normalize_vietnamese_text(raw_text)
 
+                    page_source_text = ocr_text if (ocr_run and (force_ocr or native_char_count < MIN_TEXT_PER_PAGE)) else native_raw_text
+                    cleaned_text = normalize_vietnamese_text(page_source_text)
                     char_count = len(cleaned_text)
                     has_text = char_count >= MIN_TEXT_PER_PAGE
+
+                    if page_needs_review:
+                        result.needs_review = True
+                    for w in page_warnings:
+                        if w not in result.quality_warnings:
+                            result.quality_warnings.append(w)
+
+                    native_capture_data = {
+                        "raw_text": native_raw_text,
+                        "char_count": len(native_raw_text),
+                        "has_text": len(native_raw_text.strip()) > 0
+                    }
+
+                    page_entry = {
+                        "page_num": page_num,
+                        "text": cleaned_text,
+                        "char_count": char_count,
+                        "has_text": has_text,
+                        "unit_type": "trang",
+                        "raw_text": native_raw_text,
+                        "raw_capture": native_capture_data,
+                        "ocr_text": ocr_text if ocr_run else None,
+                        "ocr_capture": ocr_capture,
+                        "blocks": page_blocks,
+                        "quality_warnings": page_warnings,
+                        "needs_review": page_needs_review,
+                        "indicators": quality_report.get("indicators", {})
+                    }
 
                     if has_text:
                         pages_with_significant_text += 1
                         result.total_chars += char_count
-                        result.extracted_pages.append({
-                            "page_num": page_num,
-                            "text": cleaned_text,
-                            "char_count": char_count,
-                            "has_text": True,
-                            "unit_type": "trang"
-                        })
-                    else:
-                        result.extracted_pages.append({
-                            "page_num": page_num,
-                            "text": cleaned_text,
-                            "char_count": char_count,
-                            "has_text": False,
-                            "unit_type": "trang"
-                        })
+
+                    result.extracted_pages.append(page_entry)
                 except Exception as pe:
                     result.failed_pages.append(page_num)
+                    result.needs_review = True
                     result.extracted_pages.append({
                         "page_num": page_num,
                         "text": "",
+                        "raw_text": "",
+                        "raw_capture": {"raw_text": "", "char_count": 0, "has_text": False},
+                        "ocr_text": None,
+                        "ocr_capture": None,
+                        "blocks": [],
+                        "quality_warnings": [f"extraction_error: {pe}"],
+                        "needs_review": True,
+                        "indicators": {},
                         "char_count": 0,
                         "has_text": False,
                         "unit_type": "trang",
@@ -228,6 +284,34 @@ class PDFExtractor:
                     })
 
             doc.close()
+            if result.failed_pages:
+                result.needs_review = True
+                if not result.error_message:
+                    result.error_message = f"Lỗi trích xuất tại các trang: {result.failed_pages}"
+
+            # Record overall raw capture and source quality metadata
+            result.raw_capture = {
+                "file_hash": result.file_hash,
+                "total_pages": result.total_pages,
+                "pipeline_version": result.pipeline_version,
+                "pages_summary": [
+                    {
+                        "page_num": p["page_num"],
+                        "raw_char_count": len(p.get("raw_text", "")),
+                        "has_text": p["has_text"],
+                        "needs_review": p.get("needs_review", False),
+                        "warnings": p.get("quality_warnings", [])
+                    }
+                    for p in result.extracted_pages
+                ]
+            }
+            result.source_quality = {
+                "pipeline_version": result.pipeline_version,
+                "file_hash": result.file_hash,
+                "needs_review": result.needs_review,
+                "quality_warnings": sorted(list(set(result.quality_warnings))),
+                "total_pages": result.total_pages
+            }
 
             if result.total_pages > 0:
                 text_ratio = pages_with_significant_text / result.total_pages
@@ -263,6 +347,11 @@ class PDFExtractor:
                 result.extracted_pages.append({
                     "page_num": idx,
                     "text": para,
+                    "raw_text": para,
+                    "raw_capture": {"raw_text": para, "char_count": len(para), "has_text": True},
+                    "blocks": [{"block_id": f"p{idx}_b0", "bbox": [0, 0, 0, 0], "type": "prose", "text": para}],
+                    "quality_warnings": [],
+                    "needs_review": False,
                     "char_count": len(para),
                     "has_text": True,
                     "unit_type": "đoạn"
@@ -273,18 +362,17 @@ class PDFExtractor:
 
     @classmethod
     def extract_pptx(cls, filepath: Path) -> PDFExtractionResult:
-        """Read slides in presentation order, including table text and speaker notes.
-
-        Image-only slides remain explicitly pending rather than being certified as text.
-        """
+        """Read slides in presentation order, including table text and speaker notes."""
         result = PDFExtractionResult(filepath.name, filepath, doc_type="pptx", unit_name="slide")
         ns = {"p": "http://schemas.openxmlformats.org/presentationml/2006/main",
               "a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
         rns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
         def paragraphs(xml):
             root = ET.fromstring(xml)
             return [''.join(n.text or '' for n in p.iterfind('.//a:t', ns))
                     for p in root.iter('{'+ns['a']+'}p')]
+
         def target(base, relation):
             if relation.get('TargetMode') == 'External':
                 raise ValueError('External slide relationship is not a document source')
@@ -292,6 +380,7 @@ class PDFExtractor:
             if not value.startswith('ppt/'):
                 raise ValueError('Slide relationship escapes ppt directory')
             return value
+
         try:
             result.file_size_bytes = filepath.stat().st_size
             result.file_hash = cls.calculate_file_hash(filepath)
@@ -315,8 +404,14 @@ class PDFExtractor:
                         result.failed_pages.append(page)
                         result.needs_review = True
                     result.total_chars += len(text)
-                    result.extracted_pages.append(dict(page_num=page, text=text,
-                        char_count=len(text), has_text=has_text, unit_type='slide'))
+                    result.extracted_pages.append(dict(
+                        page_num=page, text=text, raw_text=text,
+                        raw_capture={"raw_text": text, "char_count": len(text), "has_text": has_text},
+                        blocks=[{"block_id": f"p{page}_b0", "bbox": [0, 0, 0, 0], "type": "prose", "text": text}],
+                        quality_warnings=[] if has_text else ["image_only_slide_requires_review"],
+                        needs_review=not has_text,
+                        char_count=len(text), has_text=has_text, unit_type='slide'
+                    ))
                 result.is_scanned = not any(p['has_text'] for p in result.extracted_pages)
         except Exception as e:
             result.error_message = f'Lỗi đọc tài liệu PPTX: {e}'
@@ -342,6 +437,11 @@ class PDFExtractor:
                 result.extracted_pages.append({
                     "page_num": idx,
                     "text": para,
+                    "raw_text": para,
+                    "raw_capture": {"raw_text": para, "char_count": len(para), "has_text": True},
+                    "blocks": [{"block_id": f"p{idx}_b0", "bbox": [0, 0, 0, 0], "type": "prose", "text": para}],
+                    "quality_warnings": [],
+                    "needs_review": False,
                     "char_count": len(para),
                     "has_text": True,
                     "unit_type": "đoạn"
@@ -370,20 +470,34 @@ class PDFExtractor:
                     is_handwriting_suspected=result.handwriting_suspected,
                 )
                 text = ocr_res.get("text", "")
+                result.needs_review = bool(ocr_res.get("needs_review", True) or not ocr_res.get("is_verified", False))
+                result.quality_warnings = ["image_ocr_requires_review"] if result.needs_review else []
                 result.ocr_pages = 1
                 result.total_chars = len(text)
                 result.extracted_pages.append({
                     "page_num": 1,
                     "text": text,
+                    "raw_text": text,
+                    "raw_capture": {"raw_text": text, "char_count": len(text), "has_text": len(text) > 0},
+                    "blocks": [{"block_id": "p1_b0", "bbox": [0, 0, 0, 0], "type": "image", "text": text}],
+                    "quality_warnings": result.quality_warnings,
+                    "needs_review": result.needs_review,
                     "char_count": len(text),
                     "has_text": len(text) > 0,
                     "unit_type": "hình ảnh"
                 })
             else:
                 result.is_scanned = True
+                result.needs_review = True
+                result.quality_warnings = ["unscanned_image_requires_ocr"]
                 result.extracted_pages.append({
                     "page_num": 1,
                     "text": "",
+                    "raw_text": "",
+                    "raw_capture": {"raw_text": "", "char_count": 0, "has_text": False},
+                    "blocks": [],
+                    "quality_warnings": ["unscanned_image_requires_ocr"],
+                    "needs_review": True,
                     "char_count": 0,
                     "has_text": False,
                     "unit_type": "hình ảnh"

@@ -136,7 +136,7 @@ def audit_corpus(root: Path, dimensions: int = 1024) -> dict:
                                         raise ValueError('Page review remains partial')
                                     if record['state'] != reviewed_page_state(review):
                                         raise ValueError('Page state and reviewed content differ')
-                                    expected = [c['text'] for c in TextChunker.chunk_page(doc['clean_title'], name, page, reviewed_page_text(review))]
+                                    expected = [c['text'] for c in TextChunker.chunk_page(doc['clean_title'], name, page, reviewed_page_text(dict(review, editorial='') if doc.get('pipeline_version', '').startswith('rag-pipeline-yc205-') else review))]
                                     if actual != expected:
                                         failures.append({'kind': 'review_text_not_indexed', 'file': name, 'page': page})
                             except (OSError, ValueError, KeyError):

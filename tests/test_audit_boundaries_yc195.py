@@ -63,14 +63,28 @@ def test_partial_subsentence_cannot_certify_an_extended_false_claim():
     assert result.get('check_status') != 'verified'
 
 
-def test_auditor_cannot_use_quote_beyond_admitted_source_prefix():
+def test_auditor_cannot_use_quote_from_a_source_omitted_by_budget(monkeypatch):
+    from app import rag_agent
+    monkeypatch.setattr(rag_agent, 'context_capacity', lambda _: 4096)
+    tail = 'Stack còn hỗ trợ thao tác bí mật độc quyền.'
+    oversized = ('Chú thích nền về Stack. ' * 400) + '\n' + tail
+    response = json.dumps({'claims': [{'statement': tail, 'source_id': 'S1', 'evidence_quote': tail, 'verdict': 'supported'}], 'overall_verdict': 'supported'}, ensure_ascii=False)
+    model = Replies([tail + ' [S1]', response])
+    chunks = [make_chunk(SOURCE, semantic_score=.99), make_chunk(oversized, semantic_score=.98)]
+    result = PsychologyAgent(searcher=RecordingSearcher(chunks), ollama=model, translator=NoTranslation()).process_query_sync('Stack có các thao tác nào?', model='test-model', embed_model=None, processing_level='careful')
+    assert tail not in model.calls[0]['messages'][0]['content']
+    assert result['context']['source_ids'] == ['S1']
+    assert result.get('check_status') != 'verified'
+
+
+def test_complete_admitted_source_tail_can_support_auditor_quote():
     tail = 'Stack còn hỗ trợ thao tác bí mật độc quyền.'
     source = SOURCE + '\n' + ('Chú thích nền về Stack. ' * 80) + '\n' + tail
     response = json.dumps({'claims': [{'statement': tail, 'source_id': 'S1', 'evidence_quote': tail, 'verdict': 'supported'}], 'overall_verdict': 'supported'}, ensure_ascii=False)
     model = Replies([tail + ' [S1]', response])
     result = PsychologyAgent(searcher=RecordingSearcher([make_chunk(source, semantic_score=.99)]), ollama=model, translator=NoTranslation()).process_query_sync('Stack có các thao tác nào?', model='test-model', embed_model=None, processing_level='careful')
-    assert tail not in model.calls[0]['messages'][0]['content']
-    assert result.get('check_status') != 'verified'
+    assert tail in model.calls[0]['messages'][0]['content']
+    assert result.get('check_status') == 'verified'
 
 
 def test_opposite_meaning_paraphrase_cannot_cover_the_draft_statement():

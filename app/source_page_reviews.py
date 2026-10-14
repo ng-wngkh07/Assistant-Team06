@@ -9,9 +9,12 @@ def latest_page_reviews(root: Path) -> dict:
     folders = (
         root/'data/evaluation/handwriting-complete-20261004/reviews',
         root/'data/evaluation/corpus-completion-20261004/source-reviews',
+        root/'data/evaluation/rag-repair-yc205/reviews',
     )
     for folder in folders:
         for path in folder.glob('*/*.json'):
+            if path.name.endswith('-raw.json'):
+                continue
             review = json.loads(path.read_text())
             key = (review['filename'], review['page'])
             previous = result.get(key)
