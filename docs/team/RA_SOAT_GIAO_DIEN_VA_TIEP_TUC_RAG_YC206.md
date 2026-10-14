@@ -1,6 +1,6 @@
 # Rà soát giao diện và tiếp tục RAG — YC-206
 
-Cập nhật 2026-10-14T21:21:39.491083+07:00. Main local đồng bộ `099c769` (PR13/14), bảo toàn thay đổi local và backup.
+Cập nhật 2026-10-14T21:39:10.580450+07:00. Main local đồng bộ `099c769` (PR13/14), bảo toàn thay đổi local và backup.
 
 Đã sửa năm lỗi: thiếu `resumeSourceList` làm chat mới/mở phiên lỗi; tự chèn lại câu đã gửi sau lỗi; danh sách ôn tập không cập nhật ngay; hộp đồng bộ thư viện không đóng được sau lỗi; thiếu cảnh báo trang nguồn chưa được duyệt cạnh trích dẫn. Giao diện dùng asset `yc206-ui04`, bài tập `yc206-ui02`.
 
@@ -39,6 +39,6 @@ Baseline mô hình thật0/7 tạo được câu trả lời. V5 trước citati
 
 Theo YC207, sửa và kiểm chứng → commit/push nhánh/PR GitHub → chỉ học tiếp khi mọi cổng đạt. Đợt này xuất bản mã/test/hồ sơ để review, không công bố tài liệu gốc, DB/vector/weights hoặc dữ liệu người dùng. Không merge main hoặc khởi chạy học khi nguồn/chất lượng chưa đạt.
 
-Bằng chứng local: `data/evaluation/ui-audit-yc206/` (matrix/log/ảnh); `data/evaluation/rag-repair-yc205/` (source/migration/tokens101PASS trước citation05, citation05 độc lập80PASS, readiness/realQA/manual review). File nguồn và dữ liệu người dùng không được công bố. GitHub: đang chuẩn bị nhánh/PR; chưa xác nhận push hoặc CI ở mốc cập nhật này.
+Bằng chứng local: `data/evaluation/ui-audit-yc206/` (matrix/log/ảnh); `data/evaluation/rag-repair-yc205/` (source/migration/tokens101PASS trước citation05, citation05 độc lập80PASS, readiness/realQA/manual review). File nguồn và dữ liệu người dùng không được công bố. GitHub: đã push `fc47329` và mở [PR15](https://github.com/ng-wngkh07/Study-Agent/pull/15) nháp; chưa merge. CI đầu có hai lỗi harness do thiếu config mô hình private. Đã tái hiện và sửa bằng metadata ngữ cảnh8192 trong thư mục thử, giữ nguyên kiểm giới hạn và production guard; portable kiểm lại496PASS12SKIP. CI head tiếp theo đang chờ, chưa báo đạt.
 
-Kiểm cuối:496PASS/12SKIP sau cách ly khóa dialogue trong fixture (giữ cơ chế khóa thật ở thư mục tạm); không còn để kiểm API mô phỏng tranh khóa inference đang chạy. Node27PASS tái sử dụng vì ba asset không thay sau lượt kiểm. Consumer24PASS. Staged32file dùng chung, rà bí mật và whitespace trước push; PR để draft do nguồn và chất lượng mô hình chưa đạt toàn bộ.
+Kiểm cuối:496PASS/12SKIP sau cách ly khóa dialogue trong fixture (giữ cơ chế khóa thật ở thư mục tạm); không còn để kiểm API mô phỏng tranh khóa inference đang chạy. Node27PASS tái sử dụng vì ba asset không thay sau lượt kiểm. Consumer24PASS. 32file dùng chung đã quét bí mật và whitespace trước push; PR để draft do nguồn và chất lượng mô hình chưa đạt toàn bộ.

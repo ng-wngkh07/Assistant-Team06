@@ -2,7 +2,7 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-14T21:21:39.491083+07:00
+- Cập nhật: 2026-10-14T21:39:10.580450+07:00
 - Mục mới nhất: **[YC-207](#yc-207)**.
 - Nhật ký chung có **47 mục**: 17 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206 và 6 LOG), 3 tổ chức/tài liệu, 3 phát hành/đồng bộ GitHub, 12 rà soát/nghiệm thu, 7 làm rõ kiến trúc/quyền/quy trình, 5 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
@@ -1017,10 +1017,12 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Trước/sau: YC205/206 chưa có quyền commit/push mới; nay cho phép commit và push bản sửa đã kiểm chứng qua nhánh/PR theo quy trình nhóm. Không suy quyền merge main, kích hoạt adapter hoặc công bố DB, nguồn riêng, weights và dữ liệu người dùng.
 - Phần/file: README_QUY_TAC.md, nhật ký gốc và checkpoint local; yêu cầu được ghi thành quy tắc dự án.
 - Kiểm chứng: đối chiếu quy trình Git/phạm vi tài sản hiện hành; không đổi hành vi runtime trong bước ghi quy tắc. Push đợt sửa YC205/206 đang chờ hoàn tất kiểm chứng, chưa báo đã xuất bản.
-- Trạng thái: APPLIED / FIX_PUBLICATION_PENDING; cập nhật: 2026-10-14T20:58:58.375951+07:00.
+- Trạng thái tại mốc ghi quy tắc: APPLIED / FIX_PUBLICATION_PENDING; cập nhật: 2026-10-14T20:58:58.375951+07:00.
 
 - Kết quả tích hợp YC205/206 cập nhật 2026-10-14T21:21:39.491083+07:00: main099c769; source/raw/code/VNI/typed block/provenance/migration và retrieval/token/citation đã tích hợp checkout local sau trả quyền. Bốn ca citation/bản dịch mới RED→GREEN, citation05 độc lập80PASS; portable sau tích hợp496PASS12SKIP, Node27PASS. Thêm cảnh báo trang chưa duyệt trên UI, browser đã kiểm; checkbox thay lịch/PDF/bộ lọc/xóa phiên riêng đã kiểm trong kho thử. Không suy mô hình/Vision/OCR từ mô phỏng.
 - Chỉ mục thử v5:157PDF22711trang,52608chunk/vector;20628vector tạo lại, binding và SQLite/FTS đạt. Cổng nguồn vẫn7916trang pending+2partial, complete:false; không publish DB hoặc học/activate. QA04 model thật6/7responseanswer nhưng manual2PASS2partial3FAIL; xác nhận bản dịch máy làm lệch ngữ cảnh, loại khỏi căn cứ trả lời, giữ snippet để đối chiếu. Các phép thử này là diagnostic đã xem, không phải holdout kín.
 - Quyền hiện tại: mọi đơn vị Antigravity đã terminal/trả quyền; Codex review/tích hợp/phát hành. Push nhánh/PR YC205/206 đang chuẩn bị theo YC207, chưa merge hoặc CI mới. Báo cáo RA_SOAT_GIAO_DIEN_VA_TIEP_TUC_RAG_YC206.md và evidence local; full private-corpus suite/Windows máy thật/IME/mobile chưa nghiệm thu.
 
 - Chốt kiểm trước phát hành 2026-10-14T21:29:32.955560+07:00: citation06 đã review/tích hợp, OOP thật không còn chép câu mẫu hoặc mã `[S#]`, cóS1hợp lệ. Cách ly thêm dialogue lock trong fixture để bộ API mock không tranh inference thật; portable496PASS12SKIP, consumer24PASS, Node27PASS. Cổng nguồn/chất lượng giữ đóng; nhánh codex/fix/shared/yc205-yc206-tv6 được chuẩn bị để push/PR draft theo YC207.
+
+- Công bố và sửa kiểm thử CI 2026-10-14T21:39:10.580450+07:00: đã push fc47329ca16c2bdc629fe639867387bc7176aeae và mở [PR15](https://github.com/ng-wngkh07/Study-Agent/pull/15) nháp trên nhánh codex/fix/shared/yc205-yc206-tv6, chưa merge main. CI ban đầu Windows/macOS có2FAIL vì hai ca ngân sách đọc config mô hình private trước gọi stub; đã tái hiện khi config vắng, cung cấp metadata8192 riêng trong thư mục thử, giữ nguyên mọi assertion và production guard. Local kiểm lại496PASS12SKIP; không tải weights vào CI. Đang đẩy bản sửa harness và chờ CI trên head mới; nguồn/chất lượng chưa đạt, huấn luyện NOT_RUN.
