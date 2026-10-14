@@ -3,7 +3,6 @@
 Raw OCR remains pending content review. This runner never starts training.
 """
 import argparse
-import fcntl
 import hashlib
 import json
 import math
@@ -14,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from app import file_lock as fcntl
 from app.pdf_extractor import PDFExtractor
 from app.vision_ocr import VisionOCRManager, BACKEND_TESSERACT
 from app.indexer import KnowledgeIndexer, pack_vector

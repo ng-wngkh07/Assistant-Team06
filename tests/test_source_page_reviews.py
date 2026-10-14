@@ -173,3 +173,22 @@ def test_complete_visual_review_survives_sync_and_audit(tmp_path, monkeypatch):
 
 def digest_blob(blob):
     return hashlib.sha256(blob).hexdigest()
+
+
+def test_sync_runner_uses_portable_lock_without_direct_fcntl_import(monkeypatch):
+    import builtins
+    from app import file_lock
+    original_import = builtins.__import__
+
+    def without_posix_lock(name, *args, **kwargs):
+        if name == 'fcntl':
+            raise ModuleNotFoundError("No module named 'fcntl'")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', without_posix_lock)
+    spec = importlib.util.spec_from_file_location(
+        'portable_sync_test', Path(__file__).resolve().parents[1]/'scripts/complete_corpus.py'
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.fcntl is file_lock

@@ -1,10 +1,10 @@
 # Rà soát giao diện và tiếp tục RAG — YC-206
 
-Cập nhật 2026-10-14T21:39:10.580450+07:00. Main local đồng bộ `099c769` (PR13/14), bảo toàn thay đổi local và backup.
+Cập nhật 2026-10-14T21:47:45.640776+07:00. Main local đồng bộ `099c769` (PR13/14), bảo toàn thay đổi local và backup.
 
 Đã sửa năm lỗi: thiếu `resumeSourceList` làm chat mới/mở phiên lỗi; tự chèn lại câu đã gửi sau lỗi; danh sách ôn tập không cập nhật ngay; hộp đồng bộ thư viện không đóng được sau lỗi; thiếu cảnh báo trang nguồn chưa được duyệt cạnh trích dẫn. Giao diện dùng asset `yc206-ui04`, bài tập `yc206-ui02`.
 
-27 kiểm thử JavaScript và24kiểm thử consumer nguồn/lịch sử đạt; bộ Python portable sau tích hợp backend đạt496, bỏ qua12ca cần dữ liệu riêng. Kiểm thử UI dùng kho tổng hợp riêng, model/Vision/OCR mô phỏng; mô phỏng không chứng minh chất lượng mô hình. Chat mới và mở phiên đã lưu đã kiểm thêm trên ứng dụng đang chạy với dữ liệu thật.
+27 kiểm thử JavaScript và24kiểm thử consumer nguồn/lịch sử đạt; bộ Python portable sau tích hợp backend đạt497, bỏ qua12ca cần dữ liệu riêng. Kiểm thử UI dùng kho tổng hợp riêng, model/Vision/OCR mô phỏng; mô phỏng không chứng minh chất lượng mô hình. Chat mới và mở phiên đã lưu đã kiểm thêm trên ứng dụng đang chạy với dữ liệu thật.
 
 | Luồng | Trạng thái | Bằng chứng/giới hạn |
 | --- | --- | --- |
@@ -39,6 +39,8 @@ Baseline mô hình thật0/7 tạo được câu trả lời. V5 trước citati
 
 Theo YC207, sửa và kiểm chứng → commit/push nhánh/PR GitHub → chỉ học tiếp khi mọi cổng đạt. Đợt này xuất bản mã/test/hồ sơ để review, không công bố tài liệu gốc, DB/vector/weights hoặc dữ liệu người dùng. Không merge main hoặc khởi chạy học khi nguồn/chất lượng chưa đạt.
 
-Bằng chứng local: `data/evaluation/ui-audit-yc206/` (matrix/log/ảnh); `data/evaluation/rag-repair-yc205/` (source/migration/tokens101PASS trước citation05, citation05 độc lập80PASS, readiness/realQA/manual review). File nguồn và dữ liệu người dùng không được công bố. GitHub: đã push `fc47329` và mở [PR15](https://github.com/ng-wngkh07/Study-Agent/pull/15) nháp; chưa merge. CI đầu có hai lỗi harness do thiếu config mô hình private. Đã tái hiện và sửa bằng metadata ngữ cảnh8192 trong thư mục thử, giữ nguyên kiểm giới hạn và production guard; portable kiểm lại496PASS12SKIP. CI head tiếp theo đang chờ, chưa báo đạt.
+Bằng chứng local: `data/evaluation/ui-audit-yc206/` (matrix/log/ảnh); `data/evaluation/rag-repair-yc205/` (source/migration/tokens101PASS trước citation05, citation05 độc lập80PASS, readiness/realQA/manual review). File nguồn và dữ liệu người dùng không được công bố. GitHub: đã push `fc47329` và mở [PR15](https://github.com/ng-wngkh07/Study-Agent/pull/15) nháp; chưa merge. CI đầu có hai lỗi harness do thiếu config mô hình private. Đã tái hiện và sửa bằng metadata ngữ cảnh8192 trong thư mục thử, giữ nguyên kiểm giới hạn và production guard; portable kiểm lại497PASS12SKIP. CI head tiếp theo đang chờ, chưa báo đạt.
 
-Kiểm cuối:496PASS/12SKIP sau cách ly khóa dialogue trong fixture (giữ cơ chế khóa thật ở thư mục tạm); không còn để kiểm API mô phỏng tranh khóa inference đang chạy. Node27PASS tái sử dụng vì ba asset không thay sau lượt kiểm. Consumer24PASS. 32file dùng chung đã quét bí mật và whitespace trước push; PR để draft do nguồn và chất lượng mô hình chưa đạt toàn bộ.
+Kiểm cuối:497PASS/12SKIP sau cách ly khóa dialogue trong fixture (giữ cơ chế khóa thật ở thư mục tạm); không còn để kiểm API mô phỏng tranh khóa inference đang chạy. Node27PASS tái sử dụng vì ba asset không thay sau lượt kiểm. Consumer24PASS. 32file dùng chung đã quét bí mật và whitespace trước push; PR để draft do nguồn và chất lượng mô hình chưa đạt toàn bộ.
+
+CI Windows thật phát hiện công cụ đồng bộ nguồn import POSIX fcntl trực tiếp. Đã thay bằng app.file_lock sẵn có sau thiết lập ROOT/sys.path; thêm hồi quy import không có fcntl, giữ đầy đủ các ca bảo toàn review nguồn printed/visual. Local497PASS12SKIP; chờ CI sau push sửa Windows. Có33file thay đổi dùng chung so main; không đổi logic cổng nguồn/học.
