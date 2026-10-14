@@ -986,9 +986,30 @@
                     <button id="btn-rename-session" class="btn btn-sm btn-outline btn-mini" title="Đổi tên cuộc trò chuyện">✏️</button>
                 </div>
                 <div class="session-controls">
-                    <button type="button" id="btn-resume-last-question" class="btn btn-sm btn-outline btn-mini" hidden>↩ Mở câu hỏi gần nhất</button>
-                    <div id="resume-source-list" class="resume-source-list" hidden></div>
                     <button id="btn-summarize-session" class="btn btn-sm btn-outline btn-mini" title="Tổng hợp chủ đề chính">📝 Tóm tắt chủ đề</button>
+                    <div class="recent-sources-dropdown-wrapper" id="recent-sources-wrapper" hidden>
+                        <button type="button" id="btn-recent-sources-toggle" class="btn btn-sm btn-outline btn-mini recent-sources-trigger" aria-expanded="false" aria-haspopup="true" title="Xem danh sách nguồn và câu hỏi gần nhất">
+                            <span class="recent-sources-icon">🔖</span>
+                            <span>Nguồn gần nhất</span>
+                            <span class="dropdown-chevron" aria-hidden="true">▾</span>
+                        </button>
+                        <div id="recent-sources-menu" class="recent-sources-menu" role="menu" hidden>
+                            <div class="recent-menu-section" id="recent-question-section">
+                                <button type="button" id="btn-resume-last-question" class="recent-menu-action-btn" role="menuitem" hidden>
+                                    <span class="menu-icon">↩</span>
+                                    <span class="menu-label">Mở câu hỏi gần nhất</span>
+                                </button>
+                            </div>
+                            <div class="recent-menu-divider" id="recent-sources-divider" hidden></div>
+                            <div class="recent-menu-section" id="recent-sources-section">
+                                <div id="resume-source-header" class="recent-menu-header" hidden>
+                                    <span class="header-title">Dùng lại nguồn gần nhất</span>
+                                    <span class="header-sub">(tìm lại cho câu hỏi mới)</span>
+                                </div>
+                                <div id="resume-source-list" class="resume-source-list" role="group" hidden></div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 

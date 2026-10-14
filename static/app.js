@@ -48,8 +48,32 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnCloseSummary = document.getElementById("btn-close-summary");
     const btnResumeLastQuestion = document.getElementById("btn-resume-last-question");
     const resumeSourceList = document.getElementById("resume-source-list");
+    const recentSourcesWrapper = document.getElementById("recent-sources-wrapper");
+    const btnRecentSourcesToggle = document.getElementById("btn-recent-sources-toggle");
+    const recentSourcesMenu = document.getElementById("recent-sources-menu");
+    const recentSourcesDivider = document.getElementById("recent-sources-divider");
+    const resumeSourceHeader = document.getElementById("resume-source-header");
     const answerModeSelect = document.getElementById("answer-mode");
     const processingLevelSelect = document.getElementById("processing-level");
+
+    function closeRecentSourcesMenu() {
+        if (recentSourcesMenu) recentSourcesMenu.hidden = true;
+        if (btnRecentSourcesToggle) {
+            btnRecentSourcesToggle.setAttribute("aria-expanded", "false");
+            btnRecentSourcesToggle.classList.remove("active");
+        }
+    }
+
+    function toggleRecentSourcesMenu() {
+        if (!recentSourcesMenu) return;
+        const willOpen = recentSourcesMenu.hidden;
+        recentSourcesMenu.hidden = !willOpen;
+        if (btnRecentSourcesToggle) {
+            btnRecentSourcesToggle.setAttribute("aria-expanded", String(willOpen));
+            if (willOpen) btnRecentSourcesToggle.classList.add("active");
+            else btnRecentSourcesToggle.classList.remove("active");
+        }
+    }
 
     function renderResumeControls(turn, fallbackCitations = []) {
         const previousCitations = latestRestorableTurn?.citations || [];
@@ -57,12 +81,13 @@ document.addEventListener("DOMContentLoaded", () => {
             ...turn,
             citations: turn.citations?.length ? turn.citations : (fallbackCitations.length ? fallbackCitations : previousCitations),
         } : null;
+
+        const hasRestorableTurn = Boolean(latestRestorableTurn);
         if (btnResumeLastQuestion) {
-            btnResumeLastQuestion.hidden = !latestRestorableTurn;
+            btnResumeLastQuestion.hidden = !hasRestorableTurn;
             btnResumeLastQuestion.textContent = "↩ Mở câu hỏi gần nhất";
         }
-        if (!resumeSourceList) return;
-        resumeSourceList.replaceChildren();
+
         const citations = (latestRestorableTurn?.citations || []).filter(c => c && c.page_num && (c.doc_id || c.filename));
         const unique = [];
         const seen = new Set();
@@ -70,24 +95,56 @@ document.addEventListener("DOMContentLoaded", () => {
             const key = `${citation.doc_id || citation.filename}:${citation.page_num}`;
             if (!seen.has(key)) { seen.add(key); unique.push(citation); }
         }
-        if (!unique.length) {
-            resumeSourceList.hidden = true;
-            return;
+        const hasSources = unique.length > 0;
+
+        if (resumeSourceHeader) {
+            resumeSourceHeader.hidden = !hasSources;
         }
-        const label = document.createElement("span");
-        label.className = "resume-source-label";
-        label.textContent = "Dùng lại nguồn gần nhất · tìm lại cho câu hỏi mới:";
-        resumeSourceList.appendChild(label);
-        for (const citation of unique) {
-            const button = document.createElement("button");
-            button.type = "button";
-            button.className = "btn btn-sm btn-outline btn-mini";
-            button.textContent = `${citation.book_title || citation.filename || "Tài liệu"} · tr. ${citation.page_num}`;
-            button.title = "Giới hạn lượt tìm kiếm mới vào trang này; nội dung và citation sẽ được truy xuất lại.";
-            button.addEventListener("click", () => selectPreviousSource(citation));
-            resumeSourceList.appendChild(button);
+        if (recentSourcesDivider) {
+            recentSourcesDivider.hidden = !(hasRestorableTurn && hasSources);
         }
-        resumeSourceList.hidden = false;
+
+        if (resumeSourceList) {
+            resumeSourceList.replaceChildren();
+            if (hasSources) {
+                for (const citation of unique) {
+                    const button = document.createElement("button");
+                    button.type = "button";
+                    button.className = "recent-menu-source-item";
+                    button.title = "Giới hạn lượt tìm kiếm mới vào trang này; nội dung và citation sẽ được truy xuất lại.";
+
+                    const iconSpan = document.createElement("span");
+                    iconSpan.className = "source-item-icon";
+                    iconSpan.textContent = "📄";
+
+                    const titleSpan = document.createElement("span");
+                    titleSpan.className = "source-item-title";
+                    titleSpan.textContent = citation.book_title || citation.filename || "Tài liệu";
+
+                    const pageSpan = document.createElement("span");
+                    pageSpan.className = "source-item-page";
+                    pageSpan.textContent = `tr. ${citation.page_num}`;
+
+                    button.append(iconSpan, titleSpan, pageSpan);
+                    button.addEventListener("click", () => {
+                        closeRecentSourcesMenu();
+                        selectPreviousSource(citation);
+                    });
+                    resumeSourceList.appendChild(button);
+                }
+                resumeSourceList.hidden = false;
+            } else {
+                resumeSourceList.hidden = true;
+            }
+        }
+
+        if (recentSourcesWrapper) {
+            const shouldShowWrapper = hasRestorableTurn || hasSources;
+            recentSourcesWrapper.hidden = !shouldShowWrapper;
+            if (!shouldShowWrapper) {
+                closeRecentSourcesMenu();
+            }
+        }
     }
 
     async function selectPreviousSource(citation) {
@@ -250,6 +307,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (btnResumeLastQuestion) {
         btnResumeLastQuestion.addEventListener("click", () => {
+            closeRecentSourcesMenu();
             if (isGenerating || !latestRestorableTurn) return;
             const draft = userInput.value.trim();
             userInput.value = draft && draft !== latestRestorableTurn.question
@@ -260,6 +318,25 @@ document.addEventListener("DOMContentLoaded", () => {
             chatStatus.textContent = "Câu hỏi gần nhất đã được đưa vào ô nhập; bấm Gửi nếu muốn chạy lại với nguồn và chế độ hiện tại.";
         });
     }
+
+    if (btnRecentSourcesToggle) {
+        btnRecentSourcesToggle.addEventListener("click", (e) => {
+            e.stopPropagation();
+            toggleRecentSourcesMenu();
+        });
+    }
+
+    document.addEventListener("click", (e) => {
+        if (recentSourcesWrapper && !recentSourcesWrapper.contains(e.target)) {
+            closeRecentSourcesMenu();
+        }
+    });
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+            closeRecentSourcesMenu();
+        }
+    });
 
     if (processingLevelSelect) {
         try {
@@ -1422,17 +1499,26 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (btnOpenOcrReview && ocrModal) {
         btnOpenOcrReview.addEventListener("click", () => {
-            ocrModal.style.display = "block";
+            ocrModal.classList.add("active");
+            ocrModal.style.display = "flex";
             loadOcrReviews();
             populateOcrDocDropdown();
         });
         if (btnCloseOcrModal) {
             btnCloseOcrModal.addEventListener("click", () => {
+                ocrModal.classList.remove("active");
                 ocrModal.style.display = "none";
             });
         }
         window.addEventListener("click", (e) => {
             if (e.target === ocrModal) {
+                ocrModal.classList.remove("active");
+                ocrModal.style.display = "none";
+            }
+        });
+        window.addEventListener("keydown", (e) => {
+            if (e.key === "Escape" && ocrModal.classList.contains("active")) {
+                ocrModal.classList.remove("active");
                 ocrModal.style.display = "none";
             }
         });

@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-14T21:54:13.628006+07:00
-- Mục mới nhất: **[YC-207](#yc-207)**.
-- Nhật ký chung có **47 mục**: 17 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206 và 6 LOG), 3 tổ chức/tài liệu, 3 phát hành/đồng bộ GitHub, 12 rà soát/nghiệm thu, 7 làm rõ kiến trúc/quyền/quy trình, 5 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
+- Cập nhật: 2026-10-14T23:15:00+07:00
+- Mục mới nhất: **[YC-208](#yc-208)**.
+- Nhật ký chung có **48 mục**: 18 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206/208 và 6 LOG), 3 tổ chức/tài liệu, 3 phát hành/đồng bộ GitHub, 12 rà soát/nghiệm thu, 7 làm rõ kiến trúc/quyền/quy trình, 5 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -36,6 +36,7 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 | YC-195 thay phân chia mode YC-191/194 | QA đầy đủ, tự so sánh theo câu hỏi; từng bước chuyển sang bài tập; mức xử lý phải phù hợp model hiện tại | Đang triển khai/đo; không suy chất lượng từ độ dài hay thời gian. |
 | YC-200 triển khai hướng YC-199 | Huấn luyện mẫu nhỏ giải bài tập có đáp án/lời giải chi tiết; chỉ mở rộng khi ổn định và hiệu quả cao qua đánh giá độc lập | Đã được yêu cầu; không cấp quyền tự kích hoạt adapter hoặc hạ cổng nguồn/chất lượng. |
 | YC-207 bổ sung thứ tự sửa lỗi/phát hành/học | Sửa và kiểm chứng lỗi → đẩy mã/test/hồ sơ dùng chung lên GitHub → chỉ huấn luyện tiếp khi các cổng đạt | Áp dụng từ 14/10/2026; không push trực tiếp main hoặc công bố dữ liệu/model riêng. |
+| YC-208 sửa bố cục UI OCR & dropdown nguồn | Căn giữa modal OCR hai chiều; tách nguồn gần nhất thành dropdown menu dọc bên phải tóm tắt | Đã áp dụng, giữ nguyên chức năng/hợp đồng test. |
 
 ## Mẫu mục mới
 
@@ -1030,3 +1031,25 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Sửa tương thích Windows 2026-10-14T21:47:45.640776+07:00: CI Windows thật còn2FAIL ở đồng bộ nguồn do scripts/complete_corpus.py import POSIX fcntl. Antigravity windows07 sửa tối thiểu trong snapshot rồi terminal/trả quyền; Codex đối chiếu diff/hash và tích hợp from app import file_lock as fcntl sau ROOT/sys.path. Thêm ca tái hiện import không có fcntl RED→GREEN; portable497PASS12SKIP, không bỏ hai ca printed/visual review. Khóa native Unix và adapter LockFileEx Windows được tái dùng; không sửa dữ liệu nguồn/cổng học. CI head mới đang chờ; dịch vụ local còn chờ tải lại sau CI.
 
 - Nghiệm thu phần mềm local/GitHub 2026-10-14T21:54:13.628006+07:00: remote xác nhận2619c1a1f19c8705c5adea08bb0e1225181b54d5; CI push38583738297 Windows/macOS SUCCESS trên đúng head, history PR SUCCESS. PR15 vẫn draft/chưa merge, main099c769 giữ nguyên. Đã restart đúng web23992/supervisor24004 về dịch vụ mới, health healthy/inference_ready; bốn asset served hash khớp. So mọi bảng kho knowledge/history/timetable và registry trước/sau: nguyên vẹn, SQLite integrityok; không publish shadowv5. Browser mở phiên cũ rồi chat mới: về màn hình bắt đầu, ô nhập trống và lịch sử vẫn còn. Ảnh/evidence local data/evaluation/ui-audit-yc206; backup data/backups/yc207-service-restart. Mã sửa đã xuất bản và kiểm chứng, cập nhật tài liệu đợt này cũng được push; cổng nguồn7918fail và chất lượng model chưa đạt nên huấn luyện NOT_RUN, adapteractive:null. Windows máy thật/mobile/IME/OCR/VLM toàn bộ chưa nghiệm thu.
+
+<a id="yc-208"></a>
+### YC-208 - 14/10/2026 23:15 (UTC+07)
+
+- Người thực hiện: Antigravity (Senior Frontend & UI/UX Engineer); loại: sửa lỗi bố cục giao diện và trải nghiệm người dùng.
+- Mục tiêu:
+  1. Căn giữa khung “📝 Thẩm định & duyệt bản nhận diện chữ cục bộ” (`#ocr-modal`): Sửa lỗi modal bị lệch góc trên bên trái do thiết lập inline `style.display = "block"` làm mất layout `display: flex` căn giữa của container `.modal`. Chuyển sang kích hoạt bằng class `.active`, bổ sung fallback CSS `display: flex !important` và `margin: auto` cho `.modal-content`, hỗ trợ phím Escape và giới hạn cuộn an toàn (`max-height: min(88vh, 850px)`).
+  2. Tách chức năng “Dùng lại nguồn gần nhất · tìm lại cho câu hỏi mới” (`#resume-source-list`) và “↩ Mở câu hỏi gần nhất” (`#btn-resume-last-question`) thành dropdown popup menu dọc riêng neo ở góc phải, nằm bên phải nút “📝 Tóm tắt chủ đề” (`#btn-summarize-session`). Xóa bỏ tình trạng nút tràn hàng ngang đè lên tên phiên và biểu tượng cây bút (✏️ `#btn-rename-session`). Hỗ trợ toggle mở/đóng, tự đóng khi click bên ngoài hoặc bấm Escape, bảo đảm khả năng tiếp cận và giữ nguyên 100% hợp đồng ID/chức năng cho backend và bộ kiểm thử.
+- Trước / sau thay đổi:
+  - Trước: Modal OCR hiển thị ở góc trên bên trái; các nút nguồn gần nhất nằm trên cùng một hàng ngang trải dài làm co hẹp tiêu đề phiên và đè lên nút sửa tên cuộc trò chuyện.
+  - Sau: Modal OCR được căn chính giữa màn hình theo cả hai chiều; các thao tác nguồn và câu hỏi gần nhất được gom gọn vào dropdown menu dọc bên phải nút Tóm tắt chủ đề, giao diện thoáng và không bị đè lên bất kỳ thành phần nào.
+- Phần/file sửa:
+  - `static/index.html`: Cấu trúc lại `.session-controls` đưa `#btn-summarize-session` sang bên trái wrapper dropdown `#recent-sources-wrapper`, giữ nguyên ID `#btn-resume-last-question` và `#resume-source-list`.
+  - `static/style.css`: Quy tắc hiển thị flex cho modal kèm căn giữa `margin: auto`; thiết kế phong cách dark liquid glass cho `.recent-sources-trigger`, `.recent-sources-menu`, `.recent-menu-action-btn`, `.recent-menu-source-item`.
+  - `static/app.js`: Quản lý trạng thái mở/đóng menu `#recent-sources-menu` và toggle `aria-expanded`; chuẩn hóa `classList.add("active")` cho `#ocr-modal`; đóng menu khi chọn nguồn hoặc câu hỏi gần nhất.
+- Kiểm thử:
+  - Node UI Lifecycle tests: `tests/chat_lifecycle_ui_yc206.test.cjs` (6 PASS, 0 FAIL).
+  - Node UI Component tests: `tests/chat_input_ui.test.cjs`, `tests/document_lookup_ui.test.cjs`, `tests/practice_ui.test.cjs` (21 PASS, 0 FAIL).
+  - Pytest UI & Backend contract tests: `tests/test_study_agent_c_f_g.py`, `tests/test_learning_tools_ui_contract.py` (28 PASS, 0 FAIL).
+  - History validation: `scripts/check_history.py` (PASS).
+- Trạng thái: PASS / APPLIED.
+
