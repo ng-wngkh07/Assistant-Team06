@@ -340,3 +340,13 @@ test('Learning validation errors display a readable message instead of an object
     assert.match(message,/Chủ đề không hợp lệ/);
     assert.doesNotMatch(message,/\[object Object\]/);
 });
+
+test('Saving a new review question refreshes an already visible review list when the practice dialog closes', async () => {
+    const app = await createApp();
+    app.elements.get('review-topic').value = 'Trí nhớ';
+    await app.elements.get('btn-review-generate').click();
+    await findButton(app.elements.get('practice-body'), 'Chưa chắc').click();
+    await app.elements.get('btn-close-practice').click();
+    assert.match(textOf(app.elements.get('review-list')), /Trong điều kiện A/);
+    assert.doesNotMatch(textOf(app.elements.get('review-list')), /Chưa có câu nào/);
+});

@@ -9,22 +9,28 @@ import numpy as np
 
 from app.config import (
     SRC_DIR, DB_PATH, DEFAULT_EMBED_MODEL,
-    CHUNK_SIZE_CHARS, CHUNK_OVERLAP_CHARS
+    CHUNK_SIZE_CHARS, CHUNK_OVERLAP_CHARS, DATA_DIR
 )
 from app.pdf_extractor import PDFExtractor, PDFExtractionResult
 from app.chunker import TextChunker
 from app.ollama_client import OllamaClient
+from app.source_quality import (
+    PIPELINE_VERSION, save_source_quality_sidecar, load_source_quality_sidecar
+)
 
 logger = logging.getLogger(__name__)
+
 
 def pack_vector(vec: List[float]) -> bytes:
     """Pack float list into binary bytes."""
     return struct.pack(f"{len(vec)}f", *vec)
 
+
 def unpack_vector(blob: bytes) -> np.ndarray:
     """Unpack binary bytes into numpy float32 array."""
     count = len(blob) // 4
     return np.array(struct.unpack(f"{count}f", blob), dtype=np.float32)
+
 
 class KnowledgeIndexer:
     def __init__(self, db_path: Path = DB_PATH, src_dir: Path = SRC_DIR):
@@ -40,7 +46,7 @@ class KnowledgeIndexer:
         return conn
 
     def _init_db(self):
-        """Create database tables and FTS5 virtual table."""
+        """Create database tables, migration columns, and FTS5 virtual table."""
         with self.get_connection() as conn:
             conn.executescript("""
             CREATE TABLE IF NOT EXISTS documents (
@@ -55,6 +61,7 @@ class KnowledgeIndexer:
                 is_scanned INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL,
                 error_message TEXT,
+                pipeline_version TEXT NOT NULL DEFAULT 'v1',
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -93,12 +100,37 @@ class KnowledgeIndexer:
                 INSERT INTO chunks_fts(chunks_fts, rowid, book_title, text) VALUES('delete', old.id, old.book_title, old.text);
                 INSERT INTO chunks_fts(rowid, book_title, text) VALUES (new.id, new.book_title, new.text);
             END;
+
+            CREATE TABLE IF NOT EXISTS document_source_quality (
+                doc_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+                filename TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
+                pipeline_version TEXT NOT NULL,
+                needs_review INTEGER NOT NULL DEFAULT 0,
+                quality_warnings TEXT,
+                raw_char_count INTEGER NOT NULL DEFAULT 0,
+                raw_capture_hash TEXT,
+                blocks_count INTEGER NOT NULL DEFAULT 0,
+                quality_metadata TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
             """)
 
+            # Migration: Ensure pipeline_version column exists in documents
+            cols = [row["name"] for row in conn.execute("PRAGMA table_info(documents)").fetchall()]
+            if "pipeline_version" not in cols:
+                conn.execute("ALTER TABLE documents ADD COLUMN pipeline_version TEXT NOT NULL DEFAULT 'v1'")
+
+            cols_q = [row["name"] for row in conn.execute("PRAGMA table_info(document_source_quality)").fetchall()]
+            if "raw_capture_hash" not in cols_q:
+                conn.execute("ALTER TABLE document_source_quality ADD COLUMN raw_capture_hash TEXT")
+
     def get_indexed_files_map(self) -> Dict[str, Dict[str, Any]]:
-        """Return dict of {filename: {file_hash, filepath, status, id, ...}}"""
+        """Return dict of {filename: {file_hash, filepath, status, id, pipeline_version, ...}}"""
         with self.get_connection() as conn:
-            cursor = conn.execute("SELECT id, filename, filepath, file_hash, status, total_pages, is_scanned FROM documents")
+            cols = [row["name"] for row in conn.execute("PRAGMA table_info(documents)").fetchall()]
+            pipe_col = ", pipeline_version" if "pipeline_version" in cols else ""
+            cursor = conn.execute(f"SELECT id, filename, filepath, file_hash, status, total_pages, is_scanned{pipe_col} FROM documents")
             return {row["filename"]: dict(row) for row in cursor.fetchall()}
 
     def backfill_missing_embeddings(
@@ -112,7 +144,6 @@ class KnowledgeIndexer:
         Populate embeddings for all chunks that currently have embedding IS NULL.
         Allows adding vector search capability to already indexed files.
         """
-        # Find actual model name from Ollama (e.g. match bge-m3 or bge-m3:latest)
         resolved_model = self.ollama.find_best_embed_model(embed_model) or embed_model
         test_emb = self.ollama.get_embedding("test", model=resolved_model)
         if test_emb is None:
@@ -167,7 +198,8 @@ class KnowledgeIndexer:
     ) -> Dict[str, Any]:
         """
         Index all PDFs from SRC_DIR.
-        Supports incremental updates (skips unchanged files unless force=True).
+        Supports incremental updates (skips unchanged files with matching pipeline version unless force=True).
+        Detects obsolete pipeline versions and migrates them safely.
         Automatically backfills vector embeddings if embed_model is available.
         """
         report = {
@@ -219,6 +251,69 @@ class KnowledgeIndexer:
                 )
             report["removed_files"] = len(obsolete_filenames)
 
+        # Pre-load verified human page reviews so they are honored upon reindexing.
+        # Strict provenance:
+        # 1. Require BOTH canonical relative filename AND current source_hash.
+        # 2. Resolve latest verification state (new revoked/pending overrides older verified).
+        # 3. Never allow hash-only fallback across different paths.
+        latest_page_review_states: Dict[Tuple[str, int], Dict[str, Any]] = {}
+
+        # 1. Load from source_page_reviews
+        try:
+            from app.source_page_reviews import latest_page_reviews, validate_page_review, reviewed_page_text
+            reviews_root = self.src_dir.parent if hasattr(self.src_dir, "parent") else Path.cwd()
+            spr = latest_page_reviews(reviews_root)
+            for (r_fn, r_page), (r_path, r_data) in spr.items():
+                if type(r_page) is not int or r_page < 1 or not r_fn:
+                    continue
+                norm_fn = str(Path(r_fn))
+                order = (r_data.get("reviewed_at") or "", str(r_path))
+                prev = latest_page_review_states.get((norm_fn, r_page))
+                if prev is None or order > prev["order"]:
+                    is_ver = (r_data.get("image_reviewed") is True and r_data.get("completeness") in ("complete", "partial"))
+                    txt = r_data.get("transcript") or r_data.get("text") or ""
+                    if r_data.get("kind") == "blank":
+                        txt = ""
+                    s_sha = r_data.get("source_sha256") or r_data.get("source_hash") or ""
+                    latest_page_review_states[(norm_fn, r_page)] = {
+                        "order": order,
+                        "source_hash": s_sha,
+                        "is_verified": is_ver,
+                        "text": txt,
+                        "needs_review": bool(r_data.get("unresolved")),
+                        "review": r_data,
+                    }
+        except Exception as e:
+            logger.debug(f"Could not load source_page_reviews: {e}")
+
+        # 2. Load from vision_ocr CACHE_DIR
+        from app.vision_ocr import CACHE_DIR
+        if CACHE_DIR.exists():
+            for cp in CACHE_DIR.glob("*.json"):
+                try:
+                    entry = json.loads(cp.read_text(encoding="utf-8"))
+                    if not isinstance(entry, dict):
+                        continue
+                    r_fn = entry.get("source_relpath") or entry.get("filename")
+                    r_page = entry.get("page_num") or entry.get("page")
+                    if not r_fn or type(r_page) is not int or r_page < 1:
+                        continue
+                    norm_fn = str(Path(r_fn))
+                    order = (entry.get("verified_at") or entry.get("reviewed_at") or "", str(cp))
+                    prev = latest_page_review_states.get((norm_fn, r_page))
+                    if prev is None or order > prev["order"]:
+                        is_ver = bool(entry.get("is_verified") and not entry.get("needs_review") and entry.get("text"))
+                        s_sha = entry.get("source_hash") or entry.get("source_sha256") or ""
+                        latest_page_review_states[(norm_fn, r_page)] = {
+                            "order": order,
+                            "source_hash": s_sha,
+                            "is_verified": is_ver,
+                            "text": entry.get("text") or "",
+                            "needs_review": bool(entry.get("needs_review")),
+                        }
+                except Exception:
+                    continue
+
         for idx, file_path in enumerate(source_files, 1):
             rel_path = str(file_path.relative_to(self.src_dir))
             file_hash = PDFExtractor.calculate_file_hash(file_path)
@@ -228,12 +323,16 @@ class KnowledgeIndexer:
                 progress_callback(idx, len(source_files), rel_path, "Đang xử lý...")
 
             # Check for incremental skip
-            # The document identity is strictly its relative path within src_dir.
-            # Never fallback match_key to basename for nested files.
+            # Stale pipeline version triggers re-indexing to ensure obsolete extraction is not skipped
             if not force and rel_path in indexed_map:
                 existing = indexed_map[rel_path]
-                if existing["file_hash"] == file_hash and existing["status"] in ("indexed", "scanned_unocred", "ocr_partial_reviewed") and rel_path not in force_ocr_files and not (ocr and existing["status"] == "scanned_unocred"):
-                    # If project directory moved or filepath is stale, rebase filepath to current resolved path
+                pipeline_matched = (existing.get("pipeline_version") == PIPELINE_VERSION)
+                if (existing["file_hash"] == file_hash
+                    and pipeline_matched
+                    and existing["status"] in ("indexed", "scanned_unocred", "ocr_partial_reviewed")
+                    and rel_path not in force_ocr_files
+                    and not (ocr and existing["status"] == "scanned_unocred")):
+
                     if existing.get("filepath") != current_abs_path:
                         with self.get_connection() as conn:
                             conn.execute(
@@ -246,13 +345,13 @@ class KnowledgeIndexer:
                     report["details"].append({
                         "filename": rel_path,
                         "status": "skipped",
-                        "reason": "File không thay đổi (đã lập chỉ mục, cập nhật đường dẫn)"
+                        "reason": "File không thay đổi (đã lập chỉ mục, khớp phiên bản pipeline)"
                     })
                     if existing["is_scanned"]:
                         report["scanned_files"].append(rel_path)
                     continue
 
-            # Extract text
+            # Extract document content
             is_force = (rel_path in force_ocr_files)
             extract_res = PDFExtractor.extract_file(file_path, force_ocr=is_force) if is_force else PDFExtractor.extract_file(file_path)
             if ocr and extract_res.is_scanned and not is_force:
@@ -260,22 +359,55 @@ class KnowledgeIndexer:
 
             extract_res.filename = rel_path
 
-            if extract_res.error_message:
-                report["error_files"].append({"filename": rel_path, "error": extract_res.error_message})
+            if extract_res.error_message or extract_res.failed_pages:
+                err_msg = extract_res.error_message or f"Lỗi trích xuất trang: {extract_res.failed_pages}"
+                report["error_files"].append({"filename": rel_path, "error": err_msg})
                 # Extraction failures must not erase a previously usable index
-                # or advance its hash; the next scan must be able to retry.
                 if rel_path not in indexed_map:
                     self._save_document_record(extract_res, status="error", is_scanned=False)
                 report["details"].append({
                     "filename": rel_path,
                     "status": "error",
-                    "error": extract_res.error_message
+                    "error": err_msg
                 })
                 continue
 
-            if extract_res.is_scanned:
+            # Chunk pages, honoring human-verified reviews bound strictly to canonical path and source hash
+            norm_rel = str(Path(rel_path))
+            all_chunks = []
+            extracted_pages_count = 0
+            for page in extract_res.extracted_pages:
+                p_num = page["page_num"]
+                rev_state = latest_page_review_states.get((norm_rel, p_num))
+                if rev_state and rev_state["source_hash"] == file_hash and rev_state["is_verified"]:
+                    review = rev_state.get("review")
+                    if review:
+                        validate_page_review(review, rel_path, p_num, file_hash)
+                        page_text = reviewed_page_text(dict(review, editorial=''))
+                        page["needs_review"] = review["completeness"] != "complete"
+                    else:
+                        page_text = rev_state["text"]
+                    page_has_text = len(page_text.strip()) > 0
+                else:
+                    page_text = page.get("text")
+                    page_has_text = page.get("has_text")
+
+                if page_has_text and page_text:
+                    extracted_pages_count += 1
+                    chunks = TextChunker.chunk_page(
+                        book_title=extract_res.clean_title,
+                        filename=rel_path,
+                        page_num=p_num,
+                        page_text=page_text
+                    )
+                    all_chunks.extend(chunks)
+
+            # If document was flagged scanned but has NO reviewed chunks, record as scanned_unocred
+            if extract_res.is_scanned and not all_chunks:
                 report["scanned_files"].append(rel_path)
-                self._save_document_record(extract_res, status="scanned_unocred", is_scanned=True)
+                with self.get_connection() as conn:
+                    doc_id = self._save_document_record(extract_res, status="scanned_unocred", is_scanned=True, connection=conn)
+                    self._save_quality_record(conn, doc_id, extract_res)
                 report["details"].append({
                     "filename": rel_path,
                     "status": "scanned_unocred",
@@ -284,29 +416,25 @@ class KnowledgeIndexer:
                 })
                 continue
 
-            # Chunk and Index pages
-            all_chunks = []
-            extracted_pages_count = 0
-            for page in extract_res.extracted_pages:
-                if page.get("has_text") and page.get("text"):
-                    extracted_pages_count += 1
-                    chunks = TextChunker.chunk_page(
-                        book_title=extract_res.clean_title,
-                        filename=rel_path,
-                        page_num=page["page_num"],
-                        page_text=page["text"]
-                    )
-                    all_chunks.extend(chunks)
-
-            # Prepare embeddings before touching the active document. Replace the
-            # metadata, chunks and trigger-maintained FTS in one transaction.
+            # Prepare embeddings before modifying the database.
+            # If embedding fails, an exception is raised and the transaction is never started,
+            # retaining the previous index intact.
             prepared = self._prepare_chunk_rows(all_chunks, can_embed, resolved_embed_model)
+
+            # Determine final status for documents with chunks
+            doc_status = "indexed"
+            if extract_res.is_scanned:
+                doc_status = "indexed" if extracted_pages_count == extract_res.total_pages else "ocr_partial_reviewed"
+
+            # Atomic transaction: upsert document, replace chunks, and record source quality.
+            # Rolls back completely if any failure occurs during writing.
             with self.get_connection() as conn:
                 doc_id = self._save_document_record(
-                    extract_res, status="indexed", is_scanned=False,
+                    extract_res, status=doc_status, is_scanned=extract_res.is_scanned,
                     extracted_pages_count=extracted_pages_count, connection=conn,
                 )
                 chunks_inserted = self._insert_chunk_rows(conn, doc_id, prepared)
+                self._save_quality_record(conn, doc_id, extract_res)
 
             report["indexed_files"] += 1
             report["total_pages_indexed"] += extracted_pages_count
@@ -320,6 +448,8 @@ class KnowledgeIndexer:
                 "chunks_count": chunks_inserted,
                 "failed_pages": extract_res.failed_pages,
                 "ocr_pages": extract_res.ocr_pages,
+                "needs_review": extract_res.needs_review,
+                "quality_warnings": extract_res.quality_warnings,
             })
 
         # If embedding is now enabled, backfill any chunks from previously indexed files that have NULL embeddings
@@ -341,14 +471,15 @@ class KnowledgeIndexer:
         *,
         connection: Optional[sqlite3.Connection] = None
     ) -> int:
-        """Upsert document record in DB and delete old chunks if re-indexing."""
+        """Upsert document record in DB and delete old chunks if re-indexing. Preserves existing doc_id."""
         if connection is None:
             with self.get_connection() as conn:
                 return self._save_document_record(
                     res, status, is_scanned, extracted_pages_count, connection=conn,
                 )
         conn = connection
-        # Check existing
+
+        pipe_ver = getattr(res, "pipeline_version", PIPELINE_VERSION)
         row = conn.execute("SELECT id FROM documents WHERE filename = ?", (res.filename,)).fetchone()
         if row:
             doc_id = row["id"]
@@ -364,26 +495,73 @@ class KnowledgeIndexer:
                 is_scanned = ?,
                 status = ?,
                 error_message = ?,
+                pipeline_version = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """, (
                 res.clean_title, str(res.filepath), res.file_size_bytes,
                 res.file_hash, res.total_pages, extracted_pages_count,
-                1 if is_scanned else 0, status, res.error_message, doc_id
+                1 if is_scanned else 0, status, res.error_message, pipe_ver, doc_id
             ))
         else:
             cursor = conn.execute("""
             INSERT INTO documents (
                 filename, clean_title, filepath, file_size, file_hash,
-                total_pages, extracted_pages_count, is_scanned, status, error_message
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                total_pages, extracted_pages_count, is_scanned, status, error_message, pipeline_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 res.filename, res.clean_title, str(res.filepath), res.file_size_bytes,
                 res.file_hash, res.total_pages, extracted_pages_count,
-                1 if is_scanned else 0, status, res.error_message
+                1 if is_scanned else 0, status, res.error_message, pipe_ver
             ))
             doc_id = cursor.lastrowid
         return doc_id
+
+    def _save_quality_record(self, conn: sqlite3.Connection, doc_id: int, res: PDFExtractionResult):
+        """Save source quality and raw block metadata to database and persisted sidecar."""
+        import hashlib
+        raw_all = "".join(p.get("raw_text", "") for p in res.extracted_pages)
+        raw_capture_hash = hashlib.sha256(raw_all.encode("utf-8")).hexdigest()
+
+        warnings_json = json.dumps(res.quality_warnings, ensure_ascii=False)
+        blocks_count = sum(len(p.get("blocks", [])) for p in res.extracted_pages)
+        meta = {
+            "filename": res.filename,
+            "file_hash": res.file_hash,
+            "pipeline_version": res.pipeline_version,
+            "raw_capture_hash": raw_capture_hash,
+            "total_pages": res.total_pages,
+            "failed_pages": res.failed_pages,
+            "needs_review": res.needs_review,
+            "quality_warnings": res.quality_warnings,
+            "pages_summary": getattr(res, "raw_capture", {}).get("pages_summary", []),
+            "pages": res.extracted_pages
+        }
+        meta_json = json.dumps(meta, ensure_ascii=False)
+
+        conn.execute("""
+            INSERT INTO document_source_quality (
+                doc_id, filename, file_hash, pipeline_version,
+                needs_review, quality_warnings, raw_char_count,
+                raw_capture_hash, blocks_count, quality_metadata, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(doc_id) DO UPDATE SET
+                filename=excluded.filename,
+                file_hash=excluded.file_hash,
+                pipeline_version=excluded.pipeline_version,
+                needs_review=excluded.needs_review,
+                quality_warnings=excluded.quality_warnings,
+                raw_char_count=excluded.raw_char_count,
+                raw_capture_hash=excluded.raw_capture_hash,
+                blocks_count=excluded.blocks_count,
+                quality_metadata=excluded.quality_metadata,
+                updated_at=CURRENT_TIMESTAMP
+        """, (
+            doc_id, res.filename, res.file_hash, res.pipeline_version,
+            1 if res.needs_review else 0, warnings_json, res.total_chars,
+            raw_capture_hash, blocks_count, meta_json
+        ))
+
 
     def _save_chunks(
         self,
@@ -430,35 +608,34 @@ class KnowledgeIndexer:
             chunk_count = conn.execute("SELECT COUNT(*) as c FROM chunks").fetchone()["c"]
             embedded_chunk_count = conn.execute("SELECT COUNT(*) as c FROM chunks WHERE embedding IS NOT NULL").fetchone()["c"]
             total_pages = conn.execute("SELECT SUM(extracted_pages_count) as c FROM documents").fetchone()["c"] or 0
-            
+
             docs = conn.execute("""
-                SELECT id, filename, file_hash, clean_title, total_pages, extracted_pages_count, is_scanned, status, error_message, updated_at
+                SELECT id, filename, file_hash, clean_title, total_pages, extracted_pages_count, is_scanned, status, error_message, pipeline_version, updated_at
                 FROM documents ORDER BY filename ASC
             """).fetchall()
 
-            # Count current explicit reviews by page identity. A fresh engine
-            # draft cannot withdraw approval, but a later editor review can.
             from app.vision_ocr import CACHE_DIR
             captured, reviewed, latest_reviews = {}, {}, {}
-            for cp in CACHE_DIR.glob("*.json"):
-                try:
-                    entry = json.loads(cp.read_text(encoding="utf-8"))
-                    if not isinstance(entry, dict):
+            if CACHE_DIR.exists():
+                for cp in CACHE_DIR.glob("*.json"):
+                    try:
+                        entry = json.loads(cp.read_text(encoding="utf-8"))
+                        if not isinstance(entry, dict):
+                            continue
+                        key = (entry.get("source_relpath"), entry.get("source_hash"))
+                        page = entry.get("page_num")
+                        if type(page) is not int or page < 1:
+                            continue
+                        if entry.get("status") == "CAPTURED_PENDING_REVIEW" or entry.get("text"):
+                            captured.setdefault(key, set()).add(page)
+                        if entry.get("is_verified") or entry.get("review_schema") or entry.get("verified_by"):
+                            identity = (key, page)
+                            order = (entry.get("verified_at") or "", cp.stat().st_mtime_ns, cp.name)
+                            previous = latest_reviews.get(identity)
+                            if previous is None or order > previous[0]:
+                                latest_reviews[identity] = (order, entry)
+                    except (OSError, ValueError, TypeError):
                         continue
-                    key = (entry.get("source_relpath"), entry.get("source_hash"))
-                    page = entry.get("page_num")
-                    if type(page) is not int or page < 1:
-                        continue
-                    if entry.get("status") == "CAPTURED_PENDING_REVIEW" or entry.get("text"):
-                        captured.setdefault(key, set()).add(page)
-                    if entry.get("is_verified") or entry.get("review_schema") or entry.get("verified_by"):
-                        identity = (key, page)
-                        order = (entry.get("verified_at") or "", cp.stat().st_mtime_ns, cp.name)
-                        previous = latest_reviews.get(identity)
-                        if previous is None or order > previous[0]:
-                            latest_reviews[identity] = (order, entry)
-                except (OSError, ValueError, TypeError):
-                    continue
             for (key, page), (_, entry) in latest_reviews.items():
                 if entry.get("is_verified") and not entry.get("needs_review") and entry.get("text"):
                     reviewed.setdefault(key, set()).add(page)
@@ -502,8 +679,6 @@ class KnowledgeIndexer:
             if page_num > row["total_pages"]:
                 raise ValueError("Trang được duyệt nằm ngoài tài liệu")
 
-        # Prepare all chunks before replacing an approved page. Keep the text,
-        # FTS triggers and document counters inside one transaction.
         chunk_records = TextChunker.chunk_page(clean_title, rel_filename, page_num, text)
         with self.get_connection() as conn:
             conn.execute("DELETE FROM chunks WHERE doc_id = ? AND page_num = ?", (doc_id, page_num))

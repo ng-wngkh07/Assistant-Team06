@@ -257,6 +257,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!reviewItems.some(item => item.id === entry.id)) reviewItems.unshift(entry);
         reviewItems = reviewItems.slice(0, 100);
         const saved = persistProgress();
+        renderReviewList();
         return saved && reviewItems.some(item => item.id === entry.id);
     }
 
