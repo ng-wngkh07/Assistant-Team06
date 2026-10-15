@@ -78,7 +78,7 @@ Cài [Node 22](https://nodejs.org/en/download) nếu đóng góp UI; Node không
 ```powershell
 .venv\Scripts\python.exe -m pip check
 .\test_windows.ps1
-node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs
+node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs
 ```
 
 `test_windows.ps1` chạy tập Python; lệnh Node kiểm giao diện riêng. CI chạy cả hai. Bộ phiên bản Python được cố định bằng constraints; khi nâng thư viện phải cập nhật cùng kiểm chứng Windows/Mac. Không tự thêm MLX vào profile Windows.
@@ -95,7 +95,7 @@ Liên kết lần chạy cũ `37882594844` hiện trả 404; kết quả của l
 
 Mỗi PR phải thêm mục vào `LICH_SU_DU_AN.md`, ghi môi trường/lệnh đã chạy và phần
 `NOT_RUN`. Khi sửa `app/server.py`, cấu hình, tìm kiếm hoặc JS/CSS chung, review chéo
-và smoke cả ba chức năng. TV4 review PR thành viên/merge theo quy trình nhóm sau CI. Tại lần kiểm YC-176, GitHub không còn bắt buộc approval; người có quyền ghi cũng có thể merge khi checks đạt. Xem [CONTRIBUTING](CONTRIBUTING.md); không tự ghi lên main.
+và smoke cả ba chức năng. TV4 review PR thành viên/merge theo quy trình nhóm sau CI. Kiểm checks và chính sách hiện hành trên đúng PR/commit; CI không thay review chéo nhóm. Xem [CONTRIBUTING](CONTRIBUTING.md); không tự ghi lên main.
 
 ## Giới hạn hiện tại
 
@@ -121,7 +121,9 @@ CI Windows đã đạt kiểm cú pháp PowerShell, 8 ca kiểm hợp đồng v�
 | Python sai phiên bản/import lỗi | Dùng đúng .venv Python3.12, chạy pip check, kiểm log setup; không cài gói vào Python toàn máy |
 | Cổng web 8000 đã dùng | Dừng đúng server của mình hoặc đổi PORT trong .env; không dừng dịch vụ của người khác |
 | Ollama/model không sẵn sàng | Kiểm endpoint manifest/11434, ollama list và lệnh check; cài full thiếu model cần xử lý lỗi tải |
+| Clone xong chưa thấy tài liệu | Dùng `-Profile demo` để nạp 29 tài liệu tổng hợp đã có trong repo; local cần nguồn riêng và Đồng bộ thư viện |
 | Nguồn mới không xuất hiện | Kiểm src/data đúng clone, bấm Đồng bộ thư viện, xem lỗi index; không coi start local là đã index |
+| File .ps1 mở trong trình soạn thảo | Gọi `powershell -NoProfile -ExecutionPolicy Bypass -File .\start_windows.ps1 -Profile demo` thay vì mở file từ CMD |
 | .env Invalid setting | Dùng biến được .env.example/launcher hỗ trợ, giá trị không rỗng |
 | Merge bị chặn dù CI đạt | Kiểm checks, nhánh cập nhật, hội thoại và policy hiện tại; approval chỉ là blocker khi bật yêu cầu duyệt |
 
