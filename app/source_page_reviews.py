@@ -4,6 +4,20 @@ import json
 from pathlib import Path
 
 
+FORBIDDEN_C0_CODEPOINTS = frozenset(c for c in range(32) if c not in (9, 10, 13))
+
+
+def _check_no_forbidden_control(text: str, field_name: str, filename: str, page: int) -> None:
+    if not isinstance(text, str):
+        return
+    for idx, ch in enumerate(text):
+        code = ord(ch)
+        if code in FORBIDDEN_C0_CODEPOINTS:
+            raise ValueError(
+                f"Forbidden control character U+{code:04X} ({repr(ch)}) in '{field_name}' at index {idx}: {filename}:{page}"
+            )
+
+
 def latest_page_reviews(root: Path) -> dict:
     result = {}
     folders = (
@@ -35,6 +49,16 @@ def validate_page_review(review: dict, filename: str, page: int, source_sha256: 
         or (review['kind'] not in ('blank', 'visual') and not review['transcript'].strip())
         or (review['completeness'] == 'complete' and review.get('unresolved'))):
         raise ValueError(f'Invalid review identity or status: {filename}:{page}')
+    # Review text is curated; raw captures remain untouched for source fidelity.
+    for field in ('transcript', 'visual_description', 'editorial'):
+        value = review.get(field)
+        if isinstance(value, str) and value:
+            _check_no_forbidden_control(value, field, filename, page)
+    unresolved = review.get('unresolved')
+    if isinstance(unresolved, list):
+        for idx, item in enumerate(unresolved):
+            if isinstance(item, str) and item:
+                _check_no_forbidden_control(item, f'unresolved[{idx}]', filename, page)
     image, raw_path = Path(review['image_path']), Path(review['raw_capture_path'])
     if (hashlib.sha256(image.read_bytes()).hexdigest() != review['image_sha256']
         or hashlib.sha256(raw_path.read_bytes()).hexdigest() != review['raw_capture_sha256']):

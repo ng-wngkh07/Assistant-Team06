@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-14T23:15:00+07:00
-- Mục mới nhất: **[YC-208](#yc-208)**.
-- Nhật ký chung có **48 mục**: 18 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206/208 và 6 LOG), 3 tổ chức/tài liệu, 3 phát hành/đồng bộ GitHub, 12 rà soát/nghiệm thu, 7 làm rõ kiến trúc/quyền/quy trình, 5 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
+- Cập nhật: 2026-10-15T07:30:53.898996+07:00
+- Mục mới nhất: **[YC-213](#yc-213)**.
+- Nhật ký chung có **54 mục**: 18 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206/208 và 6 LOG), 3 tổ chức/tài liệu, 3 phát hành/đồng bộ GitHub, 14 rà soát/nghiệm thu, 8 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -36,7 +36,6 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 | YC-195 thay phân chia mode YC-191/194 | QA đầy đủ, tự so sánh theo câu hỏi; từng bước chuyển sang bài tập; mức xử lý phải phù hợp model hiện tại | Đang triển khai/đo; không suy chất lượng từ độ dài hay thời gian. |
 | YC-200 triển khai hướng YC-199 | Huấn luyện mẫu nhỏ giải bài tập có đáp án/lời giải chi tiết; chỉ mở rộng khi ổn định và hiệu quả cao qua đánh giá độc lập | Đã được yêu cầu; không cấp quyền tự kích hoạt adapter hoặc hạ cổng nguồn/chất lượng. |
 | YC-207 bổ sung thứ tự sửa lỗi/phát hành/học | Sửa và kiểm chứng lỗi → đẩy mã/test/hồ sơ dùng chung lên GitHub → chỉ huấn luyện tiếp khi các cổng đạt | Áp dụng từ 14/10/2026; không push trực tiếp main hoặc công bố dữ liệu/model riêng. |
-| YC-208 sửa bố cục UI OCR & dropdown nguồn | Căn giữa modal OCR hai chiều; tách nguồn gần nhất thành dropdown menu dọc bên phải tóm tắt | Đã áp dụng, giữ nguyên chức năng/hợp đồng test. |
 
 ## Mẫu mục mới
 
@@ -1032,6 +1031,69 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 
 - Nghiệm thu phần mềm local/GitHub 2026-10-14T21:54:13.628006+07:00: remote xác nhận2619c1a1f19c8705c5adea08bb0e1225181b54d5; CI push38583738297 Windows/macOS SUCCESS trên đúng head, history PR SUCCESS. PR15 vẫn draft/chưa merge, main099c769 giữ nguyên. Đã restart đúng web23992/supervisor24004 về dịch vụ mới, health healthy/inference_ready; bốn asset served hash khớp. So mọi bảng kho knowledge/history/timetable và registry trước/sau: nguyên vẹn, SQLite integrityok; không publish shadowv5. Browser mở phiên cũ rồi chat mới: về màn hình bắt đầu, ô nhập trống và lịch sử vẫn còn. Ảnh/evidence local data/evaluation/ui-audit-yc206; backup data/backups/yc207-service-restart. Mã sửa đã xuất bản và kiểm chứng, cập nhật tài liệu đợt này cũng được push; cổng nguồn7918fail và chất lượng model chưa đạt nên huấn luyện NOT_RUN, adapteractive:null. Windows máy thật/mobile/IME/OCR/VLM toàn bộ chưa nghiệm thu.
 
+
+<a id="log-20261014-pr15-merge-audit-tv6"></a>
+### LOG-20261014-pr15-merge-audit-tv6 - 14/10/2026 22:05 (UTC+07)
+
+- Người thực hiện: Codex; loại: rà soát/nghiệm thu điều kiện merge PR15.
+- Mục tiêu: xác định bản sửa YC205–207 đã đủ điều kiện tích hợp main hay chưa; phân biệt kiểm tra phần mềm, review nhóm và nghiệm thu nguồn/mô hình.
+- Trước/sau: không thay mã hoặc trạng thái PR; kiểm trực tiếp GitHub xác nhận head18c123cb2b7bdc6f984c68556fbeaf134da93332, base099c769e21f135c2251ddaac5787e5b3df4715f2, OPEN/draft, MERGEABLE/CLEAN, chưa có review. CI Windows/macOS/history trên head cuối đều SUCCESS (PR run38584686482).
+- Phần đọc/kiểm: CONTRIBUTING.md phần Review và merge, README_QUY_TAC.md, báo cáo YC206, STATE.md, lịch sử YC205–207; GitHub PR/checks và bảo vệ main live. GitHub yêu cầu ba checks, nhánh cập nhật và xử lý hội thoại; required_approving_review_count=0. Review chéo và chủ trì phần chung vẫn là quy trình nhóm, không trình bày thành approval bắt buộc của GitHub.
+- Kết luận: phần kiểm tự động và xung đột đạt; PR chưa hoàn tất quy trình merge do còn draft/chưa review chéo. Các hạn chế nguồn/mô hình trong báo cáo chưa được nghiệm thu; CI không chứng minh chất lượng hỏi đáp. Việc chỉ tích hợp bản sửa phần mềm cần reviewer chấp nhận rõ phạm vi/giới hạn, không đồng nghĩa xuất bản chỉ mục thử, nghiệm thu model hoặc mở cổng học.
+- Kiểm chứng: đối chiếu head và trạng thái live với bằng chứng YC207; không chạy lại suite không đổi mã. Triển khai/handoff/merge/huấn luyện N/A vì đây là rà soát điều kiện, không phải yêu cầu thực hiện các thao tác đó.
+- Trạng thái: TECHNICAL_CHECKS_PASS / DRAFT_AND_TEAM_REVIEW_PENDING / SOURCE_MODEL_NOT_ACCEPTED. Không merge hoặc đổi Ready for review; bản ghi/checkpoint này lưu local, chưa push chỉ để cập nhật hồ sơ. Cập nhật: 2026-10-14T22:05:21.106767+07:00.
+
+
+<a id="yc-209"></a>
+### YC-209 - 14/10/2026 22:16 (UTC+07)
+
+- Người thực hiện: Antigravity duyệt nguồn, Codex tái kiểm định; loại: dữ liệu corpus/lập chỉ mục.
+- Mục tiêu: tiếp tục toàn bộ trang nguồn chưa hoàn tất với bản chép chính xác, chi tiết và đầy đủ công thức/bảng/hình, theo workflow; giữ bằng chứng nguồn và kiểm lại trước đưa vào chỉ mục đã duyệt.
+- Baseline live: shadowv5 gồm157PDF/22.711trang/52.608vector đủ binding, integrityok, complete:false. Hàng đợi7.929trang chưa hoàn tất toàn nguồn, gồm7.916trang trong phạm vi và13ngoại lệYC188. Hai trang partial nằm trong7.916trang, gây thêm2lỗi review: tổng7.918lỗi audit không phải7.918trang riêng biệt. Hiệu chỉnh cách diễn đạt số đếm ở snapshot YC207–208, giữ số/bằng chứng gốc.
+- Phần đọc/kiểm: corpus policy/tracker/source_page_reviews/corpus_readiness, repair_rag_corpus, complete_corpus và index_source_reviews; audit live hash nguồn/trang/chunk/vector trên DB thử. Không dùng page_coverage cũ để tự nâng native text thành đã duyệt. Runner lockFREE; các gói Antigravity cũ đã terminal/trả quyền.
+- Kế hoạch/tiêu chí: duyệt ảnh gốc từng trang/crop vùng khó, giữ raw và provenance, tách nguyên văn/hiệu đính, partial khi nguồn thiếu; Codex tái kiểm định, chỉ index và embed phần đủ bằng chứng, audit live sau tích hợp. Ưu tiên23trang còn thiếu doc44 rồi toàn bộ các môn/hàng đợi; giữ13ngoại lệ, không sửa PDF hoặc tự học.
+- Trạng thái: LIVE_BASELINE_AND_FROZEN_QUEUE_PASS / PAGE_REVIEW_PENDING. Bằng chứng local data/evaluation/corpus-review-yc209; chưa có trang mới được nghiệm thu/index; huấn luyện NOT_RUN. Cập nhật: 2026-10-14T22:16:34.997401+07:00.
+
+<a id="yc-210"></a>
+### YC-210 - 14/10/2026 22:16 (UTC+07)
+
+- Người thực hiện: Antigravity duyệt trang; Codex tái kiểm định; loại: làm rõ quyền ghi và quy trình duyệt corpus.
+- Quyết định: toàn bộ phần duyệt trang YC209 giao Antigravity thực hiện xuyên suốt trong một cuộc trò chuyện mới; Codex chịu trách nhiệm tái kiểm định, không thay bên duyệt chính hoặc tự chứng nhận bản chép.
+- Trước/sau: thay phương án tiếp trong hội thoại cũ bằng hội thoại Antigravity mới, giữ xuyên suốt cho review và sửa/tiếp tục. Chỉ ghi ứng viên/bằng chứng trong thư mục được giao, chưa đưa vào kho đã duyệt trước kiểm chứng.
+- Phạm vi/phối hợp: giữ model/mức suy luận đã quan sát trong metadata vận chuyển riêng; một writer mỗi phạm vi, không ghi đồng thời DB/PDF/root. Codex giữ tracker/hồ sơ/kiểm định; không gửi nội dung selection vào gói công việc. Cổng nguồn/huấn luyện và quy tắc sửa-kiểm-đẩyGitHub YC207 giữ nguyên.
+- Kiểm chứng: đã mở cuộc trò chuyện mới trong projectstudyagent, ô nhập mới trống; gói và hàng đợi đóng băng chuẩn bị. Trạng thái NEW_CONVERSATION_PREPARED / NOT_SUBMITTED; không suy Working thành ACK/hoàn thành. Cập nhật: 2026-10-14T22:16:34.997401+07:00.
+
+- Giao nhận YC210 cập nhật 2026-10-14T22:19:32.481068+07:00: đã gửi đúng một gói vào cuộc trò chuyện Antigravity mới trong projectstudyagent; UI hiển thị user message vàWorking. Chưa có ACK hoặc trang ứng viên để nghiệm thu; giữ quyền duyệt ở Antigravity và chờ bằng chứng progress/ledger.
+
+
+<a id="yc-211"></a>
+### YC-211 - 14/10/2026 22:26 (UTC+07)
+
+- Người thực hiện: Codex; loại: rà soát bàn giao dữ liệu kiểm thử qua GitHub.
+- Mục tiêu: xác minh vì sao máy clone không hiện tài liệu dù bộ dữ liệu kiểm thử đã được yêu cầu công bố; đối chiếu YC194, Git remote và cách nạp nguồn.
+- Trước/sau: không sửa mã hoặc thư viện chính. Clone mới main0b966d3a17733cc35fcc1f62486c2386a12f0a9b có27tài liệu YC194 và2mẫu cũ trong tests/fixtures/documents. Chạy scripts/dev.py demo --profile demo lập chỉ mục29nguồn/95đoạn, không lỗi; API danh sách HTTP200/29nguồn, tra cứu “đạo hàm” HTTP200/5kết quả. Chạy profilelocal trên cùng clone trả0nguồn: src không có và DB riêng chưa được nạp. Git bỏ src/data, không bỏ bộ mẫu công khai.
+- Phần đọc/kiểm: scripts/dev.py, app/config.py, run.py, start_windows.ps1, setup_windows.ps1, README/README_WINDOWS/README_MAC, corpus/README.md, .gitignore, tests/fixtures/PUBLIC_CORPUS.md và manifest/test. start_windows mặc địnhdemo; run.py trực tiếp hoặc profilelocal đọc src/data. Bộ mẫu hiện diện trên Git không tự có trong DB của mọi cách chạy.
+- Kiểm chứng: clone trực tiếp GitHub main hiện hành; test checksum/số trang/chủ đề1PASS, API và SQL count độc lập. Bằng chứng local data/evaluation/clone-documents-yc211/verification.json. Chưa xác minh commit/lệnh khởi động trên máy thành viên; chưa kết luận lỗi máy đó, chưa thử cài mới Windows hoặc sinh hỏi đáp thật. Hướng khắc phục đã kiểm: chạy launcher profiledemo để nạp bộ mẫu; thư viện157PDF chính cần gói nguồn/chỉ mục riêng và chưa được công bố qua Git.
+- Đối chiếu phát hành mới: PR15 đã MERGED lúc2026-10-14T22:06:26+07:00, merge commit0b966d3; trạng thái YC208 ở22:05 là snapshot trước merge, giữ nguyên. Codex không thực hiện merge trong lượt này.
+- Phối hợp YC209/210: Antigravity vẫn đang đọc ảnh trang trong cuộc trò chuyện mới; đã có ảnh23trang doc44 và progresskhởi tạo, chưa có ứng viên để Codex nghiệm thu tại thời điểm kiểm. Không gián đoạn writer hoặc suy ảnh render/progresscheckbox thành bản chép được duyệt. Huấn luyện NOT_RUN.
+- Trạng thái: PUBLIC_FIXTURES_PRESENT / CLEAN_CLONE_DEMO_PASS / LOCAL_EMPTY_REPRODUCED / MEMBER_RUNTIME_NOT_VERIFIED. Triển khai/sửa mã/push N/A vì chưa phát hiện lỗi nạp mẫu trong launcherdemo; không đưa dữ liệu chính vào Git để trả lời chẩn đoán. Cập nhật: 2026-10-14T22:26:14.172534+07:00.
+
+- Chẩn đoán bổ sung YC211 từ ảnh máy Windows, cập nhật 2026-10-14T22:30:23.519152+07:00: dấu nhắc dạngCMD chạy .\start_windows.ps1 -Profile demo rồi trở về ngay; nội dung script đang mở trong Notepad và server cũ đã shutdown. Bằng chứng phù hợp với CMD mở file theo liên kết .ps1 thay vì thực thi PowerShell; ảnh không có startupdemo hoặc thông báo29nguồn. Lệnh hướng dẫn ngắn trước đó thiếu trình thông dịch cho trường hợpCMD. Hướng sửa: powershell -NoProfile -ExecutionPolicy Bypass -File .\start_windows.ps1 -Profile demo; nếu thiếu .venv thì chạy setup_windows.ps1 -DemoOnly bằng cùng trình thông dịch. Không đổi liên kết file/chính sách toàn máy; chưa chạy trên máyWindowsthànhviên, triển khai mã/push N/A.
+
+
+<a id="yc-212"></a>
+### YC-212 - 14/10/2026 22:55 (UTC+07)
+
+- Người thực hiện: Antigravity duyệt/sửa bản chép; Codex tái kiểm định và lập chỉ mục thử; loại: dữ liệu corpus/huấn luyện.
+- Mục tiêu: tiếp tục YC209/210 sau phần chẩn đoán Windows, giữ duyệt trang trong cùng cuộc trò chuyện Antigravity mới và Codex kiểm độc lập.
+- Trước/sau: 23 bản chép doc44 vượt schema nhưng13bản bị Python escape làm hỏng công thức; trang5 sai dấu từ “Ổn định”, trang6 sai mã video. Đã tái hiện, trả FIX01 cho writer, giữ manifest/hash bản cũ; sau sửa33/33ảnh khớp rasterPDF và33/33schema/ký tự đạt. Không dùng thành công kỹ thuật để nghiệm thu nội dung.
+- Tái kiểm toàn33trang:17thân nguồn đạt,13partial do ký hiệu thiếu trong PDF,3trang doc54 vật lý5/6/8 chép thêm header không có trên ảnh. Đã giữ3trang để sửa,13partial không được tự điền hoặc thêm ngoại lệ. Bộ validate_page_review chung vẫn chấp nhận bốn loại C0 gây hỏng công thức; RED độc lập đã ghi, bản sửa chung còn chờ đề xuất FIX02.
+- Lập chỉ mục thử: chỉ17trang được chấp nhận vào bản SQLite mới knowledge_base-v6-batch17.db;32chunk đổi+2chunk thêm,34vector được tạo đầy đủ bằng model/digest đang dùng. Audit live integrityok,52610vector không lỗi/binding thiếu;7899trang trong phạm vi còn pending và2lỗi review-binding cũ, complete:false. So các hàng chunk/source-page/quality ngoài17trang:0thay đổi; tra FTS Leibniz/Định/Riemann đúng trang đạt. Hash v5 đầu vào không đổi; không publish kho thử hoặc sửa thư viện đang phục vụ.
+- Phần/file và bằng chứng: data/evaluation/corpus-review-yc209 gồm manifest snapshot, codex-content-revalidation-fix01-33.json, stage-batch17-result.json, embedding-batch17.json, batch17-verification.json và readiness-after-batch17.json; tracker/checkpoint local cập nhật. Handoff một lần mỗi gói sửa vào cùng chat, ghi lý do tạm ngắt lượt và xác nhận terminal trước gửi; không đổi writer/model hoặc tạo chat thứ hai.
+- Phối hợp: Antigravity đã tạo48ứng viên tại mốc22:49;15ứng viên mới chưa được Codex tái kiểm. FIX02 đã gửi một lần22:53, UI hiển thị user message/Working; sửa ba trang, đề xuất validator trong scope riêng rồi tiếp tục hàng đợi. Không nhận Working như nghiệm thu hoặc cam kết toàn kho hoàn tất.
+- Trạng thái: BATCH17_SHADOW_VERIFIED / FIX02_RUNNING / FULL_CORPUS_INCOMPLETE. Shared validator chưa sửa/tích hợp/push; mã/test dùng chung phải được đẩy nhánh/PR sau review và kiểm chứng trước huấn luyện theo YC207. Dữ liệu nguồn/chỉ mục private giữ local; huấn luyện NOT_RUN, không kích hoạt adapter. Cập nhật: 2026-10-14T22:55:23.807074+07:00.
+
+
 <a id="yc-208"></a>
 ### YC-208 - 14/10/2026 23:15 (UTC+07)
 
@@ -1053,3 +1115,17 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   - History validation: `scripts/check_history.py` (PASS).
 - Trạng thái: PASS / APPLIED.
 
+
+
+<a id="yc-213"></a>
+### YC-213 - 15/10/2026 07:30 (UTC+07)
+
+- Người thực hiện: Antigravity triển khai đề xuất và duyệt nguồn; Codex kiểm thử, tái kiểm định và tích hợp; loại: dữ liệu corpus/huấn luyện.
+- Mục tiêu: tiếp tục kiểm định/lập chỉ mục YC209–212 và sửa lỗi dùng chung trước huấn luyện theo YC207.
+- Lỗi tái hiện: validate_page_review chấp nhận ký tự điều khiển C0 trong bản chép/công thức dù ảnh và raw capture đúng hash. Kiểm thử độc lập trên main2e844d3 có24FAIL đúng hành vi sai,5PASS bảo toàn văn bản hợp lệ.
+- Thay đổi: tích hợp phần kiểm C0 từ đề xuất FIX02 của Antigravity vào app/source_page_reviews.py, giữ phong cách và các cổng danh tính/bằng chứng hiện hành. Từ chối ký tự <32 trừ newline/tab/CR trong transcript, visual_description, editorial và từng mục unresolved; không làm sạch âm thầm, không từ chối raw capture hoặc đổi PDF nguồn. Thêm tests/test_source_page_review_controls.py vào bộ kiểm thử portable.
+- Tái kiểm corpus: thêm14trang đạt trong15trang đại số mới; một trang17 thiếu mô tả đường nối sơ đồ được giữ để sửa. Ba trang doc54p5/6/8 đã bỏ đúng hai dòng tiêu đề chép thêm, delta còn lại0. Tổng34trang được đưa vào shadowv8, không xuất bản DB. Các lỗi toán có sẵn trong PDF được ghi nhận riêng, không tự sửa bản chép hoặc dùng làm nhãn huấn luyện đúng.
+- Phối hợp: Antigravity báo cáo91ứng viên, không đồng nghĩa91trang được nghiệm thu; đã tiếp tục cùng cuộc trò chuyện để sửa hình và duyệt từ trang66/toàn hàng đợi. Quyền ghi bản chép giữ ở Antigravity, Codex kiểm độc lập và chỉ nhập subset đạt vào shadow; không huấn luyện hoặc kích hoạt adapter.
+- Đồng bộ lịch sử: main mới có mục YC208 giao diện của PR16 trùng mã rà soát PR15 chưa công bố ở local. Giữ nguyên mục/anchor YC208 đã công bố; hiệu chỉnh riêng ID rà soát local thành LOG-20261014-pr15-merge-audit-tv6, giữ ngày/nội dung, bản trước hiệu chỉnh lưu local. Giữ cả hai công việc, không ghi đè thay đổi UI của PR16.
+- Kiểm chứng: targeted61PASS, baseline24FAIL→bản sửa29PASS trên ca mới; portable526PASS12SKIP, Node27PASS, pipcheckPASS và lịch sử/diffPASS. Audit shadowv8 integrityok,52611vector đủ provenance/0invalid;7882trang pending+2review-bindingfail, complete:false, ngoài subset0diff. Chưa nhận kiểm Windows máy thật, chất lượng QA/toàn corpus hoặc hoàn tất huấn luyện từ unit test.
+- Trạng thái: REVIEWED_FIX_REGRESSION_PASS / BATCH34_SHADOW_VERIFIED / PUSH_PENDING. Dữ liệu/model private giữ local, không push main hoặc merge PR. Cập nhật: 2026-10-15T07:30:26.744730+07:00.
