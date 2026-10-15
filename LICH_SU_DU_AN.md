@@ -2,7 +2,7 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-15T13:39:26.482261+07:00
+- Cập nhật: 2026-10-15T13:45:16.163900+07:00
 - Mục mới nhất: **[YC-214](#yc-214)**.
 - Nhật ký chung có **55 mục**: 18 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206/208 và 6 LOG), 3 tổ chức/tài liệu, 3 phát hành/đồng bộ GitHub, 14 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
@@ -1099,4 +1099,4 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Quyết định: chỉ đưa bản sửa, kiểm thử và lịch sử thay đổi phần mềm vào commit/PR; dữ liệu và thông tin huấn luyện giữ local. Rà nội dung file, commit và mô tả PR trước mỗi lần push.
 - Hiệu chỉnh: thu gọn phần hồ sơ nội bộ đã thêm trong PR17; giữ ID/ngày và bản đầy đủ local. Bảo toàn nội dung main có trước PR, khôi phục dòng quyết định giao diện YC208 từng bị bỏ khỏi bảng. Không viết lại lịch sử Git đã công bố.
 - Phần/file: README_QUY_TAC.md, LICH_SU_DU_AN.md và mô tả PR17. Không thay mã ứng dụng trong lần hiệu chỉnh tài liệu này.
-- Kiểm chứng/trạng thái: đã rà diff, giữ đủ ID và nội dung main, danh sách file chỉ gồm phần mềm/kiểm thử/tài liệu; chờ push và CI head cuối; cập nhật 2026-10-15T13:39:26.482261+07:00.
+- Kết quả: đã push bản hiệu chỉnh c892662 và đọc lại đúng remote/PR17; CI38693832477 Windows/macOS/history SUCCESS. Diff/file allowlist và lịch sử PASS; mã phần mềm không đổi. Không merge hoặc viết lại Git history. Cập nhật 2026-10-15T13:45:16.163900+07:00.
