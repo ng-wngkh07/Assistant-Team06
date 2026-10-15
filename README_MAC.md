@@ -94,7 +94,7 @@ Cài [Node 22](https://nodejs.org/en/download) nếu đóng góp UI. Chạy từ
 
 ```bash
 .venv/bin/python -m pytest -c pytest.windows.ini
-node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs
+node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs
 ```
 
 | Hiện tượng | Kiểm tra/cách xử lý |
@@ -102,6 +102,7 @@ node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests
 | Import lỗi/không có pytest | Dùng đúng Python .venv, cài lại profile dev theo constraints, chạy pip check; không cài vào Python toàn máy |
 | Cổng web 8000 đã dùng | Dừng đúng server của mình hoặc chọn PORT khác trong .env; không kill dịch vụ khác |
 | Ollama/model chưa sẵn sàng | Kiểm endpoint 11434, ollama list và scripts/dev.py check --profile local --require-model; FTS/demo không cần model |
+| Clone xong thư viện trống | Chạy profile demo để nạp 29 tài liệu tổng hợp; local cần nguồn riêng và Đồng bộ thư viện |
 | Không tìm được nguồn mới | Kiểm đường dẫn src/data, đồng bộ thư viện, xem lỗi extraction/index và test một cụm thực có trong nguồn |
 | File .env báo Invalid setting | Chỉ dùng biến launcher hỗ trợ, giá trị không rỗng, không chép đường dẫn/token vào Git |
 | Thiếu model/runtime MLX | Kiểm .train-venv và gói model/provenance; không bật adapter chưa duyệt hoặc bỏ gate |

@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-15T13:45:16.163900+07:00
-- Mục mới nhất: **[YC-214](#yc-214)**.
-- Nhật ký chung có **55 mục**: 18 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206/208 và 6 LOG), 3 tổ chức/tài liệu, 3 phát hành/đồng bộ GitHub, 14 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
+- Cập nhật: 2026-10-15T13:55:47.480344+07:00
+- Mục mới nhất: **[YC-215](#yc-215)**.
+- Nhật ký chung có **56 mục**: 18 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206/208 và 6 LOG), 3 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 14 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -50,7 +50,7 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Phần/file sửa và cách xử lý:
 - Log/phiên bản liên quan; lý do thay quyết định nếu có:
 - Ảnh hưởng/phối hợp với phần còn lại:
-- Kiểm thử: môi trường/model/data version, ca tái hiện/hồi quy, kết quả:
+- Kiểm thử phần mềm: OS/Python/profile, ca tổng hợp tái hiện/hồi quy, kết quả; thông tin nội bộ giữ local:
 - Trạng thái: PASS / FAIL / đang làm / NOT_RUN / N/A có lý do:
 - Giới hạn, lỗi còn lại, rollback/bước tiếp:
 ```
@@ -1100,3 +1100,12 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Hiệu chỉnh: thu gọn phần hồ sơ nội bộ đã thêm trong PR17; giữ ID/ngày và bản đầy đủ local. Bảo toàn nội dung main có trước PR, khôi phục dòng quyết định giao diện YC208 từng bị bỏ khỏi bảng. Không viết lại lịch sử Git đã công bố.
 - Phần/file: README_QUY_TAC.md, LICH_SU_DU_AN.md và mô tả PR17. Không thay mã ứng dụng trong lần hiệu chỉnh tài liệu này.
 - Kết quả: đã push bản hiệu chỉnh c892662 và đọc lại đúng remote/PR17; CI38693832477 Windows/macOS/history SUCCESS. Diff/file allowlist và lịch sử PASS; mã phần mềm không đổi. Không merge hoặc viết lại Git history. Cập nhật 2026-10-15T13:45:16.163900+07:00.
+
+<a id="yc-215"></a>
+### YC-215 - 15/10/2026 13:55 (UTC+07)
+
+- Người thực hiện: Codex; loại: đồng bộ GitHub và cập nhật hướng dẫn phần mềm.
+- Trước/sau: local còn ở PR15, main local chậm hơn GitHub; đã fast-forward main tới 2e844d3 (gồm PR16), chuyển checkout sang nhánh PR17 chứa main mới và bản sửa YC213. Năm file đang sửa được sao lưu và giữ stash; đối chiếu hash xác nhận chúng đã có đầy đủ trên PR17, không áp lại hoặc ghi đè.
+- File/phạm vi: README.md, README_MAC.md, README_WINDOWS.md, CONTRIBUTING.md, mẫu PR và nhật ký. Hướng dẫn đúng profile để thấy tài liệu demo sau clone, gọi PowerShell bằng -File, đồng bộ main/tiếp tục PR hiện hữu, mô tả giao diện hiện tại và bổ sung tập test vòng đời chat. Đồng nhất giới hạn công bố YC214, bỏ yêu cầu ghi thông tin huấn luyện trong mẫu PR/nhật ký; giữ các mục lịch sử cũ.
+- Kiểm chứng phần mềm: 526 pytest PASS/12 SKIP; 27 Node UI PASS; pip check, đối chiếu asset HTTP và liên kết tài liệu PASS. Nạp lại đúng dịch vụ, health healthy; ba DB và registry bảo toàn nội dung qua snapshot trước/sau. Kiểm trình duyệt: mở phiên cũ/menu nguồn, Escape, nhập nháp rồi Cuộc trò chuyện mới trả về màn hình bắt đầu với ô trống và lịch sử vẫn còn.
+- Ảnh hưởng/giới hạn: bản sửa ứng dụng YC213 không đổi; chỉ đồng bộ mã đã công bố và sửa tài liệu. Cập nhật cùng PR17 hiện hữu; chưa merge hoặc có review chéo nhóm. Windows máy thành viên, toàn bộ OCR/model thật NOT_RUN trong lượt này. Hồ sơ nội bộ giữ local; không viết lại lịch sử Git đã công bố.

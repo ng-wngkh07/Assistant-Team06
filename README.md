@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Demo tra cứu, sửa code, kiểm thử với nguồn tổng hợp | Python 3.12; Windows 10/11 64 bit hoặc Mac | [Windows](README_WINDOWS.md), [Mac](README_MAC.md) |
 | QA, embedding và đọc ảnh thật cho phát triển | Môi trường web + Ollama và model tương ứng | [Windows](README_WINDOWS.md#nguồn-thật-và-ocr), [Mac](README_MAC.md#ollama-và-nguồn-riêng) |
-| Model nền/adapter MLX và chuẩn bị training | Mac Apple Silicon, Python 3.13 riêng trong .train-venv | [MLX Mac](README_MAC.md#runtime-mlx-riêng) |
+| Runtime MLX riêng của người điều phối | Mac Apple Silicon, môi trường tách khỏi web | [MLX Mac](README_MAC.md#runtime-mlx-riêng) |
 
 Internet cần cho lần cài thư viện/công cụ/model; tra cứu FTS và test mock không cần Ollama. RAM/dung lượng cần theo model và corpus; repo chưa có số tối thiểu đo được để cam kết cho mọi máy. Linux và Mac Intel/MLX chưa thuộc phạm vi nghiệm thu.
 
@@ -23,7 +23,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_windows.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\start_windows.ps1
 ```
 
-Mở `http://127.0.0.1:8000`; dừng bằng Ctrl+C. Bộ cài chuẩn bị Python 3.12, Git, Ollama và ba model từ manifest. Chưa có Git: dùng quy trình ZIP trong [README_WINDOWS.md](README_WINDOWS.md). Dùng `setup_windows.ps1 -DemoOnly` cho demo/test nhẹ, không tải Ollama/model.
+Mở `http://127.0.0.1:8000`; dừng bằng Ctrl+C. Bộ cài chuẩn bị Python 3.12, Git, Ollama và ba model từ manifest. Chưa có Git: dùng quy trình ZIP trong [README_WINDOWS.md](README_WINDOWS.md). Để chỉ thử giao diện và tra cứu, thay lệnh setup bằng `powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_windows.ps1 -DemoOnly`. Mặc định start dùng profile demo. Nếu gọi `.ps1` từ CMD khiến file mở trong trình soạn thảo, dùng đầy đủ lệnh `powershell ... -File` ở trên.
 
 ## Bắt đầu demo trên Mac
 
@@ -39,6 +39,22 @@ python3.12 -m venv .venv
 
 Mở `http://127.0.0.1:8000`. Demo dựng FTS từ `tests/fixtures/documents` vào `data/team-demo`, không chạm corpus riêng. Có thể tra cứu ngay; QA/đọc ảnh thật cần Ollama/model. [Hướng dẫn Mac](README_MAC.md) có cấu hình .env, nguồn riêng, MLX và OCR.
 
+## Tài liệu sau khi clone và cập nhật mã
+
+Bản demo có **29 tài liệu tổng hợp**: hai mẫu ban đầu và [27 tài liệu thuộc 9 chủ đề](tests/fixtures/PUBLIC_CORPUS.md). Chạy với `--profile demo` (Windows: `-Profile demo`) để dựng thư viện từ các file đã có trong repo. Git không chứa thư viện sách riêng, DB/vector hoặc model của máy điều phối.
+
+Profile `local` đọc nguồn và dữ liệu theo `.env`, **không tự lập chỉ mục khi khởi động**. Nhận nguồn được phép chia sẻ, kiểm đường dẫn rồi dùng **Đồng bộ thư viện**; đợi hoàn tất và thử tìm một cụm xuất hiện trong nguồn. Không dùng DB mang đường dẫn máy khác để thay bước này.
+
+Khi cập nhật từ GitHub, dừng đúng server của mình, kiểm `git status` và giữ/cất thay đổi đang làm trước khi chuyển nhánh. Với checkout sạch muốn chạy bản main:
+
+```bash
+git fetch origin
+git switch main
+git pull --ff-only origin main
+```
+
+Khởi động lại bằng launcher của nền tảng, tải lại trang trình duyệt. `git fetch` chỉ tải thông tin remote; PR chưa merge phải được kiểm trên đúng nhánh PR. Xem [CONTRIBUTING](CONTRIBUTING.md#branch-và-thay-đổi) nếu đang tiếp tục PR hiện hữu.
+
 ## Sử dụng ba chức năng
 
 1. **Tra cứu:** mở chế độ tra cứu, tìm từ xuất hiện trong tài liệu, ví dụ `học tập` ở demo. Kết quả có tên nguồn, trang/phần và trích đoạn; PDF có nút mở trang, Markdown hiện phần văn bản.
@@ -47,9 +63,11 @@ Mở `http://127.0.0.1:8000`. Demo dựng FTS từ `tests/fixtures/documents` v�
 
 Trong QA, chọn mức xử lý **Tự động**, **Thông thường** hoặc **Kiểm tra kỹ**. Tự động chọn theo câu hỏi; Kiểm tra kỹ thêm bước đối chiếu nhận định với nguồn, có thể trả trạng thái chưa kiểm chứng khi model không hoàn tất hoặc thiếu căn cứ. So sánh được xác định từ nội dung câu hỏi. Mức xử lý là quy trình ứng dụng, không bảo đảm model luôn trả đúng.
 
-Trong công cụ học, nhập/chọn chủ đề để tạo tối đa ba câu hỏi từ lý thuyết, tìm bài tập/đáp án có sẵn hoặc tạo câu ôn tập. Nguồn đề và nguồn đáp án được hiển thị riêng; chọn cách xem trước khi mở đáp án/lời giải. Câu sai hoặc “Chưa chắc” được lưu để ôn trên trình duyệt hiện tại. Khi chưa đủ căn cứ, QA nêu trạng thái và phạm vi đã tìm; các nút mở rộng giữ câu hỏi và gửi lại với phạm vi mới. Với phiên dài, ứng dụng báo khi một phần lịch sử không nằm trong ngữ cảnh lượt hiện tại. Chọn trang từ trích dẫn chỉ đặt phạm vi tìm kiếm, hệ thống truy xuất và kiểm citation mới cho lượt tiếp theo. Nút **Mới** bắt đầu chủ đề không kèm lịch sử phiên trước.
+Trong công cụ học, nhập/chọn chủ đề để tạo tối đa ba câu hỏi từ lý thuyết, tìm bài tập/đáp án có sẵn hoặc tạo câu ôn tập. Nguồn đề và nguồn đáp án được hiển thị riêng; chọn cách xem trước khi mở đáp án/lời giải. Câu sai hoặc “Chưa chắc” được lưu để ôn trên trình duyệt hiện tại. Khi chưa đủ căn cứ, QA nêu trạng thái và phạm vi đã tìm; các nút mở rộng giữ câu hỏi và gửi lại với phạm vi mới. Với phiên dài, ứng dụng báo khi một phần lịch sử không nằm trong ngữ cảnh lượt hiện tại. Chọn trang từ trích dẫn chỉ đặt phạm vi tìm kiếm, hệ thống truy xuất và kiểm citation mới cho lượt tiếp theo. Nút **Cuộc trò chuyện mới** đưa về màn hình bắt đầu, xóa bản nháp và phạm vi nguồn đang chọn; các phiên đã lưu vẫn còn trong danh sách. Khi lượt trước đang trả lời, ứng dụng yêu cầu đợi hoàn tất. Câu hỏi đã gửi được xóa khỏi ô nhập; khi gửi lỗi, bản nháp mới đang gõ được giữ nguyên và giao diện báo cách khôi phục câu hỏi.
 
-Xem [bản tích hợp YC-198](docs/team/BAN_TICH_HOP_VA_SUA_LOI_YC198.md) về sửa lỗi, kiểm thử và giới hạn; [ngữ cảnh MLX](docs/team/NGU_CANH_VA_DU_LIEU_HUAN_LUYEN_YC196.md) về mặc định 8K và lựa chọn local.
+Trong phiên có lịch sử, menu nguồn gần nhất nằm bên phải **Tóm tắt chủ đề**; chọn nguồn sẽ truy xuất lại cho câu hỏi mới. Menu đóng khi chọn mục, bấm ra ngoài hoặc nhấn Escape. Cửa sổ thẩm định OCR hiển thị giữa màn hình, cho phép kiểm/chỉnh bản nhận diện trước khi xác nhận.
+
+Xem [nhật ký thay đổi](LICH_SU_DU_AN.md) để đối chiếu bản sửa giao diện và các giới hạn đã kiểm chứng.
 
 Luồng tài liệu: nguồn → trích xuất/OCR → đoạn văn → FTS/vector → truy xuất → QA có nguồn. Luồng lịch: ảnh → bản nháp → người dùng xác nhận/chỉnh → lưu/xuất. Khi thêm nguồn riêng, dùng profile local và **Đồng bộ thư viện** theo hướng dẫn nền tảng; profile local không tự lập chỉ mục lúc khởi động.
 
@@ -68,9 +86,9 @@ Luồng tài liệu: nguồn → trích xuất/OCR → đoạn văn → FTS/vect
 | requirements-windows-tools.json, *.ps1 | Manifest công cụ/model Windows và setup/start/test |
 | .github/ | Workflow CI và mẫu PR |
 | docs/team/, output/pdf/ | Tài liệu nhóm và PDF phân công |
-| corpus/ | Quy ước metadata bàn giao; chưa có importer tự động |
+| corpus/ | Quy ước bàn giao riêng; không chứa thư viện thật hoặc importer tự động |
 
-`.env.example` mô tả các biến launcher đọc; `.env` không commit. `src/` là nguồn thật; `data/` giữ DB, vector, model, lịch/hội thoại/cache. Bàn giao nguồn/model qua gói có version/hash ở kho được kiểm soát; không merge SQLite/weights qua Git và không dùng `git add -f` vượt ignore. [Corpus](corpus/README.md) mô tả ranh giới này.
+`.env.example` mô tả các biến launcher đọc; `.env` không commit. `src/` là nguồn thật; `data/` giữ DB, vector, model, lịch/hội thoại/cache. Theo YC-214, chỉ công bố bản sửa, kiểm thử tổng hợp và tài liệu phần mềm; dữ liệu và thông tin huấn luyện giữ local, kể cả trong commit, mô tả PR và bình luận. Bàn giao riêng ở nơi được kiểm soát; không merge SQLite/weights qua Git và không dùng `git add -f` vượt ignore. [Corpus](corpus/README.md) mô tả ranh giới này.
 
 API tự mô tả tại `http://127.0.0.1:8000/docs`. Kiểm trạng thái qua `scripts/dev.py check --profile demo` hoặc `--profile local`; thêm `--require-model` nếu cần lệnh thất bại khi model QA chưa sẵn sàng. Lệnh check không chứng nhận chất lượng model hay toàn corpus. Lỗi runtime hiện tại hiển thị trong terminal đang chạy ứng dụng.
 
@@ -81,18 +99,15 @@ Trên Mac:
 ```bash
 .venv/bin/python -m pip check
 .venv/bin/python -m pytest -c pytest.windows.ini
-node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs
+node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs
 ```
 
 Node 22 dùng cho test giao diện, không cần để chạy web; cài từ [Node.js](https://nodejs.org/en/download). Windows dùng `test_windows.ps1` và lệnh Node tương tự. CI [Team feature checks](https://github.com/ng-wngkh07/Study-Agent/actions/workflows/team-checks.yml) kiểm Python 3.12 Windows/Mac, demo, feature tests, test giao diện; Windows thêm PowerShell/installer DemoOnly. PR kiểm nhật ký mới.
 
-Đọc [CONTRIBUTING.md](CONTRIBUTING.md) để báo lỗi, tạo branch/PR và review; [quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md), [PDF](output/pdf/PHAN_CHIA_NHIEM_VU_DO_AN_NHOM.pdf) và [nhật ký](LICH_SU_DU_AN.md) ghi trách nhiệm/lịch sử. Main cần các checks bắt buộc; cấu hình kiểm tại YC-176 không bắt buộc approval. Nhóm vẫn review chéo và TV4 merge theo quy trình; người có quyền ghi cũng có khả năng merge trên GitHub.
+Đọc [CONTRIBUTING.md](CONTRIBUTING.md) để báo lỗi, tạo branch/PR và review; [quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md), [PDF](output/pdf/PHAN_CHIA_NHIEM_VU_DO_AN_NHOM.pdf) và [nhật ký](LICH_SU_DU_AN.md) ghi trách nhiệm/lịch sử. Đối chiếu checks và chính sách hiện hành trên PR trước khi merge. Nhóm vẫn cần review chéo và TV4 điều phối tích hợp; CI xanh không thay review hoặc nghiệm thu chức năng thật.
 
 ## Giới hạn và giấy phép
 
 CI/demo không nghiệm thu bộ cài full trên máy Windows mới, QA/VLM thật, corpus readiness hoặc training. MLX không cài trong môi trường Windows. Chỉ TV4 ghi corpus/index/vector chính và training; cần audit live `complete: true`, review/provenance toàn nguồn và đánh giá candidate độc lập trước kích hoạt. Các bước đã/chưa chạy ghi trong nhật ký và báo cáo nhóm.
 
 Mã nguồn theo [MIT](LICENSE). Giấy phép mã không cấp quyền chia sẻ sách, ảnh cá nhân hoặc model của bên thứ ba; kiểm quyền và giấy phép riêng của từng nguồn/model.
-
-
-Bản demo dùng [bộ 27 tài liệu kiểm thử / 9 chủ đề](tests/fixtures/PUBLIC_CORPUS.md) do dự án tự biên soạn, kèm manifest và ca kiểm tra; không chứa dữ liệu huấn luyện riêng.
