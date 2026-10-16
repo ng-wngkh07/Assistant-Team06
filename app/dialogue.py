@@ -50,9 +50,36 @@ class DialogueGate:
 dialogue_gate = DialogueGate()
 
 
+HELP_MESSAGE = """Chào bạn! Tôi là **Study Agent** — trợ lý hỗ trợ học tập cục bộ. Dưới đây là các chức năng tôi có thể giúp bạn:
+
+### 1. 📖 Tra cứu tài liệu (Document Lookup)
+- Tìm kiếm từ khóa, khái niệm và định lý trong kho tài liệu học tập đã lập chỉ mục.
+- Xem trích đoạn văn bản, đối chiếu ngữ cảnh và mở trực tiếp trang PDF tương ứng.
+
+### 2. 💬 Hỏi đáp học tập có nguồn dẫn (QA & RAG)
+- Trả lời câu hỏi dựa trên nội dung tài liệu học tập kèm trích dẫn nguồn (tên tài liệu, số trang); nếu tài liệu chưa có hoặc thiếu căn cứ minh chứng, hệ thống sẽ nói rõ chưa đủ thông tin thay vì phỏng đoán.
+- Hỗ trợ 3 mức xử lý: **Tự động**, **Thông thường** và **Kiểm tra kỹ** (đối chiếu nhận định với nguồn).
+- Duy trì ngữ cảnh hội thoại: bạn có thể hỏi nối tiếp như *"điều đó là gì?"*, *"cho ví dụ cụ thể"*.
+- Thu hẹp phạm vi: bạn có thể giới hạn lượt tìm kiếm vào tài liệu hoặc trang cụ thể theo nhu cầu.
+
+### 3. 📝 Luyện tập & Ôn tập (Practice & Exercises)
+- Tạo câu hỏi ôn tập lý thuyết theo chủ đề bạn chọn từ nội dung tài liệu.
+- Tự động tìm kiếm các bài tập có sẵn và hiển thị kèm đáp án/lời giải từ tài liệu.
+- Tự động lưu các câu làm sai vào danh sách ôn tập riêng trên trình duyệt.
+
+### 4. 📅 Thời khóa biểu từ ảnh (Timetable from Image)
+- Tải lên ảnh chụp thời khóa biểu để nhận diện môn học, phòng học và thời gian bằng thị giác máy tính.
+- Cho phép xem và chỉnh sửa bản nháp, phát hiện trùng lịch và xuất ra file lịch chuẩn (`.ics`).
+
+---
+💡 **Mẹo:** Bạn có thể bắt đầu bằng cách nhập một câu hỏi học tập, hoặc gõ `help` bất kỳ lúc nào để xem lại danh sách này!"""
+
+
 def dialogue_intent(query, history):
     """Conservative deterministic routing: never infer personal facts or goals."""
     q = normalize_query(query).casefold().strip(" .!?…")
+    if q in {"help", "/help", "tro giup", "tro_giup", "trợ giúp", "huong dan", "hướng dẫn", "bot co the lam gi", "bot có thể làm gì", "chuc nang", "chức năng", "cac chuc nang", "các chức năng"}:
+        return HELP_MESSAGE, query
     if q in {"chào", "xin chào", "chào bạn", "hello", "hi"}:
         return "Chào bạn! Bạn muốn tra cứu khái niệm, hiểu một lý thuyết hay tìm hiểu một tình huống cụ thể?", query
     if q in {"cảm ơn", "cảm ơn bạn", "cám ơn", "thanks", "thank you"}:

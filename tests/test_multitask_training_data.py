@@ -144,50 +144,64 @@ def test_build_session_summary_schema(sample_context):
     assert 0 < len(parsed["summary"]) < 400
 
 
-def test_fail_closed_admission_validator():
-    """Verify validate_live_canonical_admission fails closed on invalid inputs."""
+def test_fail_closed_admission_validator(tmp_path, monkeypatch):
+    """Exercise admission failures without reading the operator's corpus."""
+    import hashlib
     import sqlite3
-    from pathlib import Path
-    from scripts.prepare_multitask_training import validate_live_canonical_admission
+    import scripts.prepare_multitask_training as admission
 
-    db_path = Path("data/knowledge_base.db")
-    if not db_path.exists():
-        pytest.skip("Local database required for admission test")
+    source = tmp_path / "synthetic-source.txt"
+    passage = "A linear map preserves vector addition and scalar multiplication."
+    source.write_text(passage, encoding="utf-8")
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    text_hash = hashlib.sha256(passage.encode("utf-8")).hexdigest()
+    monkeypatch.setattr(admission, "FROZEN_HOLDOUT_SOURCE_HASHES", set())
+    monkeypatch.setattr(admission, "EXCLUDED_PAGES_MANIFEST", [
+        {"filename": source.name, "page": 2, "reason": "synthetic exclusion"},
+    ])
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript("""
+            CREATE TABLE documents(id INTEGER, filename TEXT, file_hash TEXT, filepath TEXT);
+            CREATE TABLE corpus_source_pages(filename TEXT, page_num INTEGER, state TEXT,
+                source_sha256 TEXT, review_path TEXT);
+            CREATE TABLE chunks(id INTEGER, filename TEXT, page_num INTEGER, text TEXT);
+            CREATE TABLE corpus_vector_provenance(chunk_id INTEGER, text_sha256 TEXT,
+                dimensions INTEGER, full_text INTEGER);
+        """)
+        conn.execute("INSERT INTO documents VALUES(1, ?, ?, ?)",
+                     (source.name, source_hash, str(source)))
+        for page, state in [(1, "text_verified"), (2, "text_verified"), (3, "ocr_pending_review")]:
+            conn.execute("INSERT INTO corpus_source_pages VALUES(?, ?, ?, ?, '')",
+                         (source.name, page, state, source_hash))
+            conn.execute("INSERT INTO chunks VALUES(?, ?, ?, ?)",
+                         (page, source.name, page, passage))
+            conn.execute("INSERT INTO corpus_vector_provenance VALUES(?, ?, 1024, 1)",
+                         (page, text_hash))
 
-    conn = sqlite3.connect(db_path.resolve().as_uri()+"?mode=ro", uri=True)
-    # 1. Non-existent document
-    res = validate_live_canonical_admission(conn, 999999, 1, 1, 0, 10, "dummy", "dummy quote text here")
-    assert not res["admitted"]
-    assert "not found" in res["reason"].lower()
+        def check(doc=1, page=1, start=0, end=len(passage), text=passage, quote=passage[:25]):
+            return admission.validate_live_canonical_admission(
+                conn, doc, page, page, start, end, text, quote)
 
-    # 2. Excluded page (cslt pointer page 42)
-    c = conn.cursor()
-    c.execute("SELECT id FROM documents WHERE filename = ?", ("cslt/slides/chapter09-pointer.pdf",))
-    row = c.fetchone()
-    if row:
-        doc_id = row[0]
-        c.execute("SELECT id, text FROM chunks WHERE doc_id = ? AND page_num = 42", (doc_id,))
-        ch = c.fetchone()
-        if ch:
-            res = validate_live_canonical_admission(conn, doc_id, 42, ch[0], 0, 50, ch[1][:50], ch[1][:25])
-            assert not res["admitted"]
-            assert "approved exclusion manifest" in res["reason"].lower() or "state" in res["reason"].lower()
-
-    # 3. Mismatched raw slice bounds
-    c.execute("SELECT chunks.id, chunks.doc_id, chunks.page_num, chunks.text FROM chunks WHERE id = 101683")
-    ch = c.fetchone()
-    if ch:
-        cid, doc_id, page_num, raw_text = ch
-        res = validate_live_canonical_admission(conn, doc_id, page_num, cid, 10, 50, "WRONG TEXT", "WRONG QUOTE HERE 12345")
-        assert not res["admitted"]
-        assert "mismatch" in res["reason"].lower()
-
-        # 4. Short evidence quote (length 10 < 20 chars, but present in passage)
-        res = validate_live_canonical_admission(conn, doc_id, page_num, cid, 0, 100, raw_text[:100], raw_text[:10])
-        assert not res["admitted"]
-        assert "short" in res["reason"].lower()
-
-    conn.close()
+        # A valid control proves the fixture reaches admission, not an earlier failure.
+        assert check()["admitted"] is True
+        for kwargs, reason in [
+            ({"doc": 999999}, "not found"),
+            ({"page": 2}, "approved exclusion manifest"),
+            ({"page": 3}, "state"),
+            ({"text": "WRONG TEXT"}, "literal slice mismatch"),
+            ({"quote": passage[:10]}, "too short"),
+            ({"start": -1}, "invalid span bounds"),
+        ]:
+            result = check(**kwargs)
+            assert result["admitted"] is False
+            assert reason in result["reason"].lower()
+        source.unlink()
+        result = check()
+        assert result["admitted"] is False
+        assert "source file does not exist" in result["reason"].lower()
+    finally:
+        conn.close()
 
 
 def test_candidate_dataset_exact_slice_binding():

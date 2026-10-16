@@ -17,8 +17,8 @@ Internet cần cho lần cài thư viện/công cụ/model; tra cứu FTS và te
 Nếu đã có Git:
 
 ```powershell
-git clone https://github.com/ng-wngkh07/Study-Agent.git
-cd Study-Agent
+git clone https://github.com/ng-wngkh07/Assistant-Team06.git
+cd Assistant-Team06
 powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_windows.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\start_windows.ps1
 ```
@@ -30,14 +30,18 @@ Mở `http://127.0.0.1:8000`; dừng bằng Ctrl+C. Bộ cài chuẩn bị Pytho
 Cài Python 3.12 và Git trước theo [hướng dẫn Mac](README_MAC.md). Trên clone mới:
 
 ```bash
-git clone https://github.com/ng-wngkh07/Study-Agent.git
-cd Study-Agent
+git clone https://github.com/ng-wngkh07/Assistant-Team06.git
+cd Assistant-Team06
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python scripts/dev.py serve --profile demo
 ```
 
 Mở `http://127.0.0.1:8000`. Demo dựng FTS từ `tests/fixtures/documents` vào `data/team-demo`, không chạm corpus riêng. Có thể tra cứu ngay; QA/đọc ảnh thật cần Ollama/model. [Hướng dẫn Mac](README_MAC.md) có cấu hình .env, nguồn riêng, MLX và OCR.
+
+Thử gõ `help` hoặc `/help` trong ô chat sau khi mở ứng dụng để xem chức năng.
+Lệnh này trả trợ giúp xác định, không gọi mô hình hay tìm nguồn; không phải câu
+trả lời học thuật có trích dẫn. Nếu server đang bận, chờ lượt hiện tại kết thúc rồi thử lại.
 
 ## Tài liệu sau khi clone và cập nhật mã
 
@@ -60,6 +64,7 @@ Khởi động lại bằng launcher của nền tảng, tải lại trang trìn
 1. **Tra cứu:** mở chế độ tra cứu, tìm từ xuất hiện trong tài liệu, ví dụ `học tập` ở demo. Kết quả có tên nguồn, trang/phần và trích đoạn; PDF có nút mở trang, Markdown hiện phần văn bản.
 2. **QA:** khi model QA đã sẵn sàng, hỏi nội dung từ nguồn đã lập chỉ mục. Đối chiếu câu trả lời với trích dẫn; thiếu nguồn hoặc model phải xử lý theo thông báo. Test mock không chứng minh độ chính xác model.
 3. **Lịch ảnh:** chọn ảnh thời khóa biểu, đọc bản nháp, chỉnh thông tin chưa rõ và xác nhận trước khi lưu/xuất lịch. Có ảnh tổng hợp ở `tests/fixtures/timetables`; không dùng lịch cá nhân làm dữ liệu training.
+4. **Trợ giúp (`help`):** gõ `help` (hoặc `/help`, `trợ giúp`) trong ô chat để xem ngay danh sách các chức năng bot hỗ trợ và mẹo tương tác nhanh mà không cần gọi mô hình.
 
 Trong QA, chọn mức xử lý **Tự động**, **Thông thường** hoặc **Kiểm tra kỹ**. Tự động chọn theo câu hỏi; Kiểm tra kỹ thêm bước đối chiếu nhận định với nguồn, có thể trả trạng thái chưa kiểm chứng khi model không hoàn tất hoặc thiếu căn cứ. So sánh được xác định từ nội dung câu hỏi. Mức xử lý là quy trình ứng dụng, không bảo đảm model luôn trả đúng.
 
@@ -103,7 +108,7 @@ Trên Mac:
 node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs
 ```
 
-Node 22 dùng cho test giao diện, không cần để chạy web; cài từ [Node.js](https://nodejs.org/en/download). Windows dùng `test_windows.ps1` và lệnh Node tương tự. CI [Team feature checks](https://github.com/ng-wngkh07/Study-Agent/actions/workflows/team-checks.yml) kiểm Python 3.12 Windows/Mac, demo, feature tests, test giao diện; Windows thêm PowerShell/installer DemoOnly. PR kiểm nhật ký mới.
+Node 22 dùng cho test giao diện, không cần để chạy web; cài từ [Node.js](https://nodejs.org/en/download). Windows dùng `test_windows.ps1` và lệnh Node tương tự. CI [Team feature checks](https://github.com/ng-wngkh07/Assistant-Team06/actions/workflows/team-checks.yml) kiểm Python 3.12 Windows/Mac, demo, feature tests, test giao diện; Windows thêm PowerShell/installer DemoOnly. PR kiểm nhật ký mới. Job `ui_adapter` trên Ubuntu kiểm luồng Streamlit với phụ thuộc riêng ở `ui/requirements.txt`; không cần Streamlit để dùng Web UI chính.
 
 Đọc [CONTRIBUTING.md](CONTRIBUTING.md) để báo lỗi, tạo branch/PR và review; [quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md), [PDF](output/pdf/PHAN_CHIA_NHIEM_VU_DO_AN_NHOM.pdf) và [nhật ký](LICH_SU_DU_AN.md) ghi trách nhiệm/lịch sử. Đối chiếu checks và chính sách hiện hành trên PR trước khi merge. Nhóm vẫn cần review chéo và TV4 điều phối tích hợp; CI xanh không thay review hoặc nghiệm thu chức năng thật.
 

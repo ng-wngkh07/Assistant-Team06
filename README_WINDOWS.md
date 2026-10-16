@@ -10,7 +10,7 @@ Máy Windows 10/11 64 bit dùng PowerShell. Có Internet cho lần cài; lần t
 
 Nếu đã có Git, clone theo README chính. Nếu chưa có Git:
 
-1. Mở [Download ZIP](https://github.com/ng-wngkh07/Study-Agent/archive/refs/heads/main.zip), giải nén vào thư mục riêng.
+1. Mở [Download ZIP](https://github.com/ng-wngkh07/Assistant-Team06/archive/refs/heads/main.zip), giải nén vào thư mục riêng.
 2. Mở PowerShell tại thư mục vừa giải nén, chạy:
 
 ```powershell
@@ -20,8 +20,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_windows.ps1 -DemoOnl
 3. Script chuẩn bị Python/Git. Đóng rồi mở PowerShell để nhận PATH mới. Clone repo vào một thư mục mới để làm việc với branch (bản ZIP không có lịch sử Git):
 
 ```powershell
-git clone https://github.com/ng-wngkh07/Study-Agent.git
-cd Study-Agent
+git clone https://github.com/ng-wngkh07/Assistant-Team06.git
+cd Assistant-Team06
 powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_windows.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\start_windows.ps1
 ```
@@ -87,8 +87,8 @@ Tập `pytest.windows.ini` kiểm tra các tính năng với dữ liệu tạm/m
 demo sạch; không cần corpus/model cá nhân. Các test cũ phụ thuộc thư viện sách,
 OCR feedback local, giám sát tiến trình POSIX và thử nghiệm MLX vẫn chạy riêng trên
 Mac; không được báo tập feature là toàn bộ test đã đạt. Xem kết quả mới nhất tại
-[CI Windows và Mac](https://github.com/ng-wngkh07/Study-Agent/actions/workflows/team-checks.yml).
-[Lần chạy ngày 09/10/2026 trên commit 871d4dc](https://github.com/ng-wngkh07/Study-Agent/actions/runs/37887196815)
+[CI Windows và Mac](https://github.com/ng-wngkh07/Assistant-Team06/actions/workflows/team-checks.yml).
+[Lần chạy ngày 09/10/2026 trên commit 871d4dc](https://github.com/ng-wngkh07/Assistant-Team06/actions/runs/37887196815)
 đã đạt 110 test feature trên mỗi hệ điều hành, cùng kiểm bộ cài demo Windows.
 Liên kết lần chạy cũ `37882594844` hiện trả 404; kết quả của lần chạy hiện tại
 được kiểm riêng, không suy từ liên kết cũ hoặc coi 404 là test thất bại.

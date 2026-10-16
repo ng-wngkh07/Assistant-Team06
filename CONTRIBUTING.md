@@ -86,7 +86,9 @@ Feature suite dùng nguồn/data tạm/mock; không cần corpus/model cá nhân
 liên quan phần sửa. Nếu sửa environment/installer, kiểm setup/PowerShell trên Windows;
 Mac PASS không được ghi thành Windows PASS. Nếu sửa UI chung, smoke ba chế độ.
 Model/ảnh thật, bộ cài full máy mới, POSIX/MLX/corpus tests có nghiệm thu riêng; ghi NOT_RUN
-khi chưa chạy. Xem [Team feature checks](https://github.com/ng-wngkh07/Study-Agent/actions/workflows/team-checks.yml).
+khi chưa chạy. Xem [Team feature checks](https://github.com/ng-wngkh07/Assistant-Team06/actions/workflows/team-checks.yml).
+
+Adapter Streamlit có phụ thuộc riêng ở `ui/requirements.txt`; xem [hướng dẫn UI](ui/README.md). Job `ui_adapter` kiểm thao tác thử lại, hủy, chat mới và giới hạn lịch sử trên Ubuntu. Chạy `python -m pytest tests/test_streamlit_flow.py` sau khi cài các phụ thuộc này; feature suite Windows/Mac vẫn giữ các kiểm tra hiện có.
 
 Nâng dependency: sửa profile đúng và constraints tương ứng, giải quyết trong venv mới,
 kiểm pip check/import/runtime và CI Windows/Mac. Constraints web/Python3.12 không dùng
@@ -140,7 +142,7 @@ nhật ký thay đổi phần mềm và PDF phân công được phép. Dữ li�
 không công bố trên GitHub theo YC-214; rà cả nội dung văn bản, tên/nội dung commit,
 mô tả PR và bình luận trước khi push, không chỉ rà phần mở rộng file. `.gitignore` dùng allowlist: file
 chia sẻ mới ở gốc phải thêm ngoại lệ chính xác và kiểm lại, không mở rộng cho data bí mật.
-Nguồn thật `src/`, toàn `data/`, DB/vector/weights, .env, venv/cache, docs/project và
+Nguồn thật `src/`, dữ liệu bên trong `data/` (trừ tài liệu `data/README.md`), DB/vector/weights, .env, venv/cache, docs/project và
 cấu hình/tích hợp cá nhân giao riêng hoặc giữ local. Không merge SQLite/weights qua Git.
 
 Bàn giao nguồn/model có version/hash/quyền và provenance theo [corpus/README.md](corpus/README.md).

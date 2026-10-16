@@ -1,0 +1,3 @@
+# Optional Streamlit adapter; main Web UI does not need these packages.
+streamlit==1.66.0
+requests>=2.31,<3

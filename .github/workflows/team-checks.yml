@@ -43,6 +43,22 @@ jobs:
         with:
           node-version: '22'
       - run: node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs
+  ui_adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            constraints-web-py312.txt
+            ui/requirements.txt
+      - run: python -m pip install -c constraints-web-py312.txt -r requirements.txt -r requirements-dev.txt -r ui/requirements.txt
+      - run: python -m pip check
+      - run: python -m pytest tests/test_streamlit_flow.py -q
   history:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
