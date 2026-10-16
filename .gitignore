@@ -27,6 +27,7 @@
 !/test_windows.ps1
 !/app/
 !/static/
+!/ui/
 !/scripts/
 !/tests/
 !/docs/

@@ -1133,3 +1133,10 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Nội dung: Thiết kế quy chuẩn hiển thị nguồn trích dẫn dưới câu trả lời tại docs/ui-sources.md kèm 2 ví dụ trực quan (đơn nguồn từ PDF chính quy và đa nguồn có cảnh báo OCR), quy chuẩn cấu trúc dữ liệu và tương tác người dùng.
 - File: .gitignore, docs/ui-sources.md, LICH_SU_DU_AN.md.
 - Kiểm chứng: scripts/check_history.py PASS; kiểm tra cú pháp Markdown và đáp ứng đầy đủ tiêu chí nghiệm thu Issue #19.
+<a id="log-20261016-ui-issue18-tv5"></a>
+### LOG-20261016-ui-issue18-tv5 - 16/10/2026 20:05 (UTC+07)
+
+- Người thực hiện: TV5; loại: giao diện & tài liệu thiết kế (Issue #18).
+- Nội dung: Thiết lập kế hoạch kiến trúc UI ui/README.md đặc tả kết nối API backend FastAPI, tạo trang placeholder ui/app.py với ô input box và khung chat Streamlit, bổ sung bản vẽ wireframe mockup tại docs/chat-mockup.md.
+- File: .gitignore, ui/README.md, ui/app.py, docs/chat-mockup.md, LICH_SU_DU_AN.md.
+- Kiểm chứng: scripts/check_history.py PASS; kiểm tra cú pháp Streamlit và tài liệu thiết kế đạt yêu cầu nghiệm thu Lab 2.
