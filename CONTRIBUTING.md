@@ -148,3 +148,13 @@ Một writer chính hợp nhất corpus/training; readiness live `complete: true
 nguồn-trang-chunk-vector, dedup/split/tokenizer/tài nguyên phải đạt. Đánh giá candidate độc lập,
 giữ kiến thức cũ và rollback trước kích hoạt; loss/test xanh chưa đủ. Giấy phép [MIT](LICENSE)
 cho mã không thay quyền nguồn/model. Hai cải tiến nhỏ trong phân công còn là đề xuất.
+
+## Quản lý bí mật và dữ liệu nhạy cảm (Secrets)
+
+1. **Không commit bí mật:** Tuyệt đối không commit API keys, mật khẩu, access token hoặc thông tin bí mật cá nhân vào Git (bao gồm cả code, commit message, PR description và comment).
+2. **Cấu hình môi trường qua `.env`:**
+   - Sao chép file `.env.example` thành `.env` để cấu hình cục bộ: `cp .env.example .env`.
+   - File `.env` đã được liệt kê trong `.gitignore` và không bao giờ được thêm vào Git (`git add`).
+3. **Xử lý sự cố rò rỉ:** Nếu phát hiện bí mật bị commit nhầm:
+   - Ngay lập tức thu hồi/revoke token/key trên trang quản trị nhà cung cấp dịch vụ.
+   - Báo ngay cho nhóm trưởng (TV4) và người quản lý tài liệu (TV6) để loại bỏ commit khỏi lịch sử Git.
