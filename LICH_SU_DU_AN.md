@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-15T13:55:47.480344+07:00
-- Mục mới nhất: **[YC-215](#yc-215)**.
-- Nhật ký chung có **56 mục**: 18 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206/208 và 6 LOG), 3 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 14 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
+- Cập nhật: 2026-10-16T20:45:00+07:00
+- Mục mới nhất: **[LOG-20261016-data-issue23-tv4](#log-20261016-data-issue23-tv4)**.
+- Nhật ký chung có **57 mục**: 18 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206/208 và 6 LOG), 4 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 14 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1140,3 +1140,12 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Nội dung: Thiết lập kế hoạch kiến trúc UI ui/README.md đặc tả kết nối API backend FastAPI, tạo trang placeholder ui/app.py với ô input box và khung chat Streamlit, bổ sung bản vẽ wireframe mockup tại docs/chat-mockup.md.
 - File: .gitignore, ui/README.md, ui/app.py, docs/chat-mockup.md, LICH_SU_DU_AN.md.
 - Kiểm chứng: scripts/check_history.py PASS; kiểm tra cú pháp Streamlit và tài liệu thiết kế đạt yêu cầu nghiệm thu Lab 2.
+
+<a id="log-20261016-data-issue23-tv4"></a>
+### LOG-20261016-data-issue23-tv4 - 16/10/2026 20:45 (UTC+07)
+
+- Người thực hiện: TV4 / Nhóm trưởng; loại: tài liệu nguồn dữ liệu & chủ sở hữu (Issue #23).
+- Nội dung: Tạo tài liệu data/README.md liệt kê và phân loại đầy đủ 8 tệp/thư mục dữ liệu (knowledge_base.db, history.db, timetable.db, translations.db, adapters/active_registry.json, runtime/, ocr_cache/, team-demo/); ghi rõ nguồn dữ liệu (data source), chủ sở hữu phụ trách (owner: TV1–TV6 theo phân công nhóm), tần suất cập nhật, chính sách lưu trữ Git và nguyên tắc quản trị (quy tắc single-writer cho TV4, bảo đảm dữ liệu cá nhân không commit vào repo). Cập nhật .gitignore cho phép theo dõi data/README.md an toàn.
+- File: .gitignore, data/README.md, README.md, LICH_SU_DU_AN.md.
+- Kiểm chứng: Cấu trúc bảng đầy đủ 6 cột chuẩn hóa, đáp ứng 100% tiêu chí nghiệm thu của Issue #23; scripts/check_history.py PASS.
+
