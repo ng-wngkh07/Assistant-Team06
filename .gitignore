@@ -36,6 +36,7 @@
 # Tài liệu nhóm đã biên tập; hồ sơ/handoff/audit cá nhân vẫn giữ local.
 /docs/*
 !/docs/team/
+!/docs/*.md
 
 # corpus/ chỉ chứa metadata văn bản; PDF/ảnh/gói nặng lưu ở kho riêng.
 /corpus/**
