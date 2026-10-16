@@ -1109,3 +1109,11 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - File/phạm vi: README.md, README_MAC.md, README_WINDOWS.md, CONTRIBUTING.md, mẫu PR và nhật ký. Hướng dẫn đúng profile để thấy tài liệu demo sau clone, gọi PowerShell bằng -File, đồng bộ main/tiếp tục PR hiện hữu, mô tả giao diện hiện tại và bổ sung tập test vòng đời chat. Đồng nhất giới hạn công bố YC214, bỏ yêu cầu ghi thông tin huấn luyện trong mẫu PR/nhật ký; giữ các mục lịch sử cũ.
 - Kiểm chứng phần mềm: 526 pytest PASS/12 SKIP; 27 Node UI PASS; pip check, đối chiếu asset HTTP và liên kết tài liệu PASS. Nạp lại đúng dịch vụ, health healthy; ba DB và registry bảo toàn nội dung qua snapshot trước/sau. Kiểm trình duyệt: mở phiên cũ/menu nguồn, Escape, nhập nháp rồi Cuộc trò chuyện mới trả về màn hình bắt đầu với ô trống và lịch sử vẫn còn.
 - Ảnh hưởng/giới hạn: bản sửa ứng dụng YC213 không đổi; chỉ đồng bộ mã đã công bố và sửa tài liệu. Cập nhật cùng PR17 hiện hữu; chưa merge hoặc có review chéo nhóm. Windows máy thành viên, toàn bộ OCR/model thật NOT_RUN trong lượt này. Hồ sơ nội bộ giữ local; không viết lại lịch sử Git đã công bố.
+
+<a id="log-20261016-security-issue28-tv4"></a>
+### LOG-20261016-security-issue28-tv4 - 16/10/2026 19:35 (UTC+07)
+
+- Người thực hiện: TV4 / Nhóm trưởng; loại: quy định bảo mật & tài liệu đóng góp (Issue #28).
+- Nội dung: Bổ sung mục quản lý bí mật và dữ liệu nhạy cảm (Secrets) vào CONTRIBUTING.md theo tiêu chí nghiệm thu Lab 2; xác nhận .env đã nằm trong .gitignore và .env.example không chứa credential thật.
+- File: CONTRIBUTING.md, LICH_SU_DU_AN.md.
+- Kiểm chứng: .gitignore và .env.example hợp lệ; scripts/check_history.py PASS.
