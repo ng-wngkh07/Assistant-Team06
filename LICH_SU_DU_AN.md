@@ -1125,3 +1125,11 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Nội dung: Hoàn thành rà soát thủ công và gitleaks trên toàn bộ repo tìm bí mật, token và thông tin cá nhân; lập báo cáo kết quả an toàn tại docs/security-check.md.
 - File: docs/security-check.md, LICH_SU_DU_AN.md.
 - Kiểm chứng: Quét sạch 0 secret; scripts/check_history.py PASS.
+
+<a id="log-20261016-ui-issue18-tv5"></a>
+### LOG-20261016-ui-issue18-tv5 - 16/10/2026 20:05 (UTC+07)
+
+- Người thực hiện: TV5; loại: giao diện & tài liệu thiết kế (Issue #18).
+- Nội dung: Thiết lập kế hoạch kiến trúc UI ui/README.md đặc tả kết nối API backend FastAPI, tạo trang placeholder ui/app.py với ô input box và khung chat Streamlit, bổ sung bản vẽ wireframe mockup tại docs/chat-mockup.md.
+- File: .gitignore, ui/README.md, ui/app.py, docs/chat-mockup.md, LICH_SU_DU_AN.md.
+- Kiểm chứng: scripts/check_history.py PASS; kiểm tra cú pháp Streamlit và tài liệu thiết kế đạt yêu cầu nghiệm thu Lab 2.
