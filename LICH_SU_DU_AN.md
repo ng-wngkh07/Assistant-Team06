@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-15T13:55:47.480344+07:00
-- Mục mới nhất: **[YC-215](#yc-215)**.
-- Nhật ký chung có **56 mục**: 18 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206/208 và 6 LOG), 3 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 14 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
+- Cập nhật: 2026-10-16T20:45:00+07:00
+- Mục mới nhất: **[LOG-20261016-backend-issue21-tv2](#log-20261016-backend-issue21-tv2)**.
+- Nhật ký chung có **57 mục**: 19 môi trường/chức năng (YC-167/170/173/175/177/185/192/194/195/205/206/208 và 7 LOG), 3 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 14 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Các mã trùng YC-180–183 giữ cả hai mốc và không tính hai lần.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1140,3 +1140,12 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Nội dung: Thiết lập kế hoạch kiến trúc UI ui/README.md đặc tả kết nối API backend FastAPI, tạo trang placeholder ui/app.py với ô input box và khung chat Streamlit, bổ sung bản vẽ wireframe mockup tại docs/chat-mockup.md.
 - File: .gitignore, ui/README.md, ui/app.py, docs/chat-mockup.md, LICH_SU_DU_AN.md.
 - Kiểm chứng: scripts/check_history.py PASS; kiểm tra cú pháp Streamlit và tài liệu thiết kế đạt yêu cầu nghiệm thu Lab 2.
+
+<a id="log-20261016-backend-issue21-tv2"></a>
+### LOG-20261016-backend-issue21-tv2 - 16/10/2026 20:45 (UTC+07)
+
+- Người thực hiện: TV2 / Backend Developer; loại: tính năng backend & hướng dẫn người dùng (Issue #21).
+- Nội dung: Triển khai lệnh help trong backend (app/dialogue.py), nhận diện các biến thể lệnh trợ giúp (help, /help, hướng dẫn, trợ giúp) và trả về danh sách 4 năng lực cốt lõi thực tế của bot (Tra cứu tài liệu quy chế/học phần, Hỏi đáp đa chế độ kèm trích dẫn, Ôn tập câu hỏi tự luận/trắc nghiệm, Quản lý thời khóa biểu từ ảnh) với response_kind: "dialogue". Xử lý tức thì tại tầng dialogue intent không tốn tài nguyên GPU/LLM. Tạo bộ test tests/test_help.py (5 test cases) kiểm tra khớp lệnh, nội dung đầy đủ, phân biệt câu hỏi chứa từ help và kiểm tra endpoint chat API/SSE. Cập nhật mục chạy/sử dụng lệnh trong README.md.
+- File: app/dialogue.py, tests/test_help.py, README.md, LICH_SU_DU_AN.md.
+- Kiểm chứng: 5/5 test tests/test_help.py PASS; test_study_agent_c_f_g.py PASS; chat_lifecycle_ui_yc206.test.cjs PASS; scripts/check_history.py PASS.
+

@@ -60,6 +60,7 @@ Khởi động lại bằng launcher của nền tảng, tải lại trang trìn
 1. **Tra cứu:** mở chế độ tra cứu, tìm từ xuất hiện trong tài liệu, ví dụ `học tập` ở demo. Kết quả có tên nguồn, trang/phần và trích đoạn; PDF có nút mở trang, Markdown hiện phần văn bản.
 2. **QA:** khi model QA đã sẵn sàng, hỏi nội dung từ nguồn đã lập chỉ mục. Đối chiếu câu trả lời với trích dẫn; thiếu nguồn hoặc model phải xử lý theo thông báo. Test mock không chứng minh độ chính xác model.
 3. **Lịch ảnh:** chọn ảnh thời khóa biểu, đọc bản nháp, chỉnh thông tin chưa rõ và xác nhận trước khi lưu/xuất lịch. Có ảnh tổng hợp ở `tests/fixtures/timetables`; không dùng lịch cá nhân làm dữ liệu training.
+4. **Trợ giúp (`help`):** gõ `help` (hoặc `/help`, `trợ giúp`) trong ô chat bất kỳ lúc nào để xem ngay danh sách các chức năng bot hỗ trợ và mẹo tương tác nhanh mà không cần gọi mô hình.
 
 Trong QA, chọn mức xử lý **Tự động**, **Thông thường** hoặc **Kiểm tra kỹ**. Tự động chọn theo câu hỏi; Kiểm tra kỹ thêm bước đối chiếu nhận định với nguồn, có thể trả trạng thái chưa kiểm chứng khi model không hoàn tất hoặc thiếu căn cứ. So sánh được xác định từ nội dung câu hỏi. Mức xử lý là quy trình ứng dụng, không bảo đảm model luôn trả đúng.
 
