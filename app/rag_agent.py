@@ -434,7 +434,7 @@ class PsychologyAgent:
         short_reply, resolved_query = dialogue_intent(query, effective_chat_history)
         if short_reply:
             yield {"type": "token", "content": short_reply}
-            yield {"type": "done", "citations": [], "response_kind": "dialogue"}
+            yield {"type": "done", "citations": [], "response_kind": "dialogue", "generation_calls": 0}
             return
         search_query = normalize_query(resolved_query)
         if not source_page and is_unclear_query(search_query):

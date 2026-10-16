@@ -53,18 +53,17 @@ dialogue_gate = DialogueGate()
 HELP_MESSAGE = """Chào bạn! Tôi là **Study Agent** — trợ lý hỗ trợ học tập cục bộ. Dưới đây là các chức năng tôi có thể giúp bạn:
 
 ### 1. 📖 Tra cứu tài liệu (Document Lookup)
-- Tìm kiếm từ khóa, khái niệm và định lý trong kho tài liệu học tập.
+- Tìm kiếm từ khóa, khái niệm và định lý trong kho tài liệu học tập đã lập chỉ mục.
 - Xem trích đoạn văn bản, đối chiếu ngữ cảnh và mở trực tiếp trang PDF tương ứng.
 
 ### 2. 💬 Hỏi đáp học tập có nguồn dẫn (QA & RAG)
-- Trả lời câu hỏi dựa trên nội dung tài liệu đã được lập chỉ mục, luôn đi kèm trích dẫn nguồn (tên tài liệu, số trang).
-- Hỗ trợ 3 chế độ trả lời: **Trả lời nhanh**, **Từng bước** và **So sánh khái niệm**.
+- Trả lời câu hỏi dựa trên nội dung tài liệu học tập kèm trích dẫn nguồn (tên tài liệu, số trang); nếu tài liệu chưa có hoặc thiếu căn cứ minh chứng, hệ thống sẽ nói rõ chưa đủ thông tin thay vì phỏng đoán.
 - Hỗ trợ 3 mức xử lý: **Tự động**, **Thông thường** và **Kiểm tra kỹ** (đối chiếu nhận định với nguồn).
 - Duy trì ngữ cảnh hội thoại: bạn có thể hỏi nối tiếp như *"điều đó là gì?"*, *"cho ví dụ cụ thể"*.
-- Thu hẹp phạm vi: bạn có thể bấm vào nguồn gần nhất để giới hạn lượt tìm kiếm vào tài liệu hoặc trang cụ thể.
+- Thu hẹp phạm vi: bạn có thể giới hạn lượt tìm kiếm vào tài liệu hoặc trang cụ thể theo nhu cầu.
 
 ### 3. 📝 Luyện tập & Ôn tập (Practice & Exercises)
-- Tạo câu hỏi ôn tập lý thuyết theo chủ đề bạn chọn.
+- Tạo câu hỏi ôn tập lý thuyết theo chủ đề bạn chọn từ nội dung tài liệu.
 - Tự động tìm kiếm các bài tập có sẵn và hiển thị kèm đáp án/lời giải từ tài liệu.
 - Tự động lưu các câu làm sai vào danh sách ôn tập riêng trên trình duyệt.
 
