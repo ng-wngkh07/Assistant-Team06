@@ -88,6 +88,7 @@ Luồng tài liệu: nguồn → trích xuất/OCR → đoạn văn → FTS/vect
 | .github/ | Workflow CI và mẫu PR |
 | docs/team/, output/pdf/ | Tài liệu nhóm và PDF phân công |
 | corpus/ | Quy ước bàn giao riêng; không chứa thư viện thật hoặc importer tự động |
+| data/ | CSDL và tệp runtime; quy ước nguồn và quyền sở hữu xem tại [data/README.md](data/README.md) |
 
 `.env.example` mô tả các biến launcher đọc; `.env` không commit. `src/` là nguồn thật; `data/` giữ DB, vector, model, lịch/hội thoại/cache. Theo YC-214, chỉ công bố bản sửa, kiểm thử tổng hợp và tài liệu phần mềm; dữ liệu và thông tin huấn luyện giữ local, kể cả trong commit, mô tả PR và bình luận. Bàn giao riêng ở nơi được kiểm soát; không merge SQLite/weights qua Git và không dùng `git add -f` vượt ignore. [Corpus](corpus/README.md) mô tả ranh giới này.
 
