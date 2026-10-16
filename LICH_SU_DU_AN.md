@@ -1126,6 +1126,13 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - File: docs/security-check.md, LICH_SU_DU_AN.md.
 - Kiểm chứng: Quét sạch 0 secret; scripts/check_history.py PASS.
 
+<a id="log-20261016-ui-issue19-tv5"></a>
+### LOG-20261016-ui-issue19-tv5 - 16/10/2026 20:20 (UTC+07)
+
+- Người thực hiện: TV5; loại: thiết kế giao diện & đặc tả trích dẫn (Issue #19).
+- Nội dung: Thiết kế quy chuẩn hiển thị nguồn trích dẫn dưới câu trả lời tại docs/ui-sources.md kèm 2 ví dụ trực quan (đơn nguồn từ PDF chính quy và đa nguồn có cảnh báo OCR), quy chuẩn cấu trúc dữ liệu và tương tác người dùng.
+- File: .gitignore, docs/ui-sources.md, LICH_SU_DU_AN.md.
+- Kiểm chứng: scripts/check_history.py PASS; kiểm tra cú pháp Markdown và đáp ứng đầy đủ tiêu chí nghiệm thu Issue #19.
 <a id="log-20261016-ui-issue18-tv5"></a>
 ### LOG-20261016-ui-issue18-tv5 - 16/10/2026 20:05 (UTC+07)
 
