@@ -376,4 +376,27 @@ def test_ingest_to_src_without_auto_quiz_and_on_demand_generate(client, tmp_path
     assert len(gen_mat["flashcards"]) >= 1
 
 
+def test_upload_webp_study_material(client):
+    import io
+    from PIL import Image
+    img = Image.new("RGB", (100, 50), color=(100, 150, 200))
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    res = client.post("/api/materials/upload", json={
+        "filename": "diagram.webp",
+        "file_base64": b64,
+        "generate_study_set": True,
+        "quiz_count": 2,
+        "flashcard_count": 2,
+        "persist_to_src": False,
+    })
+    assert res.status_code == 200
+    mat = res.json()["material"]
+    assert mat["filename"] == "diagram.webp"
+    assert len(mat["quiz"]) >= 1
+    assert len(mat["flashcards"]) >= 1
+
+
+
 

@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-17T23:30:00+07:00
-- Mục mới nhất: **[YC-226](#yc-226)**.
-- Nhật ký chung có **81 mục**: 29 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 58 mã YC và 23 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 17/10/2026.
+- Cập nhật: 2026-10-18T00:05:00+07:00
+- Mục mới nhất: **[YC-227](#yc-227)**.
+- Nhật ký chung có **82 mục**: 30 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 59 mã YC và 23 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 18/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1597,3 +1597,24 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   + `.venv/bin/python scripts/dev.py check --profile local`: PASS.
 - Trạng thái: PASS.
 - Giới hạn, lỗi còn lại, bước tiếp: Đẩy commit giải quyết xung đột lên PR #44; theo dõi CI xanh và chờ Owner duyệt merge.
+
+
+<a id="yc-227"></a>
+### YC-227 - 18/10/2026 00:05 (UTC+07)
+
+- Người thực hiện: Antigravity; loại: kiểm tra chức năng tải tài liệu và tạo câu hỏi cục bộ, sửa lỗi không tương thích định dạng WebP và khởi động lại dịch vụ với auto-reload.
+- Mục tiêu: Chẩn đoán và giải quyết dứt điểm phản ánh của người dùng về việc tải tài liệu bị báo lỗi API 404, không upload được tài liệu và phần tạo câu hỏi ôn tập không hoạt động; kiểm định toàn diện luồng tải tài liệu và sinh bài học ôn luyện; hoàn thiện hỗ trợ trích xuất ảnh định dạng WebP trong `PDFExtractor`.
+- Trước/sau thay đổi:
+  + Trước: Tiến trình máy chủ cổng 8000 chạy ngầm từ trước khi tích hợp PR #42 (tính năng tài liệu học tập của TV2/TV5), dẫn tới việc gọi các endpoint mới `/api/materials/upload` và `/api/materials/generate-from-library` trả về mã lỗi `404 Not Found`. Giao diện hiển thị cảnh báo không tìm thấy API và chặn luồng tạo câu hỏi ôn luyện. Tệp ảnh `.webp` chưa được khai báo xử lý trong `PDFExtractor.extract_file`.
+  + Sau: Đã dừng tiến trình cũ và khởi chạy lại dịch vụ FastAPI với chế độ `--reload` (`run.py serve --host 127.0.0.1 --port 8000 --reload`); bổ sung khai báo `.webp` vào `SUPPORTED_EXTENSIONS` và định tuyến giải mã ảnh trong `PDFExtractor.extract_file`; bổ sung test case `test_upload_webp_study_material` trong `tests/test_study_materials.py`. Đã kiểm định thực tế thành công 100% các định dạng PDF, TXT, PNG, WebP với HTTP 200, trích xuất chuẩn và sinh đủ quiz / flashcard có căn cứ.
+- Phần/file sửa: `app/pdf_extractor.py`, `tests/test_study_materials.py`, `LICH_SU_DU_AN.md`, `docs/project/STATE.md`.
+- Kiểm thử phần mềm:
+  + `curl http://127.0.0.1:8000/api/materials/documents`: HTTP 200 (PASS).
+  + `POST /api/materials/upload` (PDF/TXT/PNG/WebP): HTTP 200 (PASS).
+  + `POST /api/materials/generate-from-library`: HTTP 200 (PASS: sinh đúng câu hỏi và thẻ nhớ kèm trích dẫn).
+  + `.venv/bin/python -m pytest tests/test_study_materials.py`: PASS (15 passed).
+  + `.venv/bin/python -m pytest -c pytest.windows.ini`: PASS (653 passed, 12 skipped).
+  + `.venv/bin/python scripts/check_history.py --base origin/main`: PASS.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, bước tiếp: Dịch vụ cục bộ đang chạy ổn định; người dùng chỉ cần làm mới trang web (F5 / Cmd+Shift+R) để trải nghiệm đầy đủ tính năng.
+
