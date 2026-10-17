@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-17T22:25:00.000000+07:00
-- Mục mới nhất: **[LOG-20261017-qa-integrate-quiz-flashcard-with-topic-tv2](#log-20261017-qa-integrate-quiz-flashcard-with-topic-tv2)**.
-- Nhật ký chung có **68 mục**: 26 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 18 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 17/10/2026.
+- Cập nhật: 2026-10-17T22:30:00.000000+07:00
+- Mục mới nhất: **[LOG-20261017-qa-remove-loading-offline-badge-tv2](#log-20261017-qa-remove-loading-offline-badge-tv2)**.
+- Nhật ký chung có **69 mục**: 27 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 19 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 17/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1297,3 +1297,21 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Trạng thái: PASS; đã kiểm chứng trực quan và tự động.
 - Giới hạn, lỗi còn lại, rollback/bước tiếp: Khởi động lại máy chủ nền port 8000; người dùng tải lại trang web bằng Ctrl+F5 để nhận bản giao diện tích hợp mới.
 
+<a id="log-20261017-qa-remove-loading-offline-badge-tv2"></a>
+### LOG-20261017-qa-remove-loading-offline-badge-tv2 - 17/10/2026 22:30 (UTC+07)
+
+- Người thực hiện: TV2 (Backend & AI) và TV5 (Frontend UI/UX); loại: tinh chỉnh giao diện hộp thoại (Loại bỏ nhãn offline theo đánh dấu khoanh đỏ của người dùng trong hộp thoại xử lý tài liệu).
+- Lỗi hoặc mục tiêu (ý chính):
+  1. Loại bỏ nhãn thông báo "🔒 Chạy 100% Offline trên GPU/CPU nội bộ" (`.loading-local-badge`) trong hộp thoại chờ phân tích tài liệu `#study-loading-modal` theo phản hồi đánh dấu khoanh đỏ của người dùng.
+  2. Tinh chỉnh khoảng cách lề dưới của dòng trạng thái `#study-loading-step` về `0` để bố cục hộp thoại chờ cân đối, gọn gàng và thẩm mỹ hơn.
+- Trước / sau thay đổi:
+  - Trước: Hộp thoại chờ hiển thị thêm dải viền nhãn màu đỏ "Chạy 100% Offline trên GPU/CPU nội bộ" bên dưới thông tin xử lý tài liệu.
+  - Sau: Dải nhãn đã được xóa bỏ hoàn toàn, hộp thoại chỉ hiển thị vòng xoay spinner, tiêu đề tiến trình và dòng trạng thái chi tiết của quá trình trích xuất.
+- Phần/file sửa và cách xử lý:
+  - `static/index.html`: Xóa bỏ phần tử `.loading-local-badge`; đặt `margin-bottom: 0` cho `#study-loading-step`; nâng phiên bản cache buster query string sang `?v=yc207-ui11`.
+- Kiểm thử phần mềm:
+  - `.\venv\Scripts\python.exe -m pytest tests/test_learning_tools_ui_contract.py`: 6 PASS / 0 FAIL.
+  - `node --test tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs`: 19 PASS / 0 FAIL.
+  - `.\venv\Scripts\python.exe -m pytest tests/test_study_materials.py`: 14 PASS / 0 FAIL.
+- Trạng thái: PASS; đã kiểm chứng trực quan và tự động hóa.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Người dùng làm mới trang bằng Ctrl+F5 để cập nhật hộp thoại chờ mới nhất.
