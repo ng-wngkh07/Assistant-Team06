@@ -3221,6 +3221,27 @@ body.sidebar-collapsed #btn-open-sidebar { display: inline-flex; }
     font-size: 15px;
     font-weight: 700;
     color: #ffffff;
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.4;
+}
+
+#study-loading-modal .modal-content {
+    max-width: 460px !important;
+    width: min(460px, calc(100vw - 32px)) !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+}
+
+#study-loading-title,
+#study-loading-step,
+.source-meta-card h3 {
+    max-width: 100%;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .study-card-details {
