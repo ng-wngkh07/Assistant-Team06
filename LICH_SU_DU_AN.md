@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-17T20:32:00.000000+07:00
-- Mục mới nhất: **[LOG-20261017-qa-attachlayout-imageupload-tv2](#log-20261017-qa-attachlayout-imageupload-tv2)**.
-- Nhật ký chung có **65 mục**: 23 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 15 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 17/10/2026.
+- Cập nhật: 2026-10-17T22:15:00.000000+07:00
+- Mục mới nhất: **[LOG-20261017-qa-prominent-quiz-flashcard-tool-tv2](#log-20261017-qa-prominent-quiz-flashcard-tool-tv2)**.
+- Nhật ký chung có **67 mục**: 25 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 17 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 17/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1253,6 +1253,26 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Trạng thái: PASS; sẵn sàng tích hợp và nghiệm thu.
 - Giới hạn, lỗi còn lại, rollback/bước tiếp: Đảm bảo giữ vững tính toàn vẹn của dữ liệu và các kiểm thử hồi quy hiện có.
 
+<a id="log-20261017-qa-prominent-quiz-flashcard-tool-tv2"></a>
+### LOG-20261017-qa-prominent-quiz-flashcard-tool-tv2 - 17/10/2026 22:15 (UTC+07)
 
-
-
+- Người thực hiện: TV2 (Backend & AI) và TV5 (Frontend UI/UX); loại: cải tiến giao diện & trải nghiệm học tập (Đưa bộ công cụ Tạo Flashcard & Trắc nghiệm hiển thị trực diện ngay khi mở Công cụ học tập, tuân thủ nghiêm ngặt hợp đồng 3 tab và flat design).
+- Lỗi hoặc mục tiêu (ý chính):
+  1. Khắc phục tình trạng người dùng phản ánh "Phần tạo flashcard và bài tập trắc nghiệm từ tài liệu trong phần công cụ học tập chưa có" do trước đó đặt vào một tab thứ 4 riêng biệt ẩn sau tab mặc định "Tạo câu hỏi".
+  2. Đưa khối giao diện nổi bật "⚡ Tạo Flashcard và Bài tập Trắc nghiệm từ Tài liệu" (`.study-material-generator-card`) trực tiếp vào vị trí trên cùng của tab mặc định `tool-tab-practice`, giúp người dùng nhìn thấy ngay lập tức khi vừa nhấn vào "Công cụ học tập".
+  3. Khôi phục đúng cấu trúc 3 tab chuẩn theo hợp đồng kiểm thử `tests/test_learning_tools_ui_contract.py` ("Tạo câu hỏi", "Ôn tập", "Trích xuất bài tập mẫu").
+  4. Thay thế toàn bộ các dải màu gradient bằng màu đơn sắc/rgba tinh tế theo quy chuẩn thiết kế phẳng (flat design) không gradient của dự án.
+- Trước / sau thay đổi:
+  - Trước: Khối tạo học liệu nằm ở tab con thứ 4, khi chuyển sang "Công cụ học tập" màn hình mặc định chỉ mở tab 1 "Tạo câu hỏi theo chủ đề" khiến người dùng không thấy chức năng tạo flashcard/trắc nghiệm từ tài liệu; `static/style.css` chứa `linear-gradient` vi phạm bài test kiểm tra giao diện phẳng.
+  - Sau: Khối chức năng tạo flashcard & trắc nghiệm hiển thị trực quan ngay đầu tab mặc định của Công cụ học tập; có sẵn 2 nút "Tải tệp mới lên (PDF, Word, Ảnh...)" và "Chọn từ thư viện tài liệu", hiển thị tài liệu đang chọn, nút "⚡ Tạo Flashcard & Bài tập Trắc nghiệm" và nút "📖 Mở bộ ôn luyện đã tạo"; giao diện phẳng hoàn toàn, 100% test contract và test hồi quy đều pass.
+- Phần/file sửa và cách xử lý:
+  - `static/index.html`: Di chuyển `.study-material-generator-card` vào đầu `#tool-tab-practice` (tab mặc định kích hoạt khi mở `#learning-tools-panel`); loại bỏ tab thứ 4 thừa trong `.tool-tabs`, khôi phục 3 tab chuẩn (`practice`, `review`, `examples`). Cập nhật cache-buster query string `?v=yc207-ui09` cho các file script và stylesheet.
+  - `static/style.css`: Loại bỏ tất cả 10 khai báo `linear-gradient` trong stylesheet, thay bằng màu phẳng Obsidian Dark (`#151824`, `#1c1722`, `#f43f5e`, `rgba(244, 63, 94, 0.22)`, etc.), thỏa mãn quy định `test_learning_tools_have_theme_rules_and_no_decorative_images_or_gradients`.
+  - `static/document-lookup.js`: Khôi phục mảng `tabs = ["practice", "review", "examples"]` trong hàm `setToolTab()`.
+- Kiểm thử phần mềm:
+  - `.\venv\Scripts\python.exe -m pytest tests/test_learning_tools_ui_contract.py`: 6 PASS / 0 FAIL.
+  - `.\venv\Scripts\python.exe -m pytest tests/test_study_materials.py`: 14 PASS / 0 FAIL.
+  - `node --test tests/chat_lifecycle_ui_yc206.test.cjs`: 6 PASS / 0 FAIL.
+  - `.\venv\Scripts\python.exe -m pytest tests/test_practice.py tests/test_document_lookup.py`: 31 PASS / 0 FAIL.
+- Trạng thái: PASS; đã kiểm chứng trực quan và tự động hóa.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Khuyến nghị người dùng ấn Ctrl+F5 khi tải lại trang web để trình duyệt nhận ngay CSS/JS mới.
