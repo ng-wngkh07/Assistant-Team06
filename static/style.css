@@ -1790,17 +1790,24 @@ body.sidebar-collapsed #btn-open-sidebar { display: inline-flex; }
 
 /* ---- Thanh phiên / tóm tắt / banner ---- */
 .session-bar {
-    padding: 10px 24px;
-    background: rgba(255, 255, 255, 0.02);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    width: 100%;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 12px 20px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: 16px;
     font-size: 0.88rem;
     position: relative;
+    box-sizing: border-box;
+    flex-shrink: 0;
 }
-.session-title-wrapper { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
-.session-title-wrapper strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
+.session-title-wrapper { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; }
+.session-title-wrapper strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: none; flex: 0 1 auto; }
 .session-bar-icon { color: var(--text-muted); }
 .session-controls { display: flex; align-items: center; gap: 10px; position: relative; flex-shrink: 0; }
 .btn-mini { padding: 4px 10px; font-size: 0.78rem; border-radius: 9px; }

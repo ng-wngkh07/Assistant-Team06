@@ -12,7 +12,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let revision = 0;
 
     function setToolTab(tab) {
-        const tabs = ["practice", "review", "examples"];
+        const tabs = ["practice", "study-set", "review", "examples"];
         if (!tabs.includes(tab)) tab = "practice";
         for (const name of tabs) {
             const button = document.getElementById(`btn-tool-tab-${name}`);
@@ -52,7 +52,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     qaButton.addEventListener("click", () => setMode("qa"));
     toolsButton.addEventListener("click", () => setMode("tools"));
-    for (const name of ["practice", "review", "examples"]) {
+    for (const name of ["practice", "study-set", "review", "examples"]) {
         const button = document.getElementById(`btn-tool-tab-${name}`);
         if (button) button.addEventListener("click", () => setToolTab(name));
     }

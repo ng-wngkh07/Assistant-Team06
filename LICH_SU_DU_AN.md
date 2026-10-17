@@ -1232,6 +1232,27 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Trạng thái: PASS.
 - Giới hạn, lỗi còn lại, rollback/bước tiếp: Đã khởi động lại tiến trình máy chủ trên cổng 8000 để phục vụ đầy đủ các routes và giao diện mới.
 
+<a id="log-20261017-qa-relocate-study-tools-stretch-ui-tv2"></a>
+### LOG-20261017-qa-relocate-study-tools-stretch-ui-tv2 - 17/10/2026 21:55 (UTC+07)
+
+- Người thực hiện: TV2 (Backend & AI) và TV5 (Frontend UI/UX); loại: cải tiến giao diện & tổ chức tính năng học tập (Di chuyển nút Tạo Trắc nghiệm & Flashcard sang tab Công cụ học tập, khắc phục hiện tượng thanh phiên co cụm ở giữa màn hình, kéo dãn đối xứng giao diện).
+- Lỗi hoặc mục tiêu (ý chính):
+  1. Di chuyển chức năng Tạo Trắc nghiệm & Flashcard (`#btn-create-quiz-flashcard`) từ thanh điều khiển chat sang tab chuyên dụng "⚡ Trắc nghiệm & Flashcard" (`#tool-tab-study-set`) trong phân hệ "Công cụ học tập" (`#learning-tools-panel`), mang lại không gian thao tác trực quan, rõ ràng cho việc chọn tài liệu từ thư viện, tải file mới lên và mở lại bộ bài học đã tạo.
+  2. Khắc phục lỗi hiển thị thanh phiên `#session-bar` bị co cụm lại ở giữa màn hình (như ảnh phản hồi); chuẩn hóa độ rộng `max-width: 900px` và `width: 100%` đồng bộ cho toàn bộ các thành phần trong `.qa-panel` (`#session-bar`, `.session-summary-box`, `#training-banner`, `.messages-container`, `.input-area`, `.chat-form`), kéo dãn đều hai bên giao diện, phân bổ tiêu đề cuộc trò chuyện sang trái và các nút tác vụ sang phải bằng `justify-content: space-between`.
+- Trước / sau thay đổi:
+  - Trước: Nút Tạo Trắc nghiệm & Flashcard nằm chen chúc trong `.chat-form-controls` của khung chat; thanh `#session-bar` bị co cụm ở giữa màn hình do flexbox `align-items: center` trên `.qa-panel` mà thiếu quy tắc độ rộng tường minh.
+  - Sau: Khung chat gọn gàng, thanh `#session-bar` kéo dãn đối xứng rộng rãi (900px) đều hai bên; tab "⚡ Trắc nghiệm & Flashcard" trong Công cụ học tập cung cấp trải nghiệm chuyên nghiệp cho phép chọn tài liệu hoặc tải lên để sinh trắc nghiệm và flashcard tương tác.
+- Phần/file sửa và cách xử lý:
+  - `static/index.html`: Di chuyển `#btn-create-quiz-flashcard` từ `.chat-form-controls` vào tab mới `#tool-tab-study-set` trong `#learning-tools-panel`; thêm nút chuyển tab `#btn-tool-tab-study-set` trong `.tool-tabs`; chuẩn hóa CSS cho `.qa-panel`, `#session-bar`, `.messages-container` và `.input-area` sang `max-width: 900px` với `welcome-mode` căn giữa và chat mode dãn đều `justify-content: flex-start`.
+  - `static/style.css`: Cập nhật `.session-bar` với `width: 100%; max-width: 900px; margin: 0 auto; padding: 12px 20px; border-radius: 14px; box-sizing: border-box; justify-content: space-between`.
+  - `static/document-lookup.js`: Bổ sung `"study-set"` vào danh sách tab của `setToolTab()` và bộ lắng nghe sự kiện tab.
+  - `static/app.js`: Tích hợp các nút điều khiển trong tab Công cụ học tập (`#btn-study-tool-upload`, `#btn-study-tool-library`, `#study-tool-file-input`, `#btn-open-generated-study-set`); liên kết luồng upload file chung `handleMaterialFileUpload()`; đồng bộ trạng thái tài liệu đang chọn qua `syncGenerateButtonState()`.
+- Kiểm thử phần mềm:
+  - `.\venv\Scripts\python.exe -m pytest tests/test_study_materials.py`: 14 PASS / 0 FAIL.
+  - `node --test tests/chat_lifecycle_ui_yc206.test.cjs`: 6 PASS / 0 FAIL.
+- Trạng thái: PASS; sẵn sàng tích hợp và nghiệm thu.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Đảm bảo giữ vững tính toàn vẹn của dữ liệu và các kiểm thử hồi quy hiện có.
+
 
 
 

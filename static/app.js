@@ -1787,6 +1787,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const sourceTextPreview = document.getElementById("source-text-preview");
     const chatAttachmentPreviewTray = document.getElementById("chat-attachment-preview-tray");
     const btnCreateQuizFlashcard = document.getElementById("btn-create-quiz-flashcard");
+    const btnStudyToolUpload = document.getElementById("btn-study-tool-upload");
+    const btnStudyToolLibrary = document.getElementById("btn-study-tool-library");
+    const studyToolFileInput = document.getElementById("study-tool-file-input");
+    const studyToolActiveFilename = document.getElementById("study-tool-active-filename");
+    const studyToolStatus = document.getElementById("study-tool-status");
+    const btnOpenGeneratedStudySet = document.getElementById("btn-open-generated-study-set");
 
     // Document Content Viewer Modal UI
     const documentContentModal = document.getElementById("document-content-modal");
@@ -1813,9 +1819,24 @@ document.addEventListener("DOMContentLoaded", () => {
     const attachmentPreviewRegistry = new Map();
 
     function syncGenerateButtonState() {
-        if (!btnCreateQuizFlashcard) return;
-        const hasAttachments = attachmentPreviewRegistry.size > 0;
-        btnCreateQuizFlashcard.classList.toggle("has-active-file", hasAttachments);
+        const allAttached = Array.from(attachmentPreviewRegistry.values());
+        const activeEntry = currentInspectedAttachment || (allAttached.length ? allAttached[allAttached.length - 1] : null);
+
+        if (studyToolActiveFilename) {
+            if (activeEntry && activeEntry.filename) {
+                studyToolActiveFilename.innerHTML = `<strong>${escapeHtml(activeEntry.filename)}</strong> (${activeEntry.total_pages || 1} trang)`;
+            } else {
+                studyToolActiveFilename.textContent = "Chưa chọn tài liệu nào. Vui lòng tải tệp lên hoặc chọn từ thư viện.";
+            }
+        }
+
+        if (btnCreateQuizFlashcard) {
+            btnCreateQuizFlashcard.classList.toggle("has-active-file", Boolean(activeEntry && activeEntry.filename));
+        }
+
+        if (btnOpenGeneratedStudySet) {
+            btnOpenGeneratedStudySet.style.display = currentStudyMaterial ? "inline-flex" : "none";
+        }
     }
 
     function getFileBadgeMeta(filename) {
@@ -2033,11 +2054,34 @@ document.addEventListener("DOMContentLoaded", () => {
         generateStudySetForActiveAttachment();
     });
 
+    btnStudyToolLibrary?.addEventListener("click", () => {
+        openLibraryPicker();
+    });
+
+    btnStudyToolUpload?.addEventListener("click", () => {
+        if (studyToolFileInput) {
+            studyToolFileInput.value = "";
+            studyToolFileInput.click();
+        } else if (materialFileInput) {
+            materialFileInput.value = "";
+            materialFileInput.click();
+        }
+    });
+
+    btnOpenGeneratedStudySet?.addEventListener("click", () => {
+        if (currentStudyMaterial) {
+            openStudyMaterial(currentStudyMaterial);
+        }
+    });
+
     async function generateStudySetForActiveAttachment() {
         const allAttached = Array.from(attachmentPreviewRegistry.values());
         const activeEntry = currentInspectedAttachment || (allAttached.length ? allAttached[allAttached.length - 1] : null);
 
         if (!activeEntry || !activeEntry.filename) {
+            if (studyToolStatus) {
+                studyToolStatus.textContent = "Chưa có tài liệu được chọn. Đang mở danh sách thư viện để bạn chọn...";
+            }
             openLibraryPicker();
             return;
         }
@@ -2104,18 +2148,17 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- File Upload Handler (Ingests into src/ & attaches preview card without auto-opening Quiz/Flashcards) ---
     const ALLOWED_STUDY_EXTS = [".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown", ".png", ".jpg", ".jpeg", ".webp"];
 
-    materialFileInput?.addEventListener("change", async (e) => {
-        const file = e.target.files && e.target.files[0];
+    async function handleMaterialFileUpload(file, inputEl) {
         if (!file) return;
 
         if (file.size === 0) {
-            materialFileInput.value = "";
+            if (inputEl) inputEl.value = "";
             alert("Tệp tin rỗng (0 bytes). Vui lòng chọn tệp hợp lệ.");
             return;
         }
 
         if (file.size > 20 * 1024 * 1024) {
-            materialFileInput.value = "";
+            if (inputEl) inputEl.value = "";
             alert("Tệp vượt quá kích thước cho phép (tối đa 20MB). Vui lòng chọn tệp nhỏ hơn.");
             return;
         }
@@ -2123,7 +2166,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const dotIdx = file.name.lastIndexOf(".");
         const ext = dotIdx >= 0 ? file.name.slice(dotIdx).toLowerCase() : "";
         if (!ALLOWED_STUDY_EXTS.includes(ext)) {
-            materialFileInput.value = "";
+            if (inputEl) inputEl.value = "";
             alert(`Định dạng tệp "${ext || "không xác định"}" không được hỗ trợ. Vui lòng chọn PDF, Word, PowerPoint, TXT, Markdown hoặc Ảnh (PNG, JPG, WebP).`);
             return;
         }
@@ -2142,6 +2185,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 material: null,
                 loading: true
             });
+
+            if (studyToolStatus) {
+                studyToolStatus.textContent = `⏳ Đang đọc và nạp tệp "${file.name}" vào nguồn học tập (src/)...`;
+            }
 
             const res = await fetch("/api/materials/upload", {
                 method: "POST",
@@ -2178,18 +2225,36 @@ document.addEventListener("DOMContentLoaded", () => {
             });
 
             fetchKnowledgeBaseStatus();
+            syncGenerateButtonState();
+
             if (chatStatus) {
-                chatStatus.textContent = `✅ Đã thêm "${file.name}" vào nguồn dữ liệu học tập (src/). Nhấn vào thẻ tệp để xem nội dung hoặc nhấn "⚡ Tạo Trắc nghiệm & Flashcard" để ôn luyện.`;
+                chatStatus.textContent = `✅ Đã thêm "${file.name}" vào nguồn dữ liệu học tập (src/). Bạn có thể vào tab "⚡ Trắc nghiệm & Flashcard" trong Công cụ học tập để tạo bài ôn luyện.`;
+            }
+            if (studyToolStatus) {
+                studyToolStatus.textContent = `✅ Đã nạp thành công "${file.name}" (${(data.material && data.material.total_pages) || 1} trang) vào nguồn dữ liệu học tập (src/). Nhấn nút "⚡ Tạo Trắc nghiệm & Flashcard" bên dưới để bắt đầu ôn luyện.`;
             }
         } catch (err) {
             removeAttachmentPreviewCard(previewKey);
             console.error("Upload material error:", err);
             alert(`Lỗi xử lý tài liệu: ${err.message || err}`);
+            if (studyToolStatus) {
+                studyToolStatus.textContent = `❌ Lỗi nạp tài liệu: ${err.message || err}`;
+            }
         } finally {
-            if (materialFileInput) {
-                materialFileInput.value = "";
+            if (inputEl) {
+                inputEl.value = "";
             }
         }
+    }
+
+    materialFileInput?.addEventListener("change", (e) => {
+        const file = e.target.files && e.target.files[0];
+        handleMaterialFileUpload(file, materialFileInput);
+    });
+
+    studyToolFileInput?.addEventListener("change", (e) => {
+        const file = e.target.files && e.target.files[0];
+        handleMaterialFileUpload(file, studyToolFileInput);
     });
 
     function readFileAsBase64(file) {
@@ -2327,8 +2392,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 loading: false
             });
             fetchKnowledgeBaseStatus();
+            syncGenerateButtonState();
             if (chatStatus) {
-                chatStatus.textContent = `✅ Đã thêm "${filename}" vào khung chat và nguồn học tập (src/). Nhấn vào thẻ tệp để xem nội dung hoặc nhấn "⚡ Tạo Trắc nghiệm & Flashcard" để ôn luyện.`;
+                chatStatus.textContent = `✅ Đã thêm "${filename}" vào khung chat và nguồn học tập (src/). Nhấn vào thẻ tệp để xem nội dung hoặc vào tab "⚡ Trắc nghiệm & Flashcard" để ôn luyện.`;
+            }
+            if (studyToolStatus) {
+                studyToolStatus.textContent = `✅ Đã chọn tài liệu "${filename}" từ thư viện. Nhấn "⚡ Tạo Trắc nghiệm & Flashcard" để bắt đầu ôn luyện.`;
             }
         } catch (err) {
             removeAttachmentPreviewCard(previewKey);
@@ -2379,6 +2448,10 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             appendStudyCardToChat(data.material);
             openStudyMaterial(data.material);
+            syncGenerateButtonState();
+            if (studyToolStatus) {
+                studyToolStatus.textContent = `✅ Đã tạo thành công ${(data.material.quiz || []).length} câu trắc nghiệm và ${(data.material.flashcards || []).length} flashcards cho "${filename}".`;
+            }
         } catch (err) {
             hideStudyLoading();
             if (!existingUploadEntry) {

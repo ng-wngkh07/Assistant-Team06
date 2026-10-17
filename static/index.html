@@ -204,19 +204,83 @@
             display: none !important;
         }
 
-        /* QA Panel layout - centered hero & symmetrical chat + input frames */
+        /* QA Panel layout - centered hero in welcome mode & symmetrical stretch in chat mode */
         .qa-panel:not([hidden]) {
             display: flex !important;
             flex-direction: column !important;
-            justify-content: center !important;
             align-items: center !important;
             flex: 1 1 0% !important;
             min-height: 0 !important;
             height: 100% !important;
             position: relative !important;
-            gap: 20px !important;
-            padding: 20px 24px !important;
+            gap: 16px !important;
+            padding: 16px 24px !important;
             box-sizing: border-box !important;
+        }
+
+        .qa-panel.welcome-mode:not([hidden]) {
+            justify-content: center !important;
+        }
+
+        .qa-panel:not(.welcome-mode):not([hidden]) {
+            justify-content: flex-start !important;
+        }
+
+        /* Active Session Bar - stretched evenly across the interface */
+        #session-bar.session-bar,
+        .session-bar {
+            width: 100% !important;
+            max-width: 900px !important;
+            margin: 0 auto !important;
+            padding: 12px 20px !important;
+            background: rgba(255, 255, 255, 0.03) !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            border-radius: 14px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: space-between !important;
+            gap: 16px !important;
+            box-sizing: border-box !important;
+            flex-shrink: 0 !important;
+        }
+
+        #session-bar[style*="display: none"] {
+            display: none !important;
+        }
+
+        #session-bar .session-title-wrapper {
+            display: flex !important;
+            align-items: center !important;
+            gap: 10px !important;
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+        }
+
+        #session-bar .session-title-wrapper strong {
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            max-width: none !important;
+            font-size: 0.95rem !important;
+            color: var(--text-primary) !important;
+        }
+
+        #session-bar .session-controls {
+            display: flex !important;
+            align-items: center !important;
+            gap: 10px !important;
+            flex-shrink: 0 !important;
+        }
+
+        #session-summary-box.session-summary-box,
+        .session-summary-box,
+        #training-banner.training-banner,
+        .training-banner {
+            width: 100% !important;
+            max-width: 900px !important;
+            margin: 0 auto !important;
+            box-sizing: border-box !important;
+            flex-shrink: 0 !important;
         }
 
         .qa-panel:not([hidden]) .messages-container:not(.has-chat) {
@@ -224,27 +288,28 @@
             overflow: visible !important;
             padding: 0 !important;
             width: 100% !important;
-            max-width: 720px !important;
+            max-width: 900px !important;
             margin: 0 auto !important;
         }
 
         .qa-panel:not([hidden]) .messages-container.has-chat {
-            flex: 0 1 auto !important;
-            max-height: calc(100vh - 250px) !important;
-            overflow-y: auto !important;
-            padding: 8px 0 !important;
+            flex: 1 1 auto !important;
             width: 100% !important;
-            max-width: 720px !important;
+            max-width: 900px !important;
             margin: 0 auto !important;
+            max-height: none !important;
+            min-height: 0 !important;
+            overflow-y: auto !important;
             display: flex !important;
             flex-direction: column !important;
             align-items: center !important;
-            gap: 20px !important;
+            gap: 16px !important;
+            padding: 6px 0 !important;
         }
 
         .messages-container.has-chat > .message:not(.welcome-card) {
             width: 100% !important;
-            max-width: 720px !important;
+            max-width: 900px !important;
             margin: 0 auto !important;
             box-sizing: border-box !important;
         }
@@ -299,15 +364,16 @@
         .qa-panel:not([hidden]) .input-area {
             padding: 0 !important;
             margin: 0 auto !important;
-            max-width: 720px !important;
+            max-width: 900px !important;
             width: 100% !important;
             transform: none !important;
             border-top: none !important;
             flex-shrink: 0 !important;
+            box-sizing: border-box !important;
         }
 
         .qa-panel:not([hidden]) .chat-form {
-            max-width: 720px !important;
+            max-width: 900px !important;
             width: 100% !important;
             margin: 0 auto !important;
             box-sizing: border-box !important;
@@ -674,6 +740,7 @@
             <section id="learning-tools-panel" class="learning-tools-panel" aria-label="Công cụ học tập" hidden>
                 <nav class="tool-tabs" role="tablist" aria-label="Công cụ học tập">
                     <button id="btn-tool-tab-practice" class="tool-tab-button active" type="button" role="tab" tabindex="0" aria-label="Tạo câu hỏi" aria-selected="true" aria-controls="tool-tab-practice" data-tool-tab="practice">Tạo câu hỏi</button>
+                    <button id="btn-tool-tab-study-set" class="tool-tab-button" type="button" role="tab" tabindex="-1" aria-label="Trắc nghiệm & Flashcard" aria-selected="false" aria-controls="tool-tab-study-set" data-tool-tab="study-set">⚡ Trắc nghiệm &amp; Flashcard</button>
                     <button id="btn-tool-tab-review" class="tool-tab-button" type="button" role="tab" tabindex="-1" aria-label="Ôn tập" aria-selected="false" aria-controls="tool-tab-review" data-tool-tab="review">Ôn tập <span id="review-count">0</span></button>
                     <button id="btn-tool-tab-examples" class="tool-tab-button" type="button" role="tab" tabindex="-1" aria-label="Trích xuất bài tập mẫu" aria-selected="false" aria-controls="tool-tab-examples" data-tool-tab="examples">Trích xuất bài tập mẫu</button>
                 </nav>
@@ -741,6 +808,48 @@
                             <div id="document-results" class="document-results"></div>
                         </section>
                     </details>
+                </section>
+                <section id="tool-tab-study-set" class="tool-tab-panel" role="tabpanel" aria-labelledby="btn-tool-tab-study-set" hidden>
+                    <div class="learning-topic-card">
+                        <div class="tool-panel-header">
+                            <div>
+                                <h2>⚡ Tạo Bộ Ôn Luyện: Trắc nghiệm &amp; Flashcard</h2>
+                                <p class="text-muted">Tải tài liệu mới lên hoặc chọn từ thư viện để AI tự động trích xuất nội dung, phân tích kiến thức trọng tâm và tạo bộ câu hỏi trắc nghiệm kèm thẻ ghi nhớ Flashcard 3D có trích dẫn đối chiếu từng trang.</p>
+                            </div>
+                        </div>
+
+                        <div class="study-tools-container" style="display: flex; flex-direction: column; gap: 16px; margin-top: 14px;">
+                            <div class="study-source-select-box" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); border-radius: 12px; padding: 16px;">
+                                <h3 style="font-size: 0.95rem; margin-bottom: 10px; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+                                    <span>📄</span> Chọn nguồn tài liệu ôn luyện
+                                </h3>
+                                <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px;">
+                                    <button type="button" id="btn-study-tool-upload" class="btn btn-outline btn-sm" style="display: inline-flex; align-items: center; gap: 6px;">
+                                        <span>📤</span> Tải tệp mới lên (PDF, DOCX, Ảnh...)
+                                    </button>
+                                    <button type="button" id="btn-study-tool-library" class="btn btn-outline btn-sm" style="display: inline-flex; align-items: center; gap: 6px;">
+                                        <span>📂</span> Chọn từ thư viện tài liệu
+                                    </button>
+                                    <input type="file" id="study-tool-file-input" style="display: none;" accept=".pdf,.docx,.pptx,.txt,.md,.png,.jpg,.jpeg,.webp">
+                                </div>
+                                <div id="study-tool-active-doc" style="padding: 10px 14px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; font-size: 0.88rem; color: #38bdf8;">
+                                    <strong>Tài liệu đang chọn:</strong> <span id="study-tool-active-filename">Chưa chọn tài liệu nào. Vui lòng tải tệp lên hoặc chọn từ thư viện.</span>
+                                </div>
+                            </div>
+
+                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                <button type="button" id="btn-create-quiz-flashcard" class="btn btn-primary" style="font-size: 0.95rem; padding: 10px 22px;">
+                                    <span>⚡</span> Tạo Trắc nghiệm &amp; Flashcard
+                                </button>
+                                <button type="button" id="btn-open-generated-study-set" class="btn btn-outline" style="display: none; font-size: 0.95rem; padding: 10px 18px; color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">
+                                    <span>📖</span> Mở bộ ôn luyện đã tạo
+                                </button>
+                            </div>
+                            <p id="study-tool-status" class="tool-status text-muted" role="status" aria-live="polite">
+                                Nhấn "Tạo Trắc nghiệm &amp; Flashcard" để AI trích xuất và sinh bộ câu hỏi &amp; thẻ nhớ. Khi hoàn tất, giao diện ôn tập tương tác sẽ mở tự động.
+                            </p>
+                        </div>
+                    </div>
                 </section>
                 <section id="tool-tab-review" class="tool-tab-panel" role="tabpanel" aria-labelledby="btn-tool-tab-review" hidden>
                     <div class="tool-panel-header">
@@ -1119,10 +1228,6 @@
                                     <option value="careful">Kiểm tra kỹ</option>
                                 </select>
                             </div>
-                            <button type="button" id="btn-create-quiz-flashcard" class="study-gen-pill" title="Tạo bộ câu hỏi trắc nghiệm và thẻ ghi nhớ Flashcard từ tài liệu đã thêm">
-                                <span class="pill-icon">⚡</span>
-                                <span>Tạo Trắc nghiệm &amp; Flashcard</span>
-                            </button>
                             <span class="scope-pill active" title="Tìm trong toàn bộ thư viện tài liệu">
                                 <span class="pill-icon">📚</span>
                                 <span>Thư viện tài liệu</span>
