@@ -1232,19 +1232,4 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   QA model thật, full installer máy Windows mới và kiểm trên main sau merge NOT_RUN.
 - Cập nhật kết quả: 2026-10-16T22:16:51.486329+07:00; giữ mọi mục và attribution lịch sử cũ.
 
-<a id="log-20261017-eval-issue27-codex"></a>
 
-### LOG-20261017-eval-issue27-codex - 17/10/2026 15:34 (UTC+07)
-
-- Benchmark accuracy (Issue #27).
-- Mục tiêu/trước-sau: thêm runner đọc eval/cases.csv và in accuracy so khớp chính xác
-  hai cột expected/predicted; trước đó chưa có eval/. CSV cần có prediction đầu vào,
-  runner không tự gọi ứng dụng hoặc model.
-- File: eval/run.py, eval/cases.csv, tests/test_eval_run.py, pytest.windows.ini,
-  README.md, .gitignore, LICH_SU_DU_AN.md.
-- Kiểm chứng: Windows, Python 3.12.12 (MSYS2/UCRT64), commit cơ sở 18d3260:
-  `python eval\run.py` PASS, 3/4 (75.00%). Pytest NOT_RUN: môi trường hiện tại
-  không có pip/pytest và checkout không có .venv; đã thử `python -m pytest -q
-tests\test_eval_run.py`, dừng vì thiếu pytest. Windows/Mac CI và model inference
-  NOT_RUN; benchmark chỉ chấm prediction có sẵn.
-- Trạng thái: triển khai local trên nhánh issue; chưa commit/push/PR review chéo.

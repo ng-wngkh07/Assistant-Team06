@@ -53,6 +53,7 @@
 /src/
 /data/*
 !/data/README.md
+!/data/offices.csv
 /scratch/
 /AGENTS.md
 /.agents/
