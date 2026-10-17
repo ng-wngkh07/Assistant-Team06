@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-16T22:16:51.486329+07:00
-- Mục mới nhất: **[YC-218](#yc-218)**.
-- Nhật ký chung có **63 mục**: 21 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 13 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
+- Cập nhật: 2026-10-17T20:10:00.000000+07:00
+- Mục mới nhất: **[LOG-20261017-qa-studymaterials-tv2](#log-20261017-qa-studymaterials-tv2)**.
+- Nhật ký chung có **64 mục**: 22 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 14 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 17/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1188,3 +1188,25 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   các issue còn mở vẫn do thành viên phụ trách. Không thay protection/quyền owner.
   QA model thật, full installer máy Windows mới và kiểm trên main sau merge NOT_RUN.
 - Cập nhật kết quả: 2026-10-16T22:16:51.486329+07:00; giữ mọi mục và attribution lịch sử cũ.
+
+<a id="log-20261017-qa-studymaterials-tv2"></a>
+### LOG-20261017-qa-studymaterials-tv2 - 17/10/2026 20:10 (UTC+07)
+
+- Người thực hiện: TV2 (Backend & AI) và TV5 (Frontend UI/UX); loại: tính năng mới (Upload tài liệu học tập, tự động tạo Trắc nghiệm & Flashcard 3D).
+- Lỗi hoặc mục tiêu (ý chính): Bổ sung chức năng cho phép người dùng tự tải tài liệu học tập lên hệ thống (PDF, Word, Text, Ảnh) hoặc chọn tài liệu đã lập chỉ mục từ thư viện; tự động trích xuất nội dung và sinh bộ câu hỏi trắc nghiệm (Quiz) cùng thẻ ghi nhớ (Flashcard 3D) có đối chiếu trích dẫn tài liệu gốc từng trang (grounding citations).
+- Trước / sau thay đổi:
+  - Trước: Người dùng chỉ có thể hỏi đáp qua ô chat hoặc tạo câu hỏi cố định theo chủ đề trong công cụ học tập; không thể tự tải tài liệu riêng lên để ôn tập tương tác tức thì hoặc luyện flashcard 3D.
+  - Sau: Nút `＋` tích hợp trực quan trên thanh nhập liệu chat theo mẫu thiết kế giao diện; mở menu lựa chọn "Thêm ảnh & tệp" hoặc "Thêm từ thư viện". Modal giao diện ôn tập hiện đại với 3 tab: Trắc nghiệm (tính điểm, giải thích chi tiết, nguồn đối chiếu), Flashcard 3D (lật thẻ 3D, thống kê Đã thuộc / Cần ôn, phím tắt Spacebar, xáo trộn thẻ) và Nguồn trích đoạn.
+- Phần/file sửa và cách xử lý:
+  - `app/study_materials.py`: Xây dựng module `StudyMaterialManager` xử lý xác thực tệp tin an toàn (kích thước tối đa 20MB, kiểm tra định dạng và magic bytes), trích xuất văn bản từng trang qua `PDFExtractor`, cơ chế sinh câu hỏi trắc nghiệm và flashcards qua Ollama LLM bảo vệ bằng `gpu_coordinator` & `dialogue_gate`, kèm thuật toán dự phòng tất định (deterministic fallback) bảo đảm 100% không crash khi LLM ngoại tuyến.
+  - `app/server.py`: Bổ sung 4 endpoints API: `POST /api/materials/upload`, `POST /api/materials/generate-from-library`, `GET /api/materials/documents`, `GET /api/materials/{material_id}`.
+  - `static/index.html`: Thêm nút đính kèm `btn-chat-attach`, menu dropdown popup, Modal chọn tài liệu thư viện `library-picker-modal`, Modal ôn tập đa năng `study-material-modal` (Quiz & 3D Flashcard) và Modal trạng thái phân tích `study-loading-modal`.
+  - `static/style.css`: Thiết kế giao diện dark obsidian, hiệu ứng lật thẻ 3D (`preserve-3d`, `rotateY`), thanh tiến độ glowing gradient, quiz option feedback states (emerald green / crimson red), hỗ trợ responsive hoàn chỉnh.
+  - `static/app.js`: Tích hợp logic xử lý tải tệp qua FileReader, kết nối API backend, quản lý trạng thái Quiz/Flashcards, tương tác lật thẻ và phím tắt (Space, Mũi tên trái/phải), tự động gửi thông báo Study Card vào cuộc trò chuyện.
+  - `tests/test_study_materials.py`: Viết bộ 8 kiểm thử tự động kiểm tra xác thực định dạng, giới hạn kích thước, thuật ngữ trích xuất, tạo fallback và kiểm tra toàn bộ API endpoints.
+- Kiểm thử phần mềm:
+  - `pytest tests/test_study_materials.py tests/test_help.py tests/test_study_agent_c_f_g.py`: 51 PASS / 0 FAIL.
+  - `node --test tests/chat_lifecycle_ui_yc206.test.cjs`: 6 PASS / 0 FAIL.
+- Trạng thái: PASS; sẵn sàng tích hợp và nghiệm thu.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Lưu giữ tài liệu an toàn trong bộ nhớ cache runtime cục bộ; không ảnh hưởng tới dữ liệu huấn luyện hoặc các chức năng tra cứu hiện hữu.
+

@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import re
@@ -29,6 +30,7 @@ from app.dialogue import dialogue_gate, DialogueBusyError, BUSY_TEXT
 from app import timetable_store, timetable_vision, timetable_ics
 from app.practice import PracticeGenerationError, PracticeService, PracticeSessionNotFound
 from app.learning import LearningService
+from app.study_materials import study_material_manager, StudyMaterialError
 from app.input_policy import (
     validate_query_text,
     validate_chat_history,
@@ -355,6 +357,111 @@ async def list_learning_exercises(req: LearningExercisesRequest):
     except Exception as exc:
         logger.exception("Không trích xuất được bài tập theo chủ đề")
         raise HTTPException(status_code=502, detail="Không trích xuất được bài tập lúc này. Hãy thử lại sau.") from exc
+
+
+class MaterialUploadRequest(BaseModel):
+    filename: str
+    file_base64: str
+    quiz_count: int = Field(default=3, ge=1, le=10)
+    flashcard_count: int = Field(default=5, ge=1, le=15)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+
+
+class MaterialLibraryGenerateRequest(BaseModel):
+    document_id: Optional[int] = Field(default=None, ge=1)
+    filename: Optional[str] = None
+    page_from: int = Field(default=1, ge=1)
+    page_to: Optional[int] = Field(default=None, ge=1)
+    quiz_count: int = Field(default=3, ge=1, le=10)
+    flashcard_count: int = Field(default=5, ge=1, le=15)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+
+
+@app.post("/api/materials/upload")
+async def upload_and_generate_materials(req: MaterialUploadRequest):
+    try:
+        raw_b64 = req.file_base64
+        if "," in raw_b64:
+            raw_b64 = raw_b64.split(",", 1)[1]
+        file_bytes = base64.b64decode(raw_b64)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Dữ liệu tệp tải lên (Base64) không hợp lệ: {e}")
+
+    def run_extraction_and_generation():
+        extracted = study_material_manager.extract_document(req.filename, file_bytes)
+        return study_material_manager.generate_materials_from_pages(
+            extracted,
+            quiz_count=req.quiz_count,
+            flashcard_count=req.flashcard_count,
+            difficulty=req.difficulty,
+            model=DEFAULT_CHAT_MODEL,
+        )
+
+    try:
+        record = await run_in_threadpool(run_extraction_and_generation)
+        return {
+            "status": "success",
+            "material": record,
+            "material_id": record["id"],
+            "id": record["id"],
+        }
+    except StudyMaterialError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except GPUBusyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
+    except DialogueBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
+    except Exception as exc:
+        logger.exception("Lỗi xử lý tài liệu tải lên")
+        raise HTTPException(status_code=500, detail=f"Lỗi xử lý tài liệu tải lên: {exc}")
+
+
+@app.post("/api/materials/generate-from-library")
+async def generate_materials_from_library(req: MaterialLibraryGenerateRequest):
+    def run_lib_generation():
+        return study_material_manager.generate_from_library_document(
+            doc_id=req.document_id,
+            filename=req.filename,
+            page_from=req.page_from,
+            page_to=req.page_to,
+            quiz_count=req.quiz_count,
+            flashcard_count=req.flashcard_count,
+            difficulty=req.difficulty,
+            model=DEFAULT_CHAT_MODEL,
+        )
+
+    try:
+        record = await run_in_threadpool(run_lib_generation)
+        return {
+            "status": "success",
+            "material": record,
+            "material_id": record["id"],
+            "id": record["id"],
+        }
+    except StudyMaterialError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except GPUBusyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
+    except DialogueBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
+    except Exception as exc:
+        logger.exception("Lỗi tạo câu hỏi từ thư viện")
+        raise HTTPException(status_code=500, detail=f"Lỗi tạo câu hỏi từ thư viện: {exc}")
+
+
+@app.get("/api/materials/documents")
+async def get_study_material_documents():
+    docs = await run_in_threadpool(document_lookup.documents)
+    return {"documents": docs}
+
+
+@app.get("/api/materials/{material_id}")
+async def get_study_material(material_id: str):
+    mat = study_material_manager.get_material(material_id)
+    if not mat:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bộ tài liệu ôn tập đã tạo.")
+    return mat
+
 
 
 def requested_source_scope(req):
