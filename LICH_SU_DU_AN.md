@@ -1189,19 +1189,4 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   QA model thật, full installer máy Windows mới và kiểm trên main sau merge NOT_RUN.
 - Cập nhật kết quả: 2026-10-16T22:16:51.486329+07:00; giữ mọi mục và attribution lịch sử cũ.
 
-<a id="log-20261017-eval-cases-issue26"></a>
-### LOG-20261017-eval-cases-issue26 - 17/10/2026 15:46 (UTC+07)
 
-- Người thực hiện: Codex theo yêu cầu của người phụ trách; loại: bộ câu hỏi benchmark (Issue #26).
-- Mục tiêu/trước-sau: tạo 15 câu hỏi tiếng Việt có đáp án tham chiếu và category
-  normal/edge/out-of-scope; có 3 ca edge về dữ kiện thiếu, hệ mâu thuẫn và cách
-  hiểu căn bậc hai, cùng 2 ca ngoài phạm vi.
-- Phần/file: eval/cases.csv, tests/test_eval_cases.py, pytest.windows.ini,
-  README.md, .gitignore, LICH_SU_DU_AN.md. Nội dung tự biên soạn, không lấy từ
-  corpus demo, nguồn riêng hoặc hồ sơ người dùng.
-- Kiểm chứng: Windows, Python 3.12.12, commit cơ sở 18d3260; CSV được đọc bằng
-  Python `csv` module: đúng schema, 15 hàng, 3 edge, nhãn/giá trị không rỗng và
-  câu hỏi duy nhất PASS; quy tắc nhật ký PASS; `git diff --check` PASS.
-  `python -m pytest -q tests\test_eval_cases.py` NOT_RUN vì Python hiện tại không
-  cài pytest; Windows/Mac CI và review chéo NOT_RUN.
-- Trạng thái: hoàn tất nội dung CSV và kiểm thử hợp đồng; chưa commit/push/PR review.
