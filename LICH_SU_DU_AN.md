@@ -5,6 +5,9 @@
 - Cập nhật: 2026-10-17T22:30:00.000000+07:00
 - Mục mới nhất: **[LOG-20261017-qa-remove-loading-offline-badge-tv2](#log-20261017-qa-remove-loading-offline-badge-tv2)**.
 - Nhật ký chung có **69 mục**: 27 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 19 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 17/10/2026.
+- Cập nhật: 2026-10-17T22:20:00+07:00
+- Mục mới nhất: **[LOG-20261017-eval-issue27-codex](#log-20261017-eval-issue27-codex)**.
+- Nhật ký chung có **67 mục**: 22 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 10 làm rõ kiến trúc/quyền/quy trình, 10 dữ liệu corpus/huấn luyện. Có 50 mã YC và 17 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1315,3 +1318,51 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   - `.\venv\Scripts\python.exe -m pytest tests/test_study_materials.py`: 14 PASS / 0 FAIL.
 - Trạng thái: PASS; đã kiểm chứng trực quan và tự động hóa.
 - Giới hạn, lỗi còn lại, rollback/bước tiếp: Người dùng làm mới trang bằng Ctrl+F5 để cập nhật hộp thoại chờ mới nhất.
+<a id="log-20261017-backend-issue20-tv3"></a>
+### LOG-20261017-backend-issue20-tv3 - 17/10/2026 20:20 (UTC+07)
+
+- Người thực hiện: TV3 / Antigravity; loại: chức năng tra cứu văn phòng hỗ trợ tên một phần (Issue #20).
+- Mục tiêu: Hỗ trợ tra cứu văn phòng khi người dùng nhập một phần tên (ví dụ `'training'` tìm thấy `'Training Office'`), không phân biệt hoa/thường, xử lý khoảng trắng thừa, xếp hạng ưu tiên (khớp chính xác → tiền tố từ → ranh giới từ → chuỗi con) và không làm thay đổi bất kỳ câu trả lời nào khác của hệ thống.
+- Trước/sau: Trước chưa có module tra cứu văn phòng hỗ trợ partial match; sau bổ sung `app/office_lookup.py`, dữ liệu mẫu công khai `data/offices.csv` và bộ kiểm thử `tests/test_office_lookup.py`.
+- Phần/file sửa: `.gitignore`, `data/offices.csv`, `app/office_lookup.py`, `tests/test_office_lookup.py`, `pytest.windows.ini`, `LICH_SU_DU_AN.md`.
+- Kiểm thử: `pytest tests/test_office_lookup.py tests/test_help.py tests/test_document_lookup.py` PASS; giữ nguyên 100% câu trả lời của `dialogue_intent` và `RAGAgent`.
+- Trạng thái: PASS.
+
+<a id="log-20261017-ai-issue24-tv4"></a>
+### LOG-20261017-ai-issue24-tv4 - 17/10/2026 20:20 (UTC+07)
+
+- Người thực hiện: TV4 / Antigravity; loại: đặc tả và định nghĩa giao diện dịch vụ AI cho LLM tương lai (Issue #24).
+- Mục tiêu: Viết tài liệu đặc tả `docs/ai-interface.md` (chữ ký hàm, cấu trúc đầu vào/đầu ra, phân loại lỗi, cơ chế dự phòng) và định nghĩa hợp đồng `AIServiceInterface` tại `app/ai_interface.py` kèm `MockAIService` và `LegacyClientAdapter`, chưa gọi thêm nhà cung cấp LLM mới.
+- Trước/sau: Trước chưa có `docs/ai-interface.md` và giao thức chuẩn cho tầng sinh văn bản; sau có đặc tả đầy đủ, kiểu dữ liệu bất biến `AIRequest`/`AIResponse`/`AIStreamChunk`, cây ngoại lệ `AIServiceError` và kiểm thử hợp đồng `tests/test_ai_interface.py`.
+- Phần/file sửa: `docs/ai-interface.md`, `app/ai_interface.py`, `tests/test_ai_interface.py`, `pytest.windows.ini`, `LICH_SU_DU_AN.md`.
+- Kiểm thử: `pytest tests/test_ai_interface.py` PASS; kiểm tra `scripts/check_history.py` PASS.
+- Trạng thái: PASS.
+
+<a id="log-20261017-eval-cases-issue26"></a>
+### LOG-20261017-eval-cases-issue26 - 17/10/2026 15:46 (UTC+07)
+
+- Người thực hiện: Codex theo yêu cầu của người phụ trách; loại: bộ câu hỏi benchmark (Issue #26).
+- Mục tiêu/trước-sau: tạo 15 câu hỏi tiếng Việt có đáp án tham chiếu và category
+  normal/edge/out-of-scope; có 3 ca edge về dữ kiện thiếu, hệ mâu thuẫn và cách
+  hiểu căn bậc hai, cùng 2 ca ngoài phạm vi.
+- Phần/file: eval/cases.csv, tests/test_eval_cases.py, pytest.windows.ini,
+  README.md, .gitignore, LICH_SU_DU_AN.md. Nội dung tự biên soạn, không lấy từ
+  corpus demo, nguồn riêng hoặc hồ sơ người dùng.
+- Kiểm chứng: Windows, Python 3.12.12, commit cơ sở 18d3260; CSV được đọc bằng
+  Python `csv` module: đúng schema, 15 hàng, 3 edge, nhãn/giá trị không rỗng và
+  câu hỏi duy nhất PASS; quy tắc nhật ký PASS; `git diff --check` PASS.
+  `python -m pytest -q tests\test_eval_cases.py` PASS; Windows/Mac CI và review chéo.
+- Trạng thái: PASS.
+
+<a id="log-20261017-eval-issue27-codex"></a>
+### LOG-20261017-eval-issue27-codex - 17/10/2026 15:34 (UTC+07)
+
+- Người thực hiện: Codex theo yêu cầu của người phụ trách; loại: script chạy benchmark (Issue #27).
+- Mục tiêu/trước-sau: thêm runner đọc eval/cases.csv và in accuracy so khớp chính xác
+  hai cột expected/predicted; trước đó chưa có eval/. CSV cần có prediction đầu vào,
+  runner không tự gọi ứng dụng hoặc model.
+- File: eval/run.py, eval/cases.csv, tests/test_eval_run.py, pytest.windows.ini,
+  README.md, .gitignore, LICH_SU_DU_AN.md.
+- Kiểm chứng: Windows/Mac Python 3.12: `python eval/run.py` PASS, 12/15 (80.00%).
+  `pytest tests/test_eval_run.py tests/test_eval_cases.py` PASS (10 passed).
+- Trạng thái: PASS.

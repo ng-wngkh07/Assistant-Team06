@@ -31,6 +31,7 @@
 !/ui/
 !/scripts/
 !/tests/
+!/eval/
 !/docs/
 !/corpus/
 !/data/
@@ -52,6 +53,7 @@
 /src/
 /data/*
 !/data/README.md
+!/data/offices.csv
 /scratch/
 /AGENTS.md
 /.agents/
