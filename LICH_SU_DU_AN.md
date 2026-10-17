@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-17T22:30:00+07:00
-- Mục mới nhất: **[YC-224](#yc-224)**.
-- Nhật ký chung có **70 mục**: 22 môi trường/chức năng, 6 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 57 mã YC và 13 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
+- Cập nhật: 2026-10-17T22:55:00+07:00
+- Mục mới nhất: **[YC-225](#yc-225)**.
+- Nhật ký chung có **73 mục**: 23 môi trường/chức năng, 6 tổ chức/tài liệu, 5 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 10 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 58 mã YC và 15 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1175,7 +1175,6 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   Windows native/Python3.12 mới/Streamlit/model QA thật/tự nạp rule chat mới NOT_RUN.
   Chưa commit/push gói này; không nhận CI PR34 là CI của YC217. Hồ sơ/dữ liệu riêng
   giữ local theo YC214; kết quả này không cấp quyền huấn luyện hoặc promote.
-
 <a id="log-20261016-data-issue23-tv4"></a>
 ### LOG-20261016-data-issue23-tv4 - 16/10/2026 20:45 (UTC+07)
 
@@ -1230,6 +1229,26 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Đồng bộ local: mã/config khớp bản PR đã kiểm định; giữ gói tài liệu YC217 chưa
   commit. Nhật ký local có 64 mục, PR có 63 vì YC217 chưa phát hành; không mất mục main.
 - Cập nhật kết quả: 2026-10-16T22:25:20.871173+07:00; giữ mọi mục và attribution lịch sử cũ.
+
+<a id="log-20261017-backend-issue20-tv3"></a>
+### LOG-20261017-backend-issue20-tv3 - 17/10/2026 20:20 (UTC+07)
+
+- Người thực hiện: TV3 / Antigravity; loại: chức năng tra cứu văn phòng hỗ trợ tên một phần (Issue #20).
+- Mục tiêu: Hỗ trợ tra cứu văn phòng khi người dùng nhập một phần tên (ví dụ `'training'` tìm thấy `'Training Office'`), không phân biệt hoa/thường, xử lý khoảng trắng thừa, xếp hạng ưu tiên (khớp chính xác → tiền tố từ → ranh giới từ → chuỗi con) và không làm thay đổi bất kỳ câu trả lời nào khác của hệ thống.
+- Trước/sau: Trước chưa có module tra cứu văn phòng hỗ trợ partial match; sau bổ sung `app/office_lookup.py`, dữ liệu mẫu công khai `data/offices.csv` và bộ kiểm thử `tests/test_office_lookup.py`.
+- Phần/file sửa: `.gitignore`, `data/offices.csv`, `app/office_lookup.py`, `tests/test_office_lookup.py`, `pytest.windows.ini`, `LICH_SU_DU_AN.md`.
+- Kiểm thử: `pytest tests/test_office_lookup.py tests/test_help.py tests/test_document_lookup.py` PASS; giữ nguyên 100% câu trả lời của `dialogue_intent` và `RAGAgent`.
+- Trạng thái: PASS.
+
+<a id="log-20261017-ai-issue24-tv4"></a>
+### LOG-20261017-ai-issue24-tv4 - 17/10/2026 20:20 (UTC+07)
+
+- Người thực hiện: TV4 / Antigravity; loại: đặc tả và định nghĩa giao diện dịch vụ AI cho LLM tương lai (Issue #24).
+- Mục tiêu: Viết tài liệu đặc tả `docs/ai-interface.md` (chữ ký hàm, cấu trúc đầu vào/đầu ra, phân loại lỗi, cơ chế dự phòng) và định nghĩa hợp đồng `AIServiceInterface` tại `app/ai_interface.py` kèm `MockAIService` và `LegacyClientAdapter`, chưa gọi thêm nhà cung cấp LLM mới.
+- Trước/sau: Trước chưa có `docs/ai-interface.md` và giao thức chuẩn cho tầng sinh văn bản; sau có đặc tả đầy đủ, kiểu dữ liệu bất biến `AIRequest`/`AIResponse`/`AIStreamChunk`, cây ngoại lệ `AIServiceError` và kiểm thử hợp đồng `tests/test_ai_interface.py`.
+- Phần/file sửa: `docs/ai-interface.md`, `app/ai_interface.py`, `tests/test_ai_interface.py`, `pytest.windows.ini`, `LICH_SU_DU_AN.md`.
+- Kiểm thử: `pytest tests/test_ai_interface.py` PASS; kiểm tra `scripts/check_history.py` PASS.
+- Trạng thái: PASS.
 
 <a id="yc-219"></a>
 ### YC-219 - 16/10/2026 22:47 (UTC+07)
@@ -1382,4 +1401,25 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   + `./.venv/bin/python -m pytest -c pytest.windows.ini --collect-only`: PASS (626 tests collected).
 - Trạng thái: PASS.
 - Giới hạn, lỗi còn lại, bước tiếp: Tiếp tục duy trì quy tắc khi thành viên mở PR; các bot rà soát tự động sẽ đối chiếu trực tiếp theo `AGENT.md`.
+
+
+
+<a id="yc-225"></a>
+### YC-225 - 17/10/2026 22:55 (UTC+07)
+
+- Người thực hiện: Antigravity; loại: đồng bộ nhánh main, xử lý xung đột tích hợp và tái kiểm định sau đồng bộ.
+- Mục tiêu: Đồng bộ toàn bộ thay đổi của branch làm việc với nhánh main mới nhất trên GitHub (đã tích hợp các PR #35, #36, #41, #40); giải quyết dứt điểm các xung đột trên 12 tệp; bảo đảm tương thích giữa QA cốt lõi (YC-220/YC-222), module tra cứu văn phòng mới (#20), giao diện AI tương lai (#24) và các bài kiểm thử; tái kiểm định toàn diện hệ thống, chuẩn bị Pull Request và khởi động lại dịch vụ backend.
+- Trước/sau thay đổi:
+  + Trước: Local branch chậm hơn `origin/main` 13 commit chứa các tính năng mới (`app/office_lookup.py`, `data/offices.csv`, `app/ai_interface.py`, `docs/ai-interface.md`); server cổng 8000 bị treo/lỗi 500 do tiến trình cũ chạy Python 3.14 brew không tương thích.
+  + Sau: Đã hợp nhất sạch sẽ `origin/main` vào nhánh tính năng; bảo toàn đầy đủ các bản vá QA cốt lõi, UI, VLM OCR và rà soát lỗi YC-222; đăng ký bổ sung các test suite mới (`test_office_lookup.py`, `test_ai_interface.py`, `test_qa_core_yc220.py`) vào `pytest.windows.ini`; hệ thống vượt qua 100% các bộ kiểm thử; chuẩn bị khởi động lại backend sạch trên Python 3.12 cổng 8000.
+- Phần/file sửa và cách xử lý:
+  + Giải quyết xung đột 12 tệp: `.gitignore`, `CONTRIBUTING.md`, `DEFINITION_OF_DONE.md`, `README.md`, `app/rag_agent.py`, `docs/security-check.md`, `docs/team/RA_SOAT_TICH_HOP_YC218.md`, `docs/ui-sources.md`, `pytest.windows.ini`, `tests/test_streamlit_flow.py`, `ui/app.py`, `LICH_SU_DU_AN.md`.
+  + Tích hợp đầy đủ các entry `LOG-20261017-backend-issue20-tv3` và `LOG-20261017-ai-issue24-tv4` từ main mà không làm mất bất kỳ mục lịch sử nào.
+- Kiểm thử phần mềm:
+  + `.venv/bin/python scripts/check_history.py --base origin/main`: PASS.
+  + `.venv/bin/python -m pytest -c pytest.windows.ini`: PASS.
+  + `node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs`: PASS.
+  + `.venv/bin/python scripts/dev.py check --profile local`: PASS.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, bước tiếp: Đẩy nhánh lên GitHub, mở PR cho nhóm review; kiểm tra kết quả CI trên GitHub Actions.
 

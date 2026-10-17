@@ -118,3 +118,4 @@ def test_claims_remain_plain_text_after_completed_turn_rerender():
         assert not at.exception
         assert any(raw in t.value for t in at.text)
         assert at.session_state['messages'][-1]['citations']==citations
+

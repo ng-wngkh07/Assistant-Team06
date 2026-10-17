@@ -246,7 +246,6 @@ def render_citations(citations: Any) -> None:
                 for claim in claims:
                     if isinstance(claim, str) and claim.strip():
                         st.text(f"• {claim.strip()}")
-
             snippet = cit.get("snippet")
             if snippet is not None and str(snippet):
                 st.text(str(snippet))

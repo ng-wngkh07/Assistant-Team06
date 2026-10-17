@@ -101,6 +101,7 @@ Luồng tài liệu: nguồn → trích xuất/OCR → đoạn văn → FTS/vect
 | .github/ | Workflow CI và mẫu PR |
 | docs/team/, output/pdf/ | Tài liệu nhóm và PDF phân công |
 | corpus/ | Quy ước bàn giao riêng; không chứa thư viện thật hoặc importer tự động |
+| data/ | CSDL và tệp runtime; quy ước nguồn và quyền sở hữu xem tại [data/README.md](data/README.md) |
 | lab02/backlog/ | Backlog gốc; không chạy lại script để tạo trùng 12 issue |
 | eval/ | Đầu ra dự kiến #26–27; chưa có runner được nghiệm thu |
 

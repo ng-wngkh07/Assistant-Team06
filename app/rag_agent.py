@@ -417,6 +417,7 @@ class PsychologyAgent:
         Stream agent response with safety checks, context retrieval, and Ollama generation.
         Yields events: {"type": "citation" | "token" | "done" | "error" | "crisis", ...}
         """
+
         search_scope = (
             {"kind": "page", "document_id": source_page[0], "page_num": source_page[1]}
             if source_page else

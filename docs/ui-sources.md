@@ -4,7 +4,6 @@ Tài liệu này đặc tả quy chuẩn thiết kế giao diện, cấu trúc d
 
 > **Lưu ý về phạm vi giao diện:**
 > Giao diện chính thức của ứng dụng là **Web UI** tại `static/index.html` (phục vụ trực tiếp qua FastAPI tại `http://localhost:8000`). Trang Streamlit (`ui/app.py`) đóng vai trò là adapter mẫu phục vụ kiểm thử tích hợp client sync.
-
 > **Đối chiếu tích hợp YC217, 16/10/2026:** đây là đặc tả thiết kế của #19.
 > JSON minh họa không chứng minh mọi trường đều có trong phản hồi thật;
 > `pdf_url`/`page_quality` là trường có điều kiện, không được tự điền

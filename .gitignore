@@ -34,6 +34,7 @@
 !/tests/
 !/docs/
 !/corpus/
+!/data/
 !/.env.example
 
 # Tài liệu nhóm đã biên tập; hồ sơ/handoff/audit cá nhân vẫn giữ local.
@@ -50,10 +51,9 @@
 
 # src/ là tài liệu gốc; data/ chứa SQLite/vector/model/dữ liệu cá nhân.
 /src/
-!/data/
 /data/*
-!/data/offices.csv
 !/data/README.md
+!/data/offices.csv
 /scratch/
 /AGENTS.md
 /.agents/
