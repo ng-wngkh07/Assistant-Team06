@@ -1,0 +1,5 @@
+case_id,input,expected,predicted
+lookup,Tra cứu tài liệu về trí nhớ,lookup,lookup
+qa,Giải thích khái niệm điều kiện hóa,qa,qa
+timetable,Đọc thời khóa biểu từ ảnh,timetable,qa
+help,Hiển thị hướng dẫn sử dụng,help,help
