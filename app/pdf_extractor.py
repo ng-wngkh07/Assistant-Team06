@@ -57,7 +57,7 @@ class PDFExtractor:
 
     SUPPORTED_EXTENSIONS = {
         ".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown",
-        ".png", ".jpg", ".jpeg"
+        ".png", ".jpg", ".jpeg", ".webp"
     }
 
     @staticmethod
@@ -528,7 +528,7 @@ class PDFExtractor:
             return cls.extract_pptx(filepath)
         elif ext in (".txt", ".md", ".markdown"):
             return cls.extract_text(filepath)
-        elif ext in (".png", ".jpg", ".jpeg"):
+        elif ext in (".png", ".jpg", ".jpeg", ".webp"):
             return cls.extract_image(filepath, ocr=ocr or force_ocr)
         else:
             res = PDFExtractionResult(filename=rel_path or filepath.name, filepath=filepath, doc_type="unsupported")
