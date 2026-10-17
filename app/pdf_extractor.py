@@ -13,7 +13,7 @@ import pymupdf
 
 from app.config import DATA_DIR, MIN_TEXT_PER_PAGE
 from app.text_cleaner import normalize_vietnamese_text
-from app.vision_ocr import VisionOCRManager, BACKEND_TESSERACT
+from app.vision_ocr import VisionOCRManager, BACKEND_TESSERACT, BACKEND_OLLAMA_VISION
 from app.source_quality import PIPELINE_VERSION, inspect_page_quality
 
 
@@ -62,7 +62,10 @@ class PDFExtractor:
 
     @staticmethod
     def ocr_available() -> bool:
-        return VisionOCRManager.ocr_available(BACKEND_TESSERACT)
+        return (
+            VisionOCRManager.ocr_available(BACKEND_TESSERACT)
+            or VisionOCRManager.ocr_available(BACKEND_OLLAMA_VISION)
+        )
 
     @staticmethod
     def calculate_file_hash(filepath: Path) -> str:
@@ -460,7 +463,14 @@ class PDFExtractor:
             result.total_pages = 1
 
             if ocr and cls.ocr_available():
-                ocr_mgr = VisionOCRManager()
+                preferred_backend = (
+                    BACKEND_OLLAMA_VISION
+                    if VisionOCRManager.ocr_available(BACKEND_OLLAMA_VISION)
+                    else BACKEND_TESSERACT
+                    if VisionOCRManager.ocr_available(BACKEND_TESSERACT)
+                    else BACKEND_OLLAMA_VISION
+                )
+                ocr_mgr = VisionOCRManager(backend=preferred_backend)
                 raw_bytes = filepath.read_bytes()
                 ocr_res = ocr_mgr.ocr_image_bytes(
                     image_bytes=raw_bytes,
