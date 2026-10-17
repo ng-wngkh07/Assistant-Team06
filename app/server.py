@@ -365,6 +365,8 @@ class MaterialUploadRequest(BaseModel):
     quiz_count: int = Field(default=3, ge=1, le=10)
     flashcard_count: int = Field(default=5, ge=1, le=15)
     difficulty: Literal["easy", "medium", "hard"] = "medium"
+    generate_study_set: bool = True
+    persist_to_src: Optional[bool] = None
 
 
 class MaterialLibraryGenerateRequest(BaseModel):
@@ -375,6 +377,12 @@ class MaterialLibraryGenerateRequest(BaseModel):
     quiz_count: int = Field(default=3, ge=1, le=10)
     flashcard_count: int = Field(default=5, ge=1, le=15)
     difficulty: Literal["easy", "medium", "hard"] = "medium"
+
+
+class MaterialLibraryInspectRequest(BaseModel):
+    document_id: Optional[int] = Field(default=None, ge=1)
+    filename: Optional[str] = None
+    persist_to_src: Optional[bool] = None
 
 
 @app.post("/api/materials/upload")
@@ -389,13 +397,22 @@ async def upload_and_generate_materials(req: MaterialUploadRequest):
 
     def run_extraction_and_generation():
         extracted = study_material_manager.extract_document(req.filename, file_bytes)
-        return study_material_manager.generate_materials_from_pages(
+        should_persist = req.persist_to_src if req.persist_to_src is not None else ("PYTEST_CURRENT_TEST" not in os.environ)
+        ingestion_info = None
+        if should_persist:
+            ingestion_info = study_material_manager.ingest_to_src_and_index(req.filename, file_bytes, extracted)
+        if not req.generate_study_set:
+            return study_material_manager.store_extracted_document(extracted, ingestion_info=ingestion_info)
+        record = study_material_manager.generate_materials_from_pages(
             extracted,
             quiz_count=req.quiz_count,
             flashcard_count=req.flashcard_count,
             difficulty=req.difficulty,
             model=DEFAULT_CHAT_MODEL,
         )
+        if ingestion_info:
+            record.update(ingestion_info)
+        return record
 
     try:
         record = await run_in_threadpool(run_extraction_and_generation)
@@ -414,6 +431,31 @@ async def upload_and_generate_materials(req: MaterialUploadRequest):
     except Exception as exc:
         logger.exception("Lỗi xử lý tài liệu tải lên")
         raise HTTPException(status_code=500, detail=f"Lỗi xử lý tài liệu tải lên: {exc}")
+
+
+@app.post("/api/materials/inspect-library")
+async def inspect_library_document_endpoint(req: MaterialLibraryInspectRequest):
+    def run_lib_inspect():
+        should_persist = req.persist_to_src if req.persist_to_src is not None else ("PYTEST_CURRENT_TEST" not in os.environ)
+        return study_material_manager.inspect_library_document(
+            doc_id=req.document_id,
+            filename=req.filename,
+            persist_to_src=should_persist,
+        )
+
+    try:
+        record = await run_in_threadpool(run_lib_inspect)
+        return {
+            "status": "success",
+            "material": record,
+            "material_id": record["id"],
+            "id": record["id"],
+        }
+    except StudyMaterialError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Lỗi đọc nội dung tài liệu thư viện")
+        raise HTTPException(status_code=500, detail=f"Lỗi đọc nội dung tài liệu thư viện: {exc}")
 
 
 @app.post("/api/materials/generate-from-library")

@@ -11,7 +11,7 @@
             try { localStorage.setItem("theme", "dark"); } catch (e) {}
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=yc207-ui06">
+    <link rel="stylesheet" href="/static/style.css?v=yc207-ui07">
     <link rel="stylesheet" href="/static/theme.css?v=3-contrast-fix">
     <style>
         /* Ambient gradient glowing orbs */
@@ -1119,6 +1119,10 @@
                                     <option value="careful">Kiểm tra kỹ</option>
                                 </select>
                             </div>
+                            <button type="button" id="btn-create-quiz-flashcard" class="study-gen-pill" title="Tạo bộ câu hỏi trắc nghiệm và thẻ ghi nhớ Flashcard từ tài liệu đã thêm">
+                                <span class="pill-icon">⚡</span>
+                                <span>Tạo Trắc nghiệm &amp; Flashcard</span>
+                            </button>
                             <span class="scope-pill active" title="Tìm trong toàn bộ thư viện tài liệu">
                                 <span class="pill-icon">📚</span>
                                 <span>Thư viện tài liệu</span>
@@ -1471,6 +1475,34 @@
         </div>
     </div>
 
+    <!-- Document Content Viewer Modal (Opens when clicking an attached file/folder card) -->
+    <div id="document-content-modal" class="modal">
+        <div class="modal-content study-material-modal-content" style="max-width: 880px; width: min(880px, calc(100vw - 32px)); height: min(88vh, 840px);">
+            <div class="modal-header">
+                <div class="study-material-title-group">
+                    <h2 id="doc-content-modal-title">📄 Nội dung tài liệu</h2>
+                    <span id="doc-content-modal-meta" class="study-material-meta">Đã nạp vào nguồn dữ liệu học tập (src/)</span>
+                </div>
+                <div class="study-material-header-actions" style="display: flex; align-items: center; gap: 10px;">
+                    <button type="button" id="btn-doc-content-generate" class="btn btn-primary btn-sm" title="Tạo bộ câu hỏi trắc nghiệm và Flashcard từ tài liệu này">
+                        ⚡ Tạo Trắc nghiệm &amp; Flashcard
+                    </button>
+                    <button type="button" class="btn-close-modal" id="btn-close-doc-content-modal" aria-label="Đóng">&times;</button>
+                </div>
+            </div>
+            <div class="study-material-body" style="gap: 14px;">
+                <div class="doc-content-toolbar" style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                    <input type="text" id="doc-content-search-input" class="form-input" placeholder="🔍 Tìm kiếm từ khóa hoặc đoạn văn bên trong tài liệu..." style="flex: 1; min-width: 220px;">
+                    <span id="doc-content-src-badge" class="scope-pill active" style="font-size: 11.5px;">📂 Nguồn: src/</span>
+                </div>
+                <div id="doc-content-image-box" style="display: none; text-align: center; background: rgba(10, 13, 20, 0.75); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 14px;">
+                    <img id="doc-content-image-preview" src="" alt="Hình ảnh đính kèm" style="max-width: 100%; max-height: 340px; object-fit: contain; border-radius: 10px;">
+                </div>
+                <div id="doc-content-pages-list" class="doc-content-pages-list" style="display: flex; flex-direction: column; gap: 14px; flex: 1; overflow-y: auto; padding-right: 4px;"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Study Material Generating Loading Modal -->
     <div id="study-loading-modal" class="modal">
         <div class="modal-content modal-sm" style="text-align: center; padding: 28px 24px; max-width: 460px; width: min(460px, calc(100vw - 32px)); box-sizing: border-box; overflow: hidden;">
@@ -1483,7 +1515,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=yc207-ui06"></script>
+    <script src="/static/app.js?v=yc207-ui07"></script>
     <script src="/static/document-lookup.js?v=yc198-release01"></script>
     <script src="/static/timetable.js?v=yc195-02"></script>
     <script src="/static/layout.js?v=yc195-02"></script>

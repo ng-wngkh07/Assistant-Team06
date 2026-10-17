@@ -316,3 +316,64 @@ def test_attachment_preview_card_modal_structure_and_centered_chat_layout(client
     assert len(mat.get("pages", [])) >= 1
 
 
+def test_ingest_to_src_without_auto_quiz_and_on_demand_generate(client, tmp_path, monkeypatch):
+    import sqlite3
+    from pathlib import Path
+    import app.config as cfg
+
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "static/index.html").read_text(encoding="utf-8")
+    js = (root / "static/app.js").read_text(encoding="utf-8")
+
+    # Verify dedicated button & content viewer modal exist
+    assert 'id="btn-create-quiz-flashcard"' in html
+    assert 'id="document-content-modal"' in html
+    assert "openDocumentContentViewer" in js
+    assert "generateStudySetForActiveAttachment" in js
+
+    temp_src = tmp_path / "src"
+    temp_db = tmp_path / "knowledge_base.db"
+    monkeypatch.setattr(cfg, "SRC_DIR", temp_src)
+    monkeypatch.setattr(cfg, "DB_PATH", temp_db)
+
+    doc_text = (
+        "Cấu trúc dữ liệu cây nhị phân tìm kiếm (BST) là cấu trúc phân cấp trong đó mỗi nút có tối đa hai nút con. "
+        "Nút con bên trái luôn có giá trị nhỏ hơn nút cha và nút con bên phải luôn có giá trị lớn hơn nút cha."
+    )
+    b64 = base64.b64encode(doc_text.encode("utf-8")).decode("ascii")
+
+    # Step 1: Add file with generate_study_set=False, persist_to_src=True
+    res = client.post("/api/materials/upload", json={
+        "filename": "cay_nhi_phan.txt",
+        "file_base64": b64,
+        "generate_study_set": False,
+        "persist_to_src": True,
+    })
+    assert res.status_code == 200
+    mat = res.json()["material"]
+    assert mat["saved_to_src"] is True
+    assert mat["src_path"] == "src/cay_nhi_phan.txt"
+    assert mat["study_generated"] is False
+    assert mat["quiz"] == []
+    assert mat["flashcards"] == []
+    assert len(mat["pages"]) == 1
+    assert "cây nhị phân" in mat["pages"][0]["text"]
+    assert (temp_src / "cay_nhi_phan.txt").is_file()
+
+    with sqlite3.connect(temp_db) as conn:
+        row = conn.execute("SELECT id, filename, status FROM documents WHERE filename = ?", ("cay_nhi_phan.txt",)).fetchone()
+        assert row is not None
+        assert row[2] == "indexed"
+        chunks = conn.execute("SELECT COUNT(*) FROM chunks WHERE doc_id = ?", (row[0],)).fetchone()[0]
+        assert chunks >= 1
+
+    # Step 2: Click dedicated button to generate Quiz & Flashcard on demand
+    gen_res = client.post("/api/materials/generate-from-library", json={"filename": "cay_nhi_phan.txt"})
+    assert gen_res.status_code == 200
+    gen_mat = gen_res.json()["material"]
+    assert gen_mat["study_generated"] is True
+    assert len(gen_mat["quiz"]) >= 1
+    assert len(gen_mat["flashcards"]) >= 1
+
+
+

@@ -3462,3 +3462,83 @@ body.sidebar-collapsed #btn-open-sidebar { display: inline-flex; }
     animation: spin 0.8s linear infinite;
 }
 
+/* --- Dedicated Quiz & Flashcard Generator Pill Button --- */
+.study-gen-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 13px;
+    border-radius: 9999px;
+    background: linear-gradient(135deg, rgba(244, 63, 94, 0.22) 0%, rgba(225, 29, 72, 0.14) 100%);
+    border: 1px solid rgba(251, 113, 133, 0.45);
+    color: #ffe4e6;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 12px rgba(244, 63, 94, 0.18);
+}
+
+.study-gen-pill:hover {
+    background: linear-gradient(135deg, rgba(244, 63, 94, 0.35) 0%, rgba(225, 29, 72, 0.25) 100%);
+    border-color: rgba(251, 113, 133, 0.75);
+    color: #ffffff;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(244, 63, 94, 0.32);
+}
+
+.study-gen-pill.has-active-file {
+    background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+    border-color: #fb7185;
+    color: #ffffff;
+    box-shadow: 0 4px 16px rgba(244, 63, 94, 0.4);
+}
+
+/* --- Document Content Viewer Modal Cards --- */
+.doc-content-page-card {
+    background: rgba(18, 22, 34, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.doc-content-page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.doc-content-page-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 9999px;
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(96, 165, 250, 0.35);
+    color: #93c5fd;
+    font-size: 11.5px;
+    font-weight: 700;
+}
+
+.doc-content-page-chars {
+    font-size: 11.5px;
+    color: #94a3b8;
+}
+
+.doc-content-page-text {
+    font-size: 13.5px;
+    line-height: 1.68;
+    color: #e2e8f0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+

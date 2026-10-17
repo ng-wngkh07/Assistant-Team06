@@ -561,12 +561,202 @@ class StudyMaterialManager:
             "quiz": norm_quiz,
             "flashcards": norm_flashcards,
             "difficulty": difficulty,
+            "study_generated": True,
+            "saved_to_src": getattr(extracted_result, "saved_to_src", False),
+            "src_path": getattr(extracted_result, "src_path", f"src/{extracted_result.filename}"),
         }
 
         with self._lock:
             self._materials[material_id] = record
 
         return record
+
+    def ingest_to_src_and_index(
+        self,
+        filename: str,
+        file_bytes: bytes,
+        extracted_result: PDFExtractionResult,
+        src_dir: Optional[Path] = None,
+        db_path: Optional[Path] = None,
+    ) -> Dict[str, Any]:
+        """Save the uploaded file into src/ and index its extracted content into knowledge_base.db."""
+        from app.config import DB_PATH, DEFAULT_EMBED_MODEL, SRC_DIR
+        from app.chunker import TextChunker
+        from app.indexer import KnowledgeIndexer
+
+        target_src = Path(src_dir) if src_dir else SRC_DIR
+        target_db = Path(db_path) if db_path else DB_PATH
+        target_src.mkdir(parents=True, exist_ok=True)
+        target_db.parent.mkdir(parents=True, exist_ok=True)
+
+        safe_name = Path(filename).name
+        dest_path = target_src / safe_name
+        dest_path.write_bytes(file_bytes)
+
+        file_hash = PDFExtractor.calculate_file_hash(dest_path)
+        extracted_result.filename = safe_name
+        extracted_result.filepath = dest_path.resolve()
+        extracted_result.file_size_bytes = len(file_bytes)
+        extracted_result.file_hash = file_hash
+        setattr(extracted_result, "saved_to_src", True)
+        setattr(extracted_result, "src_path", f"src/{safe_name}")
+
+        doc_id = None
+        chunks_inserted = 0
+        try:
+            kb_indexer = KnowledgeIndexer(db_path=target_db, src_dir=target_src)
+            all_chunks = []
+            extracted_pages_count = 0
+            for page in (extracted_result.extracted_pages or []):
+                p_num = int(page.get("page_num", 1))
+                p_text = (page.get("text") or "").strip()
+                if p_text:
+                    extracted_pages_count += 1
+                    page_chunks = TextChunker.chunk_page(
+                        book_title=extracted_result.clean_title or safe_name,
+                        filename=safe_name,
+                        page_num=p_num,
+                        page_text=p_text,
+                    )
+                    all_chunks.extend(page_chunks)
+
+            resolved_embed = None
+            can_embed = False
+            try:
+                if self.ollama.check_health():
+                    resolved_embed = self.ollama.find_best_embed_model(DEFAULT_EMBED_MODEL)
+                    if resolved_embed and self.ollama.get_embedding("test", model=resolved_embed) is not None:
+                        can_embed = True
+            except Exception:
+                can_embed = False
+
+            prepared = kb_indexer._prepare_chunk_rows(all_chunks, can_embed, resolved_embed)
+            with kb_indexer.get_connection() as conn:
+                doc_id = kb_indexer._save_document_record(
+                    extracted_result,
+                    status="indexed",
+                    is_scanned=bool(extracted_result.is_scanned),
+                    extracted_pages_count=max(1, extracted_pages_count),
+                    connection=conn,
+                )
+                chunks_inserted = kb_indexer._insert_chunk_rows(conn, doc_id, prepared)
+                kb_indexer._save_quality_record(conn, doc_id, extracted_result)
+        except Exception as e:
+            logger.warning(f"Indexing uploaded file '{safe_name}' into knowledge_base.db encountered warning: {e}")
+
+        return {
+            "saved_to_src": True,
+            "src_path": f"src/{safe_name}",
+            "doc_id": doc_id,
+            "chunks_indexed": chunks_inserted,
+        }
+
+    def store_extracted_document(
+        self,
+        extracted_result: PDFExtractionResult,
+        ingestion_info: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Store an extracted document (pages & metadata) without generating Quiz/Flashcards yet."""
+        material_id = str(uuid.uuid4())
+        pages_preview = [
+            {
+                "page_num": int(p.get("page_num", 1)),
+                "text": str(p.get("text", "")),
+            }
+            for p in (extracted_result.extracted_pages or [])
+            if (p.get("text") or "").strip()
+        ]
+        info = ingestion_info or {}
+        record = {
+            "id": material_id,
+            "material_id": material_id,
+            "filename": extracted_result.filename,
+            "clean_title": extracted_result.clean_title,
+            "total_pages": extracted_result.total_pages,
+            "total_chars": extracted_result.total_chars,
+            "pages": pages_preview,
+            "quiz": [],
+            "flashcards": [],
+            "difficulty": "medium",
+            "study_generated": False,
+            "saved_to_src": bool(info.get("saved_to_src", getattr(extracted_result, "saved_to_src", False))),
+            "src_path": info.get("src_path", f"src/{extracted_result.filename}"),
+            "doc_id": info.get("doc_id"),
+            "chunks_indexed": info.get("chunks_indexed", 0),
+        }
+        with self._lock:
+            self._materials[material_id] = record
+        return record
+
+    def inspect_library_document(
+        self,
+        doc_id: Optional[int] = None,
+        filename: Optional[str] = None,
+        persist_to_src: bool = False,
+    ) -> Dict[str, Any]:
+        """Load full content pages of a library/local document without generating Quiz/Flashcards yet."""
+        import sqlite3
+        from contextlib import closing
+        from app.config import BASE_DIR, DB_PATH, SRC_DIR
+
+        if filename:
+            with self._lock:
+                for mat in reversed(list(self._materials.values())):
+                    if (mat.get("filename") == filename or mat.get("clean_title") == filename) and mat.get("pages"):
+                        return mat
+
+        doc = None
+        rows = []
+        if DB_PATH.exists():
+            try:
+                with closing(sqlite3.connect(DB_PATH.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+                    db.row_factory = sqlite3.Row
+                    if doc_id is not None:
+                        doc = db.execute("SELECT id, filename, clean_title, total_pages FROM documents WHERE id = ?", (doc_id,)).fetchone()
+                    elif filename:
+                        doc = db.execute("SELECT id, filename, clean_title, total_pages FROM documents WHERE filename = ? OR clean_title = ?", (filename, filename)).fetchone()
+                    if doc:
+                        rows = db.execute(
+                            "SELECT page_num, text FROM chunks WHERE doc_id = ? ORDER BY page_num, chunk_index",
+                            (doc["id"],)
+                        ).fetchall()
+            except Exception as e:
+                logger.warning(f"Database lookup skipped in inspect_library_document: {e}")
+
+        if doc and rows:
+            page_map: Dict[int, List[str]] = {}
+            total_chars = 0
+            for r in rows:
+                p_num = int(r["page_num"] or 1)
+                txt = (r["text"] or "").strip()
+                if txt:
+                    page_map.setdefault(p_num, []).append(txt)
+                    total_chars += len(txt)
+            extracted_pages = [{"page_num": k, "text": "\n\n".join(v)} for k, v in sorted(page_map.items())]
+            fake_res = PDFExtractionResult(filename=doc["filename"], filepath=SRC_DIR / doc["filename"])
+            fake_res.clean_title = doc["clean_title"]
+            fake_res.total_pages = doc["total_pages"]
+            fake_res.total_chars = total_chars
+            fake_res.extracted_pages = extracted_pages
+            return self.store_extracted_document(
+                fake_res,
+                ingestion_info={"saved_to_src": True, "src_path": f"src/{doc['filename']}", "doc_id": doc["id"]},
+            )
+
+        if filename:
+            for folder in (SRC_DIR, BASE_DIR / "docs", BASE_DIR):
+                if not folder or not folder.is_dir():
+                    continue
+                candidate = folder / Path(filename).name
+                if candidate.is_file():
+                    raw_bytes = candidate.read_bytes()
+                    extracted = self.extract_document(candidate.name, raw_bytes)
+                    ingest_info = {"saved_to_src": folder == SRC_DIR, "src_path": f"src/{candidate.name}"}
+                    if persist_to_src:
+                        ingest_info = self.ingest_to_src_and_index(candidate.name, raw_bytes, extracted)
+                    return self.store_extracted_document(extracted, ingestion_info=ingest_info)
+
+        raise StudyMaterialError(f"Không tìm thấy tài liệu '{doc_id or filename}' trong thư viện.")
 
     @property
     def materials_cache(self) -> Dict[str, Dict[str, Any]]:
@@ -602,12 +792,12 @@ class StudyMaterialManager:
                 continue
             seen_filenames.add(fname)
             results.append({
-                "id": None,
+                "id": mat.get("doc_id"),
                 "filename": fname,
                 "clean_title": mat.get("clean_title") or fname,
                 "total_pages": mat.get("total_pages") or 1,
                 "page_count": mat.get("total_pages") or 1,
-                "chunk_count": len(mat.get("pages") or []) or 1,
+                "chunk_count": mat.get("chunks_indexed") or len(mat.get("pages") or []) or 1,
             })
 
         candidate_dirs = [SRC_DIR, BASE_DIR / "docs", BASE_DIR]
@@ -693,10 +883,35 @@ class StudyMaterialManager:
             )
 
         if filename:
+            cached_without_quiz = None
             with self._lock:
                 for mat in reversed(list(self._materials.values())):
                     if mat.get("filename") == filename or mat.get("clean_title") == filename:
-                        return mat
+                        if mat.get("quiz") and mat.get("flashcards"):
+                            return mat
+                        if mat.get("pages"):
+                            cached_without_quiz = mat
+                            break
+
+            if cached_without_quiz:
+                pages = cached_without_quiz.get("pages") or []
+                fake_res = PDFExtractionResult(
+                    filename=cached_without_quiz["filename"],
+                    filepath=Path(cached_without_quiz["filename"]),
+                )
+                fake_res.clean_title = cached_without_quiz.get("clean_title") or cached_without_quiz["filename"]
+                fake_res.total_pages = cached_without_quiz.get("total_pages") or max(1, len(pages))
+                fake_res.total_chars = cached_without_quiz.get("total_chars") or sum(len(p.get("text", "")) for p in pages)
+                fake_res.extracted_pages = pages
+                setattr(fake_res, "saved_to_src", cached_without_quiz.get("saved_to_src", True))
+                setattr(fake_res, "src_path", cached_without_quiz.get("src_path", f"src/{cached_without_quiz['filename']}"))
+                return self.generate_materials_from_pages(
+                    fake_res,
+                    quiz_count=quiz_count,
+                    flashcard_count=flashcard_count,
+                    difficulty=difficulty,
+                    model=model,
+                )
 
             for folder in (SRC_DIR, BASE_DIR / "docs", BASE_DIR):
                 if not folder or not folder.is_dir():
@@ -724,5 +939,6 @@ class StudyMaterialManager:
 
 
 study_material_manager = StudyMaterialManager()
+
 
 

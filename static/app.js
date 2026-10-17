@@ -1786,9 +1786,23 @@ document.addEventListener("DOMContentLoaded", () => {
     const sourceProcessedAt = document.getElementById("source-processed-at");
     const sourceTextPreview = document.getElementById("source-text-preview");
     const chatAttachmentPreviewTray = document.getElementById("chat-attachment-preview-tray");
+    const btnCreateQuizFlashcard = document.getElementById("btn-create-quiz-flashcard");
+
+    // Document Content Viewer Modal UI
+    const documentContentModal = document.getElementById("document-content-modal");
+    const docContentModalTitle = document.getElementById("doc-content-modal-title");
+    const docContentModalMeta = document.getElementById("doc-content-modal-meta");
+    const docContentSrcBadge = document.getElementById("doc-content-src-badge");
+    const docContentSearchInput = document.getElementById("doc-content-search-input");
+    const docContentImageBox = document.getElementById("doc-content-image-box");
+    const docContentImagePreview = document.getElementById("doc-content-image-preview");
+    const docContentPagesList = document.getElementById("doc-content-pages-list");
+    const btnDocContentGenerate = document.getElementById("btn-doc-content-generate");
+    const btnCloseDocContentModal = document.getElementById("btn-close-doc-content-modal");
 
     // State
     let currentStudyMaterial = null;
+    let currentInspectedAttachment = null;
     let currentQuizIndex = 0;
     let quizUserAnswers = {};
     let currentCardIndex = 0;
@@ -1797,6 +1811,12 @@ document.addEventListener("DOMContentLoaded", () => {
     let isCardFlipped = false;
     let cachedLibraryDocs = [];
     const attachmentPreviewRegistry = new Map();
+
+    function syncGenerateButtonState() {
+        if (!btnCreateQuizFlashcard) return;
+        const hasAttachments = attachmentPreviewRegistry.size > 0;
+        btnCreateQuizFlashcard.classList.toggle("has-active-file", hasAttachments);
+    }
 
     function getFileBadgeMeta(filename) {
         const lower = String(filename || "").toLowerCase();
@@ -1821,9 +1841,9 @@ document.addEventListener("DOMContentLoaded", () => {
             : [];
 
         const heading1 = lines[0] || `1. Tổng quan: ${cleanTitle}`;
-        const body1 = lines.slice(1, 5).join(" ") || "Tài liệu học tập đã được trích xuất nội dung phục vụ tạo câu hỏi trắc nghiệm và thẻ ghi nhớ Flashcard.";
+        const body1 = lines.slice(1, 5).join(" ") || "Tài liệu học tập đã được trích xuất nội dung và nạp vào nguồn dữ liệu src/.";
         const heading2 = lines[5] || "2. Nội dung trọng tâm & Khái niệm";
-        const body2 = lines.slice(6, 11).join(" ") || "Bao gồm các khái niệm cốt lõi, phân tích kiến trúc và trích dẫn đối chiếu trực tiếp từ tài liệu gốc.";
+        const body2 = lines.slice(6, 11).join(" ") || "Nhấn vào thẻ tệp này để xem toàn bộ nội dung chi tiết bên trong tài liệu.";
 
         return `
             <div class="attachment-doc-sheet">
@@ -1849,8 +1869,16 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         if (material) {
-            attachmentPreviewRegistry.set(key, material);
+            const entry = {
+                ...material,
+                cardKey: key,
+                isImage: Boolean(isImage),
+                imageDataUrl: imageDataUrl || (attachmentPreviewRegistry.get(key)?.imageDataUrl || ""),
+            };
+            attachmentPreviewRegistry.set(key, entry);
+            currentInspectedAttachment = entry;
         }
+        syncGenerateButtonState();
 
         const badge = getFileBadgeMeta(filename);
         const thumbHtml = (isImage && imageDataUrl)
@@ -1862,7 +1890,7 @@ document.addEventListener("DOMContentLoaded", () => {
             : "";
 
         cardEl.title = material
-            ? `Nhấn để mở Bộ Ôn Luyện: ${filename}`
+            ? `Nhấn để xem nội dung bên trong: ${filename}`
             : `Đang xử lý: ${filename}`;
 
         cardEl.innerHTML = `
@@ -1884,9 +1912,9 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         cardEl.onclick = () => {
-            const storedMat = attachmentPreviewRegistry.get(key) || material || currentStudyMaterial;
-            if (storedMat) {
-                openStudyMaterial(storedMat);
+            const storedEntry = attachmentPreviewRegistry.get(key) || material;
+            if (storedEntry) {
+                openDocumentContentViewer(storedEntry);
             }
         };
 
@@ -1900,9 +1928,121 @@ document.addEventListener("DOMContentLoaded", () => {
             cardEl.remove();
         }
         attachmentPreviewRegistry.delete(cardKey);
+        if (currentInspectedAttachment && currentInspectedAttachment.cardKey === cardKey) {
+            const remaining = Array.from(attachmentPreviewRegistry.values());
+            currentInspectedAttachment = remaining.length ? remaining[remaining.length - 1] : null;
+        }
+        syncGenerateButtonState();
         if (chatAttachmentPreviewTray.children.length === 0) {
             chatAttachmentPreviewTray.hidden = true;
         }
+    }
+
+    // --- Document Content Viewer Modal Logic ---
+    function renderDocumentContentPages(entry, filterQuery = "") {
+        if (!docContentPagesList) return;
+        const pages = (entry && Array.isArray(entry.pages)) ? entry.pages : [];
+        const q = (filterQuery || "").toLowerCase().trim();
+
+        const filteredPages = q
+            ? pages.filter(p => String(p.text || "").toLowerCase().includes(q) || `trang ${p.page_num}`.includes(q))
+            : pages;
+
+        if (!filteredPages.length) {
+            docContentPagesList.innerHTML = `
+                <div class="doc-content-page-card" style="text-align: center; color: var(--text-muted); padding: 28px;">
+                    ${q ? "Không tìm thấy đoạn nội dung nào khớp với từ khóa tìm kiếm." : "Không có nội dung văn bản trong tài liệu này."}
+                </div>
+            `;
+            return;
+        }
+
+        docContentPagesList.innerHTML = filteredPages.map(p => {
+            const pageText = String(p.text || "").trim();
+            return `
+                <div class="doc-content-page-card">
+                    <div class="doc-content-page-header">
+                        <span class="doc-content-page-badge">📑 Trang ${p.page_num || 1}</span>
+                        <span class="doc-content-page-chars">${pageText.length.toLocaleString("vi-VN")} ký tự</span>
+                    </div>
+                    <div class="doc-content-page-text">${escapeHtml(pageText)}</div>
+                </div>
+            `;
+        }).join("");
+    }
+
+    function openDocumentContentViewer(entry) {
+        if (!entry || !documentContentModal) return;
+        currentInspectedAttachment = entry;
+
+        const fname = entry.filename || "Tài liệu đính kèm";
+        const totalPages = entry.total_pages || (entry.pages ? entry.pages.length : 1) || 1;
+        const totalChars = entry.total_chars || (entry.pages || []).reduce((acc, p) => acc + String(p.text || "").length, 0);
+        const srcPath = entry.src_path || `src/${fname}`;
+
+        if (docContentModalTitle) {
+            docContentModalTitle.textContent = `📄 Nội dung: ${fname}`;
+        }
+        if (docContentModalMeta) {
+            docContentModalMeta.textContent = `${totalPages} trang · ${totalChars.toLocaleString("vi-VN")} ký tự · Đã nạp vào nguồn dữ liệu học tập (${srcPath})`;
+        }
+        if (docContentSrcBadge) {
+            docContentSrcBadge.textContent = `📂 Nguồn học tập: ${srcPath}`;
+        }
+        if (docContentSearchInput) {
+            docContentSearchInput.value = "";
+        }
+
+        if (docContentImageBox && docContentImagePreview) {
+            if (entry.isImage && entry.imageDataUrl) {
+                docContentImagePreview.src = entry.imageDataUrl;
+                docContentImageBox.style.display = "block";
+            } else {
+                docContentImagePreview.src = "";
+                docContentImageBox.style.display = "none";
+            }
+        }
+
+        renderDocumentContentPages(entry, "");
+
+        documentContentModal.style.display = "flex";
+        documentContentModal.classList.add("active");
+    }
+
+    function closeDocumentContentViewer() {
+        if (documentContentModal) {
+            documentContentModal.style.display = "none";
+            documentContentModal.classList.remove("active");
+        }
+    }
+
+    btnCloseDocContentModal?.addEventListener("click", closeDocumentContentViewer);
+
+    docContentSearchInput?.addEventListener("input", (e) => {
+        if (currentInspectedAttachment) {
+            renderDocumentContentPages(currentInspectedAttachment, e.target.value || "");
+        }
+    });
+
+    btnDocContentGenerate?.addEventListener("click", () => {
+        closeDocumentContentViewer();
+        generateStudySetForActiveAttachment();
+    });
+
+    btnCreateQuizFlashcard?.addEventListener("click", () => {
+        generateStudySetForActiveAttachment();
+    });
+
+    async function generateStudySetForActiveAttachment() {
+        const allAttached = Array.from(attachmentPreviewRegistry.values());
+        const activeEntry = currentInspectedAttachment || (allAttached.length ? allAttached[allAttached.length - 1] : null);
+
+        if (!activeEntry || !activeEntry.filename) {
+            openLibraryPicker();
+            return;
+        }
+
+        await generateFromLibraryDocument(activeEntry.filename);
     }
 
     // --- Attach Menu Controls ---
@@ -1961,7 +2101,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // --- File Upload Handler ---
+    // --- File Upload Handler (Ingests into src/ & attaches preview card without auto-opening Quiz/Flashcards) ---
     const ALLOWED_STUDY_EXTS = [".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown", ".png", ".jpg", ".jpeg", ".webp"];
 
     materialFileInput?.addEventListener("change", async (e) => {
@@ -1992,13 +2132,6 @@ document.addEventListener("DOMContentLoaded", () => {
         const previewKey = `upload-${file.name}`;
         let base64Data = "";
 
-        showStudyLoading(
-            `Đang tải lên "${file.name}"...`,
-            isImageFile
-                ? "Đang nhận diện chữ và trích xuất nội dung từ hình ảnh..."
-                : "Đang đọc nội dung và trích xuất bằng PDFExtractor..."
-        );
-
         try {
             base64Data = await readFileAsBase64(file);
             upsertAttachmentPreviewCard({
@@ -2010,17 +2143,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 loading: true
             });
 
-            showStudyLoading(
-                `Đang phân tích "${file.name}"...`,
-                "AI đang tự động tạo câu hỏi trắc nghiệm và flashcards đối chiếu tài liệu..."
-            );
-
             const res = await fetch("/api/materials/upload", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     filename: file.name,
-                    file_base64: base64Data
+                    file_base64: base64Data,
+                    generate_study_set: false,
+                    persist_to_src: true
                 })
             });
 
@@ -2038,7 +2168,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 throw new Error(detailMsg);
             }
 
-            hideStudyLoading();
             upsertAttachmentPreviewCard({
                 cardKey: previewKey,
                 filename: file.name,
@@ -2047,10 +2176,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 material: data.material,
                 loading: false
             });
-            appendStudyCardToChat(data.material);
-            openStudyMaterial(data.material);
+
+            fetchKnowledgeBaseStatus();
+            if (chatStatus) {
+                chatStatus.textContent = `✅ Đã thêm "${file.name}" vào nguồn dữ liệu học tập (src/). Nhấn vào thẻ tệp để xem nội dung hoặc nhấn "⚡ Tạo Trắc nghiệm & Flashcard" để ôn luyện.`;
+            }
         } catch (err) {
-            hideStudyLoading();
             removeAttachmentPreviewCard(previewKey);
             console.error("Upload material error:", err);
             alert(`Lỗi xử lý tài liệu: ${err.message || err}`);
@@ -2113,13 +2244,24 @@ document.addEventListener("DOMContentLoaded", () => {
                 </td>
                 <td style="text-align: center; font-size: 12.5px;">${doc.page_count || doc.total_pages || 1}</td>
                 <td style="text-align: center; font-size: 12.5px;">${doc.chunk_count || 1}</td>
-                <td style="text-align: center;">
-                    <button type="button" class="btn btn-sm btn-primary btn-generate-from-doc" style="font-size: 11.5px; padding: 4px 10px;" data-filename="${escapeHtml(doc.filename)}">
-                        ⚡ Tạo Quiz & Thẻ
+                <td style="text-align: center; display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                    <button type="button" class="btn btn-sm btn-secondary btn-attach-from-doc" style="font-size: 11px; padding: 4px 8px;" data-filename="${escapeHtml(doc.filename)}">
+                        ➕ Thêm tệp
+                    </button>
+                    <button type="button" class="btn btn-sm btn-primary btn-generate-from-doc" style="font-size: 11px; padding: 4px 8px;" data-filename="${escapeHtml(doc.filename)}">
+                        ⚡ Tạo Quiz &amp; Thẻ
                     </button>
                 </td>
             `;
             libraryPickerTableBody.appendChild(tr);
+        });
+
+        const attachBtns = libraryPickerTableBody.querySelectorAll(".btn-attach-from-doc");
+        attachBtns.forEach(btn => {
+            btn.addEventListener("click", () => {
+                const filename = btn.getAttribute("data-filename");
+                attachLibraryDocument(filename);
+            });
         });
 
         const generateBtns = libraryPickerTableBody.querySelectorAll(".btn-generate-from-doc");
@@ -2151,7 +2293,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    async function generateFromLibraryDocument(filename) {
+    async function attachLibraryDocument(filename) {
         if (libraryPickerModal) {
             libraryPickerModal.style.display = "none";
             libraryPickerModal.classList.remove("active");
@@ -2167,9 +2309,54 @@ document.addEventListener("DOMContentLoaded", () => {
             loading: true
         });
 
+        try {
+            const res = await fetch("/api/materials/inspect-library", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ filename, persist_to_src: true })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || "Không thể đọc nội dung tài liệu thư viện");
+
+            upsertAttachmentPreviewCard({
+                cardKey: previewKey,
+                filename: (data.material && data.material.filename) || filename,
+                isImage: false,
+                imageDataUrl: "",
+                material: data.material,
+                loading: false
+            });
+            fetchKnowledgeBaseStatus();
+            if (chatStatus) {
+                chatStatus.textContent = `✅ Đã thêm "${filename}" vào khung chat và nguồn học tập (src/). Nhấn vào thẻ tệp để xem nội dung hoặc nhấn "⚡ Tạo Trắc nghiệm & Flashcard" để ôn luyện.`;
+            }
+        } catch (err) {
+            removeAttachmentPreviewCard(previewKey);
+            console.error("Attach library doc error:", err);
+            alert(`Lỗi thêm tài liệu: ${err.message || err}`);
+        }
+    }
+
+    async function generateFromLibraryDocument(filename) {
+        if (libraryPickerModal) {
+            libraryPickerModal.style.display = "none";
+            libraryPickerModal.classList.remove("active");
+        }
+
+        const existingUploadEntry = attachmentPreviewRegistry.get(`upload-${filename}`);
+        const previewKey = existingUploadEntry ? `upload-${filename}` : `lib-${filename}`;
+        upsertAttachmentPreviewCard({
+            cardKey: previewKey,
+            filename: filename,
+            isImage: existingUploadEntry ? existingUploadEntry.isImage : false,
+            imageDataUrl: existingUploadEntry ? existingUploadEntry.imageDataUrl : "",
+            material: existingUploadEntry || null,
+            loading: true
+        });
+
         showStudyLoading(
             `Đang xử lý "${filename}"...`,
-            "AI đang tổng hợp nội dung thư viện và tạo bộ câu hỏi trắc nghiệm & flashcard..."
+            "AI đang tổng hợp nội dung tài liệu và tạo bộ câu hỏi trắc nghiệm & flashcard..."
         );
 
         try {
@@ -2185,8 +2372,8 @@ document.addEventListener("DOMContentLoaded", () => {
             upsertAttachmentPreviewCard({
                 cardKey: previewKey,
                 filename: (data.material && data.material.filename) || filename,
-                isImage: false,
-                imageDataUrl: "",
+                isImage: existingUploadEntry ? existingUploadEntry.isImage : false,
+                imageDataUrl: existingUploadEntry ? existingUploadEntry.imageDataUrl : "",
                 material: data.material,
                 loading: false
             });
@@ -2194,7 +2381,18 @@ document.addEventListener("DOMContentLoaded", () => {
             openStudyMaterial(data.material);
         } catch (err) {
             hideStudyLoading();
-            removeAttachmentPreviewCard(previewKey);
+            if (!existingUploadEntry) {
+                removeAttachmentPreviewCard(previewKey);
+            } else {
+                upsertAttachmentPreviewCard({
+                    cardKey: previewKey,
+                    filename: filename,
+                    isImage: existingUploadEntry.isImage,
+                    imageDataUrl: existingUploadEntry.imageDataUrl,
+                    material: existingUploadEntry,
+                    loading: false
+                });
+            }
             console.error("Library generate error:", err);
             alert(`Lỗi tạo bài học: ${err.message || err}`);
         }
