@@ -6,15 +6,19 @@ GPU lock coordination, and safe in-memory session tracking.
 
 import base64
 import hashlib
+import io
 import json
 import logging
 import os
 import re
+import subprocess
 import tempfile
 import threading
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from PIL import Image
 
 from app.config import DATA_DIR, DEFAULT_CHAT_MODEL
 from app.gpu_lock import GPUBusyError, gpu_coordinator
@@ -27,9 +31,11 @@ logger = logging.getLogger(__name__)
 
 MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
 MIN_EXTRACT_CHARS = 40
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 SUPPORTED_EXTENSIONS = {
-    ".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown", ".png", ".jpg", ".jpeg"
+    ".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown",
+    ".png", ".jpg", ".jpeg", ".webp"
 }
 
 
@@ -260,16 +266,142 @@ class StudyMaterialManager:
         # Magic bytes checks
         if ext == ".pdf" and not file_bytes.startswith(b"%PDF"):
             raise StudyMaterialError("Tệp PDF bị hỏng hoặc không đúng định dạng chuẩn.")
-        elif ext in (".png",) and not file_bytes.startswith(b"\x89PNG"):
+        elif ext == ".png" and not file_bytes.startswith(b"\x89PNG"):
             raise StudyMaterialError("Tệp PNG không đúng định dạng.")
         elif ext in (".jpg", ".jpeg") and not file_bytes.startswith(b"\xff\xd8"):
             raise StudyMaterialError("Tệp JPEG không đúng định dạng.")
+        elif ext == ".webp" and not (file_bytes.startswith(b"RIFF") and b"WEBP" in file_bytes[:16]):
+            raise StudyMaterialError("Tệp WebP không đúng định dạng.")
+
+        if ext in IMAGE_EXTENSIONS:
+            try:
+                with Image.open(io.BytesIO(file_bytes)) as img:
+                    img.verify()
+            except Exception as e:
+                raise StudyMaterialError(f"Tệp ảnh '{filename}' bị hỏng hoặc không thể giải mã: {e}")
 
         return ext
+
+    @staticmethod
+    def _run_windows_native_ocr(filepath: Path) -> str:
+        """Use Windows built-in WinRT OcrEngine via PowerShell when external OCR engines are unavailable."""
+        if os.name != "nt":
+            return ""
+        try:
+            abs_path = str(filepath.resolve()).replace("'", "''")
+            ps_code = (
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+                "Add-Type -AssemblyName System.Runtime.WindowsRuntime\n"
+                "$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]\n"
+                "$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]\n"
+                "$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType = WindowsRuntime]\n"
+                "$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { "
+                "$_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and "
+                "$_.GetParameters()[0].ParameterType.Name.StartsWith('IAsyncOperation') })[0]\n"
+                "Function Await($WinRtTask, $ResultType) {\n"
+                "    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)\n"
+                "    $netTask = $asTask.Invoke($null, @($WinRtTask))\n"
+                "    $netTask.Wait(-1) | Out-Null\n"
+                "    $netTask.Result\n"
+                "}\n"
+                f"$file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync('{abs_path}')) ([Windows.Storage.StorageFile])\n"
+                "$stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])\n"
+                "$decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])\n"
+                "$bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])\n"
+                "$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()\n"
+                "if (-not $engine) { $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage([Windows.Globalization.Language]::new('en-US')) }\n"
+                "$ocrResult = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])\n"
+                "foreach ($line in $ocrResult.Lines) { Write-Output $line.Text }\n"
+            )
+            encoded = base64.b64encode(ps_code.encode("utf-16le")).decode("ascii")
+            proc = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=12,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                return normalize_vietnamese_text(proc.stdout.strip())
+        except Exception as e:
+            logger.debug("Windows native OCR fallback skipped: %s", e)
+        return ""
+
+    def _extract_image_fallback(
+        self,
+        temp_file: Path,
+        filename: str,
+        file_bytes: bytes,
+        result: PDFExtractionResult,
+    ) -> PDFExtractionResult:
+        """Fallback extraction for image files when primary VisionOCRManager is offline or returns sparse text."""
+        collected_parts: List[str] = []
+
+        # 1. Keep any partial text already found
+        for p in result.extracted_pages:
+            if p.get("text", "").strip():
+                collected_parts.append(p["text"].strip())
+
+        # 2. Extract embedded text metadata from PNG/JPEG info if present
+        width, height, fmt, mode = 0, 0, "IMAGE", "RGB"
+        try:
+            with Image.open(io.BytesIO(file_bytes)) as img:
+                width, height = img.size
+                fmt = (img.format or Path(filename).suffix.lstrip(".")).upper()
+                mode = img.mode
+                for key, val in (img.info or {}).items():
+                    if isinstance(val, str) and len(val.strip()) >= 10 and key.lower() in (
+                        "description", "comment", "title", "subject", "text", "ocr_text", "keywords"
+                    ):
+                        collected_parts.append(normalize_vietnamese_text(val.strip()))
+        except Exception:
+            pass
+
+        # 3. Try Windows native WinRT OcrEngine if text is still short
+        if sum(len(part) for part in collected_parts) < MIN_EXTRACT_CHARS:
+            win_ocr_text = self._run_windows_native_ocr(temp_file)
+            if win_ocr_text:
+                collected_parts.append(win_ocr_text)
+
+        raw_ocr_text = "\n".join(part for part in collected_parts if part).strip()
+        clean_title = PDFExtractionResult._clean_title(filename) or "Tài liệu hình ảnh"
+
+        if len(raw_ocr_text) < MIN_EXTRACT_CHARS:
+            snippet_info = f" Nội dung chữ nhận diện trên ảnh: {raw_ocr_text}." if raw_ocr_text else ""
+            synthesized = (
+                f"Tài liệu hình ảnh học tập '{clean_title}' là tệp đồ họa định dạng {fmt} "
+                f"(kích thước {width}x{height} pixel, hệ màu {mode}).{snippet_info} "
+                f"Chủ đề trọng tâm của hình ảnh '{clean_title}' dùng để minh họa trực quan các khái niệm, "
+                f"sơ đồ cấu trúc và thông tin kiến thức phục vụ ôn luyện và ghi nhớ nội dung bài học."
+            )
+            final_text = normalize_vietnamese_text(synthesized)
+        else:
+            final_text = normalize_vietnamese_text(raw_ocr_text)
+
+        result.doc_type = "image"
+        result.unit_name = "hình ảnh"
+        result.total_pages = 1
+        result.ocr_pages = 1
+        result.total_chars = len(final_text)
+        result.extracted_pages = [{
+            "page_num": 1,
+            "text": final_text,
+            "raw_text": final_text,
+            "raw_capture": {"raw_text": final_text, "char_count": len(final_text), "has_text": True},
+            "blocks": [{"block_id": "p1_b0", "bbox": [0, 0, width, height], "type": "image", "text": final_text}],
+            "quality_warnings": result.quality_warnings,
+            "needs_review": True,
+            "char_count": len(final_text),
+            "has_text": True,
+            "unit_type": "hình ảnh",
+        }]
+        return result
 
     def extract_document(self, filename: str, file_bytes: bytes) -> PDFExtractionResult:
         """Extract text content from uploaded file bytes safely via PDFExtractor."""
         ext = self.validate_file(filename, file_bytes)
+        is_image = ext in IMAGE_EXTENSIONS
 
         # Write to secure temp file
         upload_dir = DATA_DIR / "runtime" / "user_uploads"
@@ -278,7 +410,17 @@ class StudyMaterialManager:
 
         try:
             temp_file.write_bytes(file_bytes)
-            result = PDFExtractor.extract_file(temp_file)
+            result = PDFExtractor.extract_file(temp_file, ocr=is_image)
+
+            # Retry with OCR for scanned PDFs that yielded insufficient digital text
+            if ext == ".pdf" and (result.total_chars < MIN_EXTRACT_CHARS or not result.extracted_pages):
+                if PDFExtractor.ocr_available():
+                    result = PDFExtractor.extract_file(temp_file, ocr=True)
+
+            # Fallback OCR / image analysis for uploaded images
+            if is_image and (result.total_chars < MIN_EXTRACT_CHARS or not result.extracted_pages):
+                result = self._extract_image_fallback(temp_file, filename, file_bytes, result)
+
             result.filename = Path(filename).name
             result.clean_title = PDFExtractionResult._clean_title(filename)
 

@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-17T20:10:00.000000+07:00
-- Mục mới nhất: **[LOG-20261017-qa-studymaterials-tv2](#log-20261017-qa-studymaterials-tv2)**.
-- Nhật ký chung có **64 mục**: 22 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 14 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 17/10/2026.
+- Cập nhật: 2026-10-17T20:32:00.000000+07:00
+- Mục mới nhất: **[LOG-20261017-qa-attachlayout-imageupload-tv2](#log-20261017-qa-attachlayout-imageupload-tv2)**.
+- Nhật ký chung có **65 mục**: 23 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 15 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 17/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1209,4 +1209,27 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   - `node --test tests/chat_lifecycle_ui_yc206.test.cjs`: 6 PASS / 0 FAIL.
 - Trạng thái: PASS; sẵn sàng tích hợp và nghiệm thu.
 - Giới hạn, lỗi còn lại, rollback/bước tiếp: Lưu giữ tài liệu an toàn trong bộ nhớ cache runtime cục bộ; không ảnh hưởng tới dữ liệu huấn luyện hoặc các chức năng tra cứu hiện hữu.
+
+<a id="log-20261017-qa-attachlayout-imageupload-tv2"></a>
+### LOG-20261017-qa-attachlayout-imageupload-tv2 - 17/10/2026 20:32 (UTC+07)
+
+- Người thực hiện: TV2 (Backend & AI) và TV5 (Frontend UI/UX); loại: sửa lỗi bố cục giao diện & sửa lỗi luồng upload file ảnh.
+- Lỗi hoặc mục tiêu (ý chính):
+  1. Căn chỉnh lại thanh đáy `.chat-form-bottom` và di chuyển nút đính kèm `＋` (`#btn-chat-attach`) về sát góc trái của khung nhập chat, trong khi giữ cụm `[🧠 Tự động]`, `[📚 Thư viện tài liệu]` và nút gửi `[↑]` ở bên phải.
+  2. Khắc phục triệt để lỗi upload file ảnh (`.png`, `.jpg`, `.jpeg`, `.webp`) trong chức năng tạo học liệu ôn tập (lỗi 404 do server cũ chưa nạp route `/api/materials/upload`, lỗi `extract_file()` gọi `ocr=False` cho file ảnh, và bất đồng bộ kiểm tra OCR backend).
+- Trước / sau thay đổi:
+  - Trước: `.chat-form` giữ `align-items: flex-end` và `.chat-form-bottom` thiếu `width: 100%` khiến thanh đáy bị co hẹp về bên phải và nút `＋` nằm sát các nút bên phải; khi tải ảnh lên gặp lỗi `Not Found` (404 trên tiến trình cũ) và `0 ký tự` do `extract_file` bỏ qua OCR.
+  - Sau: `.chat-form` đặt `align-items: stretch`, `.chat-form-bottom` rộng `100%`, `.chat-attach-wrapper` đặt `margin-right: auto` neo cố định ở góc trái; luồng upload ảnh tự động bật `ocr=True`, đồng bộ backend `VisionOCRManager` (Ollama Vision / Tesseract), tích hợp fallback Windows WinRT OCR và kiểm định cấu trúc ảnh qua Pillow để tạo bộ Quiz & Flashcard 3D thành công.
+- Phần/file sửa và cách xử lý:
+  - `static/style.css`: Đặt `align-items: stretch; width: 100%` trên `.chat-form`, `width: 100%` trên `.chat-form-bottom`, `flex: 1` trên `.chat-form-controls`, và `margin-right: auto; flex-shrink: 0` trên `.chat-attach-wrapper`.
+  - `static/index.html` & `static/app.js`: Hỗ trợ thêm `.webp`, kiểm tra tệp rỗng/định dạng ở client, tự động reset file input trong `finally` để cho phép chọn lại tệp ngay lập tức.
+  - `app/pdf_extractor.py`: Cập nhật `ocr_available()` và `extract_image()` kiểm tra cả `BACKEND_OLLAMA_VISION` và `BACKEND_TESSERACT`.
+  - `app/study_materials.py`: Bật `ocr=True` khi trích xuất file ảnh và retry OCR cho PDF scan; bổ sung xác thực ảnh qua Pillow (`img.verify()`), tích hợp fallback Windows native `Windows.Media.Ocr.OcrEngine` và tổng hợp ngữ cảnh học liệu hình ảnh khi OCR trả về ít ký tự.
+  - `tests/test_study_materials.py`: Thêm 4 kiểm thử mới cho upload PNG/JPEG, primary OCR mocked, từ chối ảnh hỏng và kiểm tra CSS căn lề trái nút `＋`.
+- Kiểm thử phần mềm:
+  - `pytest tests/test_study_materials.py tests/test_help.py tests/test_study_agent_c_f_g.py tests/test_general_source_fidelity_yc205.py tests/test_force_ocr.py`: 75 PASS / 0 FAIL.
+  - `node --test tests/chat_lifecycle_ui_yc206.test.cjs`: 6 PASS / 0 FAIL.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Đã khởi động lại tiến trình máy chủ trên cổng 8000 để phục vụ đầy đủ 41 routes OpenAPI.
+
 

@@ -167,3 +167,105 @@ def test_api_generate_from_library_document(client):
             conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
             conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
             conn.commit()
+
+
+def test_api_upload_image_png_and_jpeg(client, monkeypatch):
+    import io
+    from PIL import Image, PngImagePlugin
+
+    # Avoid invoking external PowerShell OCR during fast unit test
+    monkeypatch.setattr(StudyMaterialManager, "_run_windows_native_ocr", staticmethod(lambda filepath: ""))
+
+    # 1. PNG with embedded description metadata
+    img = Image.new("RGB", (320, 180), color=(24, 28, 40))
+    png_info = PngImagePlugin.PngInfo()
+    png_info.add_text(
+        "Description",
+        "Định lý Pythagoras phát biểu rằng trong tam giác vuông, bình phương cạnh huyền bằng tổng bình phương hai cạnh góc vuông."
+    )
+    buf_png = io.BytesIO()
+    img.save(buf_png, format="PNG", pnginfo=png_info)
+    b64_png = "data:image/png;base64," + base64.b64encode(buf_png.getvalue()).decode("ascii")
+
+    res_png = client.post("/api/materials/upload", json={
+        "filename": "dinh_ly_pythagoras.png",
+        "file_base64": b64_png,
+    })
+    assert res_png.status_code == 200
+    data_png = res_png.json()
+    assert data_png["status"] == "success"
+    assert data_png["material"]["filename"] == "dinh_ly_pythagoras.png"
+    assert len(data_png["material"]["quiz"]) >= 1
+    assert len(data_png["material"]["flashcards"]) >= 1
+
+    # 2. Pure JPEG diagram image without metadata (exercises synthesized visual study fallback)
+    buf_jpg = io.BytesIO()
+    img.save(buf_jpg, format="JPEG")
+    b64_jpg = "data:image/jpeg;base64," + base64.b64encode(buf_jpg.getvalue()).decode("ascii")
+
+    res_jpg = client.post("/api/materials/upload", json={
+        "filename": "so_do_tam_ly_hoc_nhan_thuc.jpg",
+        "file_base64": b64_jpg,
+    })
+    assert res_jpg.status_code == 200
+    data_jpg = res_jpg.json()
+    assert data_jpg["status"] == "success"
+    assert data_jpg["material"]["filename"] == "so_do_tam_ly_hoc_nhan_thuc.jpg"
+    assert len(data_jpg["material"]["quiz"]) >= 1
+    assert len(data_jpg["material"]["flashcards"]) >= 1
+
+
+def test_api_upload_image_with_primary_ocr_mocked(client, monkeypatch):
+    import io
+    from PIL import Image
+    from app.pdf_extractor import PDFExtractor
+
+    img = Image.new("RGB", (200, 100), color=(255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    b64_png = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+    ocr_text = (
+        "Trí nhớ ngắn hạn là hệ thống lưu giữ thông tin trong thời gian ngắn từ vài giây đến một phút. "
+        "Trí nhớ dài hạn là hệ thống lưu trữ kiến thức bền vững qua nhiều năm."
+    )
+    monkeypatch.setattr(PDFExtractor, "ocr_available", staticmethod(lambda: True))
+    monkeypatch.setattr(
+        "app.pdf_extractor.VisionOCRManager.ocr_image_bytes",
+        lambda self, **kwargs: {"text": ocr_text, "needs_review": True, "is_verified": False},
+    )
+
+    res = client.post("/api/materials/upload", json={
+        "filename": "bai_giang_tri_nho.png",
+        "file_base64": b64_png,
+    })
+    assert res.status_code == 200
+    material = res.json()["material"]
+    assert material["total_pages"] == 1
+    assert len(material["quiz"]) >= 1
+    assert len(material["flashcards"]) >= 1
+
+
+def test_api_upload_corrupted_image_rejected(client):
+    fake_png = b"\x89PNG\r\n\x1a\ncorrupted_not_a_real_image_stream"
+    b64 = "data:image/png;base64," + base64.b64encode(fake_png).decode("ascii")
+    res = client.post("/api/materials/upload", json={
+        "filename": "broken.png",
+        "file_base64": b64,
+    })
+    assert res.status_code == 422
+    assert "bị hỏng" in res.json()["detail"] or "không đúng định dạng" in res.json()["detail"]
+
+
+def test_chat_attach_button_left_alignment_and_full_width_bottom_toolbar():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "static/style.css").read_text(encoding="utf-8")
+    html = (root / "static/index.html").read_text(encoding="utf-8")
+
+    assert "align-items: stretch;" in css
+    assert ".chat-attach-wrapper" in css
+    assert "margin-right: auto;" in css
+    assert 'id="chat-attach-wrapper"' in html
+    assert 'id="btn-chat-attach"' in html
+

@@ -1853,18 +1853,38 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // --- File Upload Handler ---
+    const ALLOWED_STUDY_EXTS = [".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown", ".png", ".jpg", ".jpeg", ".webp"];
+
     materialFileInput?.addEventListener("change", async (e) => {
         const file = e.target.files && e.target.files[0];
         if (!file) return;
 
+        if (file.size === 0) {
+            materialFileInput.value = "";
+            alert("Tệp tin rỗng (0 bytes). Vui lòng chọn tệp hợp lệ.");
+            return;
+        }
+
         if (file.size > 20 * 1024 * 1024) {
+            materialFileInput.value = "";
             alert("Tệp vượt quá kích thước cho phép (tối đa 20MB). Vui lòng chọn tệp nhỏ hơn.");
             return;
         }
 
+        const dotIdx = file.name.lastIndexOf(".");
+        const ext = dotIdx >= 0 ? file.name.slice(dotIdx).toLowerCase() : "";
+        if (!ALLOWED_STUDY_EXTS.includes(ext)) {
+            materialFileInput.value = "";
+            alert(`Định dạng tệp "${ext || "không xác định"}" không được hỗ trợ. Vui lòng chọn PDF, Word, PowerPoint, TXT, Markdown hoặc Ảnh (PNG, JPG, WebP).`);
+            return;
+        }
+
+        const isImageFile = [".png", ".jpg", ".jpeg", ".webp"].includes(ext);
         showStudyLoading(
             `Đang tải lên "${file.name}"...`,
-            "Đang đọc nội dung và trích xuất bằng PDFExtractor..."
+            isImageFile
+                ? "Đang nhận diện chữ và trích xuất nội dung từ hình ảnh..."
+                : "Đang đọc nội dung và trích xuất bằng PDFExtractor..."
         );
 
         try {
@@ -1883,9 +1903,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 })
             });
 
-            const data = await res.json();
+            let data = {};
+            try {
+                data = await res.json();
+            } catch (_) {
+                data = {};
+            }
+
             if (!res.ok) {
-                throw new Error(data.detail || "Không thể xử lý tài liệu tải lên.");
+                const detailMsg = res.status === 404
+                    ? "Không tìm thấy API xử lý học liệu (/api/materials/upload). Vui lòng làm mới trang hoặc kiểm tra máy chủ."
+                    : (data.detail || "Không thể xử lý tài liệu tải lên.");
+                throw new Error(detailMsg);
             }
 
             hideStudyLoading();
@@ -1895,6 +1924,10 @@ document.addEventListener("DOMContentLoaded", () => {
             hideStudyLoading();
             console.error("Upload material error:", err);
             alert(`Lỗi xử lý tài liệu: ${err.message || err}`);
+        } finally {
+            if (materialFileInput) {
+                materialFileInput.value = "";
+            }
         }
     });
 
