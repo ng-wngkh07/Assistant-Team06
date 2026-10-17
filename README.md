@@ -118,6 +118,26 @@ Trên Mac:
 .venv/bin/python -m pytest -q tests/test_eval_cases.py
 ```
 
+### Benchmark accuracy
+
+Từ thư mục gốc repo, chạy benchmark mẫu bằng Python của môi trường dự án:
+
+```powershell
+.\.venv\Scripts\python.exe eval\run.py
+```
+
+Trên Mac dùng:
+
+```bash
+.venv/bin/python eval/run.py
+```
+
+Runner đọc `eval/cases.csv` và in accuracy theo so khớp chính xác giữa hai cột
+`expected` và `predicted` (bỏ khoảng trắng ở đầu/cuối). File CSV chứa prediction
+đã có sẵn; lệnh này không gọi ứng dụng, model hay Ollama. Thay cột `predicted`
+bằng đầu ra đã chấm/chuẩn hóa của hệ thống bạn muốn đo để đánh giá hệ thống đó.
+Có thể truyền đường dẫn CSV khác làm đối số cho script.
+
 Kiểm thử tổng quát trên Mac:
 
 ```bash

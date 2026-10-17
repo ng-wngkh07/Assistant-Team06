@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-17T22:15:00+07:00
-- Mục mới nhất: **[LOG-20261017-eval-cases-issue26](#log-20261017-eval-cases-issue26)**.
-- Nhật ký chung có **66 mục**: 22 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 10 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 50 mã YC và 16 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
+- Cập nhật: 2026-10-17T22:20:00+07:00
+- Mục mới nhất: **[LOG-20261017-eval-issue27-codex](#log-20261017-eval-issue27-codex)**.
+- Nhật ký chung có **67 mục**: 22 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 10 làm rõ kiến trúc/quyền/quy trình, 10 dữ liệu corpus/huấn luyện. Có 50 mã YC và 17 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1223,4 +1223,17 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   Python `csv` module: đúng schema, 15 hàng, 3 edge, nhãn/giá trị không rỗng và
   câu hỏi duy nhất PASS; quy tắc nhật ký PASS; `git diff --check` PASS.
   `python -m pytest -q tests\test_eval_cases.py` PASS; Windows/Mac CI và review chéo.
+- Trạng thái: PASS.
+
+<a id="log-20261017-eval-issue27-codex"></a>
+### LOG-20261017-eval-issue27-codex - 17/10/2026 15:34 (UTC+07)
+
+- Người thực hiện: Codex theo yêu cầu của người phụ trách; loại: script chạy benchmark (Issue #27).
+- Mục tiêu/trước-sau: thêm runner đọc eval/cases.csv và in accuracy so khớp chính xác
+  hai cột expected/predicted; trước đó chưa có eval/. CSV cần có prediction đầu vào,
+  runner không tự gọi ứng dụng hoặc model.
+- File: eval/run.py, eval/cases.csv, tests/test_eval_run.py, pytest.windows.ini,
+  README.md, .gitignore, LICH_SU_DU_AN.md.
+- Kiểm chứng: Windows/Mac Python 3.12: `python eval/run.py` PASS, 12/15 (80.00%).
+  `pytest tests/test_eval_run.py tests/test_eval_cases.py` PASS (10 passed).
 - Trạng thái: PASS.
