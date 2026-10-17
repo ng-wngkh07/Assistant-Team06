@@ -53,7 +53,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const recentSourcesMenu = document.getElementById("recent-sources-menu");
     const recentSourcesDivider = document.getElementById("recent-sources-divider");
     const resumeSourceHeader = document.getElementById("resume-source-header");
-    const answerModeSelect = document.getElementById("answer-mode");
     const processingLevelSelect = document.getElementById("processing-level");
 
     function closeRecentSourcesMenu() {
@@ -175,6 +174,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const statChunks = document.getElementById("stat-chunks");
     const statScanned = document.getElementById("stat-scanned");
     const ollamaStatus = document.getElementById("ollama-status");
+    let modelReadyLabel = ""; // set by fetchOllamaModels, reused by the status poll
 
     // Modal elements
     const kbModal = document.getElementById("kb-modal");
@@ -249,18 +249,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
             e.preventDefault();
-            chatForm.dispatchEvent(new Event("submit"));
-        }
-    });
-
-    document.addEventListener("click", (e) => {
-        if (e.target.classList.contains("chip") && e.target.dataset.query) {
-            if (isGenerating && userInput.value.trim()) {
-                chatStatus.textContent = "Đang giữ câu bạn soạn. Chờ câu trước hoàn tất rồi chọn gợi ý hoặc gửi câu mới.";
-                return;
-            }
-            userInput.value = e.target.dataset.query;
-            userInput.focus();
             chatForm.dispatchEvent(new Event("submit"));
         }
     });
@@ -345,14 +333,6 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (_) {}
         processingLevelSelect.addEventListener("change", () => {
             try { localStorage.setItem("qa_processing_level", processingLevelSelect.value); } catch (_) {}
-        });
-    } else if (answerModeSelect) {
-        try {
-            const savedMode = localStorage.getItem("qa_answer_mode");
-            if (["quick", "steps", "compare"].includes(savedMode)) answerModeSelect.value = savedMode;
-        } catch (_) {}
-        answerModeSelect.addEventListener("change", () => {
-            try { localStorage.setItem("qa_answer_mode", answerModeSelect.value); } catch (_) {}
         });
     }
 
@@ -598,9 +578,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 session_id: targetSessionId,
                 request_id: requestId
             };
-            if (answerModeSelect?.value) {
-                reqBody.answer_mode = answerModeSelect.value;
-            }
             if (selectedSourcePage) {
                 reqBody.source_document_id = selectedSourcePage.doc_id;
                 if (selectedSourceMode === "page") reqBody.source_page_num = selectedSourcePage.page_num;
@@ -1156,7 +1133,7 @@ document.addEventListener("DOMContentLoaded", () => {
             alert("Không thể tóm tắt: " + err.message);
         } finally {
             btnSummarizeSession.disabled = false;
-            btnSummarizeSession.textContent = "📝 Tóm tắt";
+            btnSummarizeSession.textContent = "📝 Tóm tắt chủ đề";
         }
     }
 
@@ -1258,6 +1235,25 @@ document.addEventListener("DOMContentLoaded", () => {
                 notice.textContent = "Trang nguồn này chưa được duyệt đầy đủ. Cần đối chiếu với tài liệu gốc, nhất là hình, bảng và công thức.";
                 detail.appendChild(notice);
             }
+            if (Array.isArray(c.claims) && c.claims.length > 0) {
+                const claimsContainer = document.createElement("div");
+                claimsContainer.className = "citation-claims-block";
+                const claimsHeading = document.createElement("div");
+                claimsHeading.className = "citation-claims-heading";
+                claimsHeading.textContent = "Nhận định gắn nguồn:";
+                claimsContainer.appendChild(claimsHeading);
+                const claimsList = document.createElement("ul");
+                claimsList.className = "citation-claims-list";
+                c.claims.forEach(claim => {
+                    if (typeof claim === "string" && claim.trim()) {
+                        const li = document.createElement("li");
+                        li.textContent = claim.trim();
+                        claimsList.appendChild(li);
+                    }
+                });
+                claimsContainer.appendChild(claimsList);
+                detail.appendChild(claimsContainer);
+            }
             if (typeof c.snippet === "string" && c.snippet.trim()) {
                 const quote = document.createElement("blockquote");
                 quote.className = "citation-snippet";
@@ -1347,7 +1343,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
                 if (ollamaStatus) {
                     if (data.inference_ready) {
-                        ollamaStatus.textContent = "🟢 Mô hình hỏi đáp sẵn sàng";
+                        ollamaStatus.textContent = modelReadyLabel || "🟢 Mô hình hỏi đáp sẵn sàng";
                         ollamaStatus.className = "status-indicator connected";
                     } else {
                         ollamaStatus.textContent = `🔴 ${data.service_message || "Mô hình hỏi đáp chưa sẵn sàng"}`;
@@ -1384,9 +1380,10 @@ document.addEventListener("DOMContentLoaded", () => {
             const adapted = data.model_mode !== "unadapted_base";
             if (ollamaStatus) {
                 if (data.default_model_available) {
-                    ollamaStatus.textContent = usesMlx
+                    modelReadyLabel = usesMlx
                         ? (adapted ? "🟢 Mô hình đã kiểm định sẵn sàng" : "🟢 Mô hình gốc sẵn sàng")
                         : "🟢 Mô hình phát triển Ollama sẵn sàng";
+                    ollamaStatus.textContent = modelReadyLabel;
                     ollamaStatus.className = "status-indicator connected";
                 } else {
                     ollamaStatus.textContent = "🟡 Mô hình văn bản chưa sẵn sàng";

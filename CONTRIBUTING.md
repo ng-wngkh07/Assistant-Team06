@@ -5,6 +5,11 @@ Cài/sử dụng ứng dụng theo [README](README.md), [Windows](README_WINDOWS
 [Mac](README_MAC.md). Đọc [quy tắc](README_QUY_TAC.md), [phân công](docs/team/PHAN_CONG_6_NGUOI.md)
 và [nhật ký chung](LICH_SU_DU_AN.md) trước thay đổi; quy tắc cụ thể của dự án vẫn áp dụng.
 
+[Definition of Done](DEFINITION_OF_DONE.md) áp dụng cho mọi issue/PR. Sản phẩm
+chính là QA học tập; văn phòng là ví dụ Lab 2. Component ui/backend/retrieval-data/
+ai-service/evaluation/security trong #18–29 là phân công bài tập, không tự thay
+module sản phẩm hoặc nhiệm vụ của thành viên. Xem [ma trận tích hợp](docs/team/RA_SOAT_REPO_YC217.md).
+
 ## Trách nhiệm và phối hợp
 
 TV1 tra cứu, TV2 QA, TV3 lịch từ ảnh chịu UI/API/test theo chức năng. TV4 (Mac)
@@ -86,7 +91,9 @@ Feature suite dùng nguồn/data tạm/mock; không cần corpus/model cá nhân
 liên quan phần sửa. Nếu sửa environment/installer, kiểm setup/PowerShell trên Windows;
 Mac PASS không được ghi thành Windows PASS. Nếu sửa UI chung, smoke ba chế độ.
 Model/ảnh thật, bộ cài full máy mới, POSIX/MLX/corpus tests có nghiệm thu riêng; ghi NOT_RUN
-khi chưa chạy. Xem [Team feature checks](https://github.com/ng-wngkh07/Study-Agent/actions/workflows/team-checks.yml).
+khi chưa chạy. Xem [Team feature checks](https://github.com/ng-wngkh07/Assistant-Team06/actions/workflows/team-checks.yml).
+
+Adapter Streamlit có phụ thuộc riêng ở `ui/requirements.txt`; xem [hướng dẫn UI](ui/README.md). Job `ui_adapter` kiểm thao tác thử lại, hủy, chat mới và giới hạn lịch sử trên Ubuntu. Chạy `python -m pytest tests/test_streamlit_flow.py` sau khi cài các phụ thuộc này; feature suite Windows/Mac vẫn giữ các kiểm tra hiện có.
 
 Nâng dependency: sửa profile đúng và constraints tương ứng, giải quyết trong venv mới,
 kiểm pip check/import/runtime và CI Windows/Mac. Constraints web/Python3.12 không dùng
@@ -127,6 +134,12 @@ và attribution Git được giữ nguyên.
 TV4 điều phối merge theo quy trình nhóm. Quyền thao tác thực tế phụ thuộc cấu hình GitHub;
 quy trình này không tự thay đổi quyền tài khoản hoặc chính sách bảo vệ nhánh.
 
+Cập nhật YC217, 16/10/2026: main đã có ruleset chỉ user owner được cập nhật qua PR;
+CI/protection cũ giữ riêng và không đổi. Review chéo vẫn là quy trình bắt buộc của
+nhóm; protection hiện không bắt buộc số approval. Xem [cấu hình và cách dựng lại](docs/team/QUYEN_MERGE_VA_BRANCH.md).
+Nhánh đã merge có thể xóa sau kiểm tích hợp và xác nhận không còn việc phụ thuộc;
+không bắt buộc xóa và không tự xóa nhánh của thành viên.
+
 Reviewer kiểm đúng tiêu chí, test/giới hạn, log, ranh giới tài sản và ảnh hưởng; phần chung
 cần review chủ trì bị ảnh hưởng. TV4 merge theo quy trình nhóm sau checks/review hợp lệ. TV6 kiểm tích hợp;
 nhóm đồng bộ main bằng fast-forward khi checkout sạch. Không tự tắt bảo vệ review,
@@ -140,8 +153,16 @@ nhật ký thay đổi phần mềm và PDF phân công được phép. Dữ li�
 không công bố trên GitHub theo YC-214; rà cả nội dung văn bản, tên/nội dung commit,
 mô tả PR và bình luận trước khi push, không chỉ rà phần mở rộng file. `.gitignore` dùng allowlist: file
 chia sẻ mới ở gốc phải thêm ngoại lệ chính xác và kiểm lại, không mở rộng cho data bí mật.
-Nguồn thật `src/`, toàn `data/`, DB/vector/weights, .env, venv/cache, docs/project và
+Nguồn thật `src/`, dữ liệu riêng trong `data/` (trừ ngoại lệ công khai bên dưới), DB/vector/weights, .env, venv/cache, docs/project và
 cấu hình/tích hợp cá nhân giao riêng hoặc giữ local. Không merge SQLite/weights qua Git.
+
+Ngoại lệ Lab 2 được giới hạn đúng `data/offices.csv`, `data/README.md`,
+`eval/cases.csv`, `eval/run.py` và backlog công khai; không mở toàn `data/`.
+Hai file data chỉ chứa ví dụ/metadata công khai, được review quyền nguồn và thông
+tin cá nhân trước commit. Rule chung duy nhất là `.agents/rules/study-agent.md`;
+các file `.agents` khác vẫn local. Trước PR kiểm đầu ra xuất hiện trong diff,
+đặc biệt các file mới từng bị ignore. Không chạy lại `lab02/backlog/create_issues.py`
+để tạo lại #18–29; script không có cơ chế ngăn issue trùng.
 
 Bàn giao nguồn/model có version/hash/quyền và provenance theo [corpus/README.md](corpus/README.md).
 Một writer chính hợp nhất corpus/training; readiness live `complete: true`, OCR review,

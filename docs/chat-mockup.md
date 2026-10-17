@@ -2,6 +2,8 @@
 
 Tài liệu này mô tả chi tiết bản vẽ cấu trúc wireframe và mockup trực quan của trang hội thoại học tập (`Chat Page`) kèm ô nhập liệu (`Input Box`) theo tiêu chí nghiệm thu của **Issue #18 (Lab 2)**.
 
+> Đây là bản mẫu thiết kế, không phải ảnh chức năng đã nghiệm thu hoặc câu trả lời từ corpus thật. UI chính nằm tại `static/index.html`; adapter Streamlit ở `ui/app.py`. Cách bố trí/phím tắt dưới đây là mục tiêu thiết kế, kiểm riêng trên từng client.
+
 ---
 
 ## 1. Cấu trúc Tổng thể Giao diện (Layout Overview)
@@ -27,7 +29,7 @@ Giao diện trang hội thoại được chia làm 3 phân vùng chính:
 | • Quy chế tín chỉ    |                                                                                |
 |                      |  [🤖 Trợ lý Học tập]                                                            |
 | ── Chế độ trả lời ─── |  Mô hình OSI (Open Systems Interconnection) gồm 7 tầng chính:                  |
-| (•) Tiêu chuẩn       |  1. Tầng Vật lý (Physical)                                                     |
+| (•) Ngắn gọn       |  1. Tầng Vật lý (Physical)                                                     |
 | ( ) So sánh          |  2. Tầng Liên kết dữ liệu (Data Link)                                          |
 | ( ) Tóm tắt cốt lõi  |  3. Tầng Mạng (Network)                                                        |
 |                      |  4. Tầng Giao vận (Transport): Đảm bảo việc truyền dữ liệu tin cậy giữa hai... |
@@ -37,7 +39,7 @@ Giao diện trang hội thoại được chia làm 3 phân vùng chính:
 |                      |                                                                                |
 |                      |  ▼ 📚 Đối chiếu với tài liệu gốc:                                              |
 |                      |  +--------------------------------------------------------------------------+  |
-|                      |  | [S1] Giáo trình Mạng máy tính · Trang 42 · Độ khớp: 95%                   |  |
+|                      |  | [S1] Giáo trình Mạng máy tính · Trang 42 · Điểm truy xuất: 0.95                   |  |
 |                      |  | "Mô hình tham chiếu OSI chuẩn hóa các chức năng mạng thành 7 tầng phân biệt...|  |
 |                      |  | [📖 Mở trang 42 (PDF)]                                                     |  |
 |                      |  +--------------------------------------------------------------------------+  |
@@ -81,4 +83,4 @@ Giao diện trang hội thoại được chia làm 3 phân vùng chính:
 ## 4. Khả năng Tương thích và Trải nghiệm Người dùng (UX)
 
 - **Responsive Design:** Tự động ẩn Sidebar trên thiết bị di động (Mobile) thành menu trượt dạng hamburger. Ô input box tự động co giãn 100% chiều rộng.
-- **Khả năng phục hồi khi lỗi:** Nếu máy chủ mất kết nối hoặc trả về lỗi 503/409, câu hỏi người dùng vừa gõ vẫn được lưu trong ô input để người dùng không phải gõ lại từ đầu.
+- **Khả năng phục hồi khi lỗi:** Nếu máy chủ mất kết nối hoặc trả về lỗi 503/409, adapter giữ câu hỏi trong lượt chờ, khóa nhập lượt mới và cho thử lại cùng request ID. Hủy chỉ bỏ lượt chờ khỏi ngữ cảnh UI; không đảm bảo dừng server. Điểm truy xuất là số xếp hạng, không phải phần trăm xác suất đúng.

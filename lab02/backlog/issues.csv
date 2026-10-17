@@ -1,0 +1,13 @@
+title,component,labels,size,body
+"UI: chat page placeholder with input box",ui,"feat,ui",S,"Create ui/README.md plan and a placeholder page (Streamlit later). Acceptance: README explains how UI will call the backend; screenshot or mockup in docs/."
+"UI: show sources under each answer",ui,"feat,ui",M,"Design how citations appear. Acceptance: mockup in docs/ui-sources.md with 2 examples."
+"Backend: office lookup handles partial names",backend,"feat,backend",S,"'training' should find 'Training Office'. Acceptance: 2 new tests pass; no change to other answers."
+"Backend: help command lists what the bot can do",backend,"feat,backend",S,"Reply to 'help'. Acceptance: test_help passes; README Run section updated."
+"Data: add 6 more offices to data/offices.csv",retrieval-data,"feat,data",S,"Use public information only. Acceptance: CSV valid; lookup tests for 2 new offices."
+"Data: document data sources and owners",retrieval-data,"docs,data",S,"Create data/README.md with source, owner, update frequency for each file."
+"AI service: define the interface for the future LLM",ai-service,"feat,ai",M,"Write docs/ai-interface.md: function signature, inputs, outputs, errors, fallback. No LLM call yet."
+"AI service: list 10 questions that need AI vs 10 that do not",ai-service,"docs,ai",S,"Acceptance: table in docs/ai-or-not.md with a one-line reason per row."
+"Evaluation: create 15 benchmark questions with expected answers",evaluation,"test,eval",M,"eval/cases.csv with question, expected, category (normal/edge/out-of-scope). Acceptance: >= 3 edge cases."
+"Evaluation: script that runs the benchmark",evaluation,"test,eval",M,"eval/run.py prints accuracy on eval/cases.csv. Acceptance: runs from README instructions."
+"Security: add .env.example and secret-handling rule",security,"chore,security",S,"Add .env.example and a 'Secrets' section in CONTRIBUTING.md. Acceptance: .env is in .gitignore."
+"Security: review repo for personal data and secrets",security,"chore,security",S,"Run a manual + gitleaks check. Acceptance: docs/security-check.md lists what was checked and the result."

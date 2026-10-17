@@ -62,3 +62,14 @@ test('An answer keeps the source review warning visible beside its citation', as
  assert.equal(warnings.length,1);
  assert.match(warnings[0].textContent,/chưa.*duyệt|cần.*đối chiếu/i);
 });
+
+test('Cited claim text is visible as text and never injected into HTML', async () => {
+ const claim='<img src=x onerror=alert(1)> Nội dung người học đối chiếu.';
+ const citation={id:'S1',book_title:'Phiếu QA',filename:'source.md',doc_id:901,page_num:1,snippet:'Nguồn gốc.',claims:[claim]};
+ const payload=[{type:'token',content:'Câu trả lời.'},{type:'done',response_kind:'answer',citations:[citation]}].map(e=>'data: '+JSON.stringify(e)+'\n\n').join('');
+ let delivered=false;
+ const h=await harness({chat:async()=>({ok:true,body:{getReader:()=>({read:async()=>delivered?{done:true}:(delivered=true,{done:false,value:new TextEncoder().encode(payload)})})}})});
+ h.input.value='Câu hỏi học tập?';await h.submit();
+ assert.ok(h.created.some(el=>el.textContent===claim));
+ assert.ok(!h.created.some(el=>String(el.innerHTML).includes('onerror=alert')));
+});

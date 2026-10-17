@@ -216,5 +216,19 @@ def test_example_extraction_returns_empty_when_source_has_no_exercises(tmp_path)
             ("Đoạn lý thuyết không có bài tập hoặc câu hỏi.",),
         )
     service, _, _ = make_service(passages=[], db_path=db_path)
-
     assert service.list_example_exercises(1, 4, 4) == []
+
+
+def test_practice_routes_mlx_model_to_trained_client(monkeypatch):
+    class MockTrainedClient:
+        def __init__(self):
+            self.last_done_reason = "stop"
+        def chat_complete(self, messages, **kwargs):
+            return "fake-mlx-output"
+
+    monkeypatch.setattr("app.practice.TrainedModelClient", MockTrainedClient)
+    service = PracticeService(None, None, ollama=None)
+    for model_name in ("qwen2.5-3b-4bit", "local", "tam-ly-mlx", "mlx-3b"):
+        res = service._chat_complete("test prompt", model=model_name, max_tokens=100)
+        assert res == "fake-mlx-output"
+

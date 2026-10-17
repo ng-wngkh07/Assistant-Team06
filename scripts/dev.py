@@ -48,23 +48,33 @@ def prepare_demo() -> dict:
 
 
 def check_environment() -> bool:
-    from app.config import DATA_DIR, SRC_DIR, DEFAULT_CHAT_MODEL, OLLAMA_BASE_URL
+    from app.config import DATA_DIR, SRC_DIR, DEFAULT_CHAT_MODEL, OLLAMA_BASE_URL, TRAINED_MODEL_NAME
     from app.ollama_client import OllamaClient
+    from app.trained_client import TrainedModelClient
     with sqlite3.connect(":memory:") as conn:
         conn.execute("CREATE VIRTUAL TABLE smoke USING fts5(text)")
-    import fitz
+    import pymupdf as fitz
     from PIL import Image  # noqa: F401
     from app.server import app
     print(f"Python: {sys.version.split()[0]} | platform: {sys.platform}")
     print(f"Sources: {SRC_DIR}\nLocal data: {DATA_DIR}")
     print(f"App routes: {len(app.routes)} | SQLite FTS5: OK | PDF: {fitz.VersionBind}")
+    mlx_models = {TRAINED_MODEL_NAME, "qwen2.5-3b-4bit", "tam-ly-mlx", "mlx-3b", "local"}
+    if DEFAULT_CHAT_MODEL in mlx_models:
+        if TrainedModelClient.available():
+            print(f"QA model present (MLX native: {DEFAULT_CHAT_MODEL}). Vision and embedding require their own model checks.")
+            return True
+        print(f"MLX QA model missing at local model directory ({DEFAULT_CHAT_MODEL}). Install it for real QA.")
+        return False
+
     client = OllamaClient()
     if not client.check_health():
         print(f"Ollama unavailable at {OLLAMA_BASE_URL}; FTS/demo/mocked tests still work.")
         return False
     names = {model.get("name") for model in client.list_models()}
     print(f"Ollama models: {', '.join(sorted(names))}")
-    if DEFAULT_CHAT_MODEL not in names:
+    base_names = {n.split(":")[0] for n in names}
+    if DEFAULT_CHAT_MODEL not in names and DEFAULT_CHAT_MODEL not in base_names and f"{DEFAULT_CHAT_MODEL}:latest" not in names:
         print(f"QA model missing: {DEFAULT_CHAT_MODEL}. Install it for real QA.")
         return False
     print("QA model present. Vision and embedding require their own model checks.")

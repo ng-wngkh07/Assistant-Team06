@@ -7,8 +7,8 @@ Hướng dẫn áp dụng cho clone mới. Giữ môi trường/model của máy
 Cài Git và Python **3.12** từ [Python macOS](https://www.python.org/downloads/macos/) hoặc công cụ quản lý môi trường bạn đang dùng. Kiểm `git --version`, `python3.12 --version` trước khi làm. Bộ web/CI dùng Python 3.12; không dùng `python3` bất kỳ rồi mặc định đã tương thích.
 
 ```bash
-git clone https://github.com/ng-wngkh07/Study-Agent.git
-cd Study-Agent
+git clone https://github.com/ng-wngkh07/Assistant-Team06.git
+cd Assistant-Team06
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pip check

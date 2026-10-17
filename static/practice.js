@@ -140,7 +140,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 source_document_id: scope.doc_id,
                 source_page_num: scope.page_num,
                 count: 3,
-                model: document.getElementById("select-model")?.value || undefined,
             };
             if (scope.source_chunk_id) request.source_chunk_id = scope.source_chunk_id;
             practiceSession = await postJson("/api/practice/generate", request);

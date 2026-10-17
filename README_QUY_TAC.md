@@ -2,6 +2,10 @@
 
 **Dự án:** Agent Học Tập. Quy tắc áp dụng cho mã nguồn, test, cấu hình, tài liệu và gói dữ liệu/model. Phân công/đầu ra/nghiệm thu theo [tài liệu nhóm](docs/team/PHAN_CONG_6_NGUOI.md); thao tác đóng góp theo [CONTRIBUTING](CONTRIBUTING.md).
 
+Theo YC217 (16/10/2026), sản phẩm chính là **QA học tập có nguồn**; ví dụ văn phòng
+thuộc Lab 2. Giữ issue #18–29 cho các thành viên. [Đặc tả](docs/01_Y_TUONG_DU_AN.md)
+và [DoD](DEFINITION_OF_DONE.md) phân biệt thiết kế, triển khai và nghiệm thu.
+
 ## Trách nhiệm và thông tin thành viên
 
 TV1 tra cứu, TV2 QA, TV3 lịch ảnh, TV4 dữ liệu/chỉ mục chính/huấn luyện và điều phối phát hành, TV5 UI/môi trường chung, TV6 kiểm thử/nghiệm thu/tài liệu. TV4 dùng Mac; các vai trò còn lại dùng Windows.
@@ -30,6 +34,12 @@ Vòng thực hiện: nhận việc/chốt tiêu chí → tái hiện → sửa/t
 
 Bảo vệ main tại lần kiểm 09/10/2026: CI Windows/Mac/history, nhánh cập nhật, hội thoại xử lý; áp dụng cả admin, cấm force-push/xóa; không bắt buộc approval. Review chéo là quy trình nhóm; người có quyền ghi vẫn có thể merge khi thỏa điều kiện GitHub. Kiểm Settings/PR trước merge. Không push trực tiếp main, force-push nhánh chung, reset việc người khác hoặc thay bảo vệ để vượt lỗi.
 
+YC217 thay phần quyền merge của mốc trên: đã thêm ruleset `Restrict updates` cho
+main, chỉ user owner bypass qua PR. Protection chất lượng giữ nguyên; quyền ghi
+repo của thành viên không tự cho phép merge main. Chi tiết/giới hạn kiểm chứng:
+[quyền merge](docs/team/QUYEN_MERGE_VA_BRANCH.md). Không bắt buộc xóa nhánh sau merge;
+chỉ dọn nhánh đã kiểm, không còn công việc/PR phụ thuộc.
+
 ## Nhật ký và hồ sơ
 
 `LICH_SU_DU_AN.md` ở gốc là nhật ký chung, cập nhật cùng PR. Thành viên dùng ID `LOG-YYYYMMDD-chucnang-maviec-tvN`, ghi ngày/giờ Asia/Ho_Chi_Minh, mã vai trò/tác giả thay đổi, loại, trước/sau, file, ảnh hưởng, kiểm chứng và giới hạn. Giữ ID/ngày của mục cũ; hiệu chỉnh có lý do/thời điểm và bảo toàn các thay đổi có ý nghĩa.
@@ -41,6 +51,11 @@ Ghi lịch sử ứng dụng, không chép prompt/hội thoại/log tool/metadat
 Git chứa app/static/script dùng chung/test tổng hợp/dependency/config mẫu/CI/README/docs nhóm, nhật ký thay đổi phần mềm, tài liệu kỹ thuật công khai và PDF phân công. Nguồn thật, ảnh/lịch/hội thoại người dùng, DB/vector/weights/adapter/dataset, .env, venv/cache/log, hồ sơ nội bộ và bảng ánh xạ thành viên quản lý riêng.
 
 Tuân thủ [.gitignore](.gitignore), kiểm staged và không dùng `git add -f`. Gói nguồn/model riêng có version/hash/provenance/quyền và vị trí tải kiểm soát; không merge SQLite/vector/weights giữa branch.
+
+Ngoại lệ công khai YC217: ví dụ `data/offices.csv` và `data/README.md` (#22–23),
+bộ đánh giá phần mềm `eval/cases.csv`, `eval/run.py` (#26–27), backlog Lab 2 và
+rule `.agents/rules/study-agent.md`. Không coi ngoại lệ này là quyền công bố dữ
+liệu/thông tin huấn luyện hoặc mở rộng allowlist cho DB/model/cấu hình riêng.
 
 ## Nguồn, model và nghiệm thu
 
