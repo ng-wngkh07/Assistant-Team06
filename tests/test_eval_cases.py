@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 CASES_PATH = Path(__file__).resolve().parent.parent / "eval" / "cases.csv"
-EXPECTED_COLUMNS = ["question", "expected", "category"]
+EXPECTED_COLUMNS = ["question", "expected", "category", "predicted"]
 ALLOWED_CATEGORIES = {"normal", "edge", "out-of-scope"}
 
 
@@ -15,7 +15,7 @@ def test_benchmark_cases_have_expected_schema_and_coverage():
 
     assert len(cases) == 15
     assert all(
-        case["question"].strip() and case["expected"].strip()
+        case["question"].strip() and case["expected"].strip() and case["predicted"].strip()
         for case in cases
     )
     assert all(case["category"] in ALLOWED_CATEGORIES for case in cases)
