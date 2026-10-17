@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-17T21:30:00+07:00
-- Mục mới nhất: **[LOG-20261017-ai-issue24-tv4](#log-20261017-ai-issue24-tv4)**.
-- Nhật ký chung có **65 mục**: 22 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 10 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 15 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
+- Cập nhật: 2026-10-17T22:15:00+07:00
+- Mục mới nhất: **[LOG-20261017-eval-cases-issue26](#log-20261017-eval-cases-issue26)**.
+- Nhật ký chung có **66 mục**: 22 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 10 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 50 mã YC và 16 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1207,4 +1207,20 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Trước/sau: Trước chưa có `docs/ai-interface.md` và giao thức chuẩn cho tầng sinh văn bản; sau có đặc tả đầy đủ, kiểu dữ liệu bất biến `AIRequest`/`AIResponse`/`AIStreamChunk`, cây ngoại lệ `AIServiceError` và kiểm thử hợp đồng `tests/test_ai_interface.py`.
 - Phần/file sửa: `docs/ai-interface.md`, `app/ai_interface.py`, `tests/test_ai_interface.py`, `pytest.windows.ini`, `LICH_SU_DU_AN.md`.
 - Kiểm thử: `pytest tests/test_ai_interface.py` PASS; kiểm tra `scripts/check_history.py` PASS.
+- Trạng thái: PASS.
+
+<a id="log-20261017-eval-cases-issue26"></a>
+### LOG-20261017-eval-cases-issue26 - 17/10/2026 15:46 (UTC+07)
+
+- Người thực hiện: Codex theo yêu cầu của người phụ trách; loại: bộ câu hỏi benchmark (Issue #26).
+- Mục tiêu/trước-sau: tạo 15 câu hỏi tiếng Việt có đáp án tham chiếu và category
+  normal/edge/out-of-scope; có 3 ca edge về dữ kiện thiếu, hệ mâu thuẫn và cách
+  hiểu căn bậc hai, cùng 2 ca ngoài phạm vi.
+- Phần/file: eval/cases.csv, tests/test_eval_cases.py, pytest.windows.ini,
+  README.md, .gitignore, LICH_SU_DU_AN.md. Nội dung tự biên soạn, không lấy từ
+  corpus demo, nguồn riêng hoặc hồ sơ người dùng.
+- Kiểm chứng: Windows, Python 3.12.12, commit cơ sở 18d3260; CSV được đọc bằng
+  Python `csv` module: đúng schema, 15 hàng, 3 edge, nhãn/giá trị không rỗng và
+  câu hỏi duy nhất PASS; quy tắc nhật ký PASS; `git diff --check` PASS.
+  `python -m pytest -q tests\test_eval_cases.py` PASS; Windows/Mac CI và review chéo.
 - Trạng thái: PASS.
