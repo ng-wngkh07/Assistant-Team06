@@ -1707,4 +1707,1165 @@ document.addEventListener("DOMContentLoaded", () => {
             btnSaveOcrReview.disabled = false;
         }
     }
+
+    // =========================================================================
+    // STUDY MATERIALS (UPLOAD, QUIZ & 3D FLASHCARDS) INTEGRATION (YC-207)
+    // =========================================================================
+    const btnChatAttach = document.getElementById("btn-chat-attach");
+    const attachPopupMenu = document.getElementById("attach-popup-menu");
+    const btnAttachUpload = document.getElementById("btn-attach-upload");
+    const btnAttachLibrary = document.getElementById("btn-attach-library");
+    const materialFileInput = document.getElementById("material-file-input");
+
+    // Modals
+    const libraryPickerModal = document.getElementById("library-picker-modal");
+    const btnCloseLibraryPicker = document.getElementById("btn-close-library-picker");
+    const librarySearchInput = document.getElementById("library-search-input");
+    const libraryPickerTableBody = document.getElementById("library-picker-table-body");
+
+    const studyMaterialModal = document.getElementById("study-material-modal");
+    const btnCloseStudyMaterial = document.getElementById("btn-close-study-material");
+    const studyMaterialTitle = document.getElementById("study-material-title");
+    const studyMaterialSubtitle = document.getElementById("study-material-subtitle");
+
+    const studyLoadingModal = document.getElementById("study-loading-modal");
+    const studyLoadingTitle = document.getElementById("study-loading-title");
+    const studyLoadingStep = document.getElementById("study-loading-step");
+
+    // Study Tabs
+    const tabBtnQuiz = document.getElementById("tab-btn-quiz");
+    const tabBtnFlashcards = document.getElementById("tab-btn-flashcards");
+    const tabBtnSources = document.getElementById("tab-btn-sources");
+    const panelQuiz = document.getElementById("study-panel-quiz");
+    const panelFlashcards = document.getElementById("study-panel-flashcards");
+    const panelSources = document.getElementById("study-panel-sources");
+    const quizBadgeCount = document.getElementById("quiz-badge-count");
+    const cardBadgeCount = document.getElementById("card-badge-count");
+
+    // Quiz UI
+    const quizProgressText = document.getElementById("quiz-progress-text");
+    const quizScoreText = document.getElementById("quiz-score-text");
+    const quizProgressFill = document.getElementById("quiz-progress-fill");
+    const quizQuestionText = document.getElementById("quiz-question-text");
+    const quizChoicesContainer = document.getElementById("quiz-choices-container");
+    const quizFeedbackBox = document.getElementById("quiz-feedback-box");
+    const quizFeedbackHeader = document.getElementById("quiz-feedback-header");
+    const quizFeedbackIcon = document.getElementById("quiz-feedback-icon");
+    const quizFeedbackTitle = document.getElementById("quiz-feedback-title");
+    const quizExplanationText = document.getElementById("quiz-explanation-text");
+    const quizCitationPage = document.getElementById("quiz-citation-page");
+    const quizCitationQuote = document.getElementById("quiz-citation-quote");
+    const btnQuizPrev = document.getElementById("btn-quiz-prev");
+    const btnQuizNext = document.getElementById("btn-quiz-next");
+    const btnQuizRestart = document.getElementById("btn-quiz-restart");
+    const quizBubbles = document.getElementById("quiz-bubbles");
+
+    // Flashcard UI
+    const flashcardCard = document.getElementById("flashcard-card");
+    const flashcardInner = document.getElementById("flashcard-inner");
+    const cardFrontText = document.getElementById("card-front-text");
+    const cardBackText = document.getElementById("card-back-text");
+    const cardCitationPage = document.getElementById("card-citation-page");
+    const cardCitationQuote = document.getElementById("card-citation-quote");
+    const cardCounterText = document.getElementById("card-counter-text");
+    const cardFrontIndicator = document.getElementById("card-front-indicator");
+    const cardBackIndicator = document.getElementById("card-back-indicator");
+    const cardMasteredCount = document.getElementById("card-mastered-count");
+    const cardLearningCount = document.getElementById("card-learning-count");
+    const btnCardPrev = document.getElementById("btn-card-prev");
+    const btnCardNext = document.getElementById("btn-card-next");
+    const btnCardFlip = document.getElementById("btn-card-flip");
+    const btnCardMastered = document.getElementById("btn-card-mastered");
+    const btnCardUnmastered = document.getElementById("btn-card-unmastered");
+    const btnCardShuffle = document.getElementById("btn-card-shuffle");
+
+    // Sources UI
+    const sourceDocName = document.getElementById("source-doc-name");
+    const sourcePageCount = document.getElementById("source-page-count");
+    const sourceDocType = document.getElementById("source-doc-type");
+    const sourceProcessedAt = document.getElementById("source-processed-at");
+    const sourceTextPreview = document.getElementById("source-text-preview");
+    const chatAttachmentPreviewTray = document.getElementById("chat-attachment-preview-tray");
+    const btnCreateQuizFlashcard = document.getElementById("btn-create-quiz-flashcard");
+    const btnStudyToolUpload = document.getElementById("btn-study-tool-upload");
+    const btnStudyToolLibrary = document.getElementById("btn-study-tool-library");
+    const studyToolFileInput = document.getElementById("study-tool-file-input");
+    const studyToolActiveFilename = document.getElementById("study-tool-active-filename");
+    const studyToolStatus = document.getElementById("study-tool-status");
+    const btnOpenGeneratedStudySet = document.getElementById("btn-open-generated-study-set");
+
+    // Document Content Viewer Modal UI
+    const documentContentModal = document.getElementById("document-content-modal");
+    const docContentModalTitle = document.getElementById("doc-content-modal-title");
+    const docContentModalMeta = document.getElementById("doc-content-modal-meta");
+    const docContentSrcBadge = document.getElementById("doc-content-src-badge");
+    const docContentSearchInput = document.getElementById("doc-content-search-input");
+    const docContentImageBox = document.getElementById("doc-content-image-box");
+    const docContentImagePreview = document.getElementById("doc-content-image-preview");
+    const docContentPagesList = document.getElementById("doc-content-pages-list");
+    const btnDocContentGenerate = document.getElementById("btn-doc-content-generate");
+    const btnCloseDocContentModal = document.getElementById("btn-close-doc-content-modal");
+
+    // State
+    let currentStudyMaterial = null;
+    let currentInspectedAttachment = null;
+    let currentQuizIndex = 0;
+    let quizUserAnswers = {};
+    let currentCardIndex = 0;
+    let cardOrder = [];
+    let cardMastery = {};
+    let isCardFlipped = false;
+    let cachedLibraryDocs = [];
+    const attachmentPreviewRegistry = new Map();
+
+    function syncGenerateButtonState() {
+        const allAttached = Array.from(attachmentPreviewRegistry.values());
+        const activeEntry = currentInspectedAttachment || (allAttached.length ? allAttached[allAttached.length - 1] : null);
+
+        if (studyToolActiveFilename) {
+            if (activeEntry && activeEntry.filename) {
+                studyToolActiveFilename.innerHTML = `<strong>${escapeHtml(activeEntry.filename)}</strong> (${activeEntry.total_pages || 1} trang)`;
+            } else {
+                studyToolActiveFilename.textContent = "Chưa chọn tài liệu nào. Vui lòng bấm \"Tải tệp mới lên\" để thêm tài liệu ôn luyện.";
+            }
+        }
+
+        if (btnCreateQuizFlashcard) {
+            btnCreateQuizFlashcard.classList.toggle("has-active-file", Boolean(activeEntry && activeEntry.filename));
+        }
+
+        if (btnOpenGeneratedStudySet) {
+            btnOpenGeneratedStudySet.style.display = currentStudyMaterial ? "inline-flex" : "none";
+        }
+    }
+
+    function getFileBadgeMeta(filename) {
+        const lower = String(filename || "").toLowerCase();
+        if (lower.endsWith(".pdf")) {
+            return { cls: "icon-pdf", label: "PDF" };
+        }
+        if (lower.endsWith(".pptx") || lower.endsWith(".ppt")) {
+            return { cls: "icon-ppt", label: "P" };
+        }
+        if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".webp")) {
+            return { cls: "icon-img", label: "🖼" };
+        }
+        return { cls: "icon-doc", label: "≡" };
+    }
+
+    function buildDocSheetPreviewHtml(filename, material) {
+        const cleanTitle = (material && (material.clean_title || material.filename)) || filename || "Tài liệu học tập";
+        const rawPages = (material && Array.isArray(material.pages)) ? material.pages : [];
+        const rawText = rawPages.map(p => p.text || "").join("\n").trim();
+        const lines = rawText
+            ? rawText.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+            : [];
+
+        const heading1 = lines[0] || `1. Tổng quan: ${cleanTitle}`;
+        const body1 = lines.slice(1, 5).join(" ") || "Tài liệu học tập đã được trích xuất nội dung và nạp vào nguồn dữ liệu src/.";
+        const heading2 = lines[5] || "2. Nội dung trọng tâm & Khái niệm";
+        const body2 = lines.slice(6, 11).join(" ") || "Nhấn vào thẻ tệp này để xem toàn bộ nội dung chi tiết bên trong tài liệu.";
+
+        return `
+            <div class="attachment-doc-sheet">
+                <div class="attachment-doc-heading">${escapeHtml(heading1)}</div>
+                <div class="attachment-doc-lines">${escapeHtml(body1)}</div>
+                <div class="attachment-doc-subheading">${escapeHtml(heading2)}</div>
+                <div class="attachment-doc-lines">${escapeHtml(body2)}</div>
+            </div>
+        `;
+    }
+
+    function upsertAttachmentPreviewCard({ cardKey, filename, isImage = false, imageDataUrl = "", material = null, loading = false }) {
+        if (!chatAttachmentPreviewTray) return null;
+        const key = cardKey || filename || `att-${Date.now()}`;
+        chatAttachmentPreviewTray.hidden = false;
+
+        let cardEl = chatAttachmentPreviewTray.querySelector(`[data-attachment-key="${CSS.escape(key)}"]`);
+        if (!cardEl) {
+            cardEl = document.createElement("div");
+            cardEl.className = "chat-attachment-card";
+            cardEl.setAttribute("data-attachment-key", key);
+            chatAttachmentPreviewTray.appendChild(cardEl);
+        }
+
+        if (material) {
+            const entry = {
+                ...material,
+                cardKey: key,
+                isImage: Boolean(isImage),
+                imageDataUrl: imageDataUrl || (attachmentPreviewRegistry.get(key)?.imageDataUrl || ""),
+            };
+            attachmentPreviewRegistry.set(key, entry);
+            currentInspectedAttachment = entry;
+        }
+        syncGenerateButtonState();
+
+        const badge = getFileBadgeMeta(filename);
+        const thumbHtml = (isImage && imageDataUrl)
+            ? `<img src="${imageDataUrl}" alt="${escapeHtml(filename)}" class="attachment-thumb-img">`
+            : buildDocSheetPreviewHtml(filename, material);
+
+        const loadingHtml = loading
+            ? `<div class="attachment-loading-overlay"><div class="attachment-loading-spinner"></div></div>`
+            : "";
+
+        cardEl.title = material
+            ? `Nhấn để xem nội dung bên trong: ${filename}`
+            : `Đang xử lý: ${filename}`;
+
+        cardEl.innerHTML = `
+            <button type="button" class="attachment-card-remove" title="Xóa tệp đính kèm" aria-label="Xóa tệp đính kèm">&times;</button>
+            <div class="attachment-card-thumb">
+                ${thumbHtml}
+                ${loadingHtml}
+            </div>
+            <div class="attachment-card-footer">
+                <span class="attachment-file-icon ${badge.cls}">${badge.label}</span>
+                <span class="attachment-file-name">${escapeHtml(filename)}</span>
+            </div>
+        `;
+
+        const btnRemove = cardEl.querySelector(".attachment-card-remove");
+        btnRemove?.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            removeAttachmentPreviewCard(key);
+        });
+
+        cardEl.onclick = () => {
+            const storedEntry = attachmentPreviewRegistry.get(key) || material;
+            if (storedEntry) {
+                openDocumentContentViewer(storedEntry);
+            }
+        };
+
+        return cardEl;
+    }
+
+    function removeAttachmentPreviewCard(cardKey) {
+        if (!chatAttachmentPreviewTray) return;
+        const cardEl = chatAttachmentPreviewTray.querySelector(`[data-attachment-key="${CSS.escape(cardKey)}"]`);
+        if (cardEl) {
+            cardEl.remove();
+        }
+        attachmentPreviewRegistry.delete(cardKey);
+        if (currentInspectedAttachment && currentInspectedAttachment.cardKey === cardKey) {
+            const remaining = Array.from(attachmentPreviewRegistry.values());
+            currentInspectedAttachment = remaining.length ? remaining[remaining.length - 1] : null;
+        }
+        syncGenerateButtonState();
+        if (chatAttachmentPreviewTray.children.length === 0) {
+            chatAttachmentPreviewTray.hidden = true;
+        }
+    }
+
+    // --- Document Content Viewer Modal Logic ---
+    function renderDocumentContentPages(entry, filterQuery = "") {
+        if (!docContentPagesList) return;
+        const pages = (entry && Array.isArray(entry.pages)) ? entry.pages : [];
+        const q = (filterQuery || "").toLowerCase().trim();
+
+        const filteredPages = q
+            ? pages.filter(p => String(p.text || "").toLowerCase().includes(q) || `trang ${p.page_num}`.includes(q))
+            : pages;
+
+        if (!filteredPages.length) {
+            docContentPagesList.innerHTML = `
+                <div class="doc-content-page-card" style="text-align: center; color: var(--text-muted); padding: 28px;">
+                    ${q ? "Không tìm thấy đoạn nội dung nào khớp với từ khóa tìm kiếm." : "Không có nội dung văn bản trong tài liệu này."}
+                </div>
+            `;
+            return;
+        }
+
+        docContentPagesList.innerHTML = filteredPages.map(p => {
+            const pageText = String(p.text || "").trim();
+            return `
+                <div class="doc-content-page-card">
+                    <div class="doc-content-page-header">
+                        <span class="doc-content-page-badge">📑 Trang ${p.page_num || 1}</span>
+                        <span class="doc-content-page-chars">${pageText.length.toLocaleString("vi-VN")} ký tự</span>
+                    </div>
+                    <div class="doc-content-page-text">${escapeHtml(pageText)}</div>
+                </div>
+            `;
+        }).join("");
+    }
+
+    function openDocumentContentViewer(entry) {
+        if (!entry || !documentContentModal) return;
+        currentInspectedAttachment = entry;
+
+        const fname = entry.filename || "Tài liệu đính kèm";
+        const totalPages = entry.total_pages || (entry.pages ? entry.pages.length : 1) || 1;
+        const totalChars = entry.total_chars || (entry.pages || []).reduce((acc, p) => acc + String(p.text || "").length, 0);
+        const srcPath = entry.src_path || `src/${fname}`;
+
+        if (docContentModalTitle) {
+            docContentModalTitle.textContent = `📄 Nội dung: ${fname}`;
+        }
+        if (docContentModalMeta) {
+            docContentModalMeta.textContent = `${totalPages} trang · ${totalChars.toLocaleString("vi-VN")} ký tự · Đã nạp vào nguồn dữ liệu học tập (${srcPath})`;
+        }
+        if (docContentSrcBadge) {
+            docContentSrcBadge.textContent = `📂 Nguồn học tập: ${srcPath}`;
+        }
+        if (docContentSearchInput) {
+            docContentSearchInput.value = "";
+        }
+
+        if (docContentImageBox && docContentImagePreview) {
+            if (entry.isImage && entry.imageDataUrl) {
+                docContentImagePreview.src = entry.imageDataUrl;
+                docContentImageBox.style.display = "block";
+            } else {
+                docContentImagePreview.src = "";
+                docContentImageBox.style.display = "none";
+            }
+        }
+
+        renderDocumentContentPages(entry, "");
+
+        documentContentModal.style.display = "flex";
+        documentContentModal.classList.add("active");
+    }
+
+    function closeDocumentContentViewer() {
+        if (documentContentModal) {
+            documentContentModal.style.display = "none";
+            documentContentModal.classList.remove("active");
+        }
+    }
+
+    btnCloseDocContentModal?.addEventListener("click", closeDocumentContentViewer);
+
+    docContentSearchInput?.addEventListener("input", (e) => {
+        if (currentInspectedAttachment) {
+            renderDocumentContentPages(currentInspectedAttachment, e.target.value || "");
+        }
+    });
+
+    btnDocContentGenerate?.addEventListener("click", () => {
+        closeDocumentContentViewer();
+        generateStudySetForActiveAttachment();
+    });
+
+    btnCreateQuizFlashcard?.addEventListener("click", () => {
+        generateStudySetForActiveAttachment();
+    });
+
+    btnStudyToolLibrary?.addEventListener("click", () => {
+        openLibraryPicker();
+    });
+
+    btnStudyToolUpload?.addEventListener("click", () => {
+        if (studyToolFileInput) {
+            studyToolFileInput.value = "";
+            studyToolFileInput.click();
+        } else if (materialFileInput) {
+            materialFileInput.value = "";
+            materialFileInput.click();
+        }
+    });
+
+    btnOpenGeneratedStudySet?.addEventListener("click", () => {
+        if (currentStudyMaterial) {
+            openStudyMaterial(currentStudyMaterial);
+        }
+    });
+
+    async function generateStudySetForActiveAttachment() {
+        const allAttached = Array.from(attachmentPreviewRegistry.values());
+        const activeEntry = currentInspectedAttachment || (allAttached.length ? allAttached[allAttached.length - 1] : null);
+
+        if (!activeEntry || !activeEntry.filename) {
+            if (studyToolStatus) {
+                studyToolStatus.textContent = "Chưa có tài liệu được chọn. Vui lòng bấm \"Tải tệp mới lên\" để thêm tài liệu ôn luyện.";
+            }
+            if (studyToolFileInput) {
+                studyToolFileInput.value = "";
+                studyToolFileInput.click();
+            }
+            return;
+        }
+
+        await generateFromLibraryDocument(activeEntry.filename);
+    }
+
+    // --- Attach Menu Controls ---
+    function toggleAttachMenu() {
+        if (!attachPopupMenu) return;
+        const isHidden = Boolean(attachPopupMenu.hidden);
+        attachPopupMenu.hidden = !isHidden;
+        if (btnChatAttach) {
+            btnChatAttach.setAttribute("aria-expanded", String(isHidden));
+        }
+    }
+
+    function closeAttachMenu() {
+        if (attachPopupMenu) attachPopupMenu.hidden = true;
+        if (btnChatAttach) btnChatAttach.setAttribute("aria-expanded", "false");
+    }
+
+    btnChatAttach?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleAttachMenu();
+    });
+
+    document.addEventListener("click", (e) => {
+        if (e.target && !e.target.closest?.("#chat-attach-wrapper")) {
+            closeAttachMenu();
+        }
+    });
+
+    btnAttachUpload?.addEventListener("click", () => {
+        closeAttachMenu();
+        if (materialFileInput) {
+            materialFileInput.value = "";
+            materialFileInput.click();
+        }
+    });
+
+    btnAttachLibrary?.addEventListener("click", () => {
+        closeAttachMenu();
+        openLibraryPicker();
+    });
+
+    // --- Loading Modal Helpers ---
+    function showStudyLoading(title, step) {
+        if (studyLoadingTitle) studyLoadingTitle.textContent = title || "Đang xử lý tài liệu...";
+        if (studyLoadingStep) studyLoadingStep.textContent = step || "Vui lòng chờ...";
+        if (studyLoadingModal) {
+            studyLoadingModal.style.display = "flex";
+            studyLoadingModal.classList.add("active");
+        }
+    }
+
+    function hideStudyLoading() {
+        if (studyLoadingModal) {
+            studyLoadingModal.style.display = "none";
+            studyLoadingModal.classList.remove("active");
+        }
+    }
+
+    // --- File Upload Handler (Ingests into src/ & attaches preview card without auto-opening Quiz/Flashcards) ---
+    const ALLOWED_STUDY_EXTS = [".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown", ".png", ".jpg", ".jpeg", ".webp"];
+
+    async function handleMaterialFileUpload(file, inputEl) {
+        if (!file) return;
+
+        if (file.size === 0) {
+            if (inputEl) inputEl.value = "";
+            alert("Tệp tin rỗng (0 bytes). Vui lòng chọn tệp hợp lệ.");
+            return;
+        }
+
+        if (file.size > 20 * 1024 * 1024) {
+            if (inputEl) inputEl.value = "";
+            alert("Tệp vượt quá kích thước cho phép (tối đa 20MB). Vui lòng chọn tệp nhỏ hơn.");
+            return;
+        }
+
+        const dotIdx = file.name.lastIndexOf(".");
+        const ext = dotIdx >= 0 ? file.name.slice(dotIdx).toLowerCase() : "";
+        if (!ALLOWED_STUDY_EXTS.includes(ext)) {
+            if (inputEl) inputEl.value = "";
+            alert(`Định dạng tệp "${ext || "không xác định"}" không được hỗ trợ. Vui lòng chọn PDF, Word, PowerPoint, TXT, Markdown hoặc Ảnh (PNG, JPG, WebP).`);
+            return;
+        }
+
+        const isImageFile = [".png", ".jpg", ".jpeg", ".webp"].includes(ext);
+        const previewKey = `upload-${file.name}`;
+        let base64Data = "";
+
+        try {
+            base64Data = await readFileAsBase64(file);
+            upsertAttachmentPreviewCard({
+                cardKey: previewKey,
+                filename: file.name,
+                isImage: isImageFile,
+                imageDataUrl: isImageFile ? base64Data : "",
+                material: null,
+                loading: true
+            });
+
+            if (studyToolStatus) {
+                studyToolStatus.textContent = `⏳ Đang đọc và nạp tệp "${file.name}" vào nguồn học tập (src/)...`;
+            }
+
+            const res = await fetch("/api/materials/upload", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    filename: file.name,
+                    file_base64: base64Data,
+                    generate_study_set: false,
+                    persist_to_src: true
+                })
+            });
+
+            let data = {};
+            try {
+                data = await res.json();
+            } catch (_) {
+                data = {};
+            }
+
+            if (!res.ok) {
+                const detailMsg = res.status === 404
+                    ? "Không tìm thấy API xử lý học liệu (/api/materials/upload). Vui lòng làm mới trang hoặc kiểm tra máy chủ."
+                    : (data.detail || "Không thể xử lý tài liệu tải lên.");
+                throw new Error(detailMsg);
+            }
+
+            upsertAttachmentPreviewCard({
+                cardKey: previewKey,
+                filename: file.name,
+                isImage: isImageFile,
+                imageDataUrl: isImageFile ? base64Data : "",
+                material: data.material,
+                loading: false
+            });
+
+            fetchKnowledgeBaseStatus();
+            syncGenerateButtonState();
+
+            if (chatStatus) {
+                chatStatus.textContent = `✅ Đã thêm "${file.name}" vào nguồn dữ liệu học tập (src/). Bạn có thể vào tab "⚡ Trắc nghiệm & Flashcard" trong Công cụ học tập để tạo bài ôn luyện.`;
+            }
+            if (studyToolStatus) {
+                studyToolStatus.textContent = `✅ Đã nạp thành công "${file.name}" (${(data.material && data.material.total_pages) || 1} trang) vào nguồn dữ liệu học tập (src/). Nhấn nút "⚡ Tạo Trắc nghiệm & Flashcard" bên dưới để bắt đầu ôn luyện.`;
+            }
+        } catch (err) {
+            removeAttachmentPreviewCard(previewKey);
+            console.error("Upload material error:", err);
+            alert(`Lỗi xử lý tài liệu: ${err.message || err}`);
+            if (studyToolStatus) {
+                studyToolStatus.textContent = `❌ Lỗi nạp tài liệu: ${err.message || err}`;
+            }
+        } finally {
+            if (inputEl) {
+                inputEl.value = "";
+            }
+        }
+    }
+
+    materialFileInput?.addEventListener("change", (e) => {
+        const file = e.target.files && e.target.files[0];
+        handleMaterialFileUpload(file, materialFileInput);
+    });
+
+    studyToolFileInput?.addEventListener("change", (e) => {
+        const file = e.target.files && e.target.files[0];
+        handleMaterialFileUpload(file, studyToolFileInput);
+    });
+
+    function readFileAsBase64(file) {
+        return new Promise((resolve, reject) => {
+            if (typeof FileReader === "undefined") {
+                return reject(new Error("Trình duyệt không hỗ trợ FileReader"));
+            }
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = error => reject(error);
+            reader.readAsDataURL(file);
+        });
+    }
+
+    // --- Library Picker Logic ---
+    async function openLibraryPicker() {
+        if (libraryPickerModal) {
+            libraryPickerModal.style.display = "flex";
+            libraryPickerModal.classList.add("active");
+        }
+        if (libraryPickerTableBody) {
+            libraryPickerTableBody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 18px;">⏳ Đang tải danh sách tài liệu thư viện...</td></tr>`;
+        }
+
+        try {
+            const res = await fetch("/api/materials/documents");
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || "Lỗi tải thư viện");
+            cachedLibraryDocs = data.documents || [];
+            renderLibraryTable(cachedLibraryDocs);
+        } catch (err) {
+            if (libraryPickerTableBody) {
+                libraryPickerTableBody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--danger); padding: 18px;">❌ ${err.message}</td></tr>`;
+            }
+        }
+    }
+
+    function renderLibraryTable(docs) {
+        if (!libraryPickerTableBody) return;
+        if (!docs || docs.length === 0) {
+            libraryPickerTableBody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 18px;">Không tìm thấy tài liệu nào trong thư viện.</td></tr>`;
+            return;
+        }
+
+        libraryPickerTableBody.innerHTML = "";
+        docs.forEach(doc => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td>
+                    <strong style="color: var(--text-primary); display: block;">${escapeHtml(doc.clean_title || doc.filename)}</strong>
+                    <small style="color: var(--text-muted); font-size: 11px;">${escapeHtml(doc.filename)}</small>
+                </td>
+                <td style="text-align: center; font-size: 12.5px;">${doc.page_count || doc.total_pages || 1}</td>
+                <td style="text-align: center; font-size: 12.5px;">${doc.chunk_count || 1}</td>
+                <td style="text-align: center; display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                    <button type="button" class="btn btn-sm btn-secondary btn-attach-from-doc" style="font-size: 11px; padding: 4px 8px;" data-filename="${escapeHtml(doc.filename)}">
+                        ➕ Thêm tệp
+                    </button>
+                    <button type="button" class="btn btn-sm btn-primary btn-generate-from-doc" style="font-size: 11px; padding: 4px 8px;" data-filename="${escapeHtml(doc.filename)}">
+                        ⚡ Tạo Quiz &amp; Thẻ
+                    </button>
+                </td>
+            `;
+            libraryPickerTableBody.appendChild(tr);
+        });
+
+        const attachBtns = libraryPickerTableBody.querySelectorAll(".btn-attach-from-doc");
+        attachBtns.forEach(btn => {
+            btn.addEventListener("click", () => {
+                const filename = btn.getAttribute("data-filename");
+                attachLibraryDocument(filename);
+            });
+        });
+
+        const generateBtns = libraryPickerTableBody.querySelectorAll(".btn-generate-from-doc");
+        generateBtns.forEach(btn => {
+            btn.addEventListener("click", () => {
+                const filename = btn.getAttribute("data-filename");
+                generateFromLibraryDocument(filename);
+            });
+        });
+    }
+
+    librarySearchInput?.addEventListener("input", (e) => {
+        const query = (e.target.value || "").toLowerCase().trim();
+        if (!query) {
+            renderLibraryTable(cachedLibraryDocs);
+            return;
+        }
+        const filtered = cachedLibraryDocs.filter(d => 
+            (d.clean_title && d.clean_title.toLowerCase().includes(query)) ||
+            (d.filename && d.filename.toLowerCase().includes(query))
+        );
+        renderLibraryTable(filtered);
+    });
+
+    btnCloseLibraryPicker?.addEventListener("click", () => {
+        if (libraryPickerModal) {
+            libraryPickerModal.style.display = "none";
+            libraryPickerModal.classList.remove("active");
+        }
+    });
+
+    async function attachLibraryDocument(filename) {
+        if (libraryPickerModal) {
+            libraryPickerModal.style.display = "none";
+            libraryPickerModal.classList.remove("active");
+        }
+
+        const previewKey = `lib-${filename}`;
+        upsertAttachmentPreviewCard({
+            cardKey: previewKey,
+            filename: filename,
+            isImage: false,
+            imageDataUrl: "",
+            material: null,
+            loading: true
+        });
+
+        try {
+            const res = await fetch("/api/materials/inspect-library", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ filename, persist_to_src: true })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || "Không thể đọc nội dung tài liệu thư viện");
+
+            upsertAttachmentPreviewCard({
+                cardKey: previewKey,
+                filename: (data.material && data.material.filename) || filename,
+                isImage: false,
+                imageDataUrl: "",
+                material: data.material,
+                loading: false
+            });
+            fetchKnowledgeBaseStatus();
+            syncGenerateButtonState();
+            if (chatStatus) {
+                chatStatus.textContent = `✅ Đã thêm "${filename}" vào khung chat và nguồn học tập (src/). Nhấn vào thẻ tệp để xem nội dung hoặc vào tab "⚡ Trắc nghiệm & Flashcard" để ôn luyện.`;
+            }
+            if (studyToolStatus) {
+                studyToolStatus.textContent = `✅ Đã chọn tài liệu "${filename}" từ thư viện. Nhấn "⚡ Tạo Trắc nghiệm & Flashcard" để bắt đầu ôn luyện.`;
+            }
+        } catch (err) {
+            removeAttachmentPreviewCard(previewKey);
+            console.error("Attach library doc error:", err);
+            alert(`Lỗi thêm tài liệu: ${err.message || err}`);
+        }
+    }
+
+    async function generateFromLibraryDocument(filename) {
+        if (libraryPickerModal) {
+            libraryPickerModal.style.display = "none";
+            libraryPickerModal.classList.remove("active");
+        }
+
+        const existingUploadEntry = attachmentPreviewRegistry.get(`upload-${filename}`);
+        const previewKey = existingUploadEntry ? `upload-${filename}` : `lib-${filename}`;
+        upsertAttachmentPreviewCard({
+            cardKey: previewKey,
+            filename: filename,
+            isImage: existingUploadEntry ? existingUploadEntry.isImage : false,
+            imageDataUrl: existingUploadEntry ? existingUploadEntry.imageDataUrl : "",
+            material: existingUploadEntry || null,
+            loading: true
+        });
+
+        showStudyLoading(
+            `Đang xử lý "${filename}"...`,
+            "AI đang tổng hợp nội dung tài liệu và tạo bộ câu hỏi trắc nghiệm & flashcard..."
+        );
+
+        try {
+            const res = await fetch("/api/materials/generate-from-library", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ filename })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || "Không thể tạo từ tài liệu thư viện");
+
+            hideStudyLoading();
+            upsertAttachmentPreviewCard({
+                cardKey: previewKey,
+                filename: (data.material && data.material.filename) || filename,
+                isImage: existingUploadEntry ? existingUploadEntry.isImage : false,
+                imageDataUrl: existingUploadEntry ? existingUploadEntry.imageDataUrl : "",
+                material: data.material,
+                loading: false
+            });
+            appendStudyCardToChat(data.material);
+            openStudyMaterial(data.material);
+            syncGenerateButtonState();
+            if (studyToolStatus) {
+                studyToolStatus.textContent = `✅ Đã tạo thành công ${(data.material.quiz || []).length} câu trắc nghiệm và ${(data.material.flashcards || []).length} flashcards cho "${filename}".`;
+            }
+        } catch (err) {
+            hideStudyLoading();
+            if (!existingUploadEntry) {
+                removeAttachmentPreviewCard(previewKey);
+            } else {
+                upsertAttachmentPreviewCard({
+                    cardKey: previewKey,
+                    filename: filename,
+                    isImage: existingUploadEntry.isImage,
+                    imageDataUrl: existingUploadEntry.imageDataUrl,
+                    material: existingUploadEntry,
+                    loading: false
+                });
+            }
+            console.error("Library generate error:", err);
+            alert(`Lỗi tạo bài học: ${err.message || err}`);
+        }
+    }
+
+    // --- Study Material Modal Presentation ---
+    function openStudyMaterial(material) {
+        if (!material) return;
+        currentStudyMaterial = material;
+        currentQuizIndex = 0;
+        quizUserAnswers = {};
+        currentCardIndex = 0;
+        isCardFlipped = false;
+        cardMastery = {};
+
+        const totalCards = (material.flashcards || []).length;
+        cardOrder = Array.from({ length: totalCards }, (_, i) => i);
+
+        if (studyMaterialTitle) {
+            studyMaterialTitle.textContent = `📖 Bộ Ôn Luyện: ${material.filename}`;
+        }
+        const quizCount = (material.quiz || []).length;
+        if (studyMaterialSubtitle) {
+            studyMaterialSubtitle.textContent = `${quizCount} câu trắc nghiệm · ${totalCards} flashcards · ${material.total_pages || 1} trang`;
+        }
+        if (quizBadgeCount) quizBadgeCount.textContent = String(quizCount);
+        if (cardBadgeCount) cardBadgeCount.textContent = String(totalCards);
+
+        if (sourceDocName) sourceDocName.textContent = `Tài liệu: ${material.filename}`;
+        if (sourcePageCount) sourcePageCount.textContent = String(material.total_pages || 1);
+        if (sourceDocType) sourceDocType.textContent = (material.filename && material.filename.endsWith(".pdf")) ? "PDF Document" : "Văn bản học tập";
+        if (sourceProcessedAt) sourceProcessedAt.textContent = new Date().toLocaleTimeString("vi-VN");
+        if (sourceTextPreview) {
+            const previewText = (material.pages || []).map(p => `--- Trang ${p.page_num} ---\n${p.text}`).join("\n\n");
+            sourceTextPreview.textContent = previewText || "Không có trích đoạn văn bản thô.";
+        }
+
+        switchStudyTab("quiz");
+        renderQuiz();
+        renderFlashcards();
+
+        if (studyMaterialModal) {
+            studyMaterialModal.style.display = "flex";
+            studyMaterialModal.classList.add("active");
+        }
+    }
+
+    btnCloseStudyMaterial?.addEventListener("click", () => {
+        if (studyMaterialModal) {
+            studyMaterialModal.style.display = "none";
+            studyMaterialModal.classList.remove("active");
+        }
+    });
+
+    // --- Study Tabs Switching ---
+    function switchStudyTab(tabName) {
+        const tabs = [
+            { name: "quiz", btn: tabBtnQuiz, panel: panelQuiz },
+            { name: "flashcards", btn: tabBtnFlashcards, panel: panelFlashcards },
+            { name: "sources", btn: tabBtnSources, panel: panelSources }
+        ];
+
+        tabs.forEach(t => {
+            if (t.name === tabName) {
+                t.btn?.classList.add("active");
+                if (t.panel) t.panel.hidden = false;
+            } else {
+                t.btn?.classList.remove("active");
+                if (t.panel) t.panel.hidden = true;
+            }
+        });
+    }
+
+    tabBtnQuiz?.addEventListener("click", () => switchStudyTab("quiz"));
+    tabBtnFlashcards?.addEventListener("click", () => switchStudyTab("flashcards"));
+    tabBtnSources?.addEventListener("click", () => switchStudyTab("sources"));
+
+    // --- Quiz Logic ---
+    function renderQuiz() {
+        const quiz = (currentStudyMaterial && currentStudyMaterial.quiz) || [];
+        if (!quiz.length) {
+            if (quizQuestionText) quizQuestionText.textContent = "Không tìm thấy câu hỏi trắc nghiệm nào.";
+            if (quizChoicesContainer) quizChoicesContainer.innerHTML = "";
+            return;
+        }
+
+        renderQuizQuestion(currentQuizIndex);
+        renderQuizBubbles();
+        updateQuizScore();
+    }
+
+    function renderQuizQuestion(idx) {
+        const quiz = (currentStudyMaterial && currentStudyMaterial.quiz) || [];
+        if (idx < 0 || idx >= quiz.length) return;
+        currentQuizIndex = idx;
+
+        const q = quiz[idx];
+        if (quizProgressText) quizProgressText.textContent = `Câu ${idx + 1} / ${quiz.length}`;
+        if (quizProgressFill) {
+            const pct = Math.round(((idx + 1) / quiz.length) * 100);
+            quizProgressFill.style.width = `${pct}%`;
+        }
+
+        if (quizQuestionText) quizQuestionText.textContent = q.question;
+
+        if (quizChoicesContainer) {
+            quizChoicesContainer.innerHTML = "";
+            const answered = quizUserAnswers[idx];
+
+            (q.choices || []).forEach(choice => {
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "quiz-choice-btn";
+
+                if (answered) {
+                    btn.disabled = true;
+                    if (choice.label === q.correct_answer) {
+                        btn.classList.add("correct");
+                    }
+                    if (choice.label === answered.selected && !answered.isCorrect) {
+                        btn.classList.add("incorrect");
+                    }
+                    if (choice.label === answered.selected) {
+                        btn.classList.add("selected");
+                    }
+                } else {
+                    btn.addEventListener("click", () => handleQuizAnswer(idx, choice.label));
+                }
+
+                btn.innerHTML = `
+                    <span class="quiz-choice-key">${escapeHtml(choice.label)}</span>
+                    <span class="quiz-choice-text">${escapeHtml(choice.text)}</span>
+                `;
+                quizChoicesContainer.appendChild(btn);
+            });
+        }
+
+        if (quizFeedbackBox) {
+            const answered = quizUserAnswers[idx];
+            if (answered) {
+                quizFeedbackBox.hidden = false;
+                if (answered.isCorrect) {
+                    if (quizFeedbackIcon) quizFeedbackIcon.textContent = "✅";
+                    if (quizFeedbackTitle) {
+                        quizFeedbackTitle.textContent = "Chính xác!";
+                        quizFeedbackTitle.style.color = "#10b981";
+                    }
+                } else {
+                    if (quizFeedbackIcon) quizFeedbackIcon.textContent = "❌";
+                    if (quizFeedbackTitle) {
+                        quizFeedbackTitle.textContent = `Chưa đúng! Đáp án chính xác là ${q.correct_answer}`;
+                        quizFeedbackTitle.style.color = "#ef4444";
+                    }
+                }
+
+                if (quizExplanationText) quizExplanationText.textContent = q.explanation || "Không có giải thích chi tiết.";
+                if (quizCitationPage) quizCitationPage.textContent = `Trang ${q.page_num || 1}`;
+                if (quizCitationQuote) {
+                    quizCitationQuote.textContent = q.evidence_quote ? `"${q.evidence_quote}"` : "(Tham khảo nội dung tổng quát từ tài liệu)";
+                }
+            } else {
+                quizFeedbackBox.hidden = true;
+            }
+        }
+
+        if (btnQuizPrev) btnQuizPrev.disabled = idx === 0;
+        if (btnQuizNext) {
+            btnQuizNext.disabled = idx === quiz.length - 1;
+            btnQuizNext.textContent = idx === quiz.length - 1 ? "Đã đến câu cuối" : "Câu tiếp theo ➡";
+        }
+
+        const allAnswered = Object.keys(quizUserAnswers).length === quiz.length;
+        if (btnQuizRestart) {
+            btnQuizRestart.style.display = allAnswered ? "inline-flex" : "none";
+        }
+    }
+
+    function handleQuizAnswer(idx, selectedKey) {
+        const quiz = (currentStudyMaterial && currentStudyMaterial.quiz) || [];
+        const q = quiz[idx];
+        if (!q) return;
+
+        const isCorrect = selectedKey === q.correct_answer;
+        quizUserAnswers[idx] = { selected: selectedKey, isCorrect };
+
+        renderQuizQuestion(idx);
+        renderQuizBubbles();
+        updateQuizScore();
+    }
+
+    function renderQuizBubbles() {
+        if (!quizBubbles) return;
+        const quiz = (currentStudyMaterial && currentStudyMaterial.quiz) || [];
+        quizBubbles.innerHTML = "";
+
+        quiz.forEach((_, i) => {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "quiz-bubble";
+            b.textContent = String(i + 1);
+
+            if (i === currentQuizIndex) b.classList.add("active");
+            const ans = quizUserAnswers[i];
+            if (ans) {
+                b.classList.add(ans.isCorrect ? "correct" : "wrong");
+            }
+
+            b.addEventListener("click", () => renderQuizQuestion(i));
+            quizBubbles.appendChild(b);
+        });
+    }
+
+    function updateQuizScore() {
+        if (!quizScoreText) return;
+        const total = (currentStudyMaterial && currentStudyMaterial.quiz && currentStudyMaterial.quiz.length) || 0;
+        const correctCount = Object.values(quizUserAnswers).filter(a => a.isCorrect).length;
+        const answeredCount = Object.keys(quizUserAnswers).length;
+        quizScoreText.textContent = `${correctCount} / ${answeredCount} (Tổng ${total} câu)`;
+    }
+
+    btnQuizPrev?.addEventListener("click", () => {
+        if (currentQuizIndex > 0) renderQuizQuestion(currentQuizIndex - 1);
+    });
+
+    btnQuizNext?.addEventListener("click", () => {
+        const total = (currentStudyMaterial && currentStudyMaterial.quiz && currentStudyMaterial.quiz.length) || 0;
+        if (currentQuizIndex < total - 1) renderQuizQuestion(currentQuizIndex + 1);
+    });
+
+    btnQuizRestart?.addEventListener("click", () => {
+        quizUserAnswers = {};
+        renderQuizQuestion(0);
+        renderQuizBubbles();
+        updateQuizScore();
+    });
+
+    // --- Flashcards Logic ---
+    function renderFlashcards() {
+        const cards = (currentStudyMaterial && currentStudyMaterial.flashcards) || [];
+        if (!cards.length) {
+            if (cardFrontText) cardFrontText.textContent = "Không tìm thấy flashcards nào.";
+            if (cardBackText) cardBackText.textContent = "";
+            return;
+        }
+
+        renderCurrentCard();
+        updateCardMasteryStats();
+    }
+
+    function renderCurrentCard() {
+        const cards = (currentStudyMaterial && currentStudyMaterial.flashcards) || [];
+        if (!cards.length) return;
+
+        isCardFlipped = false;
+        if (flashcardInner) flashcardInner.classList.remove("is-flipped");
+
+        const realIndex = cardOrder[currentCardIndex];
+        const card = cards[realIndex];
+        if (!card) return;
+
+        const total = cards.length;
+        if (cardCounterText) cardCounterText.textContent = `Thẻ ${currentCardIndex + 1} / ${total}`;
+        if (cardFrontIndicator) cardFrontIndicator.textContent = `${currentCardIndex + 1} / ${total}`;
+        if (cardBackIndicator) cardBackIndicator.textContent = `${currentCardIndex + 1} / ${total}`;
+
+        if (cardFrontText) cardFrontText.textContent = card.front;
+        if (cardBackText) cardBackText.textContent = card.back;
+        if (cardCitationPage) cardCitationPage.textContent = `Trang ${card.page_num || 1}`;
+        if (cardCitationQuote) {
+            cardCitationQuote.textContent = card.evidence_quote ? `"${card.evidence_quote}"` : "(Trích xuất từ nội dung tài liệu)";
+        }
+    }
+
+    function toggleCardFlip() {
+        if (!flashcardInner) return;
+        isCardFlipped = !isCardFlipped;
+        if (isCardFlipped) {
+            flashcardInner.classList.add("is-flipped");
+        } else {
+            flashcardInner.classList.remove("is-flipped");
+        }
+    }
+
+    flashcardCard?.addEventListener("click", toggleCardFlip);
+    btnCardFlip?.addEventListener("click", toggleCardFlip);
+
+    btnCardPrev?.addEventListener("click", () => {
+        const total = cardOrder.length;
+        if (total <= 0) return;
+        currentCardIndex = (currentCardIndex - 1 + total) % total;
+        renderCurrentCard();
+    });
+
+    btnCardNext?.addEventListener("click", () => {
+        const total = cardOrder.length;
+        if (total <= 0) return;
+        currentCardIndex = (currentCardIndex + 1) % total;
+        renderCurrentCard();
+    });
+
+    btnCardMastered?.addEventListener("click", () => {
+        const realIndex = cardOrder[currentCardIndex];
+        cardMastery[realIndex] = "mastered";
+        updateCardMasteryStats();
+        const total = cardOrder.length;
+        if (total > 0) {
+            currentCardIndex = (currentCardIndex + 1) % total;
+            renderCurrentCard();
+        }
+    });
+
+    btnCardUnmastered?.addEventListener("click", () => {
+        const realIndex = cardOrder[currentCardIndex];
+        cardMastery[realIndex] = "learning";
+        updateCardMasteryStats();
+        const total = cardOrder.length;
+        if (total > 0) {
+            currentCardIndex = (currentCardIndex + 1) % total;
+            renderCurrentCard();
+        }
+    });
+
+    btnCardShuffle?.addEventListener("click", () => {
+        for (let i = cardOrder.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [cardOrder[i], cardOrder[j]] = [cardOrder[j], cardOrder[i]];
+        }
+        currentCardIndex = 0;
+        renderCurrentCard();
+    });
+
+    function updateCardMasteryStats() {
+        const mastered = Object.values(cardMastery).filter(v => v === "mastered").length;
+        const learning = Object.values(cardMastery).filter(v => v === "learning").length;
+        if (cardMasteredCount) cardMasteredCount.textContent = String(mastered);
+        if (cardLearningCount) cardLearningCount.textContent = String(learning);
+    }
+
+    // Keyboard support
+    document.addEventListener("keydown", (e) => {
+        if (!studyMaterialModal || studyMaterialModal.style.display !== "flex") return;
+        if (panelFlashcards && !panelFlashcards.hidden) {
+            if (e.code === "Space") {
+                e.preventDefault();
+                toggleCardFlip();
+            } else if (e.code === "ArrowLeft") {
+                e.preventDefault();
+                btnCardPrev?.click();
+            } else if (e.code === "ArrowRight") {
+                e.preventDefault();
+                btnCardNext?.click();
+            }
+        }
+    });
+
+    // --- Assistant Message Study Card in Chat ---
+    function appendStudyCardToChat(material) {
+        if (!messagesContainer || !material) return;
+        const quizCount = (material.quiz || []).length;
+        const cardCount = (material.flashcards || []).length;
+
+        messagesContainer.classList.add("has-chat");
+
+        const msgDiv = document.createElement("div");
+        msgDiv.className = "message assistant study-card-message";
+        msgDiv.innerHTML = `
+            <div class="message-avatar">
+                <img src="/static/logo.jpg" alt="AI" class="hero-avatar-img" style="width: 32px; height: 32px; border-radius: 50%;">
+            </div>
+            <div class="message-body">
+                <div class="study-card-assistant">
+                    <div class="study-card-header">
+                        <span class="study-card-icon">📚</span>
+                        <div class="study-card-title">Đã sẵn sàng bộ học tập cho "${escapeHtml(material.filename)}"</div>
+                    </div>
+                    <div class="study-card-details">
+                        Hệ thống đã trích xuất thành công <strong>${material.total_pages || 1} trang</strong> từ tài liệu và tự động tạo:
+                        <ul style="margin: 6px 0 8px 18px;">
+                            <li><strong>${quizCount} câu hỏi trắc nghiệm</strong> (kèm giải thích chi tiết và trích dẫn đối chiếu từng trang).</li>
+                            <li><strong>${cardCount} thẻ ghi nhớ Flashcard 3D</strong> phục vụ ghi nhớ thuật ngữ và khái niệm.</li>
+                        </ul>
+                    </div>
+                    <div class="study-card-actions">
+                        <button type="button" class="btn btn-primary btn-sm btn-reopen-study" data-material-id="${escapeHtml(material.id)}">
+                            📖 Mở bộ ôn luyện (Trắc nghiệm & Flashcard)
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        messagesContainer.appendChild(msgDiv);
+        msgDiv.querySelector(".btn-reopen-study")?.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            openStudyMaterial(material);
+        });
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
 });
+
