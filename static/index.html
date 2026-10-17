@@ -11,7 +11,7 @@
             try { localStorage.setItem("theme", "dark"); } catch (e) {}
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=yc198-release02">
+    <link rel="stylesheet" href="/static/style.css?v=yc207-ui11">
     <link rel="stylesheet" href="/static/theme.css?v=3-contrast-fix">
     <style>
         /* Ambient gradient glowing orbs */
@@ -204,29 +204,114 @@
             display: none !important;
         }
 
-        /* QA Panel layout - perfectly centered hero & input on welcome screen */
+        /* QA Panel layout - centered hero in welcome mode & symmetrical stretch in chat mode */
         .qa-panel:not([hidden]) {
             display: flex !important;
             flex-direction: column !important;
+            align-items: center !important;
             flex: 1 1 0% !important;
             min-height: 0 !important;
             height: 100% !important;
             position: relative !important;
+            gap: 16px !important;
+            padding: 16px 24px !important;
+            box-sizing: border-box !important;
         }
 
-        .qa-panel.welcome-mode,
-        .qa-panel:has(.welcome-card) {
+        .qa-panel.welcome-mode:not([hidden]) {
             justify-content: center !important;
-            align-items: center !important;
         }
 
-        .qa-panel.welcome-mode .messages-container,
-        .qa-panel:has(.welcome-card) .messages-container {
+        .qa-panel:not(.welcome-mode):not([hidden]) {
+            justify-content: flex-start !important;
+        }
+
+        /* Active Session Bar - stretched evenly across the interface */
+        #session-bar.session-bar,
+        .session-bar {
+            width: 100% !important;
+            max-width: 900px !important;
+            margin: 0 auto !important;
+            padding: 12px 20px !important;
+            background: rgba(255, 255, 255, 0.03) !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            border-radius: 14px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: space-between !important;
+            gap: 16px !important;
+            box-sizing: border-box !important;
+            flex-shrink: 0 !important;
+        }
+
+        #session-bar[style*="display: none"] {
+            display: none !important;
+        }
+
+        #session-bar .session-title-wrapper {
+            display: flex !important;
+            align-items: center !important;
+            gap: 10px !important;
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+        }
+
+        #session-bar .session-title-wrapper strong {
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            max-width: none !important;
+            font-size: 0.95rem !important;
+            color: var(--text-primary) !important;
+        }
+
+        #session-bar .session-controls {
+            display: flex !important;
+            align-items: center !important;
+            gap: 10px !important;
+            flex-shrink: 0 !important;
+        }
+
+        #session-summary-box.session-summary-box,
+        .session-summary-box,
+        #training-banner.training-banner,
+        .training-banner {
+            width: 100% !important;
+            max-width: 900px !important;
+            margin: 0 auto !important;
+            box-sizing: border-box !important;
+            flex-shrink: 0 !important;
+        }
+
+        .qa-panel:not([hidden]) .messages-container:not(.has-chat) {
             flex: 0 0 auto !important;
             overflow: visible !important;
             padding: 0 !important;
             width: 100% !important;
-            max-width: 760px !important;
+            max-width: 900px !important;
+            margin: 0 auto !important;
+        }
+
+        .qa-panel:not([hidden]) .messages-container.has-chat {
+            flex: 1 1 auto !important;
+            width: 100% !important;
+            max-width: 900px !important;
+            margin: 0 auto !important;
+            max-height: none !important;
+            min-height: 0 !important;
+            overflow-y: auto !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            gap: 16px !important;
+            padding: 6px 0 !important;
+        }
+
+        .messages-container.has-chat > .message:not(.welcome-card) {
+            width: 100% !important;
+            max-width: 900px !important;
+            margin: 0 auto !important;
+            box-sizing: border-box !important;
         }
 
         /* Centered welcome greeting hero card */
@@ -239,7 +324,10 @@
             border: none !important;
             box-shadow: none !important;
             padding: 0 !important;
-            margin: 0 auto 28px auto !important;
+            margin: 0 auto 12px auto !important;
+        }
+        .messages-container.has-chat .welcome-card {
+            display: none !important;
         }
         .welcome-card .message-avatar {
             margin: 0 auto 16px auto !important;
@@ -273,13 +361,22 @@
             letter-spacing: -0.01em !important;
         }
 
-        .qa-panel.welcome-mode .input-area,
-        .qa-panel:has(.welcome-card) .input-area {
-            padding: 0 24px !important;
+        .qa-panel:not([hidden]) .input-area {
+            padding: 0 !important;
             margin: 0 auto !important;
-            max-width: 760px !important;
+            max-width: 900px !important;
             width: 100% !important;
-            transform: translateY(-16px) !important;
+            transform: none !important;
+            border-top: none !important;
+            flex-shrink: 0 !important;
+            box-sizing: border-box !important;
+        }
+
+        .qa-panel:not([hidden]) .chat-form {
+            max-width: 900px !important;
+            width: 100% !important;
+            margin: 0 auto !important;
+            box-sizing: border-box !important;
         }
 
         /* ================= Learning Tools & Timetable Panels ================= */
@@ -652,7 +749,7 @@
                         <div class="tool-panel-header">
                             <div>
                                 <h2>Tạo câu hỏi theo chủ đề</h2>
-                                <p class="text-muted">Câu hỏi do AI tạo từ tài liệu trong thư viện; từng câu có trang và trích dẫn để đối chiếu.</p>
+                                <p class="text-muted">Câu hỏi do AI tạo từ tài liệu trong thư viện hoặc tệp tải lên; từng câu có trang và trích dẫn để đối chiếu.</p>
                             </div>
                         </div>
                         <div class="learning-generate-form">
@@ -679,6 +776,42 @@
                                 </div>
                             </div>
                             <p id="learning-generate-status" class="tool-status text-muted" role="status" aria-live="polite">Chọn hoặc nhập chủ đề để bắt đầu luyện tập (tối đa 3 câu để giảm thời gian phản hồi).</p>
+                        </div>
+
+                        <!-- Tích hợp phần Tạo Flashcard & Bài tập Trắc nghiệm từ tài liệu tải lên -->
+                        <div class="study-material-integrated-box" style="margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+                                <div>
+                                    <h3 style="font-size: 0.95rem; margin: 0; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+                                        <span>⚡</span> Tạo Flashcard &amp; Bài tập Trắc nghiệm từ Tài liệu tải lên
+                                    </h3>
+                                    <p class="text-muted" style="margin: 3px 0 0 0; font-size: 0.83rem;">
+                                        Tự tải tài liệu học tập (PDF, Word, Ảnh, Markdown...) để AI trích xuất nội dung và sinh bộ trắc nghiệm kiểm tra kèm thẻ Flashcard 3D có trích dẫn đối chiếu từng trang.
+                                    </p>
+                                </div>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <button type="button" id="btn-study-tool-upload" class="btn btn-outline btn-sm" style="display: inline-flex; align-items: center; gap: 6px;">
+                                        <span>📤</span> Tải tệp mới lên (PDF, Word, Ảnh...)
+                                    </button>
+                                    <input type="file" id="study-tool-file-input" style="display: none;" accept=".pdf,.docx,.pptx,.txt,.md,.png,.jpg,.jpeg,.webp">
+                                </div>
+                            </div>
+
+                            <div id="study-tool-active-doc" style="padding: 10px 14px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; font-size: 0.88rem; color: #38bdf8; margin-bottom: 12px;">
+                                <strong>Tài liệu đang chọn:</strong> <span id="study-tool-active-filename">Chưa chọn tài liệu nào. Vui lòng bấm "Tải tệp mới lên" để thêm tài liệu ôn luyện.</span>
+                            </div>
+
+                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                <button type="button" id="btn-create-quiz-flashcard" class="btn btn-primary" style="font-size: 0.92rem; padding: 9px 20px;">
+                                    <span>⚡</span> Tạo Flashcard &amp; Bài tập Trắc nghiệm
+                                </button>
+                                <button type="button" id="btn-open-generated-study-set" class="btn btn-outline" style="display: none; font-size: 0.92rem; padding: 9px 16px; color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">
+                                    <span>📖</span> Mở bộ ôn luyện đã tạo
+                                </button>
+                            </div>
+                            <p id="study-tool-status" class="tool-status text-muted" role="status" aria-live="polite" style="font-size: 0.84rem; margin: 8px 0 0 0;">
+                                Nhấn "Tạo Flashcard &amp; Bài tập Trắc nghiệm" để AI sinh bộ câu hỏi và thẻ nhớ từ tài liệu đã tải lên.
+                            </p>
                         </div>
                     </div>
 
@@ -1050,6 +1183,7 @@
                     <button type="button" id="qa-source-clear" class="btn btn-outline btn-sm">Tìm trong toàn bộ thư viện</button>
                 </div>
                 <form id="chat-form" class="chat-form">
+                    <div id="chat-attachment-preview-tray" class="chat-attachment-preview-tray" hidden></div>
                     <textarea 
                         id="user-input" 
                         placeholder="Đặt câu hỏi học tập..." 
@@ -1058,6 +1192,28 @@
                     ></textarea>
                     <div class="chat-form-bottom">
                         <div class="chat-form-controls">
+                            <div class="chat-attach-wrapper" id="chat-attach-wrapper">
+                                <button type="button" id="btn-chat-attach" class="btn-attach" title="Thêm tài liệu hoặc ảnh" aria-label="Thêm tài liệu hoặc ảnh" aria-haspopup="true" aria-expanded="false">
+                                    <span class="attach-icon">＋</span>
+                                </button>
+                                <div id="attach-popup-menu" class="attach-popup-menu" hidden>
+                                    <button type="button" id="btn-attach-upload" class="attach-menu-item">
+                                        <span class="attach-menu-icon">📎</span>
+                                        <div class="attach-menu-text">
+                                            <span class="attach-menu-title">Thêm ảnh &amp; tệp</span>
+                                            <span class="attach-menu-sub">Tải lên từ máy tính (PDF, Word, Ảnh...)</span>
+                                        </div>
+                                    </button>
+                                    <button type="button" id="btn-attach-library" class="attach-menu-item">
+                                        <span class="attach-menu-icon">📄</span>
+                                        <div class="attach-menu-text">
+                                            <span class="attach-menu-title">Thêm từ thư viện</span>
+                                            <span class="attach-menu-sub">Duyệt &amp; tìm kiếm tài liệu có sẵn</span>
+                                        </div>
+                                    </button>
+                                </div>
+                                <input type="file" id="material-file-input" style="display: none;" accept=".pdf,.docx,.pptx,.txt,.md,.png,.jpg,.jpeg,.webp">
+                            </div>
                             <div class="processing-level-pill" title="Mức xử lý câu hỏi">
                                 <span class="pill-icon">🧠</span>
                                 <select id="processing-level" class="pill-select" aria-label="Mức xử lý">
@@ -1219,8 +1375,244 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=yc206-ui04"></script>
-    <script src="/static/document-lookup.js?v=yc198-release01"></script>
+    <!-- Library Picker Modal -->
+    <div id="library-picker-modal" class="modal">
+        <div class="modal-content" style="max-width: 760px;">
+            <div class="modal-header">
+                <h2>📚 Chọn tài liệu từ thư viện để ôn tập</h2>
+                <button type="button" class="btn-close-modal" id="btn-close-library-picker">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">Chọn tài liệu từ thư viện hệ thống để tự động tạo bộ câu hỏi trắc nghiệm và flashcard tương tác.</p>
+                <div class="search-box-row" style="margin-bottom: 14px;">
+                    <input type="text" id="library-search-input" class="form-input" placeholder="🔍 Tìm kiếm tài liệu theo tên sách, tác giả..." style="width: 100%;">
+                </div>
+                <div class="table-responsive" style="max-height: 380px; overflow-y: auto;">
+                    <table class="kb-table" id="library-picker-table">
+                        <thead>
+                            <tr>
+                                <th>Tên tài liệu</th>
+                                <th style="width: 90px; text-align: center;">Số trang</th>
+                                <th style="width: 90px; text-align: center;">Đoạn văn</th>
+                                <th style="width: 150px; text-align: center;">Thao tác</th>
+                            </tr>
+                        </thead>
+                        <tbody id="library-picker-table-body">
+                            <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Đang tải danh sách tài liệu...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Study Material (Quiz & Flashcards) Modal -->
+    <div id="study-material-modal" class="modal">
+        <div class="modal-content study-material-modal-content" style="max-width: 920px; width: min(920px, calc(100vw - 32px)); height: min(90vh, 880px);">
+            <div class="modal-header">
+                <div class="study-material-title-group">
+                    <h2 id="study-material-title">📖 Bộ Ôn Luyện: Tài liệu</h2>
+                    <span id="study-material-subtitle" class="study-material-meta">5 câu trắc nghiệm · 8 flashcards · Trích xuất từ tài liệu</span>
+                </div>
+                <div class="study-material-header-actions">
+                    <button type="button" class="btn-close-modal" id="btn-close-study-material" aria-label="Đóng">&times;</button>
+                </div>
+            </div>
+            
+            <!-- Study Mode Navigation Tabs -->
+            <div class="study-material-tabs">
+                <button type="button" id="tab-btn-quiz" class="study-tab-btn active" data-tab="quiz">
+                    <span class="tab-icon">📝</span>
+                    <span>Trắc nghiệm ôn tập</span>
+                    <span class="tab-badge" id="quiz-badge-count">0</span>
+                </button>
+                <button type="button" id="tab-btn-flashcards" class="study-tab-btn" data-tab="flashcards">
+                    <span class="tab-icon">🗂️</span>
+                    <span>Thẻ ghi nhớ (Flashcard)</span>
+                    <span class="tab-badge" id="card-badge-count">0</span>
+                </button>
+                <button type="button" id="tab-btn-sources" class="study-tab-btn" data-tab="sources">
+                    <span class="tab-icon">📑</span>
+                    <span>Nội dung trích xuất</span>
+                </button>
+            </div>
+
+            <div class="modal-body study-material-body">
+                <!-- Tab Panel 1: Quiz -->
+                <div id="study-panel-quiz" class="study-panel active">
+                    <div class="quiz-progress-bar-container">
+                        <div class="quiz-meta-row">
+                            <span id="quiz-progress-text" class="quiz-counter">Câu 1 / 1</span>
+                            <div class="quiz-score-pill" id="quiz-score-pill">
+                                <span>Điểm: </span><strong id="quiz-score-text">0 / 0</strong>
+                            </div>
+                        </div>
+                        <div class="progress-track">
+                            <div id="quiz-progress-fill" class="progress-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+
+                    <div id="quiz-container" class="quiz-container">
+                        <div class="quiz-question-card">
+                            <div class="quiz-question-badge">Câu hỏi trắc nghiệm</div>
+                            <h3 id="quiz-question-text" class="quiz-question-text">Đang nạp câu hỏi...</h3>
+                            
+                            <div id="quiz-choices-container" class="quiz-choices-grid"></div>
+
+                            <div id="quiz-feedback-box" class="quiz-feedback-box" hidden>
+                                <div id="quiz-feedback-header" class="quiz-feedback-header">
+                                    <span id="quiz-feedback-icon">✅</span>
+                                    <strong id="quiz-feedback-title">Chính xác!</strong>
+                                </div>
+                                <p id="quiz-explanation-text" class="quiz-explanation-text"></p>
+                                <div id="quiz-citation-box" class="quiz-citation-box">
+                                    <div class="citation-tag">
+                                        <span>📌 Đối chiếu tài liệu gốc: </span>
+                                        <strong id="quiz-citation-page">Trang 1</strong>
+                                    </div>
+                                    <blockquote id="quiz-citation-quote" class="citation-quote"></blockquote>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="quiz-navigation-footer">
+                            <button type="button" id="btn-quiz-prev" class="btn btn-secondary btn-sm" disabled>⬅ Câu trước</button>
+                            <div id="quiz-bubbles" class="quiz-bubbles-nav"></div>
+                            <button type="button" id="btn-quiz-next" class="btn btn-primary btn-sm">Câu tiếp theo ➡</button>
+                            <button type="button" id="btn-quiz-restart" class="btn btn-outline btn-sm" style="display: none;">🔄 Làm lại trắc nghiệm</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab Panel 2: Flashcards -->
+                <div id="study-panel-flashcards" class="study-panel" hidden>
+                    <div class="flashcard-toolbar">
+                        <div class="flashcard-counter-info">
+                            <span id="card-counter-text" class="card-counter">Thẻ 1 / 1</span>
+                            <span class="flashcard-hint-text">Bấm vào thẻ hoặc phím [Cách] để lật</span>
+                        </div>
+                        <div class="flashcard-mastery-stats">
+                            <span class="stat-badge learned">✅ Đã nhớ: <strong id="card-mastered-count">0</strong></span>
+                            <span class="stat-badge learning">⏳ Cần ôn: <strong id="card-learning-count">0</strong></span>
+                        </div>
+                    </div>
+
+                    <div class="flashcard-viewport">
+                        <div id="flashcard-card" class="flashcard-card">
+                            <div class="flashcard-inner" id="flashcard-inner">
+                                <!-- Front Face -->
+                                <div class="flashcard-face flashcard-front">
+                                    <div class="card-face-header">
+                                        <span class="card-type-tag">KHÁI NIỆM / THUẬT NGỮ</span>
+                                        <span class="card-flip-prompt">🔄 Bấm để xem định nghĩa</span>
+                                    </div>
+                                    <div class="card-face-body">
+                                        <h3 id="card-front-text" class="card-concept-title">Khái niệm</h3>
+                                    </div>
+                                    <div class="card-face-footer">
+                                        <span class="card-number-indicator" id="card-front-indicator">1 / 1</span>
+                                    </div>
+                                </div>
+
+                                <!-- Back Face -->
+                                <div class="flashcard-face flashcard-back">
+                                    <div class="card-face-header">
+                                        <span class="card-type-tag back">ĐỊNH NGHĨA & GIẢI THÍCH</span>
+                                        <span class="card-flip-prompt">🔄 Bấm để lật mặt trước</span>
+                                    </div>
+                                    <div class="card-face-body">
+                                        <p id="card-back-text" class="card-definition-text">Nội dung giải thích...</p>
+                                        <div class="card-citation-grounding" id="card-citation-box">
+                                            <span class="citation-label">📌 Đối chiếu tài liệu: <strong id="card-citation-page">Trang 1</strong></span>
+                                            <blockquote id="card-citation-quote" class="card-quote"></blockquote>
+                                        </div>
+                                    </div>
+                                    <div class="card-face-footer">
+                                        <span class="card-number-indicator" id="card-back-indicator">1 / 1</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flashcard-controls-row">
+                        <div class="flashcard-nav-btns">
+                            <button type="button" id="btn-card-prev" class="btn btn-secondary btn-sm" title="Thẻ trước">⬅ Trước</button>
+                            <button type="button" id="btn-card-flip" class="btn btn-outline btn-sm" title="Lật thẻ">🔄 Lật thẻ</button>
+                            <button type="button" id="btn-card-next" class="btn btn-secondary btn-sm" title="Thẻ sau">Sau ➡</button>
+                        </div>
+                        <div class="flashcard-mastery-actions">
+                            <button type="button" id="btn-card-unmastered" class="btn btn-mastery btn-learning" title="Đánh dấu cần ôn tập lại">
+                                <span>❌ Cần ôn lại</span>
+                            </button>
+                            <button type="button" id="btn-card-mastered" class="btn btn-mastery btn-mastered" title="Đánh dấu đã thuộc">
+                                <span>✅ Đã thuộc</span>
+                            </button>
+                        </div>
+                        <button type="button" id="btn-card-shuffle" class="btn btn-outline btn-sm" title="Trộn thứ tự thẻ">🔀 Xáo trộn</button>
+                    </div>
+                </div>
+
+                <!-- Tab Panel 3: Sources -->
+                <div id="study-panel-sources" class="study-panel" hidden>
+                    <div class="source-document-details">
+                        <div class="source-meta-card">
+                            <h3 id="source-doc-name">Tài liệu: ...</h3>
+                            <div class="source-meta-grid">
+                                <div><strong>Số trang trích xuất:</strong> <span id="source-page-count">0</span></div>
+                                <div><strong>Loại tài liệu:</strong> <span id="source-doc-type">PDF / Tài liệu</span></div>
+                                <div><strong>Thời gian xử lý:</strong> <span id="source-processed-at">Vừa xong</span></div>
+                            </div>
+                        </div>
+                        <div class="source-preview-section">
+                            <h4>Nội dung trích xuất mẫu:</h4>
+                            <div id="source-text-preview" class="source-text-preview"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Document Content Viewer Modal (Opens when clicking an attached file/folder card) -->
+    <div id="document-content-modal" class="modal">
+        <div class="modal-content study-material-modal-content" style="max-width: 880px; width: min(880px, calc(100vw - 32px)); height: min(88vh, 840px);">
+            <div class="modal-header">
+                <div class="study-material-title-group">
+                    <h2 id="doc-content-modal-title">📄 Nội dung tài liệu</h2>
+                    <span id="doc-content-modal-meta" class="study-material-meta">Đã nạp vào nguồn dữ liệu học tập (src/)</span>
+                </div>
+                <div class="study-material-header-actions" style="display: flex; align-items: center; gap: 10px;">
+                    <button type="button" id="btn-doc-content-generate" class="btn btn-primary btn-sm" title="Tạo bộ câu hỏi trắc nghiệm và Flashcard từ tài liệu này">
+                        ⚡ Tạo Trắc nghiệm &amp; Flashcard
+                    </button>
+                    <button type="button" class="btn-close-modal" id="btn-close-doc-content-modal" aria-label="Đóng">&times;</button>
+                </div>
+            </div>
+            <div class="study-material-body" style="gap: 14px;">
+                <div class="doc-content-toolbar" style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                    <input type="text" id="doc-content-search-input" class="form-input" placeholder="🔍 Tìm kiếm từ khóa hoặc đoạn văn bên trong tài liệu..." style="flex: 1; min-width: 220px;">
+                    <span id="doc-content-src-badge" class="scope-pill active" style="font-size: 11.5px;">📂 Nguồn: src/</span>
+                </div>
+                <div id="doc-content-image-box" style="display: none; text-align: center; background: rgba(10, 13, 20, 0.75); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 14px;">
+                    <img id="doc-content-image-preview" src="" alt="Hình ảnh đính kèm" style="max-width: 100%; max-height: 340px; object-fit: contain; border-radius: 10px;">
+                </div>
+                <div id="doc-content-pages-list" class="doc-content-pages-list" style="display: flex; flex-direction: column; gap: 14px; flex: 1; overflow-y: auto; padding-right: 4px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Study Material Generating Loading Modal -->
+    <div id="study-loading-modal" class="modal">
+        <div class="modal-content modal-sm" style="text-align: center; padding: 28px 24px; max-width: 460px; width: min(460px, calc(100vw - 32px)); box-sizing: border-box; overflow: hidden;">
+            <div class="spinner" style="margin: 0 auto 16px auto; width: 44px; height: 44px; border-width: 3px;"></div>
+            <h3 id="study-loading-title" style="font-size: 1.02rem; line-height: 1.45; margin-bottom: 8px; max-width: 100%; overflow-wrap: anywhere; word-break: break-word;">Đang xử lý tài liệu...</h3>
+            <p id="study-loading-step" class="text-muted" style="font-size: 0.88rem; line-height: 1.5; margin-bottom: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word;">Đang đọc và trích xuất nội dung bằng PDFExtractor...</p>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v=yc207-ui11"></script>
+    <script src="/static/document-lookup.js?v=yc207-ui11"></script>
     <script src="/static/timetable.js?v=yc195-02"></script>
     <script src="/static/layout.js?v=yc195-02"></script>
     <script src="/static/practice.js?v=yc206-ui02"></script>

@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-17T22:55:00+07:00
-- Mục mới nhất: **[YC-225](#yc-225)**.
-- Nhật ký chung có **73 mục**: 23 môi trường/chức năng, 6 tổ chức/tài liệu, 5 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 10 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 58 mã YC và 15 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
+- Cập nhật: 2026-10-17T23:30:00+07:00
+- Mục mới nhất: **[YC-226](#yc-226)**.
+- Nhật ký chung có **81 mục**: 29 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 58 mã YC và 23 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 17/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1230,6 +1230,132 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   commit. Nhật ký local có 64 mục, PR có 63 vì YC217 chưa phát hành; không mất mục main.
 - Cập nhật kết quả: 2026-10-16T22:25:20.871173+07:00; giữ mọi mục và attribution lịch sử cũ.
 
+<a id="log-20261017-qa-studymaterials-tv2"></a>
+### LOG-20261017-qa-studymaterials-tv2 - 17/10/2026 20:10 (UTC+07)
+
+- Người thực hiện: TV2 (Backend & AI) và TV5 (Frontend UI/UX); loại: tính năng mới (Upload tài liệu học tập, tự động tạo Trắc nghiệm & Flashcard 3D).
+- Lỗi hoặc mục tiêu (ý chính): Bổ sung chức năng cho phép người dùng tự tải tài liệu học tập lên hệ thống (PDF, Word, Text, Ảnh) hoặc chọn tài liệu đã lập chỉ mục từ thư viện; tự động trích xuất nội dung và sinh bộ câu hỏi trắc nghiệm (Quiz) cùng thẻ ghi nhớ (Flashcard 3D) có đối chiếu trích dẫn tài liệu gốc từng trang (grounding citations).
+- Trước / sau thay đổi:
+  - Trước: Người dùng chỉ có thể hỏi đáp qua ô chat hoặc tạo câu hỏi cố định theo chủ đề trong công cụ học tập; không thể tự tải tài liệu riêng lên để ôn tập tương tác tức thì hoặc luyện flashcard 3D.
+  - Sau: Nút `＋` tích hợp trực quan trên thanh nhập liệu chat theo mẫu thiết kế giao diện; mở menu lựa chọn "Thêm ảnh & tệp" hoặc "Thêm từ thư viện". Modal giao diện ôn tập hiện đại với 3 tab: Trắc nghiệm (tính điểm, giải thích chi tiết, nguồn đối chiếu), Flashcard 3D (lật thẻ 3D, thống kê Đã thuộc / Cần ôn, phím tắt Spacebar, xáo trộn thẻ) và Nguồn trích đoạn.
+- Phần/file sửa và cách xử lý:
+  - `app/study_materials.py`: Xây dựng module `StudyMaterialManager` xử lý xác thực tệp tin an toàn (kích thước tối đa 20MB, kiểm tra định dạng và magic bytes), trích xuất văn bản từng trang qua `PDFExtractor`, cơ chế sinh câu hỏi trắc nghiệm và flashcards qua Ollama LLM bảo vệ bằng `gpu_coordinator` & `dialogue_gate`, kèm thuật toán dự phòng tất định (deterministic fallback) bảo đảm 100% không crash khi LLM ngoại tuyến.
+  - `app/server.py`: Bổ sung 4 endpoints API: `POST /api/materials/upload`, `POST /api/materials/generate-from-library`, `GET /api/materials/documents`, `GET /api/materials/{material_id}`.
+  - `static/index.html`: Thêm nút đính kèm `btn-chat-attach`, menu dropdown popup, Modal chọn tài liệu thư viện `library-picker-modal`, Modal ôn tập đa năng `study-material-modal` (Quiz & 3D Flashcard) và Modal trạng thái phân tích `study-loading-modal`.
+  - `static/style.css`: Thiết kế giao diện dark obsidian, hiệu ứng lật thẻ 3D (`preserve-3d`, `rotateY`), thanh tiến độ glowing gradient, quiz option feedback states (emerald green / crimson red), hỗ trợ responsive hoàn chỉnh.
+  - `static/app.js`: Tích hợp logic xử lý tải tệp qua FileReader, kết nối API backend, quản lý trạng thái Quiz/Flashcards, tương tác lật thẻ và phím tắt (Space, Mũi tên trái/phải), tự động gửi thông báo Study Card vào cuộc trò chuyện.
+  - `tests/test_study_materials.py`: Viết bộ 8 kiểm thử tự động kiểm tra xác thực định dạng, giới hạn kích thước, thuật ngữ trích xuất, tạo fallback và kiểm tra toàn bộ API endpoints.
+- Kiểm thử phần mềm:
+  - `pytest tests/test_study_materials.py tests/test_help.py tests/test_study_agent_c_f_g.py`: 51 PASS / 0 FAIL.
+  - `node --test tests/chat_lifecycle_ui_yc206.test.cjs`: 6 PASS / 0 FAIL.
+- Trạng thái: PASS; sẵn sàng tích hợp và nghiệm thu.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Lưu giữ tài liệu an toàn trong bộ nhớ cache runtime cục bộ; không ảnh hưởng tới dữ liệu huấn luyện hoặc các chức năng tra cứu hiện hữu.
+
+<a id="log-20261017-qa-attachlayout-imageupload-tv2"></a>
+### LOG-20261017-qa-attachlayout-imageupload-tv2 - 17/10/2026 20:32 (UTC+07)
+
+- Người thực hiện: TV2 (Backend & AI) và TV5 (Frontend UI/UX); loại: sửa lỗi bố cục giao diện & sửa lỗi luồng upload file ảnh.
+- Lỗi hoặc mục tiêu (ý chính):
+  1. Căn chỉnh lại thanh đáy `.chat-form-bottom` và di chuyển nút đính kèm `＋` (`#btn-chat-attach`) về sát góc trái của khung nhập chat, trong khi giữ cụm `[🧠 Tự động]`, `[📚 Thư viện tài liệu]` và nút gửi `[↑]` ở bên phải.
+  2. Khắc phục triệt để lỗi upload file ảnh (`.png`, `.jpg`, `.jpeg`, `.webp`) trong chức năng tạo học liệu ôn tập (lỗi 404 do server cũ chưa nạp route `/api/materials/upload`, lỗi `extract_file()` gọi `ocr=False` cho file ảnh, và bất đồng bộ kiểm tra OCR backend).
+- Trước / sau thay đổi:
+  - Trước: `.chat-form` giữ `align-items: flex-end` và `.chat-form-bottom` thiếu `width: 100%` khiến thanh đáy bị co hẹp về bên phải và nút `＋` nằm sát các nút bên phải; khi tải ảnh lên gặp lỗi `Not Found` (404 trên tiến trình cũ) và `0 ký tự` do `extract_file` bỏ qua OCR.
+  - Sau: `.chat-form` đặt `align-items: stretch`, `.chat-form-bottom` rộng `100%`, `.chat-attach-wrapper` đặt `margin-right: auto` neo cố định ở góc trái; luồng upload ảnh tự động bật `ocr=True`, đồng bộ backend `VisionOCRManager` (Ollama Vision / Tesseract), tích hợp fallback Windows WinRT OCR và kiểm định cấu trúc ảnh qua Pillow để tạo bộ Quiz & Flashcard 3D thành công.
+- Phần/file sửa và cách xử lý:
+  - `static/style.css`: Đặt `align-items: stretch; width: 100%` trên `.chat-form`, `width: 100%` trên `.chat-form-bottom`, `flex: 1` trên `.chat-form-controls`, và `margin-right: auto; flex-shrink: 0` trên `.chat-attach-wrapper`; bổ sung giao diện thẻ xem trước đính kèm `.chat-attachment-card`, nút riêng `.study-gen-pill` (`#btn-create-quiz-flashcard`), hộp thoại xem nội dung tài liệu `.doc-content-page-card` và khung `.message.study-card-message` đồng bộ tỷ lệ `max-width: 720px`.
+  - `static/index.html` & `static/app.js`: Bổ sung thẻ đóng `</div>` của `#ocr-modal`; thêm khay `#chat-attachment-preview-tray` hiển thị thẻ xem trước khi thêm tệp (không tự động mở Quiz/Flashcard ngay); khi nhấn vào thẻ tệp đã thêm sẽ mở `#document-content-modal` hiển thị toàn bộ nội dung từng trang bên trong tệp; bổ sung nút riêng `#btn-create-quiz-flashcard` (`⚡ Tạo Trắc nghiệm & Flashcard`) để tạo câu hỏi trắc nghiệm và flashcard khi người dùng nhấn; ẩn `.welcome-card` khi `.has-chat` kích hoạt và căn giữa hai khung đối xứng `720px`.
+  - `app/pdf_extractor.py`: Cập nhật `ocr_available()` và `extract_image()` kiểm tra cả `BACKEND_OLLAMA_VISION` và `BACKEND_TESSERACT`.
+  - `app/study_materials.py` & `app/server.py`: Bổ sung `ingest_to_src_and_index()`, `store_extracted_document()`, `inspect_library_document()` và endpoint `POST /api/materials/inspect-library` để tự động lưu tệp người dùng thêm vào thư mục `src/` và lập chỉ mục vào `knowledge_base.db` làm nguồn dữ liệu học tập.
+  - `tests/test_study_materials.py`: Thêm 6 kiểm thử mới cho upload PNG/JPEG, primary OCR mocked, từ chối ảnh hỏng, thẻ đính kèm, nạp tệp vào `src/` không tự sinh Quiz/Flashcard, xem nội dung tệp và nhấn nút riêng sinh Quiz/Flashcard theo yêu cầu.
+- Kiểm thử phần mềm:
+  - `pytest tests/test_study_materials.py tests/test_help.py tests/test_study_agent_c_f_g.py tests/test_general_source_fidelity_yc205.py tests/test_force_ocr.py`: 77 PASS / 0 FAIL.
+  - `node --test tests/chat_lifecycle_ui_yc206.test.cjs`: 6 PASS / 0 FAIL.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Đã khởi động lại tiến trình máy chủ trên cổng 8000 để phục vụ đầy đủ các routes và giao diện mới.
+
+<a id="log-20261017-qa-relocate-study-tools-stretch-ui-tv2"></a>
+### LOG-20261017-qa-relocate-study-tools-stretch-ui-tv2 - 17/10/2026 21:55 (UTC+07)
+
+- Người thực hiện: TV2 (Backend & AI) và TV5 (Frontend UI/UX); loại: cải tiến giao diện & tổ chức tính năng học tập (Di chuyển nút Tạo Trắc nghiệm & Flashcard sang tab Công cụ học tập, khắc phục hiện tượng thanh phiên co cụm ở giữa màn hình, kéo dãn đối xứng giao diện).
+- Lỗi hoặc mục tiêu (ý chính):
+  1. Di chuyển chức năng Tạo Trắc nghiệm & Flashcard (`#btn-create-quiz-flashcard`) từ thanh điều khiển chat sang tab chuyên dụng "⚡ Trắc nghiệm & Flashcard" (`#tool-tab-study-set`) trong phân hệ "Công cụ học tập" (`#learning-tools-panel`), mang lại không gian thao tác trực quan, rõ ràng cho việc chọn tài liệu từ thư viện, tải file mới lên và mở lại bộ bài học đã tạo.
+  2. Khắc phục lỗi hiển thị thanh phiên `#session-bar` bị co cụm lại ở giữa màn hình (như ảnh phản hồi); chuẩn hóa độ rộng `max-width: 900px` và `width: 100%` đồng bộ cho toàn bộ các thành phần trong `.qa-panel` (`#session-bar`, `.session-summary-box`, `#training-banner`, `.messages-container`, `.input-area`, `.chat-form`), kéo dãn đều hai bên giao diện, phân bổ tiêu đề cuộc trò chuyện sang trái và các nút tác vụ sang phải bằng `justify-content: space-between`.
+- Trước / sau thay đổi:
+  - Trước: Nút Tạo Trắc nghiệm & Flashcard nằm chen chúc trong `.chat-form-controls` của khung chat; thanh `#session-bar` bị co cụm ở giữa màn hình do flexbox `align-items: center` trên `.qa-panel` mà thiếu quy tắc độ rộng tường minh.
+  - Sau: Khung chat gọn gàng, thanh `#session-bar` kéo dãn đối xứng rộng rãi (900px) đều hai bên; tab "⚡ Trắc nghiệm & Flashcard" trong Công cụ học tập cung cấp trải nghiệm chuyên nghiệp cho phép chọn tài liệu hoặc tải lên để sinh trắc nghiệm và flashcard tương tác.
+- Phần/file sửa và cách xử lý:
+  - `static/index.html`: Di chuyển `#btn-create-quiz-flashcard` từ `.chat-form-controls` vào tab mới `#tool-tab-study-set` trong `#learning-tools-panel`; thêm nút chuyển tab `#btn-tool-tab-study-set` trong `.tool-tabs`; chuẩn hóa CSS cho `.qa-panel`, `#session-bar`, `.messages-container` và `.input-area` sang `max-width: 900px` với `welcome-mode` căn giữa và chat mode dãn đều `justify-content: flex-start`.
+  - `static/style.css`: Cập nhật `.session-bar` với `width: 100%; max-width: 900px; margin: 0 auto; padding: 12px 20px; border-radius: 14px; box-sizing: border-box; justify-content: space-between`.
+  - `static/document-lookup.js`: Bổ sung `"study-set"` vào danh sách tab của `setToolTab()` và bộ lắng nghe sự kiện tab.
+  - `static/app.js`: Tích hợp các nút điều khiển trong tab Công cụ học tập (`#btn-study-tool-upload`, `#btn-study-tool-library`, `#study-tool-file-input`, `#btn-open-generated-study-set`); liên kết luồng upload file chung `handleMaterialFileUpload()`; đồng bộ trạng thái tài liệu đang chọn qua `syncGenerateButtonState()`.
+- Kiểm thử phần mềm:
+  - `.\venv\Scripts\python.exe -m pytest tests/test_study_materials.py`: 14 PASS / 0 FAIL.
+  - `node --test tests/chat_lifecycle_ui_yc206.test.cjs`: 6 PASS / 0 FAIL.
+- Trạng thái: PASS; sẵn sàng tích hợp và nghiệm thu.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Đảm bảo giữ vững tính toàn vẹn của dữ liệu và các kiểm thử hồi quy hiện có.
+
+<a id="log-20261017-qa-prominent-quiz-flashcard-tool-tv2"></a>
+### LOG-20261017-qa-prominent-quiz-flashcard-tool-tv2 - 17/10/2026 22:15 (UTC+07)
+
+- Người thực hiện: TV2 (Backend & AI) và TV5 (Frontend UI/UX); loại: cải tiến giao diện & trải nghiệm học tập (Đưa bộ công cụ Tạo Flashcard & Trắc nghiệm hiển thị trực diện ngay khi mở Công cụ học tập, tuân thủ nghiêm ngặt hợp đồng 3 tab và flat design).
+- Lỗi hoặc mục tiêu (ý chính):
+  1. Khắc phục tình trạng người dùng phản ánh "Phần tạo flashcard và bài tập trắc nghiệm từ tài liệu trong phần công cụ học tập chưa có" do trước đó đặt vào một tab thứ 4 riêng biệt ẩn sau tab mặc định "Tạo câu hỏi".
+  2. Đưa khối giao diện nổi bật "⚡ Tạo Flashcard và Bài tập Trắc nghiệm từ Tài liệu" (`.study-material-generator-card`) trực tiếp vào vị trí trên cùng của tab mặc định `tool-tab-practice`, giúp người dùng nhìn thấy ngay lập tức khi vừa nhấn vào "Công cụ học tập".
+  3. Khôi phục đúng cấu trúc 3 tab chuẩn theo hợp đồng kiểm thử `tests/test_learning_tools_ui_contract.py` ("Tạo câu hỏi", "Ôn tập", "Trích xuất bài tập mẫu").
+  4. Thay thế toàn bộ các dải màu gradient bằng màu đơn sắc/rgba tinh tế theo quy chuẩn thiết kế phẳng (flat design) không gradient của dự án.
+- Trước / sau thay đổi:
+  - Trước: Khối tạo học liệu nằm ở tab con thứ 4, khi chuyển sang "Công cụ học tập" màn hình mặc định chỉ mở tab 1 "Tạo câu hỏi theo chủ đề" khiến người dùng không thấy chức năng tạo flashcard/trắc nghiệm từ tài liệu; `static/style.css` chứa `linear-gradient` vi phạm bài test kiểm tra giao diện phẳng.
+  - Sau: Khối chức năng tạo flashcard & trắc nghiệm hiển thị trực quan ngay đầu tab mặc định của Công cụ học tập; có sẵn 2 nút "Tải tệp mới lên (PDF, Word, Ảnh...)" và "Chọn từ thư viện tài liệu", hiển thị tài liệu đang chọn, nút "⚡ Tạo Flashcard & Bài tập Trắc nghiệm" và nút "📖 Mở bộ ôn luyện đã tạo"; giao diện phẳng hoàn toàn, 100% test contract và test hồi quy đều pass.
+- Phần/file sửa và cách xử lý:
+  - `static/index.html`: Di chuyển `.study-material-generator-card` vào đầu `#tool-tab-practice` (tab mặc định kích hoạt khi mở `#learning-tools-panel`); loại bỏ tab thứ 4 thừa trong `.tool-tabs`, khôi phục 3 tab chuẩn (`practice`, `review`, `examples`). Cập nhật cache-buster query string `?v=yc207-ui09` cho các file script và stylesheet.
+  - `static/style.css`: Loại bỏ tất cả 10 khai báo `linear-gradient` trong stylesheet, thay bằng màu phẳng Obsidian Dark (`#151824`, `#1c1722`, `#f43f5e`, `rgba(244, 63, 94, 0.22)`, etc.), thỏa mãn quy định `test_learning_tools_have_theme_rules_and_no_decorative_images_or_gradients`.
+  - `static/document-lookup.js`: Khôi phục mảng `tabs = ["practice", "review", "examples"]` trong hàm `setToolTab()`.
+- Kiểm thử phần mềm:
+  - `.\venv\Scripts\python.exe -m pytest tests/test_learning_tools_ui_contract.py`: 6 PASS / 0 FAIL.
+  - `.\venv\Scripts\python.exe -m pytest tests/test_study_materials.py`: 14 PASS / 0 FAIL.
+  - `node --test tests/chat_lifecycle_ui_yc206.test.cjs`: 6 PASS / 0 FAIL.
+  - `.\venv\Scripts\python.exe -m pytest tests/test_practice.py tests/test_document_lookup.py`: 31 PASS / 0 FAIL.
+- Trạng thái: PASS; đã kiểm chứng trực quan và tự động hóa.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Khuyến nghị người dùng ấn Ctrl+F5 khi tải lại trang web để trình duyệt nhận ngay CSS/JS mới.
+
+<a id="log-20261017-qa-integrate-quiz-flashcard-with-topic-tv2"></a>
+### LOG-20261017-qa-integrate-quiz-flashcard-with-topic-tv2 - 17/10/2026 22:25 (UTC+07)
+
+- Người thực hiện: TV2 (Backend & AI) và TV5 (Frontend UI/UX); loại: tối ưu hóa giao diện & tích hợp chức năng ôn luyện (Loại bỏ nút chọn từ thư viện theo đánh dấu, tích hợp bộ tạo flashcard và trắc nghiệm chung vào cùng thẻ tạo câu hỏi theo chủ đề).
+- Lỗi hoặc mục tiêu (ý chính):
+  1. Loại bỏ nút "📂 Chọn từ thư viện tài liệu" (`#btn-study-tool-library`) trong phần công cụ học tập theo phản hồi đánh dấu khoanh tròn màu xanh của người dùng (vì phần tạo câu hỏi theo chủ đề đã sử dụng trực tiếp tài liệu từ thư viện tri thức).
+  2. Tích hợp trực tiếp phần tạo Flashcard và bài tập trắc nghiệm từ tài liệu tải lên vào chung một khung/thẻ duy nhất với phần "Tạo câu hỏi theo chủ đề" (`.learning-topic-card`), xóa bỏ tình trạng tách rời thành hai thẻ riêng lẻ gây rối mắt.
+- Trước / sau thay đổi:
+  - Trước: Màn hình "Tạo câu hỏi" hiển thị hai khối card lớn rời rạc nằm đè lên nhau; khối bên trên có nút "Chọn từ thư viện tài liệu" gây dư thừa; người dùng phải nhìn hai khung điều khiển riêng biệt.
+  - Sau: Toàn bộ chức năng tạo câu hỏi theo chủ đề (thư viện) và tạo Flashcard & Trắc nghiệm chuyên sâu (tài liệu tải lên) được tích hợp gọn gàng, liền mạch trong cùng một thẻ `.learning-topic-card`; đã loại bỏ hoàn toàn nút chọn thư viện thừa; khi người dùng tải tệp lên hoặc nhấn "⚡ Tạo Flashcard & Bài tập Trắc nghiệm", hệ thống tự động xử lý và mở bộ ôn luyện 3D tương tác.
+- Phần/file sửa và cách xử lý:
+  - `static/index.html`: Bỏ khối card riêng `.study-material-generator-card`; tích hợp khối `.study-material-integrated-box` vào bên trong `.learning-topic-card`; loại bỏ nút `#btn-study-tool-library`; cập nhật cache-buster query string sang `?v=yc207-ui10`.
+  - `static/app.js`: Cập nhật thông báo hướng dẫn người dùng nhấn "Tải tệp mới lên" khi chưa có tài liệu thay vì mở thư viện; khi nhấn nút tạo bài học nếu chưa có tài liệu sẽ tự động kích hoạt hộp thoại chọn file tải lên (`studyToolFileInput.click()`).
+- Kiểm thử phần mềm:
+  - `.\venv\Scripts\python.exe -m pytest tests/test_learning_tools_ui_contract.py`: 6 PASS / 0 FAIL.
+  - `node --test tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs`: 19 PASS / 0 FAIL.
+  - `.\venv\Scripts\python.exe -m pytest tests/test_study_materials.py`: 14 PASS / 0 FAIL.
+- Trạng thái: PASS; đã kiểm chứng trực quan và tự động.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Khởi động lại máy chủ nền port 8000; người dùng tải lại trang web bằng Ctrl+F5 để nhận bản giao diện tích hợp mới.
+
+<a id="log-20261017-qa-remove-loading-offline-badge-tv2"></a>
+### LOG-20261017-qa-remove-loading-offline-badge-tv2 - 17/10/2026 22:30 (UTC+07)
+
+- Người thực hiện: TV2 (Backend & AI) và TV5 (Frontend UI/UX); loại: tinh chỉnh giao diện hộp thoại (Loại bỏ nhãn offline theo đánh dấu khoanh đỏ của người dùng trong hộp thoại xử lý tài liệu).
+- Lỗi hoặc mục tiêu (ý chính):
+  1. Loại bỏ nhãn thông báo "🔒 Chạy 100% Offline trên GPU/CPU nội bộ" (`.loading-local-badge`) trong hộp thoại chờ phân tích tài liệu `#study-loading-modal` theo phản hồi đánh dấu khoanh đỏ của người dùng.
+  2. Tinh chỉnh khoảng cách lề dưới của dòng trạng thái `#study-loading-step` về `0` để bố cục hộp thoại chờ cân đối, gọn gàng và thẩm mỹ hơn.
+- Trước / sau thay đổi:
+  - Trước: Hộp thoại chờ hiển thị thêm dải viền nhãn màu đỏ "Chạy 100% Offline trên GPU/CPU nội bộ" bên dưới thông tin xử lý tài liệu.
+  - Sau: Dải nhãn đã được xóa bỏ hoàn toàn, hộp thoại chỉ hiển thị vòng xoay spinner, tiêu đề tiến trình và dòng trạng thái chi tiết của quá trình trích xuất.
+- Phần/file sửa và cách xử lý:
+  - `static/index.html`: Xóa bỏ phần tử `.loading-local-badge`; đặt `margin-bottom: 0` cho `#study-loading-step`; nâng phiên bản cache buster query string sang `?v=yc207-ui11`.
+- Kiểm thử phần mềm:
+  - `.\venv\Scripts\python.exe -m pytest tests/test_learning_tools_ui_contract.py`: 6 PASS / 0 FAIL.
+  - `node --test tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs`: 19 PASS / 0 FAIL.
+  - `.\venv\Scripts\python.exe -m pytest tests/test_study_materials.py`: 14 PASS / 0 FAIL.
+- Trạng thái: PASS; đã kiểm chứng trực quan và tự động hóa.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Người dùng làm mới trang bằng Ctrl+F5 để cập nhật hộp thoại chờ mới nhất.
 <a id="log-20261017-backend-issue20-tv3"></a>
 ### LOG-20261017-backend-issue20-tv3 - 17/10/2026 20:20 (UTC+07)
 
@@ -1423,3 +1549,51 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Trạng thái: PASS.
 - Giới hạn, lỗi còn lại, bước tiếp: Đẩy nhánh lên GitHub, mở PR cho nhóm review; kiểm tra kết quả CI trên GitHub Actions.
 
+
+<a id="log-20261017-eval-cases-issue26"></a>
+### LOG-20261017-eval-cases-issue26 - 17/10/2026 15:46 (UTC+07)
+
+- Người thực hiện: Codex theo yêu cầu của người phụ trách; loại: bộ câu hỏi benchmark (Issue #26).
+- Mục tiêu/trước-sau: tạo 15 câu hỏi tiếng Việt có đáp án tham chiếu và category
+  normal/edge/out-of-scope; có 3 ca edge về dữ kiện thiếu, hệ mâu thuẫn và cách
+  hiểu căn bậc hai, cùng 2 ca ngoài phạm vi.
+- Phần/file: eval/cases.csv, tests/test_eval_cases.py, pytest.windows.ini,
+  README.md, .gitignore, LICH_SU_DU_AN.md. Nội dung tự biên soạn, không lấy từ
+  corpus demo, nguồn riêng hoặc hồ sơ người dùng.
+- Kiểm chứng: Windows, Python 3.12.12, commit cơ sở 18d3260; CSV được đọc bằng
+  Python `csv` module: đúng schema, 15 hàng, 3 edge, nhãn/giá trị không rỗng và
+  câu hỏi duy nhất PASS; quy tắc nhật ký PASS; `git diff --check` PASS.
+  `python -m pytest -q tests\test_eval_cases.py` PASS; Windows/Mac CI và review chéo.
+- Trạng thái: PASS.
+
+<a id="log-20261017-eval-issue27-codex"></a>
+### LOG-20261017-eval-issue27-codex - 17/10/2026 15:34 (UTC+07)
+
+- Người thực hiện: Codex theo yêu cầu của người phụ trách; loại: script chạy benchmark (Issue #27).
+- Mục tiêu/trước-sau: thêm runner đọc eval/cases.csv và in accuracy so khớp chính xác
+  hai cột expected/predicted; trước đó chưa có eval/. CSV cần có prediction đầu vào,
+  runner không tự gọi ứng dụng hoặc model.
+- File: eval/run.py, eval/cases.csv, tests/test_eval_run.py, pytest.windows.ini,
+  README.md, .gitignore, LICH_SU_DU_AN.md.
+- Kiểm chứng: Windows/Mac Python 3.12: `python eval/run.py` PASS, 12/15 (80.00%).
+  `pytest tests/test_eval_run.py tests/test_eval_cases.py` PASS (10 passed).
+- Trạng thái: PASS.
+
+
+<a id="yc-226"></a>
+### YC-226 - 17/10/2026 23:30 (UTC+07)
+
+- Người thực hiện: Antigravity; loại: kiểm tra PR và giải quyết xung đột tích hợp sau khi main sáp nhập PR #37, #38, #42.
+- Mục tiêu: Kiểm tra trạng thái PR #44 trên GitHub; phát hiện nguyên nhân trạng thái `mergeable: CONFLICTING` do nhánh `main` vừa hợp nhất liên tiếp PR #38 (Issue #26), PR #37 (Issue #27) và PR #42 (tính năng quiz & flashcard học tập); xử lý xung đột tệp `LICH_SU_DU_AN.md`, tái kiểm định toàn diện hệ thống và cập nhật PR.
+- Trước/sau thay đổi:
+  + Trước: PR #44 bị báo conflict trên GitHub do `main` có thêm 15 commit mới và 8 mục nhật ký mới từ PR #38, #37, #42; `LICH_SU_DU_AN.md` bị xung đột nhánh rẽ.
+  + Sau: Đã tích hợp trơn tru toàn bộ các tệp mới từ main (`eval/cases.csv`, `eval/run.py`, `app/study_materials.py`, `tests/test_eval_cases.py`, `tests/test_eval_run.py`, `tests/test_study_materials.py`); bảo toàn 100% các mục nhật ký của nhóm; kiểm tra hệ thống đạt 100% PASS; cập nhật PR #44 trở lại trạng thái `MERGEABLE` và `All checks passing`.
+- Phần/file sửa: `LICH_SU_DU_AN.md`, `docs/project/STATE.md`.
+- Kiểm thử phần mềm:
+  + `.venv/bin/python scripts/check_history.py --base origin/main`: PASS.
+  + `.venv/bin/python -m pytest -c pytest.windows.ini`: PASS (659 passed, 12 skipped).
+  + `.venv/bin/python eval/run.py`: PASS (12/15, 80.00%).
+  + `node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs`: PASS (28 passed).
+  + `.venv/bin/python scripts/dev.py check --profile local`: PASS.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, bước tiếp: Đẩy commit giải quyết xung đột lên PR #44; theo dõi CI xanh và chờ Owner duyệt merge.
