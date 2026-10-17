@@ -542,6 +542,14 @@ class StudyMaterialManager:
             })
 
         material_id = str(uuid.uuid4())
+        pages_preview = [
+            {
+                "page_num": int(p.get("page_num", 1)),
+                "text": str(p.get("text", "")),
+            }
+            for p in (extracted_result.extracted_pages or [])
+            if (p.get("text") or "").strip()
+        ]
         record = {
             "id": material_id,
             "material_id": material_id,
@@ -549,6 +557,7 @@ class StudyMaterialManager:
             "clean_title": extracted_result.clean_title,
             "total_pages": extracted_result.total_pages,
             "total_chars": extracted_result.total_chars,
+            "pages": pages_preview,
             "quiz": norm_quiz,
             "flashcards": norm_flashcards,
             "difficulty": difficulty,
@@ -570,6 +579,61 @@ class StudyMaterialManager:
     def fallback_generate_flashcards(self, passages: List[Dict[str, Any]], count: int = 5) -> List[Dict[str, Any]]:
         return fallback_generate_flashcards(passages, count=count)
 
+    def list_available_documents(self, indexed_docs: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+        """Return indexed documents plus uploaded session materials and discoverable local study files."""
+        from app.config import BASE_DIR, SRC_DIR
+
+        results: List[Dict[str, Any]] = []
+        seen_filenames = set()
+
+        for d in (indexed_docs or []):
+            fname = d.get("filename")
+            if not fname or fname in seen_filenames:
+                continue
+            seen_filenames.add(fname)
+            results.append(d)
+
+        with self._lock:
+            cached_records = list(self._materials.values())
+
+        for mat in reversed(cached_records):
+            fname = mat.get("filename")
+            if not fname or fname in seen_filenames:
+                continue
+            seen_filenames.add(fname)
+            results.append({
+                "id": None,
+                "filename": fname,
+                "clean_title": mat.get("clean_title") or fname,
+                "total_pages": mat.get("total_pages") or 1,
+                "page_count": mat.get("total_pages") or 1,
+                "chunk_count": len(mat.get("pages") or []) or 1,
+            })
+
+        candidate_dirs = [SRC_DIR, BASE_DIR / "docs", BASE_DIR]
+        allowed_exts = {".pdf", ".docx", ".pptx", ".txt", ".md"}
+        for folder in candidate_dirs:
+            if not folder or not folder.is_dir():
+                continue
+            for path in sorted(folder.iterdir()):
+                if not path.is_file() or path.suffix.lower() not in allowed_exts:
+                    continue
+                if path.name.startswith(".") or path.name.lower() in {"requirements.txt", "readme.md", "lich_su_du_an.md", "agents.md", "claude.md"}:
+                    continue
+                if path.name in seen_filenames:
+                    continue
+                seen_filenames.add(path.name)
+                results.append({
+                    "id": None,
+                    "filename": path.name,
+                    "clean_title": path.stem.replace("_", " ").strip() or path.name,
+                    "total_pages": 1,
+                    "page_count": 1,
+                    "chunk_count": 1,
+                })
+
+        return results
+
     def generate_from_library_document(
         self,
         doc_id: Optional[int] = None,
@@ -581,53 +645,78 @@ class StudyMaterialManager:
         difficulty: str = "medium",
         model: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Generate quiz and flashcards from an existing indexed library document."""
+        """Generate quiz and flashcards from an existing indexed library document or local study document."""
         import sqlite3
         from contextlib import closing
-        from app.config import DB_PATH
+        from app.config import BASE_DIR, DB_PATH, SRC_DIR
 
-        with closing(sqlite3.connect(DB_PATH.resolve().as_uri() + "?mode=ro", uri=True)) as db:
-            db.row_factory = sqlite3.Row
-            if doc_id is not None:
-                doc = db.execute("SELECT id, filename, clean_title, total_pages FROM documents WHERE id = ?", (doc_id,)).fetchone()
-            elif filename:
-                doc = db.execute("SELECT id, filename, clean_title, total_pages FROM documents WHERE filename = ? OR clean_title = ?", (filename, filename)).fetchone()
-            else:
-                raise StudyMaterialError("Cần cung cấp doc_id hoặc filename tài liệu.")
+        doc = None
+        rows = []
+        if DB_PATH.exists():
+            try:
+                with closing(sqlite3.connect(DB_PATH.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+                    db.row_factory = sqlite3.Row
+                    if doc_id is not None:
+                        doc = db.execute("SELECT id, filename, clean_title, total_pages FROM documents WHERE id = ?", (doc_id,)).fetchone()
+                    elif filename:
+                        doc = db.execute("SELECT id, filename, clean_title, total_pages FROM documents WHERE filename = ? OR clean_title = ?", (filename, filename)).fetchone()
+                    if doc:
+                        resolved_doc_id = doc["id"]
+                        p_to = page_to or doc["total_pages"]
+                        rows = db.execute(
+                            "SELECT page_num, text FROM chunks WHERE doc_id = ? AND page_num BETWEEN ? AND ? ORDER BY chunk_index",
+                            (resolved_doc_id, page_from, p_to)
+                        ).fetchall()
+            except Exception as e:
+                logger.warning(f"Database lookup skipped for '{filename or doc_id}': {e}")
 
-            if not doc:
-                raise StudyMaterialError(f"Không tìm thấy tài liệu '{doc_id or filename}' trong thư viện.")
+        if doc and rows:
+            extracted_pages = []
+            total_chars = 0
+            for r in rows:
+                txt = r["text"] or ""
+                total_chars += len(txt)
+                extracted_pages.append({"page_num": r["page_num"], "text": txt})
 
-            resolved_doc_id = doc["id"]
-            p_to = page_to or doc["total_pages"]
-            rows = db.execute(
-                "SELECT page_num, text FROM chunks WHERE doc_id = ? AND page_num BETWEEN ? AND ? ORDER BY chunk_index",
-                (resolved_doc_id, page_from, p_to)
-            ).fetchall()
+            fake_res = PDFExtractionResult(filename=doc["filename"], filepath=Path(doc["filename"]))
+            fake_res.clean_title = doc["clean_title"]
+            fake_res.total_pages = doc["total_pages"]
+            fake_res.total_chars = total_chars
+            fake_res.extracted_pages = extracted_pages
 
-        if not rows:
-            raise StudyMaterialError(f"Không có nội dung văn bản trong khoảng trang {page_from} - {p_to}.")
+            return self.generate_materials_from_pages(
+                fake_res,
+                quiz_count=quiz_count,
+                flashcard_count=flashcard_count,
+                difficulty=difficulty,
+                model=model
+            )
 
-        extracted_pages = []
-        total_chars = 0
-        for r in rows:
-            txt = r["text"] or ""
-            total_chars += len(txt)
-            extracted_pages.append({"page_num": r["page_num"], "text": txt})
+        if filename:
+            with self._lock:
+                for mat in reversed(list(self._materials.values())):
+                    if mat.get("filename") == filename or mat.get("clean_title") == filename:
+                        return mat
 
-        fake_res = PDFExtractionResult(filename=doc["filename"], filepath=Path(doc["filename"]))
-        fake_res.clean_title = doc["clean_title"]
-        fake_res.total_pages = doc["total_pages"]
-        fake_res.total_chars = total_chars
-        fake_res.extracted_pages = extracted_pages
+            for folder in (SRC_DIR, BASE_DIR / "docs", BASE_DIR):
+                if not folder or not folder.is_dir():
+                    continue
+                candidate = folder / Path(filename).name
+                if candidate.is_file():
+                    extracted = self.extract_document(candidate.name, candidate.read_bytes())
+                    return self.generate_materials_from_pages(
+                        extracted,
+                        quiz_count=quiz_count,
+                        flashcard_count=flashcard_count,
+                        difficulty=difficulty,
+                        model=model
+                    )
 
-        return self.generate_materials_from_pages(
-            fake_res,
-            quiz_count=quiz_count,
-            flashcard_count=flashcard_count,
-            difficulty=difficulty,
-            model=model
-        )
+        if not doc_id and not filename:
+            raise StudyMaterialError("Cần cung cấp doc_id hoặc filename tài liệu.")
+        if doc and not rows:
+            raise StudyMaterialError(f"Không có nội dung văn bản trong khoảng trang {page_from} - {page_to or doc['total_pages']}.")
+        raise StudyMaterialError(f"Không tìm thấy tài liệu '{doc_id or filename}' trong thư viện.")
 
     def get_material(self, material_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -635,4 +724,5 @@ class StudyMaterialManager:
 
 
 study_material_manager = StudyMaterialManager()
+
 

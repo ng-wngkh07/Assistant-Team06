@@ -451,7 +451,10 @@ async def generate_materials_from_library(req: MaterialLibraryGenerateRequest):
 
 @app.get("/api/materials/documents")
 async def get_study_material_documents():
-    docs = await run_in_threadpool(document_lookup.documents)
+    def load_all_docs():
+        indexed = document_lookup.documents()
+        return study_material_manager.list_available_documents(indexed)
+    docs = await run_in_threadpool(load_all_docs)
     return {"documents": docs}
 
 

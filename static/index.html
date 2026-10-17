@@ -11,7 +11,7 @@
             try { localStorage.setItem("theme", "dark"); } catch (e) {}
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=yc198-release02">
+    <link rel="stylesheet" href="/static/style.css?v=yc207-ui05">
     <link rel="stylesheet" href="/static/theme.css?v=3-contrast-fix">
     <style>
         /* Ambient gradient glowing orbs */
@@ -204,29 +204,49 @@
             display: none !important;
         }
 
-        /* QA Panel layout - perfectly centered hero & input on welcome screen */
+        /* QA Panel layout - centered hero & symmetrical chat + input frames */
         .qa-panel:not([hidden]) {
             display: flex !important;
             flex-direction: column !important;
+            justify-content: center !important;
+            align-items: center !important;
             flex: 1 1 0% !important;
             min-height: 0 !important;
             height: 100% !important;
             position: relative !important;
+            gap: 20px !important;
+            padding: 20px 24px !important;
+            box-sizing: border-box !important;
         }
 
-        .qa-panel.welcome-mode,
-        .qa-panel:has(.welcome-card) {
-            justify-content: center !important;
-            align-items: center !important;
-        }
-
-        .qa-panel.welcome-mode .messages-container,
-        .qa-panel:has(.welcome-card) .messages-container {
+        .qa-panel:not([hidden]) .messages-container:not(.has-chat) {
             flex: 0 0 auto !important;
             overflow: visible !important;
             padding: 0 !important;
             width: 100% !important;
-            max-width: 760px !important;
+            max-width: 720px !important;
+            margin: 0 auto !important;
+        }
+
+        .qa-panel:not([hidden]) .messages-container.has-chat {
+            flex: 0 1 auto !important;
+            max-height: calc(100vh - 250px) !important;
+            overflow-y: auto !important;
+            padding: 8px 0 !important;
+            width: 100% !important;
+            max-width: 720px !important;
+            margin: 0 auto !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            gap: 20px !important;
+        }
+
+        .messages-container.has-chat > .message:not(.welcome-card) {
+            width: 100% !important;
+            max-width: 720px !important;
+            margin: 0 auto !important;
+            box-sizing: border-box !important;
         }
 
         /* Centered welcome greeting hero card */
@@ -239,7 +259,10 @@
             border: none !important;
             box-shadow: none !important;
             padding: 0 !important;
-            margin: 0 auto 28px auto !important;
+            margin: 0 auto 12px auto !important;
+        }
+        .messages-container.has-chat .welcome-card {
+            display: none !important;
         }
         .welcome-card .message-avatar {
             margin: 0 auto 16px auto !important;
@@ -273,13 +296,21 @@
             letter-spacing: -0.01em !important;
         }
 
-        .qa-panel.welcome-mode .input-area,
-        .qa-panel:has(.welcome-card) .input-area {
-            padding: 0 24px !important;
+        .qa-panel:not([hidden]) .input-area {
+            padding: 0 !important;
             margin: 0 auto !important;
-            max-width: 760px !important;
+            max-width: 720px !important;
             width: 100% !important;
-            transform: translateY(-16px) !important;
+            transform: none !important;
+            border-top: none !important;
+            flex-shrink: 0 !important;
+        }
+
+        .qa-panel:not([hidden]) .chat-form {
+            max-width: 720px !important;
+            width: 100% !important;
+            margin: 0 auto !important;
+            box-sizing: border-box !important;
         }
 
         /* ================= Learning Tools & Timetable Panels ================= */
@@ -1049,6 +1080,7 @@
                     <button type="button" id="qa-source-clear" class="btn btn-outline btn-sm">Tìm trong toàn bộ thư viện</button>
                 </div>
                 <form id="chat-form" class="chat-form">
+                    <div id="chat-attachment-preview-tray" class="chat-attachment-preview-tray" hidden></div>
                     <textarea 
                         id="user-input" 
                         placeholder="Đặt câu hỏi học tập..." 
@@ -1238,6 +1270,8 @@
                 </div>
             </div>
         </div>
+    </div>
+
     <!-- Library Picker Modal -->
     <div id="library-picker-modal" class="modal">
         <div class="modal-content" style="max-width: 760px;">
@@ -1449,7 +1483,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=yc206-ui04"></script>
+    <script src="/static/app.js?v=yc207-ui05"></script>
     <script src="/static/document-lookup.js?v=yc198-release01"></script>
     <script src="/static/timetable.js?v=yc195-02"></script>
     <script src="/static/layout.js?v=yc195-02"></script>

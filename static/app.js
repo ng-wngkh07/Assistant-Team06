@@ -1785,6 +1785,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const sourceDocType = document.getElementById("source-doc-type");
     const sourceProcessedAt = document.getElementById("source-processed-at");
     const sourceTextPreview = document.getElementById("source-text-preview");
+    const chatAttachmentPreviewTray = document.getElementById("chat-attachment-preview-tray");
 
     // State
     let currentStudyMaterial = null;
@@ -1795,6 +1796,114 @@ document.addEventListener("DOMContentLoaded", () => {
     let cardMastery = {};
     let isCardFlipped = false;
     let cachedLibraryDocs = [];
+    const attachmentPreviewRegistry = new Map();
+
+    function getFileBadgeMeta(filename) {
+        const lower = String(filename || "").toLowerCase();
+        if (lower.endsWith(".pdf")) {
+            return { cls: "icon-pdf", label: "PDF" };
+        }
+        if (lower.endsWith(".pptx") || lower.endsWith(".ppt")) {
+            return { cls: "icon-ppt", label: "P" };
+        }
+        if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".webp")) {
+            return { cls: "icon-img", label: "🖼" };
+        }
+        return { cls: "icon-doc", label: "≡" };
+    }
+
+    function buildDocSheetPreviewHtml(filename, material) {
+        const cleanTitle = (material && (material.clean_title || material.filename)) || filename || "Tài liệu học tập";
+        const rawPages = (material && Array.isArray(material.pages)) ? material.pages : [];
+        const rawText = rawPages.map(p => p.text || "").join("\n").trim();
+        const lines = rawText
+            ? rawText.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+            : [];
+
+        const heading1 = lines[0] || `1. Tổng quan: ${cleanTitle}`;
+        const body1 = lines.slice(1, 5).join(" ") || "Tài liệu học tập đã được trích xuất nội dung phục vụ tạo câu hỏi trắc nghiệm và thẻ ghi nhớ Flashcard.";
+        const heading2 = lines[5] || "2. Nội dung trọng tâm & Khái niệm";
+        const body2 = lines.slice(6, 11).join(" ") || "Bao gồm các khái niệm cốt lõi, phân tích kiến trúc và trích dẫn đối chiếu trực tiếp từ tài liệu gốc.";
+
+        return `
+            <div class="attachment-doc-sheet">
+                <div class="attachment-doc-heading">${escapeHtml(heading1)}</div>
+                <div class="attachment-doc-lines">${escapeHtml(body1)}</div>
+                <div class="attachment-doc-subheading">${escapeHtml(heading2)}</div>
+                <div class="attachment-doc-lines">${escapeHtml(body2)}</div>
+            </div>
+        `;
+    }
+
+    function upsertAttachmentPreviewCard({ cardKey, filename, isImage = false, imageDataUrl = "", material = null, loading = false }) {
+        if (!chatAttachmentPreviewTray) return null;
+        const key = cardKey || filename || `att-${Date.now()}`;
+        chatAttachmentPreviewTray.hidden = false;
+
+        let cardEl = chatAttachmentPreviewTray.querySelector(`[data-attachment-key="${CSS.escape(key)}"]`);
+        if (!cardEl) {
+            cardEl = document.createElement("div");
+            cardEl.className = "chat-attachment-card";
+            cardEl.setAttribute("data-attachment-key", key);
+            chatAttachmentPreviewTray.appendChild(cardEl);
+        }
+
+        if (material) {
+            attachmentPreviewRegistry.set(key, material);
+        }
+
+        const badge = getFileBadgeMeta(filename);
+        const thumbHtml = (isImage && imageDataUrl)
+            ? `<img src="${imageDataUrl}" alt="${escapeHtml(filename)}" class="attachment-thumb-img">`
+            : buildDocSheetPreviewHtml(filename, material);
+
+        const loadingHtml = loading
+            ? `<div class="attachment-loading-overlay"><div class="attachment-loading-spinner"></div></div>`
+            : "";
+
+        cardEl.title = material
+            ? `Nhấn để mở Bộ Ôn Luyện: ${filename}`
+            : `Đang xử lý: ${filename}`;
+
+        cardEl.innerHTML = `
+            <button type="button" class="attachment-card-remove" title="Xóa tệp đính kèm" aria-label="Xóa tệp đính kèm">&times;</button>
+            <div class="attachment-card-thumb">
+                ${thumbHtml}
+                ${loadingHtml}
+            </div>
+            <div class="attachment-card-footer">
+                <span class="attachment-file-icon ${badge.cls}">${badge.label}</span>
+                <span class="attachment-file-name">${escapeHtml(filename)}</span>
+            </div>
+        `;
+
+        const btnRemove = cardEl.querySelector(".attachment-card-remove");
+        btnRemove?.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            removeAttachmentPreviewCard(key);
+        });
+
+        cardEl.onclick = () => {
+            const storedMat = attachmentPreviewRegistry.get(key) || material || currentStudyMaterial;
+            if (storedMat) {
+                openStudyMaterial(storedMat);
+            }
+        };
+
+        return cardEl;
+    }
+
+    function removeAttachmentPreviewCard(cardKey) {
+        if (!chatAttachmentPreviewTray) return;
+        const cardEl = chatAttachmentPreviewTray.querySelector(`[data-attachment-key="${CSS.escape(cardKey)}"]`);
+        if (cardEl) {
+            cardEl.remove();
+        }
+        attachmentPreviewRegistry.delete(cardKey);
+        if (chatAttachmentPreviewTray.children.length === 0) {
+            chatAttachmentPreviewTray.hidden = true;
+        }
+    }
 
     // --- Attach Menu Controls ---
     function toggleAttachMenu() {
@@ -1880,6 +1989,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         const isImageFile = [".png", ".jpg", ".jpeg", ".webp"].includes(ext);
+        const previewKey = `upload-${file.name}`;
+        let base64Data = "";
+
         showStudyLoading(
             `Đang tải lên "${file.name}"...`,
             isImageFile
@@ -1888,7 +2000,16 @@ document.addEventListener("DOMContentLoaded", () => {
         );
 
         try {
-            const base64Data = await readFileAsBase64(file);
+            base64Data = await readFileAsBase64(file);
+            upsertAttachmentPreviewCard({
+                cardKey: previewKey,
+                filename: file.name,
+                isImage: isImageFile,
+                imageDataUrl: isImageFile ? base64Data : "",
+                material: null,
+                loading: true
+            });
+
             showStudyLoading(
                 `Đang phân tích "${file.name}"...`,
                 "AI đang tự động tạo câu hỏi trắc nghiệm và flashcards đối chiếu tài liệu..."
@@ -1918,10 +2039,19 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             hideStudyLoading();
-            openStudyMaterial(data.material);
+            upsertAttachmentPreviewCard({
+                cardKey: previewKey,
+                filename: file.name,
+                isImage: isImageFile,
+                imageDataUrl: isImageFile ? base64Data : "",
+                material: data.material,
+                loading: false
+            });
             appendStudyCardToChat(data.material);
+            openStudyMaterial(data.material);
         } catch (err) {
             hideStudyLoading();
+            removeAttachmentPreviewCard(previewKey);
             console.error("Upload material error:", err);
             alert(`Lỗi xử lý tài liệu: ${err.message || err}`);
         } finally {
@@ -1981,8 +2111,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     <strong style="color: var(--text-primary); display: block;">${escapeHtml(doc.clean_title || doc.filename)}</strong>
                     <small style="color: var(--text-muted); font-size: 11px;">${escapeHtml(doc.filename)}</small>
                 </td>
-                <td style="text-align: center; font-size: 12.5px;">${doc.page_count || 1}</td>
-                <td style="text-align: center; font-size: 12.5px;">${doc.chunk_count || 0}</td>
+                <td style="text-align: center; font-size: 12.5px;">${doc.page_count || doc.total_pages || 1}</td>
+                <td style="text-align: center; font-size: 12.5px;">${doc.chunk_count || 1}</td>
                 <td style="text-align: center;">
                     <button type="button" class="btn btn-sm btn-primary btn-generate-from-doc" style="font-size: 11.5px; padding: 4px 10px;" data-filename="${escapeHtml(doc.filename)}">
                         ⚡ Tạo Quiz & Thẻ
@@ -2027,6 +2157,16 @@ document.addEventListener("DOMContentLoaded", () => {
             libraryPickerModal.classList.remove("active");
         }
 
+        const previewKey = `lib-${filename}`;
+        upsertAttachmentPreviewCard({
+            cardKey: previewKey,
+            filename: filename,
+            isImage: false,
+            imageDataUrl: "",
+            material: null,
+            loading: true
+        });
+
         showStudyLoading(
             `Đang xử lý "${filename}"...`,
             "AI đang tổng hợp nội dung thư viện và tạo bộ câu hỏi trắc nghiệm & flashcard..."
@@ -2042,10 +2182,19 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!res.ok) throw new Error(data.detail || "Không thể tạo từ tài liệu thư viện");
 
             hideStudyLoading();
-            openStudyMaterial(data.material);
+            upsertAttachmentPreviewCard({
+                cardKey: previewKey,
+                filename: (data.material && data.material.filename) || filename,
+                isImage: false,
+                imageDataUrl: "",
+                material: data.material,
+                loading: false
+            });
             appendStudyCardToChat(data.material);
+            openStudyMaterial(data.material);
         } catch (err) {
             hideStudyLoading();
+            removeAttachmentPreviewCard(previewKey);
             console.error("Library generate error:", err);
             alert(`Lỗi tạo bài học: ${err.message || err}`);
         }
@@ -2407,8 +2556,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const quizCount = (material.quiz || []).length;
         const cardCount = (material.flashcards || []).length;
 
+        messagesContainer.classList.add("has-chat");
+
         const msgDiv = document.createElement("div");
-        msgDiv.className = "message assistant";
+        msgDiv.className = "message assistant study-card-message";
         msgDiv.innerHTML = `
             <div class="message-avatar">
                 <img src="/static/logo.jpg" alt="AI" class="hero-avatar-img" style="width: 32px; height: 32px; border-radius: 50%;">
@@ -2436,7 +2587,8 @@ document.addEventListener("DOMContentLoaded", () => {
         `;
 
         messagesContainer.appendChild(msgDiv);
-        msgDiv.querySelector(".btn-reopen-study")?.addEventListener("click", () => {
+        msgDiv.querySelector(".btn-reopen-study")?.addEventListener("click", (ev) => {
+            ev.stopPropagation();
             openStudyMaterial(material);
         });
         messagesContainer.scrollTop = messagesContainer.scrollHeight;

@@ -269,3 +269,50 @@ def test_chat_attach_button_left_alignment_and_full_width_bottom_toolbar():
     assert 'id="chat-attach-wrapper"' in html
     assert 'id="btn-chat-attach"' in html
 
+
+def test_attachment_preview_card_modal_structure_and_centered_chat_layout(client):
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "static/style.css").read_text(encoding="utf-8")
+    html = (root / "static/index.html").read_text(encoding="utf-8")
+    js = (root / "static/app.js").read_text(encoding="utf-8")
+
+    # 1. Attachment preview tray inside chat-form & Sample 1 card styles
+    assert 'id="chat-attachment-preview-tray"' in html
+    assert ".chat-attachment-card" in css
+    assert ".attachment-doc-sheet" in css
+    assert ".attachment-card-remove" in css
+    assert "upsertAttachmentPreviewCard" in js
+    assert "removeAttachmentPreviewCard" in js
+
+    # 2. Ensure #ocr-modal is closed BEFORE #library-picker-modal and #study-material-modal
+    ocr_idx = html.index('id="ocr-modal"')
+    lib_idx = html.index('id="library-picker-modal"')
+    study_idx = html.index('id="study-material-modal"')
+    ocr_segment = html[ocr_idx:lib_idx]
+    assert ocr_segment.count("<div") == ocr_segment.count("</div>"), (
+        "#ocr-modal must be completely closed before #library-picker-modal so study modals are not hidden inside #ocr-modal"
+    )
+    assert lib_idx < study_idx
+
+    # 3. Ensure welcome-card hides on has-chat and both frames share centered 720px max-width without negative translateY
+    assert ".messages-container.has-chat .welcome-card" in html
+    assert "display: none !important;" in html
+    assert "transform: translateY(-16px)" not in html
+    assert ".message.study-card-message" in css
+
+    # 4. Ensure /api/materials/documents lists available documents and /api/materials/generate-from-library works
+    docs_res = client.get("/api/materials/documents")
+    assert docs_res.status_code == 200
+    docs = docs_res.json().get("documents", [])
+    assert len(docs) >= 1
+    first_doc_name = docs[0]["filename"]
+
+    gen_res = client.post("/api/materials/generate-from-library", json={"filename": first_doc_name})
+    assert gen_res.status_code == 200
+    mat = gen_res.json()["material"]
+    assert len(mat["quiz"]) >= 1
+    assert len(mat["flashcards"]) >= 1
+    assert len(mat.get("pages", [])) >= 1
+
+

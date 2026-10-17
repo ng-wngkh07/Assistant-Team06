@@ -1221,15 +1221,16 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   - Trước: `.chat-form` giữ `align-items: flex-end` và `.chat-form-bottom` thiếu `width: 100%` khiến thanh đáy bị co hẹp về bên phải và nút `＋` nằm sát các nút bên phải; khi tải ảnh lên gặp lỗi `Not Found` (404 trên tiến trình cũ) và `0 ký tự` do `extract_file` bỏ qua OCR.
   - Sau: `.chat-form` đặt `align-items: stretch`, `.chat-form-bottom` rộng `100%`, `.chat-attach-wrapper` đặt `margin-right: auto` neo cố định ở góc trái; luồng upload ảnh tự động bật `ocr=True`, đồng bộ backend `VisionOCRManager` (Ollama Vision / Tesseract), tích hợp fallback Windows WinRT OCR và kiểm định cấu trúc ảnh qua Pillow để tạo bộ Quiz & Flashcard 3D thành công.
 - Phần/file sửa và cách xử lý:
-  - `static/style.css`: Đặt `align-items: stretch; width: 100%` trên `.chat-form`, `width: 100%` trên `.chat-form-bottom`, `flex: 1` trên `.chat-form-controls`, và `margin-right: auto; flex-shrink: 0` trên `.chat-attach-wrapper`.
-  - `static/index.html` & `static/app.js`: Hỗ trợ thêm `.webp`, kiểm tra tệp rỗng/định dạng ở client, tự động reset file input trong `finally` để cho phép chọn lại tệp ngay lập tức.
+  - `static/style.css`: Đặt `align-items: stretch; width: 100%` trên `.chat-form`, `width: 100%` trên `.chat-form-bottom`, `flex: 1` trên `.chat-form-controls`, và `margin-right: auto; flex-shrink: 0` trên `.chat-attach-wrapper`; bổ sung giao diện thẻ xem trước đính kèm `.chat-attachment-card` (với bản thu nhỏ trang tài liệu `.attachment-doc-sheet`, ảnh thumbnail, thanh tên file và nút xóa `×` ở góc phải trên) cùng khung `.message.study-card-message` đồng bộ tỷ lệ `max-width: 720px`.
+  - `static/index.html` & `static/app.js`: Bổ sung thẻ đóng `</div>` bị thiếu của `#ocr-modal` để giải phóng `#library-picker-modal`, `#study-material-modal` và `#study-loading-modal` khỏi modal ẩn; thêm khay `#chat-attachment-preview-tray` hiển thị thẻ xem trước ngay khi chọn tài liệu/ảnh; ẩn `.welcome-card` khi `.has-chat` kích hoạt, bỏ `translateY(-16px)` gây dính khung chat vào tin trả lời, và căn giữa hai khung đối xứng `720px`.
   - `app/pdf_extractor.py`: Cập nhật `ocr_available()` và `extract_image()` kiểm tra cả `BACKEND_OLLAMA_VISION` và `BACKEND_TESSERACT`.
-  - `app/study_materials.py`: Bật `ocr=True` khi trích xuất file ảnh và retry OCR cho PDF scan; bổ sung xác thực ảnh qua Pillow (`img.verify()`), tích hợp fallback Windows native `Windows.Media.Ocr.OcrEngine` và tổng hợp ngữ cảnh học liệu hình ảnh khi OCR trả về ít ký tự.
-  - `tests/test_study_materials.py`: Thêm 4 kiểm thử mới cho upload PNG/JPEG, primary OCR mocked, từ chối ảnh hỏng và kiểm tra CSS căn lề trái nút `＋`.
+  - `app/study_materials.py` & `app/server.py`: Bật `ocr=True` khi trích xuất file ảnh, tích hợp fallback Windows native `Windows.Media.Ocr.OcrEngine`, trả kèm danh sách `pages` trong hồ sơ học liệu và mở rộng `list_available_documents()` / `generate_from_library_document()` để luôn hiển thị và tạo được học liệu từ thư viện cũng như các tài liệu cục bộ.
+  - `tests/test_study_materials.py`: Thêm 5 kiểm thử mới cho upload PNG/JPEG, primary OCR mocked, từ chối ảnh hỏng, kiểm tra thẻ đính kèm, cấu trúc đóng mở `#ocr-modal`, căn giữa khung chat và tạo học liệu từ thư viện.
 - Kiểm thử phần mềm:
-  - `pytest tests/test_study_materials.py tests/test_help.py tests/test_study_agent_c_f_g.py tests/test_general_source_fidelity_yc205.py tests/test_force_ocr.py`: 75 PASS / 0 FAIL.
+  - `pytest tests/test_study_materials.py tests/test_help.py tests/test_study_agent_c_f_g.py tests/test_general_source_fidelity_yc205.py tests/test_force_ocr.py`: 76 PASS / 0 FAIL.
   - `node --test tests/chat_lifecycle_ui_yc206.test.cjs`: 6 PASS / 0 FAIL.
 - Trạng thái: PASS.
-- Giới hạn, lỗi còn lại, rollback/bước tiếp: Đã khởi động lại tiến trình máy chủ trên cổng 8000 để phục vụ đầy đủ 41 routes OpenAPI.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Đã khởi động lại tiến trình máy chủ trên cổng 8000 để phục vụ đầy đủ 41 routes OpenAPI và giao diện mới.
+
 
 
