@@ -55,7 +55,7 @@ def test_default_benchmark_runs_from_outside_repository():
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout.strip() == "Accuracy: 3/4 (75.00%)"
+    assert completed.stdout.strip() == "Accuracy: 12/15 (80.00%)"
 
 
 def test_cli_reports_invalid_file_without_success_output(tmp_path):

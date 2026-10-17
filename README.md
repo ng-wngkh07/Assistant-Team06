@@ -100,6 +100,24 @@ API tự mô tả tại `http://127.0.0.1:8000/docs`. Kiểm trạng thái qua `
 
 ## Kiểm thử và đóng góp
 
+### Bộ câu hỏi benchmark
+
+`eval/cases.csv` chứa 15 câu hỏi tự biên soạn với đáp án tham chiếu và nhãn
+`normal`, `edge` hoặc `out-of-scope` (gồm 3 ca edge và 2 ca ngoài phạm vi).
+Các ca kiểm tra nội dung và cách xử lý đầu vào thiếu/mơ hồ hoặc không thể biết;
+chúng không dùng tài liệu cá nhân hay corpus demo làm holdout và không phải
+chứng nhận chất lượng QA trên dữ liệu thật. Kiểm tra cấu trúc CSV bằng:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q tests\test_eval_cases.py
+```
+
+Trên Mac:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_eval_cases.py
+```
+
 ### Benchmark accuracy
 
 Từ thư mục gốc repo, chạy benchmark mẫu bằng Python của môi trường dự án:
@@ -120,7 +138,7 @@ Runner đọc `eval/cases.csv` và in accuracy theo so khớp chính xác giữa
 bằng đầu ra đã chấm/chuẩn hóa của hệ thống bạn muốn đo để đánh giá hệ thống đó.
 Có thể truyền đường dẫn CSV khác làm đối số cho script.
 
-Trên Mac:
+Kiểm thử tổng quát trên Mac:
 
 ```bash
 .venv/bin/python -m pip check
