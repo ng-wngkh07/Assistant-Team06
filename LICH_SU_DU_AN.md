@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-16T22:16:51.486329+07:00
-- Mục mới nhất: **[YC-218](#yc-218)**.
-- Nhật ký chung có **63 mục**: 21 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 13 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
+- Cập nhật: 2026-10-17T15:46:00+07:00
+- Mục mới nhất: **[LOG-20261017-eval-cases-issue26](#log-20261017-eval-cases-issue26)**.
+- Nhật ký chung có **64 mục**: 21 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 50 mã YC và 14 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1188,3 +1188,20 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   các issue còn mở vẫn do thành viên phụ trách. Không thay protection/quyền owner.
   QA model thật, full installer máy Windows mới và kiểm trên main sau merge NOT_RUN.
 - Cập nhật kết quả: 2026-10-16T22:16:51.486329+07:00; giữ mọi mục và attribution lịch sử cũ.
+
+<a id="log-20261017-eval-cases-issue26"></a>
+### LOG-20261017-eval-cases-issue26 - 17/10/2026 15:46 (UTC+07)
+
+- Người thực hiện: Codex theo yêu cầu của người phụ trách; loại: bộ câu hỏi benchmark (Issue #26).
+- Mục tiêu/trước-sau: tạo 15 câu hỏi tiếng Việt có đáp án tham chiếu và category
+  normal/edge/out-of-scope; có 3 ca edge về dữ kiện thiếu, hệ mâu thuẫn và cách
+  hiểu căn bậc hai, cùng 2 ca ngoài phạm vi.
+- Phần/file: eval/cases.csv, tests/test_eval_cases.py, pytest.windows.ini,
+  README.md, .gitignore, LICH_SU_DU_AN.md. Nội dung tự biên soạn, không lấy từ
+  corpus demo, nguồn riêng hoặc hồ sơ người dùng.
+- Kiểm chứng: Windows, Python 3.12.12, commit cơ sở 18d3260; CSV được đọc bằng
+  Python `csv` module: đúng schema, 15 hàng, 3 edge, nhãn/giá trị không rỗng và
+  câu hỏi duy nhất PASS; quy tắc nhật ký PASS; `git diff --check` PASS.
+  `python -m pytest -q tests\test_eval_cases.py` NOT_RUN vì Python hiện tại không
+  cài pytest; Windows/Mac CI và review chéo NOT_RUN.
+- Trạng thái: hoàn tất nội dung CSV và kiểm thử hợp đồng; chưa commit/push/PR review.
