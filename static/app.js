@@ -1826,7 +1826,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (activeEntry && activeEntry.filename) {
                 studyToolActiveFilename.innerHTML = `<strong>${escapeHtml(activeEntry.filename)}</strong> (${activeEntry.total_pages || 1} trang)`;
             } else {
-                studyToolActiveFilename.textContent = "Chưa chọn tài liệu nào. Vui lòng tải tệp lên hoặc chọn từ thư viện.";
+                studyToolActiveFilename.textContent = "Chưa chọn tài liệu nào. Vui lòng bấm \"Tải tệp mới lên\" để thêm tài liệu ôn luyện.";
             }
         }
 
@@ -2080,9 +2080,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (!activeEntry || !activeEntry.filename) {
             if (studyToolStatus) {
-                studyToolStatus.textContent = "Chưa có tài liệu được chọn. Đang mở danh sách thư viện để bạn chọn...";
+                studyToolStatus.textContent = "Chưa có tài liệu được chọn. Vui lòng bấm \"Tải tệp mới lên\" để thêm tài liệu ôn luyện.";
             }
-            openLibraryPicker();
+            if (studyToolFileInput) {
+                studyToolFileInput.value = "";
+                studyToolFileInput.click();
+            }
             return;
         }
 

@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-17T22:15:00.000000+07:00
-- Mục mới nhất: **[LOG-20261017-qa-prominent-quiz-flashcard-tool-tv2](#log-20261017-qa-prominent-quiz-flashcard-tool-tv2)**.
-- Nhật ký chung có **67 mục**: 25 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 17 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 17/10/2026.
+- Cập nhật: 2026-10-17T22:25:00.000000+07:00
+- Mục mới nhất: **[LOG-20261017-qa-integrate-quiz-flashcard-with-topic-tv2](#log-20261017-qa-integrate-quiz-flashcard-with-topic-tv2)**.
+- Nhật ký chung có **68 mục**: 26 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 9 làm rõ kiến trúc/quyền/quy trình, 8 dữ liệu corpus/huấn luyện. Có 50 mã YC và 18 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 17/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1276,3 +1276,24 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   - `.\venv\Scripts\python.exe -m pytest tests/test_practice.py tests/test_document_lookup.py`: 31 PASS / 0 FAIL.
 - Trạng thái: PASS; đã kiểm chứng trực quan và tự động hóa.
 - Giới hạn, lỗi còn lại, rollback/bước tiếp: Khuyến nghị người dùng ấn Ctrl+F5 khi tải lại trang web để trình duyệt nhận ngay CSS/JS mới.
+
+<a id="log-20261017-qa-integrate-quiz-flashcard-with-topic-tv2"></a>
+### LOG-20261017-qa-integrate-quiz-flashcard-with-topic-tv2 - 17/10/2026 22:25 (UTC+07)
+
+- Người thực hiện: TV2 (Backend & AI) và TV5 (Frontend UI/UX); loại: tối ưu hóa giao diện & tích hợp chức năng ôn luyện (Loại bỏ nút chọn từ thư viện theo đánh dấu, tích hợp bộ tạo flashcard và trắc nghiệm chung vào cùng thẻ tạo câu hỏi theo chủ đề).
+- Lỗi hoặc mục tiêu (ý chính):
+  1. Loại bỏ nút "📂 Chọn từ thư viện tài liệu" (`#btn-study-tool-library`) trong phần công cụ học tập theo phản hồi đánh dấu khoanh tròn màu xanh của người dùng (vì phần tạo câu hỏi theo chủ đề đã sử dụng trực tiếp tài liệu từ thư viện tri thức).
+  2. Tích hợp trực tiếp phần tạo Flashcard và bài tập trắc nghiệm từ tài liệu tải lên vào chung một khung/thẻ duy nhất với phần "Tạo câu hỏi theo chủ đề" (`.learning-topic-card`), xóa bỏ tình trạng tách rời thành hai thẻ riêng lẻ gây rối mắt.
+- Trước / sau thay đổi:
+  - Trước: Màn hình "Tạo câu hỏi" hiển thị hai khối card lớn rời rạc nằm đè lên nhau; khối bên trên có nút "Chọn từ thư viện tài liệu" gây dư thừa; người dùng phải nhìn hai khung điều khiển riêng biệt.
+  - Sau: Toàn bộ chức năng tạo câu hỏi theo chủ đề (thư viện) và tạo Flashcard & Trắc nghiệm chuyên sâu (tài liệu tải lên) được tích hợp gọn gàng, liền mạch trong cùng một thẻ `.learning-topic-card`; đã loại bỏ hoàn toàn nút chọn thư viện thừa; khi người dùng tải tệp lên hoặc nhấn "⚡ Tạo Flashcard & Bài tập Trắc nghiệm", hệ thống tự động xử lý và mở bộ ôn luyện 3D tương tác.
+- Phần/file sửa và cách xử lý:
+  - `static/index.html`: Bỏ khối card riêng `.study-material-generator-card`; tích hợp khối `.study-material-integrated-box` vào bên trong `.learning-topic-card`; loại bỏ nút `#btn-study-tool-library`; cập nhật cache-buster query string sang `?v=yc207-ui10`.
+  - `static/app.js`: Cập nhật thông báo hướng dẫn người dùng nhấn "Tải tệp mới lên" khi chưa có tài liệu thay vì mở thư viện; khi nhấn nút tạo bài học nếu chưa có tài liệu sẽ tự động kích hoạt hộp thoại chọn file tải lên (`studyToolFileInput.click()`).
+- Kiểm thử phần mềm:
+  - `.\venv\Scripts\python.exe -m pytest tests/test_learning_tools_ui_contract.py`: 6 PASS / 0 FAIL.
+  - `node --test tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs`: 19 PASS / 0 FAIL.
+  - `.\venv\Scripts\python.exe -m pytest tests/test_study_materials.py`: 14 PASS / 0 FAIL.
+- Trạng thái: PASS; đã kiểm chứng trực quan và tự động.
+- Giới hạn, lỗi còn lại, rollback/bước tiếp: Khởi động lại máy chủ nền port 8000; người dùng tải lại trang web bằng Ctrl+F5 để nhận bản giao diện tích hợp mới.
+

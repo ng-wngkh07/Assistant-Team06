@@ -11,7 +11,7 @@
             try { localStorage.setItem("theme", "dark"); } catch (e) {}
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=yc207-ui09">
+    <link rel="stylesheet" href="/static/style.css?v=yc207-ui10">
     <link rel="stylesheet" href="/static/theme.css?v=3-contrast-fix">
     <style>
         /* Ambient gradient glowing orbs */
@@ -744,57 +744,11 @@
                     <button id="btn-tool-tab-examples" class="tool-tab-button" type="button" role="tab" tabindex="-1" aria-label="Trích xuất bài tập mẫu" aria-selected="false" aria-controls="tool-tab-examples" data-tool-tab="examples">Trích xuất bài tập mẫu</button>
                 </nav>
                 <section id="tool-tab-practice" class="tool-tab-panel" role="tabpanel" aria-labelledby="btn-tool-tab-practice">
-                    <!-- Phần Tạo Flashcard và Bài tập Trắc nghiệm từ Tài liệu -->
-                    <div class="learning-topic-card study-material-generator-card" style="margin-bottom: 24px; border: 1px solid rgba(244, 63, 94, 0.35); background: rgba(244, 63, 94, 0.05); border-radius: 18px; padding: 20px;">
-                        <div class="tool-panel-header" style="margin-bottom: 12px;">
-                            <div>
-                                <h2 style="display: flex; align-items: center; gap: 8px; font-size: 1.18rem; color: #ffffff;">
-                                    <span style="font-size: 1.35rem;">⚡</span> Tạo Flashcard và Bài tập Trắc nghiệm từ Tài liệu
-                                </h2>
-                                <p class="text-muted" style="margin-top: 4px; font-size: 0.88rem;">
-                                    Tự tải tài liệu học tập lên (PDF, Word, Ảnh, Markdown...) hoặc chọn tài liệu có sẵn trong thư viện để AI trích xuất nội dung, phân tích kiến thức trọng tâm và tự động tạo bộ câu hỏi trắc nghiệm kiểm tra kèm thẻ Flashcard 3D có trích dẫn đối chiếu từng trang.
-                                </p>
-                            </div>
-                        </div>
-
-                        <div class="study-tools-container" style="display: flex; flex-direction: column; gap: 14px;">
-                            <div class="study-source-select-box" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); border-radius: 12px; padding: 14px;">
-                                <h3 style="font-size: 0.92rem; margin-bottom: 10px; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
-                                    <span>📄</span> Nguồn tài liệu ôn tập
-                                </h3>
-                                <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
-                                    <button type="button" id="btn-study-tool-upload" class="btn btn-outline btn-sm" style="display: inline-flex; align-items: center; gap: 6px;">
-                                        <span>📤</span> Tải tệp mới lên (PDF, Word, Ảnh...)
-                                    </button>
-                                    <button type="button" id="btn-study-tool-library" class="btn btn-outline btn-sm" style="display: inline-flex; align-items: center; gap: 6px;">
-                                        <span>📂</span> Chọn từ thư viện tài liệu
-                                    </button>
-                                    <input type="file" id="study-tool-file-input" style="display: none;" accept=".pdf,.docx,.pptx,.txt,.md,.png,.jpg,.jpeg,.webp">
-                                </div>
-                                <div id="study-tool-active-doc" style="padding: 10px 14px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; font-size: 0.88rem; color: #38bdf8;">
-                                    <strong>Tài liệu đang chọn:</strong> <span id="study-tool-active-filename">Chưa chọn tài liệu nào. Vui lòng tải tệp lên hoặc chọn từ thư viện.</span>
-                                </div>
-                            </div>
-
-                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
-                                <button type="button" id="btn-create-quiz-flashcard" class="btn btn-primary" style="font-size: 0.95rem; padding: 10px 22px;">
-                                    <span>⚡</span> Tạo Flashcard &amp; Bài tập Trắc nghiệm
-                                </button>
-                                <button type="button" id="btn-open-generated-study-set" class="btn btn-outline" style="display: none; font-size: 0.95rem; padding: 10px 18px; color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">
-                                    <span>📖</span> Mở bộ ôn luyện đã tạo
-                                </button>
-                            </div>
-                            <p id="study-tool-status" class="tool-status text-muted" role="status" aria-live="polite" style="font-size: 0.84rem; margin: 0;">
-                                Nhấn "Tạo Flashcard &amp; Bài tập Trắc nghiệm" để AI sinh bộ câu hỏi và thẻ nhớ. Khi hoàn tất, giao diện ôn tập tương tác sẽ mở tự động.
-                            </p>
-                        </div>
-                    </div>
-
                     <div class="learning-topic-card">
                         <div class="tool-panel-header">
                             <div>
                                 <h2>Tạo câu hỏi theo chủ đề</h2>
-                                <p class="text-muted">Câu hỏi do AI tạo từ tài liệu trong thư viện; từng câu có trang và trích dẫn để đối chiếu.</p>
+                                <p class="text-muted">Câu hỏi do AI tạo từ tài liệu trong thư viện hoặc tệp tải lên; từng câu có trang và trích dẫn để đối chiếu.</p>
                             </div>
                         </div>
                         <div class="learning-generate-form">
@@ -821,6 +775,42 @@
                                 </div>
                             </div>
                             <p id="learning-generate-status" class="tool-status text-muted" role="status" aria-live="polite">Chọn hoặc nhập chủ đề để bắt đầu luyện tập (tối đa 3 câu để giảm thời gian phản hồi).</p>
+                        </div>
+
+                        <!-- Tích hợp phần Tạo Flashcard & Bài tập Trắc nghiệm từ tài liệu tải lên -->
+                        <div class="study-material-integrated-box" style="margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+                                <div>
+                                    <h3 style="font-size: 0.95rem; margin: 0; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+                                        <span>⚡</span> Tạo Flashcard &amp; Bài tập Trắc nghiệm từ Tài liệu tải lên
+                                    </h3>
+                                    <p class="text-muted" style="margin: 3px 0 0 0; font-size: 0.83rem;">
+                                        Tự tải tài liệu học tập (PDF, Word, Ảnh, Markdown...) để AI trích xuất nội dung và sinh bộ trắc nghiệm kiểm tra kèm thẻ Flashcard 3D có trích dẫn đối chiếu từng trang.
+                                    </p>
+                                </div>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <button type="button" id="btn-study-tool-upload" class="btn btn-outline btn-sm" style="display: inline-flex; align-items: center; gap: 6px;">
+                                        <span>📤</span> Tải tệp mới lên (PDF, Word, Ảnh...)
+                                    </button>
+                                    <input type="file" id="study-tool-file-input" style="display: none;" accept=".pdf,.docx,.pptx,.txt,.md,.png,.jpg,.jpeg,.webp">
+                                </div>
+                            </div>
+
+                            <div id="study-tool-active-doc" style="padding: 10px 14px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; font-size: 0.88rem; color: #38bdf8; margin-bottom: 12px;">
+                                <strong>Tài liệu đang chọn:</strong> <span id="study-tool-active-filename">Chưa chọn tài liệu nào. Vui lòng bấm "Tải tệp mới lên" để thêm tài liệu ôn luyện.</span>
+                            </div>
+
+                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                <button type="button" id="btn-create-quiz-flashcard" class="btn btn-primary" style="font-size: 0.92rem; padding: 9px 20px;">
+                                    <span>⚡</span> Tạo Flashcard &amp; Bài tập Trắc nghiệm
+                                </button>
+                                <button type="button" id="btn-open-generated-study-set" class="btn btn-outline" style="display: none; font-size: 0.92rem; padding: 9px 16px; color: #38bdf8; border-color: rgba(56, 189, 248, 0.4);">
+                                    <span>📖</span> Mở bộ ôn luyện đã tạo
+                                </button>
+                            </div>
+                            <p id="study-tool-status" class="tool-status text-muted" role="status" aria-live="polite" style="font-size: 0.84rem; margin: 8px 0 0 0;">
+                                Nhấn "Tạo Flashcard &amp; Bài tập Trắc nghiệm" để AI sinh bộ câu hỏi và thẻ nhớ từ tài liệu đã tải lên.
+                            </p>
                         </div>
                     </div>
 
@@ -1623,8 +1613,8 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=yc207-ui09"></script>
-    <script src="/static/document-lookup.js?v=yc207-ui09"></script>
+    <script src="/static/app.js?v=yc207-ui10"></script>
+    <script src="/static/document-lookup.js?v=yc207-ui10"></script>
     <script src="/static/timetable.js?v=yc195-02"></script>
     <script src="/static/layout.js?v=yc195-02"></script>
     <script src="/static/theme.js?v=yc195-02"></script>
