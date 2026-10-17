@@ -1188,3 +1188,13 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   các issue còn mở vẫn do thành viên phụ trách. Không thay protection/quyền owner.
   QA model thật, full installer máy Windows mới và kiểm trên main sau merge NOT_RUN.
 - Cập nhật kết quả: 2026-10-16T22:16:51.486329+07:00; giữ mọi mục và attribution lịch sử cũ.
+
+<a id="log-20261017-ai-issue24-tv4"></a>
+### LOG-20261017-ai-issue24-tv4 - 17/10/2026 20:20 (UTC+07)
+
+- Người thực hiện: TV4 / Antigravity; loại: đặc tả và định nghĩa giao diện dịch vụ AI cho LLM tương lai (Issue #24).
+- Mục tiêu: Viết tài liệu đặc tả `docs/ai-interface.md` (chữ ký hàm, cấu trúc đầu vào/đầu ra, phân loại lỗi, cơ chế dự phòng) và định nghĩa hợp đồng `AIServiceInterface` tại `app/ai_interface.py` kèm `MockAIService` và `LegacyClientAdapter`, chưa gọi thêm nhà cung cấp LLM mới.
+- Trước/sau: Trước chưa có `docs/ai-interface.md` và giao thức chuẩn cho tầng sinh văn bản; sau có đặc tả đầy đủ, kiểu dữ liệu bất biến `AIRequest`/`AIResponse`/`AIStreamChunk`, cây ngoại lệ `AIServiceError` và kiểm thử hợp đồng `tests/test_ai_interface.py`.
+- Phần/file sửa: `docs/ai-interface.md`, `app/ai_interface.py`, `tests/test_ai_interface.py`, `pytest.windows.ini`, `LICH_SU_DU_AN.md`.
+- Kiểm thử: `pytest tests/test_ai_interface.py` PASS; kiểm tra `scripts/check_history.py` PASS.
+- Trạng thái: PASS.
