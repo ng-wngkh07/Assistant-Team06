@@ -1188,3 +1188,13 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   các issue còn mở vẫn do thành viên phụ trách. Không thay protection/quyền owner.
   QA model thật, full installer máy Windows mới và kiểm trên main sau merge NOT_RUN.
 - Cập nhật kết quả: 2026-10-16T22:16:51.486329+07:00; giữ mọi mục và attribution lịch sử cũ.
+
+<a id="log-20261017-backend-issue20-tv3"></a>
+### LOG-20261017-backend-issue20-tv3 - 17/10/2026 20:20 (UTC+07)
+
+- Người thực hiện: TV3 / Antigravity; loại: chức năng tra cứu văn phòng hỗ trợ tên một phần (Issue #20).
+- Mục tiêu: Hỗ trợ tra cứu văn phòng khi người dùng nhập một phần tên (ví dụ `'training'` tìm thấy `'Training Office'`), không phân biệt hoa/thường, xử lý khoảng trắng thừa, xếp hạng ưu tiên (khớp chính xác → tiền tố từ → ranh giới từ → chuỗi con) và không làm thay đổi bất kỳ câu trả lời nào khác của hệ thống.
+- Trước/sau: Trước chưa có module tra cứu văn phòng hỗ trợ partial match; sau bổ sung `app/office_lookup.py`, dữ liệu mẫu công khai `data/offices.csv` và bộ kiểm thử `tests/test_office_lookup.py`.
+- Phần/file sửa: `.gitignore`, `data/offices.csv`, `app/office_lookup.py`, `tests/test_office_lookup.py`, `pytest.windows.ini`, `LICH_SU_DU_AN.md`.
+- Kiểm thử: `pytest tests/test_office_lookup.py tests/test_help.py tests/test_document_lookup.py` PASS; giữ nguyên 100% câu trả lời của `dialogue_intent` và `RAGAgent`.
+- Trạng thái: PASS.
