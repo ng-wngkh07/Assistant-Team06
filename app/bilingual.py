@@ -9,6 +9,7 @@ from typing import Any
 import requests
 
 from app.config import DATA_DIR, OLLAMA_BASE_URL, DEFAULT_CHAT_MODEL
+from app.gpu_lock import gpu_coordinator, GPUBusyError
 from app.training_data import detect_language
 from app.bilingual_terms import translation_guidance, translation_is_plausible
 
@@ -57,30 +58,31 @@ class LocalTranslator:
                 "và giá trị là bản dịch.\n\n" + numbered
             )
             try:
-                if use_mlx:
-                    raw_content = TrainedModelClient().chat_complete(
-                        messages=[
-                            {"role": "system", "content": "You are an English-to-Vietnamese translator. Output Vietnamese (tiếng Việt, vi) using Latin letters with Vietnamese diacritics. Preserve meaning, do not complete cut-off sentences. Return the requested JSON."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        temperature=0,
-                        max_tokens=420 * len(batch),
-                    )
-                else:
-                    response = requests.post(
-                        f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat",
-                        json={
-                            "model": self.model,
-                            "stream": False,
-                            "format": "json",
-                            "think": False,
-                            "options": {"temperature": 0, "num_predict": 420 * len(batch)},
-                            "messages": [{"role": "system", "content": "You are an English-to-Vietnamese translator. Output Vietnamese (tiếng Việt, vi) using Latin letters with Vietnamese diacritics. Preserve meaning, do not complete cut-off sentences. Return the requested JSON."}, {"role": "user", "content": prompt}],
-                        },
-                        timeout=180,
-                    )
-                    response.raise_for_status()
-                    raw_content = response.json()["message"]["content"]
+                with gpu_coordinator.acquire_for_inference():
+                    if use_mlx:
+                        raw_content = TrainedModelClient().chat_complete(
+                            messages=[
+                                {"role": "system", "content": "You are an English-to-Vietnamese translator. Output Vietnamese (tiếng Việt, vi) using Latin letters with Vietnamese diacritics. Preserve meaning, do not complete cut-off sentences. Return the requested JSON."},
+                                {"role": "user", "content": prompt}
+                            ],
+                            temperature=0,
+                            max_tokens=420 * len(batch),
+                        )
+                    else:
+                        response = requests.post(
+                            f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat",
+                            json={
+                                "model": self.model,
+                                "stream": False,
+                                "format": "json",
+                                "think": False,
+                                "options": {"temperature": 0, "num_predict": 420 * len(batch)},
+                                "messages": [{"role": "system", "content": "You are an English-to-Vietnamese translator. Output Vietnamese (tiếng Việt, vi) using Latin letters with Vietnamese diacritics. Preserve meaning, do not complete cut-off sentences. Return the requested JSON."}, {"role": "user", "content": prompt}],
+                            },
+                            timeout=180,
+                        )
+                        response.raise_for_status()
+                        raw_content = response.json()["message"]["content"]
 
                 import re
                 m = re.search(r"\{.*\}", raw_content, re.DOTALL)
@@ -95,7 +97,7 @@ class LocalTranslator:
                         if isinstance(value, str) and translation_is_plausible(batch[index][1], value) and len(value.strip()) >= 0.65 * len(batch[index][1].strip()):
                             result[index] = value
                             conn.execute("INSERT OR REPLACE INTO translations VALUES (?, ?)", (key, value))
-            except (requests.RequestException, ValueError, KeyError):
-                # The original bilingual model can still read English if translation fails.
+            except (requests.RequestException, ValueError, KeyError, GPUBusyError):
+                # The original bilingual model can still read English if translation fails or GPU is busy.
                 continue
         return result

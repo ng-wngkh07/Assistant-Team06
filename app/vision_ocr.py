@@ -244,6 +244,7 @@ class VisionOCRManager:
             "prompt": prompt,
             "images": [b64_img],
             "stream": False,
+            "keep_alive": "0s",
             "options": {"temperature": 0.0, "num_predict": 1024},
         }
         resp = requests.post(
@@ -254,6 +255,10 @@ class VisionOCRManager:
         if resp.status_code != 200:
             raise RuntimeError(f"Ollama VLM OCR lỗi ({resp.status_code}): {resp.text[:300]}")
         res_data = resp.json()
+        if res_data.get("done_reason") == "length":
+            raise RuntimeError(
+                f"Ollama VLM OCR bị cắt cụt do vượt quá giới hạn độ dài (done_reason='length')."
+            )
         raw_output = res_data.get("response", "")
         clean = re.sub(r"^```(?:plaintext|[a-zA-Z0-9]+)?\n", "", raw_output.strip())
         clean = re.sub(r"\n```$", "", clean.strip())
@@ -289,17 +294,28 @@ class VisionOCRManager:
 
         # Verify source file with matching hash still exists in SRC_DIR
         source_hash = entry.get("source_hash")
+        source_relpath = entry.get("source_relpath")
         from app.pdf_extractor import PDFExtractor
         source_matched = False
         if source_hash:
-            for sf in SRC_DIR.rglob("*"):
-                if sf.is_file():
+            # Check source_relpath directly first (O(1))
+            if source_relpath:
+                candidate = SRC_DIR / source_relpath
+                if candidate.is_file():
                     try:
-                        if PDFExtractor.calculate_file_hash(sf) == source_hash:
+                        if PDFExtractor.calculate_file_hash(candidate) == source_hash:
                             source_matched = True
-                            break
                     except Exception:
-                        continue
+                        pass
+            if not source_matched:
+                for sf in SRC_DIR.rglob("*"):
+                    if sf.is_file():
+                        try:
+                            if PDFExtractor.calculate_file_hash(sf) == source_hash:
+                                source_matched = True
+                                break
+                        except Exception:
+                            continue
 
         if not source_matched:
             raise ValueError(

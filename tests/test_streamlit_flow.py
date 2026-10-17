@@ -100,3 +100,22 @@ def test_long_conversation_sends_only_backend_history_limit(history):
         assert sum(len(m['content'].encode('utf-8')) for m in sent)<=32000
         assert at.session_state['messages'][:len(previous)]==previous, 'Keep earlier turns visible while limiting request context'
         assert len(at.session_state['messages'])==len(previous)+2
+
+
+def test_claims_remain_plain_text_after_completed_turn_rerender():
+    raw='<img src=x onerror=alert(1)> [nhãn](https://attacker.example)'
+    citations=[{'id':'S1','book_title':'Nguồn kiểm thử','page_num':1,
+                'snippet':'Đoạn nguồn','claims':[raw]}]
+    with patch('requests.get',healthy),patch('requests.post',return_value=SimpleNamespace(
+        status_code=200,json=lambda:{'answer':'Câu trả lời có nguồn.',
+                                    'citations':citations,'session_id':'claim-session'})):
+        at=AppTest.from_file(APP).run()
+        at.chat_input[0].set_value('Entropy là gì?').run()
+        assert not at.exception
+        assert any(raw in t.value for t in at.text)
+        assert all(raw not in m.value for m in at.markdown)
+        at.run()
+        assert not at.exception
+        assert any(raw in t.value for t in at.text)
+        assert at.session_state['messages'][-1]['citations']==citations
+

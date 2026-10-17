@@ -86,7 +86,11 @@ def dialogue_intent(query, history):
         return "Rất vui được giúp bạn. Bạn có thể hỏi tiếp hoặc chuyển sang chủ đề khác.", query
     if q in {"giúp tôi", "giúp mình", "tư vấn", "tư vấn giúp tôi", "làm thế nào", "tôi nên làm gì", "cách giải quyết"}:
         return "Bạn muốn tìm hiểu vấn đề nào, và mục đích là học kiến thức hay áp dụng vào một tình huống cụ thể?", query
-    followup = bool(re.fullmatch(
+    demonstrative = bool(re.search(
+        r"(?:^|\b)(?:công\s+thức|định\s+lý|định\s+nghĩa|định\s+luật|khái\s+niệm|nguyên\s+lý|mô\s+hình|thuật\s+toán|phương\s+pháp|quy\s+tắc|bài\s+toán|nội\s+dung|vấn\s+đề|kết\s+quả|điều|cái)\s+(?:này|đó|kia|ấy|trên)\b",
+        q,
+    ))
+    followup = demonstrative or bool(re.fullmatch(
         r"(?:nó|điều đó|cái đó|vấn đề đó)(?: là gì| có nghĩa là gì| thì sao| là sao)?"
         r"|(?:cho )?ví dụ(?: nữa| cụ thể)?|giải thích(?: thêm| kỹ hơn| rõ hơn)?"
         r"|tại sao|cách áp dụng|áp dụng thế nào|còn trường hợp khác thì sao", q))
@@ -97,7 +101,8 @@ def dialogue_intent(query, history):
             return "Bạn muốn hỏi tiếp về khái niệm hoặc tình huống nào? Nêu tên chủ đề sẽ giúp tôi tìm đúng tài liệu.", query
         if normalize_query(previous).casefold().strip(" .!?") in {"giúp tôi", "tư vấn", "làm thế nào", "tôi nên làm gì"}:
             return "Bạn muốn hỏi về vấn đề nào và dùng thông tin để làm gì?", query
-        return None, f"{previous} — {query}"
+        bounded_prev = previous.split(" — ")[0].strip()
+        return None, f"{bounded_prev} — {query}"
     return None, query
 
 

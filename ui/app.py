@@ -240,6 +240,12 @@ def render_citations(citations: Any) -> None:
                     if warn_text:
                         st.text(warn_text)
 
+            claims = cit.get("claims")
+            if isinstance(claims, list) and claims:
+                st.caption("Nhận định gắn nguồn:")
+                for claim in claims:
+                    if isinstance(claim, str) and claim.strip():
+                        st.text(f"• {claim.strip()}")
             snippet = cit.get("snippet")
             if snippet is not None and str(snippet):
                 st.text(str(snippet))

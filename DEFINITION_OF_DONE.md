@@ -20,5 +20,4 @@ hoàn tất chúng chưa đồng nghĩa sản phẩm QA đã được nghiệm t
   Bản thiết kế được duyệt không tự trở thành chức năng đã chạy.
 
 Nếu thiếu một mục bắt buộc, giữ trạng thái đang làm hoặc ghi blocker cụ thể.
-Tiêu chí sản phẩm ở [đặc tả](docs/01_Y_TUONG_DU_AN.md); các việc chưa merge
-ở #20–27 vẫn do chủ trì phụ trách, không tự coi CI xanh là nghiệm thu QA thật.
+Tiêu chí sản phẩm ở [đặc tả](docs/01_Y_TUONG_DU_AN.md) và [báo cáo rà soát](docs/team/RA_SOAT_REPO_YC217.md); các việc chưa merge ở #20–27 vẫn do chủ trì phụ trách, không tự coi CI xanh là nghiệm thu QA thật.

@@ -1,6 +1,14 @@
-# Study Agent — Agent Học Tập
+# Study Agent — QA học tập có nguồn · Assistant-Team06
 
-Ứng dụng học tập chạy cục bộ: **tra cứu tài liệu**, **hỏi đáp có nguồn (QA)** và **thời khóa biểu từ ảnh**. Mã nguồn dùng Python/FastAPI, SQLite FTS5, Ollama và giao diện web. TV4 quản lý chỉ mục chính và môi trường MLX riêng trên Mac.
+Sản phẩm chính là **QA học tập**: giúp sinh viên hỏi và hiểu nội dung giáo trình/bài giảng, xem bằng chứng và nhận biết khi tài liệu chưa đủ căn cứ. QA ở đây là *Question Answering*. Tra cứu tài liệu hỗ trợ tìm và đối chiếu nguồn; ôn tập và lịch ảnh là tiện ích đi kèm. Mã nguồn dùng Python/FastAPI, SQLite FTS5, runtime model cục bộ và UI web. TV4 quản lý chỉ mục chính và môi trường MLX riêng trên Mac.
+
+Đọc [mục tiêu, use case và tiêu chí QA](docs/01_Y_TUONG_DU_AN.md), [kiến trúc](docs/02_CAU_TRUC_DU_AN.md) và [kịch bản nghiệm thu](docs/03_CACH_TRIEN_KHAI_DU_AN.md). Các ngưỡng chất lượng là đề xuất cần đo; repo không cam kết loại bỏ hoàn toàn câu trả lời sai.
+
+## Bài tập Lab 2 và trạng thái tích hợp
+
+12 issue [#18–29](https://github.com/ng-wngkh07/Assistant-Team06/issues?q=is%3Aissue) thuộc công việc của thành viên. Tại lần rà soát 16/10/2026: 5 issue đã đóng, 7 còn mở; trạng thái live trên GitHub có thể đổi. **Tra cứu văn phòng là ví dụ demo**, không thay mục tiêu QA học tập. Xem [rà soát tích hợp hiện tại](docs/team/RA_SOAT_TICH_HOP_YC218.md), [ma trận issue và cổng kiểm sau 12 issue](docs/team/RA_SOAT_REPO_YC217.md) và [Definition of Done](DEFINITION_OF_DONE.md).
+
+UI sản phẩm đang chạy là `static/` qua launcher bên dưới. `ui/` là bản mẫu Lab 2, chưa thay UI chính; adapter đã được sửa hợp đồng API, xử lý lỗi và nguồn trong PR #35 (YC-218), chờ owner review/merge. Không chạy thêm Streamlit để sử dụng sản phẩm hiện tại.
 
 ## Chọn môi trường
 
@@ -82,6 +90,7 @@ Luồng tài liệu: nguồn → trích xuất/OCR → đoạn văn → FTS/vect
 | --- | --- |
 | app/, run.py | API, trích xuất, tìm kiếm, QA, OCR/lịch, index và cổng training |
 | static/ | Giao diện ba chức năng |
+| ui/ | Bản mẫu Lab 2, xem [giới hạn và API](ui/README.md) |
 | scripts/ | Launcher chung, kiểm lịch sử, tiện ích theo nền tảng |
 | tests/, tests/fixtures/ | Test và nguồn tổng hợp |
 | requirements.txt | Phụ thuộc web runtime |
@@ -93,8 +102,10 @@ Luồng tài liệu: nguồn → trích xuất/OCR → đoạn văn → FTS/vect
 | docs/team/, output/pdf/ | Tài liệu nhóm và PDF phân công |
 | corpus/ | Quy ước bàn giao riêng; không chứa thư viện thật hoặc importer tự động |
 | data/ | CSDL và tệp runtime; quy ước nguồn và quyền sở hữu xem tại [data/README.md](data/README.md) |
+| lab02/backlog/ | Backlog gốc; không chạy lại script để tạo trùng 12 issue |
+| eval/ | Đầu ra dự kiến #26–27; chưa có runner được nghiệm thu |
 
-`.env.example` mô tả các biến launcher đọc; `.env` không commit. `src/` là nguồn thật; `data/` giữ DB, vector, model, lịch/hội thoại/cache. Theo YC-214, chỉ công bố bản sửa, kiểm thử tổng hợp và tài liệu phần mềm; dữ liệu và thông tin huấn luyện giữ local, kể cả trong commit, mô tả PR và bình luận. Bàn giao riêng ở nơi được kiểm soát; không merge SQLite/weights qua Git và không dùng `git add -f` vượt ignore. [Corpus](corpus/README.md) mô tả ranh giới này.
+`.env.example` mô tả các biến launcher đọc; `.env` không commit. `src/` là nguồn thật; `data/` giữ DB, vector, model, lịch/hội thoại/cache. Chỉ hai đường dẫn `data/offices.csv` và `data/README.md` được dành ngoại lệ cho ví dụ công khai #22–23; thành viên còn phải kiểm nguồn/quyền trước khi thêm. Theo YC-214, dữ liệu và thông tin huấn luyện giữ local, kể cả trong commit, mô tả PR và bình luận. Bàn giao riêng ở nơi được kiểm soát; không merge SQLite/weights qua Git và không dùng `git add -f` vượt ignore. [Corpus](corpus/README.md) mô tả ranh giới này.
 
 API tự mô tả tại `http://127.0.0.1:8000/docs`. Kiểm trạng thái qua `scripts/dev.py check --profile demo` hoặc `--profile local`; thêm `--require-model` nếu cần lệnh thất bại khi model QA chưa sẵn sàng. Lệnh check không chứng nhận chất lượng model hay toàn corpus. Lỗi runtime hiện tại hiển thị trong terminal đang chạy ứng dụng.
 
@@ -149,6 +160,12 @@ node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests
 Node 22 dùng cho test giao diện, không cần để chạy web; cài từ [Node.js](https://nodejs.org/en/download). Windows dùng `test_windows.ps1` và lệnh Node tương tự. CI [Team feature checks](https://github.com/ng-wngkh07/Assistant-Team06/actions/workflows/team-checks.yml) kiểm Python 3.12 Windows/Mac, demo, feature tests, test giao diện; Windows thêm PowerShell/installer DemoOnly. PR kiểm nhật ký mới. Job `ui_adapter` trên Ubuntu kiểm luồng Streamlit với phụ thuộc riêng ở `ui/requirements.txt`; không cần Streamlit để dùng Web UI chính.
 
 Đọc [CONTRIBUTING.md](CONTRIBUTING.md) để báo lỗi, tạo branch/PR và review; [quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md), [PDF](output/pdf/PHAN_CHIA_NHIEM_VU_DO_AN_NHOM.pdf) và [nhật ký](LICH_SU_DU_AN.md) ghi trách nhiệm/lịch sử. Đối chiếu checks và chính sách hiện hành trên PR trước khi merge. Nhóm vẫn cần review chéo và TV4 điều phối tích hợp; CI xanh không thay review hoặc nghiệm thu chức năng thật.
+
+[Kế hoạch cải tiến QA và tiêu chí kiểm định](docs/team/KE_HOACH_QA_COT_LOI_YC220.md)
+ưu tiên làm rõ câu hỏi, đối chiếu ý với nguồn và kiểm bằng mô hình thật;
+phân biệt nghiệm thu phần mềm với pilot học phần.
+
+[Rule Antigravity](docs/team/ANTIGRAVITY_PROJECT_RULE.md) và [quyền merge/vòng đời branch](docs/team/QUYEN_MERGE_VA_BRANCH.md) mô tả cách làm việc hiện tại. Main đã có rule chỉ owner cập nhật qua PR; giữ CI ở lớp bảo vệ riêng. Không tự xóa nhánh đang dùng.
 
 ## Giới hạn và giấy phép
 

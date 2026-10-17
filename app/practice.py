@@ -123,7 +123,8 @@ class PracticeService:
         prompt = re.sub(r"<\|[^<>\n]{1,80}\|>", lambda m: html.escape(m.group(0), quote=False), prompt)
         messages = [{"role": "user", "content": prompt}]
         system_prompt = "Bạn là trợ lý học tập bám sát tài liệu. Hãy tuân thủ định dạng dữ liệu được yêu cầu."
-        if model in (TRAINED_MODEL_NAME, "tam-ly-mlx", "mlx-3b"):
+        target_model = model or DEFAULT_CHAT_MODEL
+        if target_model in (TRAINED_MODEL_NAME, "qwen2.5-3b-4bit", "tam-ly-mlx", "mlx-3b", "local"):
             client = TrainedModelClient()
             result = client.chat_complete(
                 messages,
@@ -136,7 +137,7 @@ class PracticeService:
             return result
         result = self.ollama.chat_complete(
             messages,
-            model=model or DEFAULT_CHAT_MODEL,
+            model=target_model,
             temperature=0.0,
             num_predict=max_tokens,
             num_ctx=8192,

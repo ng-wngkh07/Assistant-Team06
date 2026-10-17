@@ -36,8 +36,15 @@ Codex kiểm độc lập trên macOS/Python 3.14.8 sau khi bên triển khai tr
   cây 313 file công khai không phát hiện secret theo rule của công cụ.
 - Liên kết local trong tài liệu đã sửa: không có đường dẫn thiếu.
 
-CI Python 3.12 Windows/macOS và job UI Ubuntu được đối chiếu trên
-[PR #35](https://github.com/ng-wngkh07/Assistant-Team06/pull/35) sau push.
+Đối chiếu CI trên commit `fa9d4c2` đã push vào
+[PR #35](https://github.com/ng-wngkh07/Assistant-Team06/pull/35): macOS/Python3.12
+**578 PASS/12 SKIP**, Windows/Python3.12 **576 PASS/14 SKIP** (thêm hai ca POSIX
+không áp dụng trên Windows), Node **27 PASS** mỗi nền tảng, Ubuntu AppTest
+**5 PASS**, history PASS. PowerShell/bộ cài demo Windows và pip check cũng PASS.
+[Run PR đã hoàn tất](https://github.com/ng-wngkh07/Assistant-Team06/actions/runs/38922811629).
+PR vẫn mở, chờ owner review/merge; protection giữ nguyên. Bản local giữ thêm
+YC217 chưa phát hành nên có64mục lịch sử, so với63 trong PR; đủ61ID main. Không
+commit lại chỉ để ghi kết quả CI này.
 Log chi tiết giữ local; không đưa dữ liệu cá nhân hoặc nội dung corpus riêng vào PR.
 Bộ môi trường local thiếu model mặc định cho profile demo; lệnh `check` không dùng
 `--require-model` nên PASS ở đây chỉ xác nhận môi trường portable, không phải QA readiness.

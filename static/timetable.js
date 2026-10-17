@@ -83,11 +83,15 @@ document.addEventListener("DOMContentLoaded", () => {
             if (fileInput.files && fileInput.files.length > 0) {
                 handleFile(fileInput.files[0]);
             }
+            fileInput.value = ""; // allow picking the same image again
         });
     }
 
     if (reuploadBtn && fileInput) {
-        reuploadBtn.addEventListener("click", () => fileInput.click());
+        reuploadBtn.addEventListener("click", () => {
+            fileInput.value = "";
+            fileInput.click();
+        });
     }
 
     function handleFile(file) {

@@ -1428,7 +1428,7 @@ body {
     cursor: pointer;
     transition: all 0.2s ease;
 }
-.timetable-dropzone:hover, .timetable-dropzone.dragover {
+.timetable-dropzone:hover, .timetable-dropzone.dragover, .timetable-dropzone.drag-over {
     border-color: var(--primary);
     background: var(--primary-light);
     box-shadow: 0 0 30px -10px rgba(244, 63, 94, 0.4);

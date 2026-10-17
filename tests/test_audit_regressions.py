@@ -172,3 +172,44 @@ def test_extraction_failure_preserves_previous_index(tmp_path, monkeypatch):
     assert snapshot(index) == before
     monkeypatch.setattr(PDFExtractor, 'extract_file', real_extract)
     assert index.index_all(embed_model=None)['indexed_files'] == 1
+
+
+def test_translator_handles_gpu_busy_gracefully(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from app.bilingual import LocalTranslator
+    from app.gpu_lock import GPUBusyError
+    @contextmanager
+    def fake_acquire():
+        raise GPUBusyError("GPU busy with training")
+        yield
+
+    monkeypatch.setattr("app.bilingual.gpu_coordinator.acquire_for_inference", fake_acquire)
+    translator = LocalTranslator(cache_path=tmp_path / "translations.db", model="qwen2.5:7b")
+    chunk = {
+        "safe_text": "The mind and body respond to trauma, and the response of the nervous system changes with experience and the environment."
+    }
+    result = translator.translate([chunk])
+    assert result == {}
+
+
+def test_vision_ocr_detects_length_truncation_and_keep_alive(monkeypatch):
+    from app.vision_ocr import VisionOCRManager
+    captured_payloads = []
+
+    class FakeResponse:
+        status_code = 200
+        def json(self):
+            return {"response": "Truncated code...", "done_reason": "length"}
+
+    def fake_post(url, json=None, **kwargs):
+        captured_payloads.append(json)
+        return FakeResponse()
+
+    monkeypatch.setattr("app.vision_ocr.requests.post", fake_post)
+    mgr = VisionOCRManager()
+    with pytest.raises(RuntimeError, match="giới hạn độ dài"):
+        mgr._ocr_ollama_vlm(b"fake image bytes")
+
+    assert len(captured_payloads) == 1
+    assert captured_payloads[0].get("keep_alive") == "0s"
+

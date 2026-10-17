@@ -21,6 +21,7 @@
 !/README_QUY_TAC.md
 !/LICH_SU_DU_AN.md
 !/DEFINITION_OF_DONE.md
+!/AGENT.md
 !/requirements-windows.txt
 !/pytest.windows.ini
 !/setup_windows.ps1
@@ -103,3 +104,20 @@ Thumbs.db
 /scripts/curate_v9_release.py
 /scripts/monitor_operations_smoke.py
 /scripts/codex_review_broad_answers.py
+
+# Chỉ chia sẻ rule project và backlog Lab 2; không mở cấu hình cá nhân.
+!/.agents/
+/.agents/*
+!/.agents/rules/
+/.agents/rules/*
+!/.agents/rules/study-agent.md
+!/lab02/
+/lab02/*
+!/lab02/backlog/
+/lab02/backlog/*
+!/lab02/backlog/issues.csv
+!/lab02/backlog/create_issues.py
+!/eval/
+/eval/*
+!/eval/cases.csv
+!/eval/run.py
