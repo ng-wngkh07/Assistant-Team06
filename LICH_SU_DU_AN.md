@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-17T21:30:00+07:00
+- Cập nhật: 2026-10-17T22:15:00+07:00
 - Mục mới nhất: **[LOG-20261017-eval-cases-issue26](#log-20261017-eval-cases-issue26)**.
-- Nhật ký chung có **65 mục**: 21 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 10 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 50 mã YC và 15 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
+- Nhật ký chung có **66 mục**: 22 môi trường/chức năng, 5 tổ chức/tài liệu, 4 phát hành/đồng bộ GitHub, 16 rà soát/nghiệm thu, 10 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 50 mã YC và 16 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh bộ đếm cũ thiếu LOG, ngày 16/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1197,6 +1197,16 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Trước/sau: Trước chưa có module tra cứu văn phòng hỗ trợ partial match; sau bổ sung `app/office_lookup.py`, dữ liệu mẫu công khai `data/offices.csv` và bộ kiểm thử `tests/test_office_lookup.py`.
 - Phần/file sửa: `.gitignore`, `data/offices.csv`, `app/office_lookup.py`, `tests/test_office_lookup.py`, `pytest.windows.ini`, `LICH_SU_DU_AN.md`.
 - Kiểm thử: `pytest tests/test_office_lookup.py tests/test_help.py tests/test_document_lookup.py` PASS; giữ nguyên 100% câu trả lời của `dialogue_intent` và `RAGAgent`.
+- Trạng thái: PASS.
+
+<a id="log-20261017-ai-issue24-tv4"></a>
+### LOG-20261017-ai-issue24-tv4 - 17/10/2026 20:20 (UTC+07)
+
+- Người thực hiện: TV4 / Antigravity; loại: đặc tả và định nghĩa giao diện dịch vụ AI cho LLM tương lai (Issue #24).
+- Mục tiêu: Viết tài liệu đặc tả `docs/ai-interface.md` (chữ ký hàm, cấu trúc đầu vào/đầu ra, phân loại lỗi, cơ chế dự phòng) và định nghĩa hợp đồng `AIServiceInterface` tại `app/ai_interface.py` kèm `MockAIService` và `LegacyClientAdapter`, chưa gọi thêm nhà cung cấp LLM mới.
+- Trước/sau: Trước chưa có `docs/ai-interface.md` và giao thức chuẩn cho tầng sinh văn bản; sau có đặc tả đầy đủ, kiểu dữ liệu bất biến `AIRequest`/`AIResponse`/`AIStreamChunk`, cây ngoại lệ `AIServiceError` và kiểm thử hợp đồng `tests/test_ai_interface.py`.
+- Phần/file sửa: `docs/ai-interface.md`, `app/ai_interface.py`, `tests/test_ai_interface.py`, `pytest.windows.ini`, `LICH_SU_DU_AN.md`.
+- Kiểm thử: `pytest tests/test_ai_interface.py` PASS; kiểm tra `scripts/check_history.py` PASS.
 - Trạng thái: PASS.
 
 <a id="log-20261017-eval-cases-issue26"></a>
