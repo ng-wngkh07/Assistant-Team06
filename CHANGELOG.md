@@ -11,6 +11,10 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Fixed
 
+- Regenerate citation repairs from admitted sources using JSON-safe formula notation, without copying a failed draft.
+- Extract image transcripts through a strict OCR response schema and reject uniform images as empty content. Keep unverified OCR outside training.
+- Reject quiz language drift and options that repeat another option with extra words. Show source evidence as the explanation.
+
 - Preserve multiplication dots in Unicode formulas instead of misclassifying them as legacy Vietnamese encoding.
 
 - Show a recoverable model error without exposing runtime tracebacks or local paths in chat.

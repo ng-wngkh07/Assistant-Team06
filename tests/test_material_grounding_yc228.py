@@ -355,3 +355,26 @@ def test_model_card_cannot_drop_the_number_of_equal_probability_outcomes():
 def test_model_card_answer_outside_its_source_is_rejected():
     result = StudyMaterialManager(Responses([], [card(back='An invented explanation')])).generate_materials_from_pages(source(), model='test-remote')
     assert result['generation']['flashcards'] == 'extractive_fallback'
+
+
+def test_model_choices_repeating_the_answer_with_extra_words_are_not_accepted():
+    ambiguous = question(choices={'A': 'Độ bất định trung bình',
+        'B': 'Độ bất định trung bình của biến ngẫu nhiên',
+        'C': 'Tốc độ', 'D': 'Khối lượng'})
+    result = StudyMaterialManager(Responses([ambiguous], [card()])).generate_materials_from_pages(source(), model='test-remote')
+    assert result['generation']['quiz'] == 'extractive_fallback'
+
+
+def test_quiz_explanation_uses_source_evidence_instead_of_unchecked_model_prose():
+    result = StudyMaterialManager(Responses([question(explanation='Invented claim about coin systems.')], [card()])).generate_materials_from_pages(source(), model='test-remote')
+    explanation = result['quiz'][0]['explanation']
+    assert 'Invented claim' not in explanation
+    assert TEXT in explanation
+
+
+def test_vietnamese_quiz_rejects_language_drift_across_question_and_choices():
+    drift = question(question='Entropy của một coin cân bằng có độ不确定量是多少？',
+        choices={'A': '1 bit', 'B': '0 bit', 'C': '2 bit', 'D': '不确定'})
+    result = StudyMaterialManager(Responses([drift], [card()])).generate_materials_from_pages(source(), model='test-remote')
+    assert result['generation']['quiz'] == 'extractive_fallback'
+    assert '不确定' not in str(result['quiz'])

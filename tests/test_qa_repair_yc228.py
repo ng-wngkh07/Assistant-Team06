@@ -5,7 +5,7 @@ from app.rag_agent import PsychologyAgent
 from test_study_agent_c_f_g import RecordingSearcher, NoTranslation, make_chunk
 
 
-def run(repair, raw=False, chunks=None, query="Entropy là gì?"):
+def run(repair, raw=False, chunks=None, query="Entropy là gì?", history=None):
     class Model:
         def __init__(self): self.calls = []
         def chat_stream(self, **kwargs):
@@ -13,7 +13,7 @@ def run(repair, raw=False, chunks=None, query="Entropy là gì?"):
             yield 'Entropy đo độ bất định trung bình.' if len(self.calls) == 1 else (repair if raw else json.dumps(repair, ensure_ascii=False))
     model = Model()
     agent = PsychologyAgent(searcher=RecordingSearcher(chunks or [make_chunk('Entropy đo độ bất định trung bình của biến ngẫu nhiên.')]), ollama=model, translator=NoTranslation())
-    result = agent.process_query_sync(query, model='test', embed_model=None, processing_level='standard', isolate_context=True)
+    result = agent.process_query_sync(query, model='test', embed_model=None, processing_level='standard', isolate_context=history is None, chat_history=history)
     return result, model.calls
 
 
@@ -239,3 +239,40 @@ def test_model_failures_do_not_expose_runtime_paths_or_tracebacks(repair):
     assert error['response_kind'] == 'technical_error'
     assert error['code'] == 'model_unavailable'
     assert all(s not in json.dumps(error) for s in ('Traceback', '/private/user', 'API_KEY'))
+
+
+def test_formula_repair_requests_json_safe_notation_and_preserves_formula():
+    text = 'Suất điện động cảm ứng: e_c = - ΔΦ / Δt.'
+    result, calls = run({'claims': [{'text': text, 'source_ids': ['S1']}]},
+                        chunks=[make_chunk(text)], query='Phát biểu định luật Faraday')
+    assert result['response_kind'] == 'answer'
+    assert result['citations'][0]['claims'] == [text]
+    assert 'Unicode' in calls[1]['system_prompt']
+    assert 'LaTeX' in calls[1]['system_prompt']
+
+
+def test_formula_with_unescaped_latex_is_rejected_without_guessing_sources():
+    payload = r'{"claims":[{"text":"e_c = - \frac{\Delta \Phi}{\Delta t}","source_ids":["S1"]}]}'
+    result, calls = run(payload, raw=True)
+    assert result['response_kind'] == 'generation_failed'
+    assert not result['citations']
+    assert len(calls) == 2
+
+
+def test_repair_retains_the_resolved_followup_subject_without_failed_draft():
+    text = 'Định lý Bayes yêu cầu P(B)>0.'
+    result, calls = run({'claims': [{'text': text, 'source_ids': ['S1']}]},
+        chunks=[make_chunk(text)], query='công thức này áp dụng khi nào?',
+        history=[{'role': 'user', 'content': 'Định lý Bayes là gì?'}])
+    assert result['response_kind'] == 'answer'
+    content = calls[1]['messages'][0]['content']
+    assert 'Bayes' in content.split('<user_query>')[-1].split('</user_query>')[0]
+    assert 'Entropy đo độ bất định trung bình.' not in content
+
+
+def test_repair_with_extra_closing_brace_still_fails_closed():
+    payload = '{"claims":[{"text":"Định lý Bayes yêu cầu P(B)>0.","source_ids":["S1"]}]}}'
+    result, calls = run(payload, raw=True)
+    assert result['response_kind'] == 'generation_failed'
+    assert not result['citations']
+    assert len(calls) == 2
