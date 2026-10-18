@@ -4,6 +4,10 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ## Unreleased
 
+### Added
+
+- Scan Python, JavaScript, GitHub Actions and the standalone Apple Vision Swift helper with CodeQL; compile the helper explicitly on macOS.
+
 ### Changed
 
 - Reorganize public documentation in English around product usage, setup, architecture, testing and maintenance. Remove internal allocation and submission records from public guides.
@@ -27,6 +31,7 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 - Reject unreadable image uploads without turning metadata into study content. Validate generated material against the exact source and page.
 - Preserve conditions in flashcards by hiding a source phrase in its original passage. Label model generation and extractive fallback separately.
 - Check local working changes during changelog validation and preserve references when migrating historical records.
+- Run Codacy Bandit security analysis for Python without requiring remote tool configuration; pin the CLI image and fixed UTF-8 reader for SARIF generation, bound scan duration, fail incomplete analysis and upload SARIF reports with the current CodeQL upload action.
 
 ## 2026-10-18
 
