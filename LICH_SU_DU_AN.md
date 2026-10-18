@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-18T10:20:00+07:00
-- Mục mới nhất: **[LOG-20261018-chat-attachment-canvas-viewer](#log-20261018-chat-attachment-canvas-viewer)**.
-- Nhật ký chung có **83 mục**: 31 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 59 mã YC và 24 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 18/10/2026.
+- Cập nhật: 2026-10-18T10:45:00+07:00
+- Mục mới nhất: **[LOG-20261018-docx-extraction-grounded-qa](#log-20261018-docx-extraction-grounded-qa)**.
+- Nhật ký chung có **84 mục**: 32 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 59 mã YC và 25 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 18/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1648,4 +1648,31 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Trạng thái: PASS.
 - Giới hạn, lỗi còn lại, bước tiếp: Đẩy commit lên branch `main` và thông báo tới người dùng.
 
+<a id="log-20261018-docx-extraction-grounded-qa"></a>
+### LOG-20261018-docx-extraction-grounded-qa - 18/10/2026 10:45 (UTC+07)
 
+- Người thực hiện: Antigravity; loại: sửa lỗi trích xuất tài liệu DOCX theo cấu trúc phân cấp, hiển thị bảng biểu và hỏi đáp ngữ cảnh cô lập theo tài liệu tải lên.
+- Mục tiêu:
+  + Khắc phục triệt để lỗi tài liệu DOCX (`On_Tap_Hoa_Hoc_12.docx`) bị phân mảnh nghiêm trọng thành 67 "trang" rời rạc, mỗi dòng văn bản đơn lẻ biến thành một trang; bảo toàn đầy đủ cấu trúc phân cấp (Tiêu đề, Heading 1/2/3, danh sách đầu dòng, khung chú thích) và cấu trúc bảng đa cột dưới định dạng Markdown bảng. Phân trang tự nhiên gắn kết (~1200 - 2200 ký tự hoặc theo mốc phân mục lớn), tạo thành đúng 3 trang liền mạch chuẩn Canvas (khớp Ảnh 2 thay vì lỗi ở Ảnh 1).
+  + Khắc phục triệt để lỗi hỏi đáp tài liệu đính kèm bị lạc đề sang kho dữ liệu toàn cục (Vật lý nhiệt, Tâm lý học, Công nghệ sinh học khi hỏi tóm tắt tệp Hoá học - Ảnh 3): Đảm bảo khi truy vấn có tài liệu đính kèm (`source_document_id` / `attachment_filename`), luồng RAG cô lập 100% không gian tìm kiếm trong tệp đó, không trộn lẫn các môn học khác.
+  + Duy trì ngữ cảnh tài liệu qua nhiều lượt hỏi đáp (multi-turn follow-up): Lưu giữ `sessionActiveAttachment` ở client và kế thừa `document_id` từ phiên trò chuyện ở server để người dùng tiếp tục đặt các câu hỏi tiếp nối về tài liệu mà không bị mất phạm vi.
+- Trước/sau thay đổi:
+  + Trước: `extract_docx` lặp từng đoạn thô và ô bảng, gán `total_pages = len(paras)`, biến 35 đoạn + 32 ô bảng thành 67 trang cắt vụn; bảng biểu bị trải phẳng thành các dòng rời rạc không thể đọc. Phía client gửi nhầm thuộc tính `material.doc_id` dẫn tới thiếu `source_document_id`; server fallback tìm kiếm toàn thư viện và LLM bị rò rỉ ngữ cảnh kiến thức môn khác.
+  + Sau: `extract_docx` dùng `python-docx` đọc tuần tự theo trật tự trực quan các phần tử khối XML (`w:p`, `w:tbl`), chuyển bảng thành Markdown table, nhận diện tiêu đề/callout và gom trang đọc tự nhiên đúng 3 trang (Trang 1: 1.148 ký tự, Trang 2: 1.517 ký tự, Trang 3: 1.173 ký tự). Client gửi chuẩn `source_document_id`, lưu ngữ cảnh phiên; server cô lập truy xuất chỉ trong tài liệu được chỉ định; Agent tóm tắt và trả lời chính xác kiến thức Ester, Lipid, Carbohydrate, Hợp chất chứa Nitơ, Polyme.
+- Phần/file sửa:
+  + `app/pdf_extractor.py`: Viết lại `extract_docx` với kiểm tra ZIP magic bytes, đọc cấu trúc phân cấp XML theo thứ tự thân tài liệu, trích xuất bảng biểu markdown đa cột, gom trang tự nhiên theo ngữ nghĩa.
+  + `static/app.js`: Cập nhật `formatCanvasBlock` hỗ trợ hiển thị bảng biểu markdown (`.canvas-table-wrapper`, `.canvas-table`), tiêu đề `#` và callout; sửa `sessionActiveAttachment` duy trì ngữ cảnh tài liệu qua các lượt hỏi tiếp nối.
+  + `static/style.css`: Thêm kiểu hiển thị bảng phẳng (zero gradient) cho Canvas viewer (`.canvas-table`, `th`, `td`).
+  + `app/server.py`: Kế thừa `document_id` và `attachment_filename` từ lịch sử phiên hiện tại khi người dùng hỏi các câu hỏi tiếp nối.
+  + `app/rag_agent.py`: Cô lập tuyệt đối tập đoạn trích truy xuất theo `source_document_id`, mở rộng truy xuất tổng quan cho câu hỏi tóm tắt tệp và cập nhật thông báo giới hạn dữ liệu rõ ràng.
+  + `tests/test_study_materials.py`: Bổ sung 4 ca kiểm thử chuyên sâu: `test_extract_docx_hierarchical_structure_and_tables`, `test_extract_docx_edge_cases`, `test_chat_immediate_qa_docx_chemistry_summary_and_specific`, `test_chat_multiturn_followup_preserves_document_context`.
+  + `tests/fixtures/documents/On_Tap_Hoa_Hoc_12.docx`: Lưu tệp mẫu thực tế làm fixture kiểm thử.
+  + `LICH_SU_DU_AN.md`: Cập nhật nhật ký phát triển.
+- Kiểm thử phần mềm:
+  + `pytest tests/test_study_materials.py`: PASS (21 passed).
+  + `pytest tests/test_learning_tools_ui_contract.py`: PASS (6 passed).
+  + `node --test tests/chat_lifecycle_ui_yc206.test.cjs tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs`: PASS (28 passed).
+  + `Get-ChildItem static\style.css | Select-String "gradient\("`: Không có gradient (tuân thủ thiết kế phẳng).
+  + `python scripts/check_history.py --base origin/main`: PASS.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, bước tiếp: Đẩy commit và push lên nhánh `feat/chat-attachment-canvas-viewer`.

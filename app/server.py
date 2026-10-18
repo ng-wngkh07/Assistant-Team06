@@ -516,6 +516,16 @@ def requested_source_scope(req):
         found = document_lookup.document_by_filename(req.attachment_filename)
         if found:
             source_doc_id = found["id"]
+    if source_doc_id is None and getattr(req, "session_id", None):
+        sess = history_store.get_session(req.session_id)
+        if sess and sess.get("turns"):
+            for turn in reversed(sess["turns"]):
+                scope = turn.get("search_scope") or {}
+                if scope.get("document_id") or scope.get("attachment_filename"):
+                    source_doc_id = scope.get("document_id")
+                    if not getattr(req, "attachment_filename", None):
+                        req.attachment_filename = scope.get("attachment_filename")
+                    break
     if source_doc_id is None:
         return None, None
     doc = document_lookup.document(source_doc_id)

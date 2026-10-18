@@ -327,38 +327,173 @@ class PDFExtractor:
 
     @classmethod
     def extract_docx(cls, filepath: Path) -> PDFExtractionResult:
-        """Extract text from DOCX file using built-in zipfile and XML parser."""
-        result = PDFExtractionResult(filename=filepath.name, filepath=filepath, doc_type="docx", unit_name="đoạn")
+        """Extract text from DOCX preserving document hierarchy (headings, tables, callouts, lists) and cohesive pages."""
+        result = PDFExtractionResult(filename=filepath.name, filepath=filepath, doc_type="docx", unit_name="trang")
         try:
-            result.file_size_bytes = filepath.stat().st_size
-            result.file_hash = cls.calculate_file_hash(filepath)
-            with zipfile.ZipFile(filepath) as z:
-                xml_content = z.read("word/document.xml")
-            root = ET.fromstring(xml_content)
-            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-            paras = []
-            for p in root.iterfind(".//w:p", ns):
-                texts = [node.text for node in p.iterfind(".//w:t", ns) if node.text]
-                if texts:
-                    clean_para = normalize_vietnamese_text("".join(texts))
-                    if clean_para.strip():
-                        paras.append(clean_para.strip())
+            if not filepath.exists() or not filepath.is_file():
+                result.error_message = "Không tìm thấy tệp DOCX."
+                return result
 
-            result.total_pages = len(paras)
-            for idx, para in enumerate(paras, 1):
-                result.total_chars += len(para)
-                result.extracted_pages.append({
-                    "page_num": idx,
-                    "text": para,
-                    "raw_text": para,
-                    "raw_capture": {"raw_text": para, "char_count": len(para), "has_text": True},
-                    "blocks": [{"block_id": f"p{idx}_b0", "bbox": [0, 0, 0, 0], "type": "prose", "text": para}],
+            file_size = filepath.stat().st_size
+            result.file_size_bytes = file_size
+            if file_size == 0:
+                result.error_message = "Tệp DOCX rỗng (0 bytes)."
+                return result
+
+            result.file_hash = cls.calculate_file_hash(filepath)
+
+            # Magic bytes check for ZIP (PK\x03\x04)
+            with open(filepath, "rb") as f:
+                header = f.read(4)
+            if not header.startswith(b"PK\x03\x04"):
+                result.error_message = "Tệp không phải định dạng DOCX hợp lệ (thiếu chữ ký ZIP PK)."
+                return result
+
+            # Verify it contains word/document.xml
+            with zipfile.ZipFile(filepath) as z:
+                namelist = set(z.namelist())
+                if "word/document.xml" not in namelist:
+                    result.error_message = "Tệp DOCX không hợp lệ (thiếu word/document.xml)."
+                    return result
+
+            # Read document elements in body order using python-docx
+            import docx
+            from docx.text.paragraph import Paragraph
+            from docx.table import Table
+
+            doc = docx.Document(filepath)
+
+            pages = []
+            current_blocks = []
+            current_text_parts = []
+            current_chars = 0
+
+            def flush_page():
+                nonlocal current_blocks, current_text_parts, current_chars
+                if not current_blocks:
+                    return
+                p_num = len(pages) + 1
+                page_text = "\n\n".join(current_text_parts).strip()
+                pages.append({
+                    "page_num": p_num,
+                    "text": page_text,
+                    "raw_text": page_text,
+                    "raw_capture": {"raw_text": page_text, "char_count": current_chars, "has_text": bool(page_text)},
+                    "blocks": list(current_blocks),
                     "quality_warnings": [],
                     "needs_review": False,
-                    "char_count": len(para),
-                    "has_text": True,
-                    "unit_type": "đoạn"
+                    "char_count": current_chars,
+                    "has_text": bool(page_text),
+                    "unit_type": "trang"
                 })
+                current_blocks = []
+                current_text_parts = []
+                current_chars = 0
+
+            for child in doc.element.body:
+                tag = child.tag
+                if tag.endswith("p"):
+                    p = Paragraph(child, doc)
+                    raw_text = normalize_vietnamese_text(p.text or "").strip()
+                    if not raw_text:
+                        continue
+
+                    # Check for explicit page breaks in XML
+                    has_hard_page_break = any(
+                        br.attrib.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type") == "page"
+                        for br in child.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}br")
+                    ) or any(child.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}lastRenderedPageBreak"))
+
+                    style_name = (p.style.name if p.style else "").lower()
+                    is_title = "title" in style_name
+                    is_h1 = "heading 1" in style_name or bool(re.match(r"^(?:chủ đề|chương|bài|phần)\s+\d+", raw_text, re.I))
+                    is_h2 = "heading 2" in style_name or bool(re.match(r"^\d+\.\s+[A-ZÀ-Ỹ]", raw_text))
+                    is_h3 = "heading 3" in style_name
+                    is_bullet = (
+                        "list" in style_name
+                        or "bullet" in style_name
+                        or raw_text.startswith(("•", "-", "*"))
+                        or any(child.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}numPr"))
+                    )
+
+                    # Logical pagination: break if hard break, or major section with enough content (>= 1000 chars), or page exceeds 2200 chars
+                    if (has_hard_page_break or (is_h1 and current_chars >= 1000) or current_chars >= 2200) and current_blocks:
+                        flush_page()
+
+                    if is_title:
+                        fmt_text = f"# {raw_text}"
+                        b_type = "heading"
+                    elif is_h1:
+                        fmt_text = f"## {raw_text}"
+                        b_type = "heading"
+                    elif is_h2:
+                        fmt_text = f"### {raw_text}"
+                        b_type = "heading"
+                    elif is_h3:
+                        fmt_text = f"#### {raw_text}"
+                        b_type = "heading"
+                    elif is_bullet:
+                        clean_item = raw_text.lstrip("•-* ").strip()
+                        fmt_text = f"• {clean_item}"
+                        b_type = "list"
+                    else:
+                        fmt_text = raw_text
+                        b_type = "prose"
+
+                    current_blocks.append({
+                        "block_id": f"p{len(pages)+1}_b{len(current_blocks)}",
+                        "type": b_type,
+                        "text": fmt_text,
+                    })
+                    current_text_parts.append(fmt_text)
+                    current_chars += len(fmt_text)
+
+                elif tag.endswith("tbl"):
+                    t = Table(child, doc)
+                    is_callout = (len(t.rows) == 1 and len(t.columns) == 1)
+                    if is_callout:
+                        cell_text = normalize_vietnamese_text(t.rows[0].cells[0].text or "").strip()
+                        if not cell_text:
+                            continue
+                        current_blocks.append({
+                            "block_id": f"p{len(pages)+1}_b{len(current_blocks)}",
+                            "type": "callout",
+                            "text": cell_text,
+                        })
+                        current_text_parts.append(cell_text)
+                        current_chars += len(cell_text)
+                    else:
+                        rows_data = []
+                        for r in t.rows:
+                            row_cells = [normalize_vietnamese_text(c.text or "").strip().replace("\n", " ") for c in r.cells]
+                            rows_data.append(row_cells)
+                        if not rows_data:
+                            continue
+                        headers = rows_data[0]
+                        md_lines = ["| " + " | ".join(headers) + " |"]
+                        md_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+                        for r in rows_data[1:]:
+                            r_cells = r[:len(headers)] + [""] * max(0, len(headers) - len(r))
+                            md_lines.append("| " + " | ".join(r_cells) + " |")
+                        md_table = "\n".join(md_lines)
+                        current_blocks.append({
+                            "block_id": f"p{len(pages)+1}_b{len(current_blocks)}",
+                            "type": "table",
+                            "text": md_table,
+                            "table_data": rows_data,
+                        })
+                        current_text_parts.append(md_table)
+                        current_chars += len(md_table)
+
+            flush_page()
+
+            if not pages:
+                result.error_message = "Tài liệu DOCX không chứa văn bản có thể trích xuất."
+                return result
+
+            result.total_pages = len(pages)
+            result.extracted_pages = pages
+            result.total_chars = sum(p["char_count"] for p in pages)
         except Exception as e:
             result.error_message = f"Lỗi đọc tài liệu DOCX: {e}"
         return result

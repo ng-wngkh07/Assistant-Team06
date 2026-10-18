@@ -4,10 +4,12 @@ Covers validation, extraction, grounding, fallback generation, and API endpoints
 """
 
 import base64
+from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
 from app.server import app
+from app.pdf_extractor import PDFExtractor
 from app.study_materials import (
     StudyMaterialManager,
     StudyMaterialError,
@@ -495,6 +497,181 @@ def test_chat_immediate_query_with_attachment(client, tmp_path, monkeypatch):
     assert len(data.get("citations", [])) >= 1
     assert "On_Tap_Vat_Ly_12" in data["citations"][0]["filename"]
     assert "Vật lý nhiệt" in data["answer"] or "VẬT LÝ" in data["answer"]
+
+
+def test_extract_docx_hierarchical_structure_and_tables():
+    fixture_path = Path(__file__).parent / "fixtures" / "documents" / "On_Tap_Hoa_Hoc_12.docx"
+    res = PDFExtractor.extract_docx(fixture_path)
+    assert res.error_message is None
+    # Must NOT fragment into 67 single-line pages! Must be 3 cohesive pages.
+    assert res.total_pages == 3
+    assert res.total_chars >= 3500
+    assert res.unit_name == "trang"
+
+    # Check Page 1 has Ester & Lipid & Callout
+    p1 = res.extracted_pages[0]
+    assert p1["page_num"] == 1
+    assert "ESTER - LIPID - XÀ PHÒNG" in p1["text"]
+    assert any(b["type"] == "callout" for b in p1["blocks"])
+
+    # Check Page 2 has Carbohydrates & Table
+    p2 = res.extracted_pages[1]
+    assert p2["page_num"] == 2
+    assert "CARBOHYDRATE" in p2["text"]
+    table_blocks = [b for b in p2["blocks"] if b["type"] == "table"]
+    assert len(table_blocks) >= 1
+    assert "Monosaccharide" in table_blocks[0]["text"]
+    assert "Disaccharide" in table_blocks[0]["text"]
+
+    # Check Page 3 has Polymer & Kim loại
+    p3 = res.extracted_pages[2]
+    assert p3["page_num"] == 3
+    assert "POLYMER" in p3["text"]
+    assert "KIM LOẠI" in p3["text"]
+
+
+def test_extract_docx_edge_cases(tmp_path):
+    import zipfile
+
+    # 1. Empty file
+    empty_f = tmp_path / "empty.docx"
+    empty_f.write_bytes(b"")
+    res1 = PDFExtractor.extract_docx(empty_f)
+    assert "rỗng" in (res1.error_message or "").lower()
+
+    # 2. Corrupt non-zip file
+    corrupt_f = tmp_path / "corrupt.docx"
+    corrupt_f.write_bytes(b"Plain text disguised as docx")
+    res2 = PDFExtractor.extract_docx(corrupt_f)
+    assert "hợp lệ" in (res2.error_message or "").lower()
+
+    # 3. Zip file without word/document.xml
+    fake_zip = tmp_path / "fake.docx"
+    with zipfile.ZipFile(fake_zip, "w") as z:
+        z.writestr("notes.txt", "hello")
+    res3 = PDFExtractor.extract_docx(fake_zip)
+    assert "word/document.xml" in (res3.error_message or "")
+
+
+def test_chat_immediate_qa_docx_chemistry_summary_and_specific(client, tmp_path, monkeypatch):
+    import app.config as cfg
+    from app.ollama_client import OllamaClient
+
+    temp_src = tmp_path / "src"
+    temp_db = tmp_path / "knowledge_base.db"
+    monkeypatch.setattr(cfg, "SRC_DIR", temp_src)
+    monkeypatch.setattr(cfg, "DB_PATH", temp_db)
+
+    # 1. Upload On_Tap_Hoa_Hoc_12.docx
+    fixture_path = Path(__file__).parent / "fixtures" / "documents" / "On_Tap_Hoa_Hoc_12.docx"
+    raw_bytes = fixture_path.read_bytes()
+    b64 = base64.b64encode(raw_bytes).decode("ascii")
+
+    res = client.post("/api/materials/upload", json={
+        "filename": "On_Tap_Hoa_Hoc_12.docx",
+        "file_base64": b64,
+        "generate_study_set": False,
+        "persist_to_src": True,
+    })
+    assert res.status_code == 200
+    material = res.json()["material"]
+    assert material["total_pages"] == 3
+
+    # 2. Ask summary query: "tóm tắt nội dung có trong file"
+    mock_summary_response = [
+        "TỔNG HỢP NỘI DUNG ÔN TẬP HÓA HỌC 12 [S1]\n\n"
+        "Tài liệu bao gồm 5 chủ đề trọng tâm:\n"
+        "1. Ester - Lipid - Xà phòng [S1]\n"
+        "2. Carbohydrate (Glucose, Fructose, Saccharose, Tinh bột, Cellulose) [S2]\n"
+        "3. Hợp chất chứa Nitrogen (Amine, Amino acid, Peptide, Protein) [S2]\n"
+        "4. Polymer và mạng lưới tổng hợp [S3]\n"
+        "5. Đại cương kim loại và dãy điện hóa [S3]"
+    ]
+
+    def fake_chat_stream_summary(self, *args, **kwargs):
+        self.last_done_reason = "stop"
+        for part in mock_summary_response:
+            yield part
+
+    monkeypatch.setattr(OllamaClient, "chat_stream", fake_chat_stream_summary)
+
+    chat_res = client.post("/api/chat", json={
+        "query": "tóm tắt nội dung có trong file",
+        "attachment_filename": "On_Tap_Hoa_Hoc_12.docx",
+        "save_history": False,
+    })
+    assert chat_res.status_code == 200
+    data = chat_res.json()
+    assert len(data.get("citations", [])) >= 1
+    # Must only cite On_Tap_Hoa_Hoc_12.docx
+    for cit in data["citations"]:
+        assert "On_Tap_Hoa_Hoc_12" in cit["filename"]
+    assert "Ester" in data["answer"] or "HÓA HỌC" in data["answer"]
+
+
+def test_chat_multiturn_followup_preserves_document_context(client, tmp_path, monkeypatch):
+    import app.config as cfg
+    from app.ollama_client import OllamaClient
+
+    temp_src = tmp_path / "src"
+    temp_db = tmp_path / "knowledge_base.db"
+    monkeypatch.setattr(cfg, "SRC_DIR", temp_src)
+    monkeypatch.setattr(cfg, "DB_PATH", temp_db)
+
+    # 1. Upload On_Tap_Hoa_Hoc_12.docx
+    fixture_path = Path(__file__).parent / "fixtures" / "documents" / "On_Tap_Hoa_Hoc_12.docx"
+    raw_bytes = fixture_path.read_bytes()
+    b64 = base64.b64encode(raw_bytes).decode("ascii")
+
+    upload_res = client.post("/api/materials/upload", json={
+        "filename": "On_Tap_Hoa_Hoc_12.docx",
+        "file_base64": b64,
+        "generate_study_set": False,
+        "persist_to_src": True,
+    })
+    assert upload_res.status_code == 200
+
+    # 2. Turn 1 with attachment
+    sess_res = client.post("/api/sessions", json={})
+    assert sess_res.status_code == 200
+    session_id = sess_res.json()["id"]
+
+    mock_turn1 = ["Ester no đơn chức có công thức CnH2nO2 (n >= 2) [S1]."]
+    def fake_stream1(self, *args, **kwargs):
+        self.last_done_reason = "stop"
+        for p in mock_turn1:
+            yield p
+
+    monkeypatch.setattr(OllamaClient, "chat_stream", fake_stream1)
+
+    res1 = client.post("/api/chat", json={
+        "query": "Ester là gì?",
+        "attachment_filename": "On_Tap_Hoa_Hoc_12.docx",
+        "session_id": session_id,
+        "save_history": True,
+    })
+    assert res1.status_code == 200
+    assert len(res1.json().get("citations", [])) >= 1
+
+    # 3. Turn 2 (Follow-up WITHOUT passing attachment_filename explicitly)
+    mock_turn2 = ["Phản ứng xà phòng hóa là thủy phân trong môi trường kiềm tạo muối và alcohol [S1]."]
+    def fake_stream2(self, *args, **kwargs):
+        self.last_done_reason = "stop"
+        for p in mock_turn2:
+            yield p
+
+    monkeypatch.setattr(OllamaClient, "chat_stream", fake_stream2)
+
+    res2 = client.post("/api/chat", json={
+        "query": "Phản ứng xà phòng hóa diễn ra như thế nào?",
+        "session_id": session_id,
+        "save_history": True,
+    })
+    assert res2.status_code == 200
+    data2 = res2.json()
+    assert len(data2.get("citations", [])) >= 1
+    assert "On_Tap_Hoa_Hoc_12" in data2["citations"][0]["filename"]
+
 
 
 

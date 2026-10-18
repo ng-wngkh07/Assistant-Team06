@@ -541,11 +541,17 @@ document.addEventListener("DOMContentLoaded", () => {
         const qaPanel = document.getElementById("qa-panel");
         if (qaPanel) qaPanel.classList.remove("welcome-mode");
 
-        // Check for attached document from active attachments
+        // Check for attached document from active attachments or current session context
         let activeAttachment = null;
         if (typeof attachmentPreviewRegistry !== "undefined" && attachmentPreviewRegistry && attachmentPreviewRegistry.size > 0) {
             const allAttached = Array.from(attachmentPreviewRegistry.values());
             activeAttachment = currentInspectedAttachment || allAttached[allAttached.length - 1];
+        }
+        if (!activeAttachment && window.sessionActiveAttachment) {
+            activeAttachment = window.sessionActiveAttachment;
+        }
+        if (activeAttachment) {
+            window.sessionActiveAttachment = activeAttachment;
         }
 
         // Append User Message with attachment pill
@@ -600,8 +606,9 @@ document.addEventListener("DOMContentLoaded", () => {
             };
             if (activeAttachment && activeAttachment.filename) {
                 reqBody.attachment_filename = activeAttachment.filename;
-                if (activeAttachment.material?.doc_id && !selectedSourcePage) {
-                    reqBody.source_document_id = activeAttachment.material.doc_id;
+                const dId = activeAttachment.doc_id || activeAttachment.material?.doc_id || activeAttachment.id;
+                if (dId && !selectedSourcePage) {
+                    reqBody.source_document_id = dId;
                 }
             }
             if (selectedSourcePage) {
@@ -1044,6 +1051,7 @@ document.addEventListener("DOMContentLoaded", () => {
         currentSessionId = null;
         sessionStorage.removeItem("active_session_id");
         clientChatHistory = [];
+        window.sessionActiveAttachment = null;
         renderResumeControls(null);
         clearSourceScope();
         if (sessionActiveTitle) sessionActiveTitle.textContent = "Cuộc trò chuyện";
@@ -2068,8 +2076,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     function formatCanvasBlock(text, pageNum, isFirstPage, filterQuery = "") {
-        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-        if (!lines.length) return "";
+        const rawLines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        if (!rawLines.length) return "";
 
         let html = "";
         if (!isFirstPage) {
@@ -2077,48 +2085,98 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         const highlight = (str) => {
-            if (!filterQuery) return escapeHtml(str);
+            let escaped = escapeHtml(str);
+            escaped = escaped.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            if (!filterQuery) return escaped;
             const safeQ = filterQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             const re = new RegExp(`(${safeQ})`, "gi");
-            return escapeHtml(str).replace(re, '<mark class="canvas-mark">$1</mark>');
+            return escaped.replace(re, '<mark class="canvas-mark">$1</mark>');
         };
 
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
+        for (let i = 0; i < rawLines.length; i++) {
+            const line = rawLines[i];
 
-            // 1. Detect Main Document Title (H1) on first page
+            // 1. Detect Markdown Table
+            if (line.startsWith("|") && line.endsWith("|")) {
+                const tableLines = [];
+                while (i < rawLines.length && rawLines[i].startsWith("|") && rawLines[i].endsWith("|")) {
+                    tableLines.push(rawLines[i]);
+                    i++;
+                }
+                i--; // Step back after loop
+                if (tableLines.length >= 2) {
+                    const parseRow = l => l.replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+                    const headers = parseRow(tableLines[0]);
+                    const bodyRows = tableLines.slice(2).map(parseRow);
+                    let tbl = '<div class="canvas-table-wrapper"><table class="canvas-table"><thead><tr>';
+                    headers.forEach(h => { tbl += `<th>${highlight(h)}</th>`; });
+                    tbl += '</tr></thead><tbody>';
+                    bodyRows.forEach(r => {
+                        tbl += '<tr>';
+                        r.forEach((c, idx) => {
+                            if (idx < headers.length) {
+                                tbl += `<td>${highlight(c)}</td>`;
+                            }
+                        });
+                        tbl += '</tr>';
+                    });
+                    tbl += '</tbody></table></div>';
+                    html += tbl;
+                    continue;
+                }
+            }
+
+            // 2. Markdown Headings
+            if (line.startsWith("# ")) {
+                html += `<h1 class="canvas-h1">${highlight(line.slice(2))}</h1>`;
+                continue;
+            }
+            if (line.startsWith("## ")) {
+                html += `<h2 class="canvas-h2">${highlight(line.slice(3))}</h2>`;
+                continue;
+            }
+            if (line.startsWith("### ")) {
+                html += `<h3 class="canvas-h3">${highlight(line.slice(4))}</h3>`;
+                continue;
+            }
+            if (line.startsWith("#### ")) {
+                html += `<h4 class="canvas-h3" style="font-size: 14.5px;">${highlight(line.slice(5))}</h4>`;
+                continue;
+            }
+
+            // 3. Detect Main Document Title (H1) on first page
             if (isFirstPage && i === 0 && (line.length < 90 || line === line.toUpperCase())) {
                 html += `<h1 class="canvas-h1">${highlight(line)}</h1>`;
                 continue;
             }
 
-            // 2. Detect Subtitle
+            // 4. Detect Subtitle
             if (isFirstPage && (i === 1 || i === 2) && (line.toLowerCase().startsWith("tóm tắt") || line.toLowerCase().startsWith("hệ thống") || line.toLowerCase().startsWith("chủ biên"))) {
                 html += `<div class="canvas-subtitle">${highlight(line)}</div>`;
                 continue;
             }
 
-            // 3. Detect Major Sections (H2: CHỦ ĐỀ, CHƯƠNG, BÀI, PHẦN)
+            // 5. Detect Major Sections (H2: CHỦ ĐỀ, CHƯƠNG, BÀI, PHẦN)
             if (/^(?:chủ\s*đề|chương|phần|bài)\s*\d+/i.test(line) || (line.length < 80 && line === line.toUpperCase() && !line.startsWith("-"))) {
                 html += `<h2 class="canvas-h2">${highlight(line)}</h2>`;
                 continue;
             }
 
-            // 4. Detect Subsections (H3: 1., 2., A., I.)
+            // 6. Detect Subsections (H3: 1., 2., A., I.)
             if (/^(?:\d+|[A-Z]|[I|V|X]+)\.\s+/.test(line)) {
                 html += `<h3 class="canvas-h3">${highlight(line)}</h3>`;
                 continue;
             }
 
-            // 5. Detect Bullet items
+            // 7. Detect Bullet items
             if (/^[•\-\*\+]\s+/.test(line)) {
                 const cleanContent = line.replace(/^[•\-\*\+]\s+/, "");
                 html += `<div class="canvas-bullet-line"><span class="canvas-bullet-dot">•</span><span class="canvas-bullet-text">${highlight(cleanContent)}</span></div>`;
                 continue;
             }
 
-            // 6. Detect Formula / Callout Box
-            if (/^(?:định luật|công thức|quy ước|lưu ý|chú ý|định nghĩa|nguyên lý)/i.test(line)) {
+            // 8. Detect Formula / Callout Box
+            if (/^(?:định luật|công thức|quy ước|lưu ý|chú ý|định nghĩa|nguyên lý|phản ứng hóa học|đặc điểm trọng tâm|dãy điện hóa)/i.test(line)) {
                 html += `<div class="canvas-callout-box">${highlight(line)}</div>`;
                 continue;
             }
@@ -2131,7 +2189,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function renderDocumentContentPages(entry, filterQuery = "") {
         if (!docContentPagesList) return;
-        const pages = (entry && Array.isArray(entry.pages)) ? entry.pages : [];
+        const pages = (entry && Array.isArray(entry.pages))
+            ? entry.pages
+            : (entry && Array.isArray(entry.extracted_pages))
+            ? entry.extracted_pages
+            : [];
         const q = (filterQuery || "").toLowerCase().trim();
 
         const filteredPages = q
@@ -2409,23 +2471,33 @@ document.addEventListener("DOMContentLoaded", () => {
                 throw new Error(detailMsg);
             }
 
+            const attachedMaterial = {
+                ...(data.material || {}),
+                cardKey: previewKey,
+                filename: file.name,
+                doc_id: data.material?.doc_id,
+                total_pages: data.material?.total_pages || 1,
+            };
+            window.sessionActiveAttachment = attachedMaterial;
+
             upsertAttachmentPreviewCard({
                 cardKey: previewKey,
                 filename: file.name,
                 isImage: isImageFile,
                 imageDataUrl: isImageFile ? base64Data : "",
-                material: data.material,
+                material: attachedMaterial,
                 loading: false
             });
 
             fetchKnowledgeBaseStatus();
             syncGenerateButtonState();
 
+            const pagesCount = (data.material && data.material.total_pages) || 1;
             if (chatStatus) {
-                chatStatus.textContent = `✅ Đã thêm "${file.name}" vào nguồn dữ liệu học tập (src/). Bạn có thể vào tab "⚡ Trắc nghiệm & Flashcard" trong Công cụ học tập để tạo bài ôn luyện.`;
+                chatStatus.textContent = `✅ Sẵn sàng hỏi đáp: Đã nạp "${file.name}" (${pagesCount} trang). Bạn có thể đặt câu hỏi hoặc yêu cầu tóm tắt tài liệu ngay!`;
             }
             if (studyToolStatus) {
-                studyToolStatus.textContent = `✅ Đã nạp thành công "${file.name}" (${(data.material && data.material.total_pages) || 1} trang) vào nguồn dữ liệu học tập (src/). Nhấn nút "⚡ Tạo Trắc nghiệm & Flashcard" bên dưới để bắt đầu ôn luyện.`;
+                studyToolStatus.textContent = `✅ Đã nạp thành công "${file.name}" (${pagesCount} trang) vào nguồn học tập (src/). Sẵn sàng hỏi đáp và ôn luyện.`;
             }
         } catch (err) {
             removeAttachmentPreviewCard(previewKey);
