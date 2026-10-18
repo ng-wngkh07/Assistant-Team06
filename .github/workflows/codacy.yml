@@ -33,14 +33,23 @@ jobs:
       actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
     name: Codacy Security Scan
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 30
     steps:
       # Checkout the repository to the GitHub Actions runner
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Run the pinned official CLI image directly: the action wrapper does not
-      # forward Java encoding options, and this repository contains UTF-8 source.
+      # CLI 7.9.25 bundles better-files 3.8.0, whose BOM decoder can split
+      # valid UTF-8 characters at a read-buffer boundary (upstream issue #326).
+      # Replace only that container-local library with the fixed official jar.
+      - name: Download fixed UTF-8 reader
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            https://repo.maven.apache.org/maven2/com/github/pathikrit/better-files_2.12/3.9.2/better-files_2.12-3.9.2.jar \
+            --output "$RUNNER_TEMP/better-files.jar"
+          echo "65fc3f2e622d23d0e574f6b526a868e62b2e8d79d8b286018d7db3aa69244cff  $RUNNER_TEMP/better-files.jar" | sha256sum --check --strict
+
       # Findings are reported to GitHub; scanner/report failures remain fatal.
       - name: Run Codacy Bandit analysis
         shell: bash
@@ -50,35 +59,25 @@ jobs:
             --env CODACY_CODE="$GITHUB_WORKSPACE" \
             --volume /var/run/docker.sock:/var/run/docker.sock \
             --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            --volume "$RUNNER_TEMP/better-files.jar:/opt/better-files.jar:ro" \
             --volume /tmp:/tmp \
             --workdir "$GITHUB_WORKSPACE" \
+            --entrypoint /bin/bash \
             codacy/codacy-analysis-cli@sha256:339e0103e28804f9d76aff34503e505440e5d5b42f5dd70dae73b592ea87826a \
-            -- analyze --tool bandit --verbose --format json \
-            --output "$GITHUB_WORKSPACE/results.json" \
+            -c 'set -euo pipefail
+                jars=(/workdir/lib/*better-files_2.12-3.8.0.jar)
+                test "${#jars[@]}" -eq 1 && test -f "${jars[0]}"
+                cp /opt/better-files.jar "${jars[0]}"
+                exec /workdir/bin/codacy-analysis-cli "$@"' codacy \
+            -- analyze --tool bandit --format sarif \
+            --output "$GITHUB_WORKSPACE/results.sarif" \
             --commit-uuid "$GITHUB_SHA" \
             --fail-if-incomplete --tool-timeout 10minutes \
             --gh-code-scanning-compat --max-allowed-issues 2147483647
 
-      - name: Inspect scanner file paths
-        shell: bash
-        run: |
-          python - <<'PYTHON'
-          import json
-          from pathlib import Path
-          rows = json.loads(Path("results.json").read_text())
-          print("RESULT COUNT", len(rows))
-          for row in rows:
-              for kind, issue in row.items():
-                  filename = issue.get("filename") if isinstance(issue, dict) else None
-                  if filename:
-                      try:
-                          Path(filename).read_text(encoding="utf-8")
-                      except (UnicodeError, OSError) as error:
-                          print("INVALID SOURCE", json.dumps(row), str(error))
-          PYTHON
-      - name: Save diagnostic report
-        uses: actions/upload-artifact@v4
+      # Upload the SARIF file generated in the previous step
+      - name: Upload SARIF results file
+        if: ${{ !cancelled() && hashFiles('results.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@v4
         with:
-          name: codacy-diagnostic
-          path: results.json
-          retention-days: 1
+          sarif_file: results.sarif
