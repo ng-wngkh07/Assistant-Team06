@@ -355,13 +355,14 @@ class PDFExtractor:
                 if "word/document.xml" not in namelist:
                     result.error_message = "Tệp DOCX không hợp lệ (thiếu word/document.xml)."
                     return result
+                xml_content = z.read("word/document.xml")
 
-            # Read document elements in body order using python-docx
-            import docx
-            from docx.text.paragraph import Paragraph
-            from docx.table import Table
-
-            doc = docx.Document(filepath)
+            root = ET.fromstring(xml_content)
+            w_ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+            body = root.find(f"{w_ns}body")
+            if body is None:
+                result.error_message = "Tài liệu DOCX không chứa phần thân body hợp lệ."
+                return result
 
             pages = []
             current_blocks = []
@@ -390,30 +391,35 @@ class PDFExtractor:
                 current_text_parts = []
                 current_chars = 0
 
-            for child in doc.element.body:
-                tag = child.tag
-                if tag.endswith("p"):
-                    p = Paragraph(child, doc)
-                    raw_text = normalize_vietnamese_text(p.text or "").strip()
+            for child in body:
+                tag = child.tag.replace(w_ns, "")
+                if tag == "p":
+                    raw_text = normalize_vietnamese_text("".join(t.text or "" for t in child.iter(f"{w_ns}t"))).strip()
                     if not raw_text:
                         continue
 
                     # Check for explicit page breaks in XML
                     has_hard_page_break = any(
-                        br.attrib.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type") == "page"
-                        for br in child.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}br")
-                    ) or any(child.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}lastRenderedPageBreak"))
+                        br.attrib.get(f"{w_ns}type") == "page"
+                        for br in child.iter(f"{w_ns}br")
+                    ) or any(child.iter(f"{w_ns}lastRenderedPageBreak"))
 
-                    style_name = (p.style.name if p.style else "").lower()
+                    pPr = child.find(f"{w_ns}pPr")
+                    style_name = ""
+                    if pPr is not None:
+                        pStyle = pPr.find(f"{w_ns}pStyle")
+                        if pStyle is not None:
+                            style_name = pStyle.attrib.get(f"{w_ns}val", "").lower()
+
                     is_title = "title" in style_name
-                    is_h1 = "heading 1" in style_name or bool(re.match(r"^(?:chủ đề|chương|bài|phần)\s+\d+", raw_text, re.I))
-                    is_h2 = "heading 2" in style_name or bool(re.match(r"^\d+\.\s+[A-ZÀ-Ỹ]", raw_text))
-                    is_h3 = "heading 3" in style_name
+                    is_h1 = "heading 1" in style_name or "heading1" in style_name or bool(re.match(r"^(?:chủ đề|chương|bài|phần)\s+\d+", raw_text, re.I))
+                    is_h2 = "heading 2" in style_name or "heading2" in style_name or bool(re.match(r"^\d+\.\s+[A-ZÀ-Ỹ]", raw_text))
+                    is_h3 = "heading 3" in style_name or "heading3" in style_name
                     is_bullet = (
                         "list" in style_name
                         or "bullet" in style_name
                         or raw_text.startswith(("•", "-", "*"))
-                        or any(child.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}numPr"))
+                        or (pPr is not None and pPr.find(f"{w_ns}numPr") is not None)
                     )
 
                     # Logical pagination: break if hard break, or major section with enough content (>= 1000 chars), or page exceeds 2200 chars
@@ -448,11 +454,25 @@ class PDFExtractor:
                     current_text_parts.append(fmt_text)
                     current_chars += len(fmt_text)
 
-                elif tag.endswith("tbl"):
-                    t = Table(child, doc)
-                    is_callout = (len(t.rows) == 1 and len(t.columns) == 1)
+                elif tag == "tbl":
+                    rows_data = []
+                    for tr in child.findall(f"{w_ns}tr"):
+                        row_cells = []
+                        for tc in tr.findall(f"{w_ns}tc"):
+                            cell_paras = []
+                            for p in tc.findall(f"{w_ns}p"):
+                                p_text = normalize_vietnamese_text("".join(t.text or "" for t in p.iter(f"{w_ns}t"))).strip()
+                                if p_text:
+                                    cell_paras.append(p_text)
+                            row_cells.append("\n".join(cell_paras))
+                        if any(row_cells):
+                            rows_data.append(row_cells)
+                    if not rows_data:
+                        continue
+
+                    is_callout = (len(rows_data) == 1 and len(rows_data[0]) == 1)
                     if is_callout:
-                        cell_text = normalize_vietnamese_text(t.rows[0].cells[0].text or "").strip()
+                        cell_text = rows_data[0][0].strip()
                         if not cell_text:
                             continue
                         callout_lines = [f"> {ln.strip()}" for ln in cell_text.splitlines() if ln.strip()]
@@ -465,24 +485,21 @@ class PDFExtractor:
                         current_text_parts.append(callout_fmt)
                         current_chars += len(callout_fmt)
                     else:
-                        rows_data = []
-                        for r in t.rows:
-                            row_cells = [normalize_vietnamese_text(c.text or "").strip().replace("\n", " ") for c in r.cells]
-                            rows_data.append(row_cells)
-                        if not rows_data:
-                            continue
-                        headers = rows_data[0]
+                        headers = [c.replace("\n", " ").strip() for c in rows_data[0]]
                         md_lines = ["| " + " | ".join(headers) + " |"]
                         md_lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
+                        clean_rows = [headers]
                         for r in rows_data[1:]:
-                            r_cells = r[:len(headers)] + [""] * max(0, len(headers) - len(r))
+                            cleaned_r = [c.replace("\n", " ").strip() for c in r]
+                            r_cells = cleaned_r[:len(headers)] + [""] * max(0, len(headers) - len(cleaned_r))
+                            clean_rows.append(r_cells)
                             md_lines.append("| " + " | ".join(r_cells) + " |")
                         md_table = "\n".join(md_lines)
                         current_blocks.append({
                             "block_id": f"p{len(pages)+1}_b{len(current_blocks)}",
                             "type": "table",
                             "text": md_table,
-                            "table_data": rows_data,
+                            "table_data": clean_rows,
                         })
                         current_text_parts.append(md_table)
                         current_chars += len(md_table)

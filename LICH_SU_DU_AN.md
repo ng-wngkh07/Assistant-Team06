@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-18T12:40:00+07:00
-- Mục mới nhất: **[LOG-20261018-canvas-attachment-fix-and-download](#log-20261018-canvas-attachment-fix-and-download)**.
-- Nhật ký chung có **85 mục**: 33 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 59 mã YC và 26 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 18/10/2026.
+- Cập nhật: 2026-10-18T12:55:00+07:00
+- Mục mới nhất: **[LOG-20261018-docx-pure-xml-ci-fix](#log-20261018-docx-pure-xml-ci-fix)**.
+- Nhật ký chung có **86 mục**: 34 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 59 mã YC và 27 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 18/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1707,3 +1707,25 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   + `scripts/check_history.py --base origin/main`: PASS.
 - Trạng thái: PASS.
 - Giới hạn, lỗi còn lại, bước tiếp: Đẩy commit và push lên nhánh `feat/chat-attachment-canvas-viewer`.
+
+<a id="log-20261018-docx-pure-xml-ci-fix"></a>
+### LOG-20261018-docx-pure-xml-ci-fix - 18/10/2026 12:55 (UTC+07)
+
+- Người thực hiện: Antigravity; loại: sửa lỗi kiểm thử CI đa nền tảng bằng bộ trích xuất tài liệu DOCX thuần chuẩn thư viện tiêu chuẩn Python (zero external dependencies).
+- Mục tiêu:
+  + Khắc phục triệt để lỗi CI GitHub Actions bị crash trên cả macOS và Windows (`Failing after 16s/31s`) tại bước `python scripts/dev.py demo`: Bước demo index toàn bộ tài liệu trong `tests/fixtures/documents/` (bao gồm các tệp `.docx` mẫu), nhưng trước đó mã nguồn dùng `import docx` (thư viện bên thứ ba `python-docx` không nằm trong danh mục `requirements-windows.txt` và `constraints-web-py312.txt`), dẫn đến lỗi `ModuleNotFoundError: No module named 'docx'` và ném `RuntimeError: Demo indexing failed`.
+  + Chuyển đổi toàn bộ logic trích xuất cấu trúc văn bản phân cấp, bảng Markdown và callout của DOCX sang thư viện tiêu chuẩn `xml.etree.ElementTree` và `zipfile` tích hợp sẵn trong Python core. Không phụ thuộc bất kỳ package bên thứ ba nào, hoàn toàn tương thích trên mọi hệ điều hành (Windows, Linux, macOS).
+- Trước/sau thay đổi:
+  + Trước: `extract_docx` import `docx`, `Paragraph`, `Table`; môi trường CI chuẩn (không cài thêm wheel ngoài) bị lỗi import và dừng luồng kiểm thử `scripts/dev.py demo`.
+  + Sau: `extract_docx` đọc tuần tự phần tử `body` qua `ET.fromstring(z.read('word/document.xml'))`, giữ nguyên 100% cấu trúc headings (`#`, `##`, `###`), danh sách bullet (`•`), callout (`> `) và bảng Markdown đa cột (`.canvas-table`). `scripts/dev.py demo` chạy trơn tru với 0 lỗi.
+- Phần/file sửa:
+  + `app/pdf_extractor.py`: Viết lại `extract_docx` bằng pure Python `xml.etree.ElementTree` và `zipfile`.
+  + `LICH_SU_DU_AN.md`: Bổ sung nhật ký thay đổi và kiểm định CI.
+- Kiểm thử phần mềm:
+  + `python scripts/dev.py demo`: PASS (32 files, 0 errors).
+  + `python scripts/dev.py check`: PASS.
+  + `pytest tests/test_study_materials.py tests/test_learning_tools_ui_contract.py`: PASS (28 passed).
+  + `node --test tests/chat_lifecycle_ui_yc206.test.cjs tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs`: PASS (28 passed).
+  + `scripts/check_history.py --base origin/main`: PASS.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, bước tiếp: Commit và push lên `feat/chat-attachment-canvas-viewer`.
