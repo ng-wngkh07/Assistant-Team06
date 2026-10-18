@@ -1720,10 +1720,12 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   + Sau: `extract_docx` đọc tuần tự phần tử `body` qua `ET.fromstring(z.read('word/document.xml'))`, giữ nguyên 100% cấu trúc headings (`#`, `##`, `###`), danh sách bullet (`•`), callout (`> `) và bảng Markdown đa cột (`.canvas-table`). `scripts/dev.py demo` chạy trơn tru với 0 lỗi.
 - Phần/file sửa:
   + `app/pdf_extractor.py`: Viết lại `extract_docx` bằng pure Python `xml.etree.ElementTree` và `zipfile`.
+  + `app/rag_agent.py`: Bảo toàn hợp đồng `generation_failed` cho các câu hỏi thông thường khi chạm trần token (`is_draft_truncated and not (is_attached_doc_query and len(raw_answer.strip()) >= 150)`), vượt qua kiểm thử hồi quy `test_study_agent_c_f_g.py`.
   + `LICH_SU_DU_AN.md`: Bổ sung nhật ký thay đổi và kiểm định CI.
 - Kiểm thử phần mềm:
   + `python scripts/dev.py demo`: PASS (32 files, 0 errors).
   + `python scripts/dev.py check`: PASS.
+  + `pytest -c pytest.windows.ini`: PASS (650 passed, 15 skipped, 0 failed).
   + `pytest tests/test_study_materials.py tests/test_learning_tools_ui_contract.py`: PASS (28 passed).
   + `node --test tests/chat_lifecycle_ui_yc206.test.cjs tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs`: PASS (28 passed).
   + `scripts/check_history.py --base origin/main`: PASS.

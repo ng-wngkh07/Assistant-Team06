@@ -842,7 +842,7 @@ class PsychologyAgent:
             return
 
         is_draft_truncated = getattr(generator, "last_done_reason", None) == "length"
-        if is_draft_truncated and len(raw_answer.strip()) < 150:
+        if is_draft_truncated and not (is_attached_doc_query and len(raw_answer.strip()) >= 150):
             answer = "Mô hình chưa tạo được câu trả lời hoàn chỉnh do vượt quá độ dài quy định."
             yield {"type": "token", "content": answer}
             yield {
@@ -992,7 +992,7 @@ class PsychologyAgent:
                     }
                     return
 
-                if getattr(generator, "last_done_reason", None) == "length" and len(repair_raw.strip()) < 150:
+                if getattr(generator, "last_done_reason", None) == "length" and not (is_attached_doc_query and len(repair_raw.strip()) >= 150):
                     yield {"type": "token", "content": "Mô hình chưa tạo được câu trả lời hoàn chỉnh do vượt quá độ dài quy định."}
                     yield {
                         "type": "done",
