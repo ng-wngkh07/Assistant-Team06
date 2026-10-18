@@ -25,6 +25,16 @@ Python 3.12 on Windows and macOS is the CI dependency target. A local run on a d
 
 Optional adapter checks use `ui/requirements.txt` and `tests/test_streamlit_flow.py`; this separate client does not replace the primary web UI.
 
+## CI security workflows
+
+GitHub Actions runs three automated security workflows:
+
+- **Actionlint** (`.github/workflows/actionlint.yml`): Validates GitHub Actions workflow syntax and ShellCheck rules on pull requests to `main`, pushes to `main`, and manual dispatch. Run locally with `actionlint`.
+- **Dependency Review** (`.github/workflows/dependency-review.yml`): Fails the check when a pull request to `main` introduces dependencies with moderate or higher severity vulnerabilities across runtime, development, and unknown scopes. The repository dependency graph must be enabled for this check to run.
+- **Gitleaks** (`.github/workflows/gitleaks.yml`): Scans the repository git history on pull requests to `main`, pushes to `main`, and manual dispatch to detect committed secrets. Run locally with `gitleaks git --redact --no-banner`.
+
+These checks do not become required merge checks automatically. The repository owner manages required checks through the branch rules.
+
 ## Real-model acceptance
 
 For changes to retrieval, prompts, evidence validation or generated study content:

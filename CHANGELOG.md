@@ -12,6 +12,7 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 - Reorganize public documentation in English around product usage, setup, architecture, testing and maintenance. Remove internal allocation and submission records from public guides.
 - Preserve the existing attachment and document-viewer behavior while updating the question-answering integration against current main.
+- Add GitHub Actions security workflows for actionlint syntax linting, Dependency Review and Gitleaks secret detection, with workflow instructions in testing documentation.
 
 ### Fixed
 
