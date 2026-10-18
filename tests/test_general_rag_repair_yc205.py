@@ -80,10 +80,10 @@ def _configure_stub_context(tmp_path, monkeypatch):
 def test_citation_repair_is_skipped_if_its_final_prompt_exceeds_capacity(monkeypatch, tmp_path):
     import app.rag_agent as rag
     # Exact counter deliberately permits the original prompt but rejects the
-    # extra repair instruction even with an empty draft. The model must never
+    # structured repair schema. The model must never
     # receive the overflowing prompt.
     def count(messages):
-        return 8000 if any('<repair_instruction>' in m['content'] for m in messages) else 400
+        return 8000 if any('"source_ids"' in m['content'] and '"claims"' in m['content'] for m in messages) else 400
     monkeypatch.setattr(rag,'get_exact_token_counter',lambda:count)
     _configure_stub_context(tmp_path, monkeypatch)
     model=RecordingModel('Câu trả lời chưa có trích dẫn.')
@@ -104,7 +104,7 @@ def test_invalid_citation_without_valid_id_has_specific_failure():
 def test_invalid_citation_remains_specific_when_repair_cannot_fit(monkeypatch, tmp_path):
     import app.rag_agent as rag
     def count(messages):
-        return 8000 if any('<repair_instruction>' in m['content'] for m in messages) else 400
+        return 8000 if any('"source_ids"' in m['content'] and '"claims"' in m['content'] for m in messages) else 400
     monkeypatch.setattr(rag,'get_exact_token_counter',lambda:count)
     _configure_stub_context(tmp_path, monkeypatch)
     model=RecordingModel('Câu trả lời ghi mã không có trong nguồn [S99].')
@@ -121,10 +121,11 @@ def test_repair_prompt_names_only_admitted_concrete_citation_codes():
             yield 'Đạo hàm là tốc độ biến thiên tức thời.' if len(self.calls)==1 else 'Đạo hàm là tốc độ biến thiên tức thời [S1].'
     model=RepairModel()
     PsychologyAgent(searcher=RecordingSearcher([make_chunk('Đạo hàm mô tả tốc độ biến thiên tức thời.')]),ollama=model,translator=NoTranslation()).process_query_sync('đạo hàm là gì',model='test',embed_model=None,isolate_context=True,processing_level='standard')
-    instruction=model.calls[1]['messages'][-1]['content'].split('<repair_instruction>',1)[1].split('</repair_instruction>',1)[0]
-    assert '[S1]' in instruction
+    instruction=model.calls[1]['system_prompt']
+    assert '"S1"' in instruction
     assert '[S#]' not in instruction
     assert '[S2]' not in instruction
+    assert '"S2"' not in instruction
     assert 'Nội dung có căn cứ' not in instruction
 
 
