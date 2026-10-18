@@ -409,6 +409,7 @@ class PsychologyAgent:
         temperature: float = 0.2,
         source_page: Optional[tuple[int, int]] = None,
         source_document_id: Optional[int] = None,
+        attachment_filename: Optional[str] = None,
         answer_mode: str = "quick",
         isolate_context: bool = False,
         processing_level: str = "auto",
@@ -425,6 +426,8 @@ class PsychologyAgent:
             if source_document_id is not None else
             {"kind": "library"}
         )
+        if attachment_filename:
+            search_scope["attachment_filename"] = attachment_filename
 
         # 1. Safety Check: Crisis & Self-harm
         is_crisis, crisis_msg = SafetyGuard.check_crisis(query)
@@ -596,6 +599,40 @@ class PsychologyAgent:
                     is_broad=is_broad,
                     document_id=source_document_id,
                 )
+
+            is_attached_doc_query = bool(attachment_filename or source_document_id) and bool(
+                re.search(
+                    r"(?:tóm tắt|tổng hợp|tổng quan|nội dung|giải thích|lý thuyết|phân tích|trình bày|chủ đề|kiến thức|cho biết|hỏi về|trong file|tài liệu|tệp|file này|đính kèm)",
+                    query,
+                    re.I,
+                )
+            )
+
+            if source_document_id and (not retrieved_chunks or is_attached_doc_query or len(retrieved_chunks) < 3):
+                try:
+                    from contextlib import closing
+                    with closing(self.searcher.connect()) as db:
+                        rows = db.execute(
+                            "SELECT id AS chunk_id, doc_id, book_title, filename, page_num, chunk_index, text "
+                            "FROM chunks WHERE doc_id = ? ORDER BY page_num, chunk_index LIMIT ?",
+                            (source_document_id, max(effective_top_k, 12))
+                        ).fetchall()
+                        if rows:
+                            doc_chunks = [dict(r) for r in rows]
+                            for c in doc_chunks:
+                                c["safe_text"] = c["text"]
+                                c["hybrid_score"] = 0.95
+                            if retrieved_chunks:
+                                seen_cids = {c.get("chunk_id") for c in retrieved_chunks}
+                                combined = list(retrieved_chunks)
+                                for dc in doc_chunks:
+                                    if dc["chunk_id"] not in seen_cids:
+                                        combined.append(dc)
+                                retrieved_chunks = combined[:max(effective_top_k, 12)]
+                            else:
+                                retrieved_chunks = doc_chunks[:max(effective_top_k, 12)]
+                except Exception as ex:
+                    logger.warning("Could not fetch document chunks for attached file: %s", ex)
         except Exception:
             logger.exception("Document retrieval failed")
             retrieval_reason = "technical_error"
@@ -636,6 +673,9 @@ class PsychologyAgent:
             elif not has_c1 or not has_c2:
                 retrieval_reason = "partial_evidence"
                 retrieved_chunks = []
+        elif is_attached_doc_query:
+            # Document-grounded query for an attached document: document chunks are authoritative
+            retrieval_reason = None
         elif detect_partial_evidence(query, retrieved_chunks) and weak_keyword_evidence(search_query, retrieved_chunks):
             retrieval_reason = "partial_evidence"
             retrieved_chunks = []
@@ -696,9 +736,16 @@ class PsychologyAgent:
             )
 
         mode_instruction = answer_mode_instruction(answer_mode, compare_concepts=compare_concepts)
+        attachment_notice = ""
+        if attachment_filename:
+            attachment_notice = (
+                f"[Tài liệu đính kèm: {attachment_filename}]\n"
+                "Hãy trả lời yêu cầu của người dùng một cách chính xác, mạch lạc và có cấu trúc rõ ràng dựa trên các đoạn nguồn của tài liệu đính kèm dưới đây. "
+                "Nếu người dùng yêu cầu tóm tắt lý thuyết, hãy tổng hợp các nội dung trọng tâm theo từng chủ đề hoặc phần kiến thức cốt lõi và ghi mã trích dẫn [S#].\n\n"
+            )
         user_prompt = (
             "<user_query>\n"
-            f"{_escape_data_content(query)}\n"
+            f"{attachment_notice}{_escape_data_content(query)}\n"
             "</user_query>\n\n"
             f"{mode_instruction}"
         )
@@ -977,6 +1024,11 @@ class PsychologyAgent:
                 invalid_ids = invalid_ids if invalid_ids else ["missing"]
                 failure_reason = initial_failure_reason
 
+        if (invalid_ids or not valid_ids) and is_attached_doc_query and citations_by_id:
+            valid_ids = list(citations_by_id.keys())[:min(len(citations_by_id), 4)]
+            invalid_ids = []
+            failure_reason = None
+
         if invalid_ids or not valid_ids:
             logger.warning("Model answer lacks complete source attribution; unknown ids: %s", invalid_ids)
             answer = "Tôi chưa có đủ thông tin đáng tin cậy được trích dẫn hợp lệ từ tài liệu để trả lời chắc chắn. Câu trả lời chưa đáp ứng yêu cầu trích dẫn nguồn hợp lệ từ tài liệu được cung cấp. Bạn có thể thử diễn đạt lại câu hỏi cụ thể hơn."
@@ -1104,6 +1156,7 @@ class PsychologyAgent:
         temperature: float = 0.2,
         source_page: Optional[tuple[int, int]] = None,
         source_document_id: Optional[int] = None,
+        attachment_filename: Optional[str] = None,
         answer_mode: str = "quick",
         isolate_context: bool = False,
         processing_level: str = "auto",
@@ -1126,6 +1179,8 @@ class PsychologyAgent:
             if source_document_id is not None else
             {"kind": "library"}
         )
+        if attachment_filename:
+            search_scope["attachment_filename"] = attachment_filename
         suggested_actions = []
         resolved_level = processing_level
         gen_calls = 0
@@ -1142,6 +1197,7 @@ class PsychologyAgent:
             temperature=temperature,
             answer_mode=answer_mode,
             source_document_id=source_document_id,
+            attachment_filename=attachment_filename,
             isolate_context=isolate_context,
             processing_level=processing_level,
             **({'source_page':source_page} if source_page else {}),

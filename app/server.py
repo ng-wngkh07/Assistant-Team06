@@ -153,6 +153,7 @@ class ChatRequest(BaseModel):
     request_id: Optional[str] = None
     source_document_id: Optional[int] = Field(default=None, ge=1)
     source_page_num: Optional[int] = Field(default=None, ge=1)
+    attachment_filename: Optional[str] = None
 
     @field_validator("query")
     @classmethod
@@ -510,13 +511,18 @@ async def get_study_material(material_id: str):
 
 
 def requested_source_scope(req):
-    if req.source_document_id is None:
+    source_doc_id = req.source_document_id
+    if source_doc_id is None and getattr(req, "attachment_filename", None):
+        found = document_lookup.document_by_filename(req.attachment_filename)
+        if found:
+            source_doc_id = found["id"]
+    if source_doc_id is None:
         return None, None
-    doc = document_lookup.document(req.source_document_id)
+    doc = document_lookup.document(source_doc_id)
     if not doc or (req.source_page_num is not None and req.source_page_num > doc['total_pages']):
         raise HTTPException(status_code=404, detail='Không tìm thấy tài liệu hoặc trang nguồn đã chọn.')
-    page = (req.source_document_id, req.source_page_num) if req.source_page_num is not None else None
-    return page, req.source_document_id
+    page = (source_doc_id, req.source_page_num) if req.source_page_num is not None else None
+    return page, source_doc_id
 
 
 def requested_source_page(req):
@@ -1173,6 +1179,7 @@ def _chat_sync(req):
                 temperature=req.temperature if req.temperature is not None else 0.2,
                 answer_mode=req.answer_mode,
                 source_document_id=source_document_id,
+                attachment_filename=req.attachment_filename,
                 isolate_context=bool(req.isolate_context),
                 processing_level=req.processing_level,
                 **({'source_page':source_page} if source_page else {})
@@ -1430,6 +1437,7 @@ async def chat_stream(req: ChatRequest):
                     temperature=req.temperature if req.temperature is not None else 0.2,
                     answer_mode=req.answer_mode,
                     source_document_id=source_document_id,
+                    attachment_filename=req.attachment_filename,
                     isolate_context=bool(req.isolate_context),
                     processing_level=req.processing_level,
                     **({'source_page':source_page} if source_page else {})

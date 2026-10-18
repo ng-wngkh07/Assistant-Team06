@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-18T00:05:00+07:00
-- Mục mới nhất: **[YC-227](#yc-227)**.
-- Nhật ký chung có **82 mục**: 30 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 59 mã YC và 23 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 18/10/2026.
+- Cập nhật: 2026-10-18T10:20:00+07:00
+- Mục mới nhất: **[LOG-20261018-chat-attachment-canvas-viewer](#log-20261018-chat-attachment-canvas-viewer)**.
+- Nhật ký chung có **83 mục**: 31 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 59 mã YC và 24 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 18/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1617,4 +1617,35 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   + `.venv/bin/python scripts/check_history.py --base origin/main`: PASS.
 - Trạng thái: PASS.
 - Giới hạn, lỗi còn lại, bước tiếp: Dịch vụ cục bộ đang chạy ổn định; người dùng chỉ cần làm mới trang web (F5 / Cmd+Shift+R) để trải nghiệm đầy đủ tính năng.
+
+<a id="log-20261018-chat-attachment-canvas-viewer"></a>
+### LOG-20261018-chat-attachment-canvas-viewer - 18/10/2026 10:20 (UTC+07)
+
+- Người thực hiện: Antigravity; loại: tính năng tương tác tài liệu đính kèm tức thì trong khung chat và giao diện đọc tài liệu Canvas liền mạch.
+- Mục tiêu:
+  + Tương tác trực tiếp với tài liệu vừa upload: Cho phép người dùng upload tài liệu lên và đặt câu hỏi hoặc yêu cầu Agent tóm tắt, giải thích ngay lập tức dựa trên nội dung tệp. Lời nhắc của người dùng trong khung chat hiển thị card đính kèm tài liệu trực quan (`[📄 filename.ext | Tài liệu học tập]`) có thể click để mở tài liệu.
+  + Giao diện đọc tài liệu Canvas liền mạch: Chuyển đổi giao diện đọc tài liệu từ dạng phân trang chia cắt dòng (Image 4) sang giao diện Canvas toàn trang hiện đại (chuẩn ChatGPT/Gemini Canvas - Image 3), hiển thị tài liệu dạng trang giấy liên tục (`canvas-doc-sheet`) với thanh công cụ Canvas (tiêu đề, tìm kiếm từ khóa kèm số lượng khớp, thanh thu phóng Zoom 50% - 150%, nút tải tệp, nút phóng to mở rộng toàn màn hình và nút chuyển nhanh tạo trắc nghiệm/flashcard).
+  + Nguồn dữ liệu tức thì: Bổ sung định tuyến `attachment_filename` trong API `/api/chat` và luồng stream `/api/chat/stream`, truy xuất ngữ cảnh chính xác từ tệp đính kèm và trích dẫn trực tiếp nguồn tài liệu.
+- Trước/sau thay đổi:
+  + Trước: Người dùng tải file lên chỉ hiển thị thông báo tải thành công, không thể hỏi đáp ngay dựa trên file vừa đính kèm. Khung modal đọc tài liệu bị cắt vụn thành từng hộp trang nhỏ lẻ, gây khó khăn cho việc đọc và theo dõi nội dung.
+  + Sau: Người dùng có thể đính kèm file và gửi câu hỏi ngay (như "Tóm tắt lý thuyết trong file"); giao diện chat hiển thị card đính kèm trong tin nhắn người dùng và Agent trả lời tổng quan có trích dẫn nguồn `[S1]`. Modal đọc file chuyển sang canvas tài liệu khổ rộng, cuộn mượt mà với đầy đủ công cụ zoom, tìm kiếm và tải xuống.
+- Phần/file sửa:
+  + `static/index.html`: Chuyển `#document-content-modal` sang Canvas Document Modal với `.canvas-top-bar`, `.canvas-viewport`, `.canvas-doc-sheet`, các điều khiển zoom, tìm kiếm, tải về và mở rộng toàn màn hình.
+  + `static/style.css`: Thêm bộ style Canvas document viewer phẳng (zero gradient), `.message-attachment-card` cho bong bóng chat người dùng.
+  + `static/app.js`: Tích hợp `activeAttachment` vào luồng chat gửi câu hỏi, hiển thị card đính kèm trong tin nhắn chat, triển khai bộ render Canvas liền mạch `renderDocumentContentPages`, điều khiển thu phóng `applyCanvasZoom`, tải tài liệu và mở rộng fullscreen.
+  + `app/document_lookup.py`: Bổ sung `document_by_filename`, hỗ trợ định dạng `.webp`, cấu hình dynamic property cho `db_path` và `src_dir`.
+  + `app/searcher.py`: Cấu hình dynamic property `db_path` và bổ sung phương thức `connect()` cho `HybridSearcher`.
+  + `app/server.py`: Mở rộng `ChatRequest` với `attachment_filename`, cập nhật `requested_source_scope` tự động nhận diện tài liệu đính kèm, chuyển tiếp vào `agent.process_query_sync` và `agent.process_query_stream`.
+  + `app/rag_agent.py`: Nhận diện truy vấn tài liệu đính kèm `is_attached_doc_query`, gắn chú thích tài liệu nguồn và trích xuất đoạn ngữ cảnh phục vụ trả lời.
+  + `tests/test_study_materials.py`: Bổ sung 2 ca kiểm thử UI contract và API chat tức thì: `test_canvas_document_viewer_ui_contract` và `test_chat_immediate_query_with_attachment`.
+  + `LICH_SU_DU_AN.md`: Ghi nhật ký phát triển và kiểm định hệ thống.
+- Kiểm thử phần mềm:
+  + `pytest tests/test_study_materials.py`: PASS (17 passed).
+  + `pytest tests/test_learning_tools_ui_contract.py`: PASS (6 passed).
+  + `node --test tests/chat_lifecycle_ui_yc206.test.cjs tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs`: PASS (28 passed).
+  + Kiểm tra quy tắc phẳng: Không sử dụng `gradient(` trong `static/style.css`.
+  + `scripts/check_history.py --base main`: PASS.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, bước tiếp: Đẩy commit lên branch `main` và thông báo tới người dùng.
+
 

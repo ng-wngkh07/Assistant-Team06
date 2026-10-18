@@ -541,13 +541,33 @@ document.addEventListener("DOMContentLoaded", () => {
         const qaPanel = document.getElementById("qa-panel");
         if (qaPanel) qaPanel.classList.remove("welcome-mode");
 
-        // Append User Message
-        appendMessage("user", query);
+        // Check for attached document from active attachments
+        let activeAttachment = null;
+        if (typeof attachmentPreviewRegistry !== "undefined" && attachmentPreviewRegistry && attachmentPreviewRegistry.size > 0) {
+            const allAttached = Array.from(attachmentPreviewRegistry.values());
+            activeAttachment = currentInspectedAttachment || allAttached[allAttached.length - 1];
+        }
+
+        // Append User Message with attachment pill
+        appendMessage("user", query, { attachment: activeAttachment });
 
         // Prepare Assistant Message Placeholder
         const assistantMsgEl = appendMessage("assistant", "");
         const contentDiv = assistantMsgEl.querySelector(".msg-content");
         contentDiv.innerHTML = '<span class="typing-indicator">Đang tra cứu thư viện và soạn câu trả lời...</span>';
+
+        // Clear preview tray in input area for subsequent queries
+        if (typeof chatAttachmentPreviewTray !== "undefined" && chatAttachmentPreviewTray) {
+            chatAttachmentPreviewTray.replaceChildren();
+            chatAttachmentPreviewTray.hidden = true;
+        }
+        if (typeof attachmentPreviewRegistry !== "undefined" && attachmentPreviewRegistry) {
+            attachmentPreviewRegistry.clear();
+        }
+        currentInspectedAttachment = null;
+        if (typeof syncGenerateButtonState === "function") {
+            syncGenerateButtonState();
+        }
 
         isGenerating = true;
         chatStatus.textContent = "Đang xử lý một câu hỏi. Bạn có thể soạn câu tiếp theo; câu đó chưa được gửi.";
@@ -578,6 +598,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 session_id: targetSessionId,
                 request_id: requestId
             };
+            if (activeAttachment && activeAttachment.filename) {
+                reqBody.attachment_filename = activeAttachment.filename;
+                if (activeAttachment.material?.doc_id && !selectedSourcePage) {
+                    reqBody.source_document_id = activeAttachment.material.doc_id;
+                }
+            }
             if (selectedSourcePage) {
                 reqBody.source_document_id = selectedSourcePage.doc_id;
                 if (selectedSourceMode === "page") reqBody.source_page_num = selectedSourcePage.page_num;
@@ -1294,17 +1320,51 @@ document.addEventListener("DOMContentLoaded", () => {
         msgBody.appendChild(citBox);
     }
 
-    function appendMessage(role, text) {
+    function appendMessage(role, text, options = {}) {
         const msgDiv = document.createElement("div");
         msgDiv.className = `message ${role}`;
 
         const avatar = role === "user" ? "👤" : "🧠";
+        let attachmentHtml = "";
+        const att = options && options.attachment;
+        if (att) {
+            const fname = att.filename || "Tài liệu đính kèm";
+            attachmentHtml = `
+                <div class="message-attachment-card" data-filename="${escapeHtml(fname)}" title="Nhấn để mở tài liệu trong Canvas">
+                    <div class="message-attachment-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                            <line x1="16" y1="13" x2="8" y2="13"></line>
+                            <line x1="16" y1="17" x2="8" y2="17"></line>
+                        </svg>
+                    </div>
+                    <div class="message-attachment-meta">
+                        <div class="message-attachment-title">${escapeHtml(fname)}</div>
+                        <div class="message-attachment-sub">Document</div>
+                    </div>
+                </div>
+            `;
+        }
+
         msgDiv.innerHTML = `
             <div class="message-avatar">${avatar}</div>
             <div class="message-body">
+                ${attachmentHtml}
                 <div class="msg-content">${text ? renderMarkdown(text) : ""}</div>
             </div>
         `;
+        if (att) {
+            const attCard = msgDiv.querySelector(".message-attachment-card");
+            attCard?.addEventListener("click", () => {
+                const stored = (typeof attachmentPreviewRegistry !== "undefined" && att.cardKey && attachmentPreviewRegistry.get(att.cardKey))
+                    || att.material
+                    || att;
+                if (stored && typeof openDocumentContentViewer === "function") {
+                    openDocumentContentViewer(stored);
+                }
+            });
+        }
         messagesContainer.appendChild(msgDiv);
         scrollToBottom();
         return msgDiv;
@@ -1956,7 +2016,119 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // --- Document Content Viewer Modal Logic ---
+    // --- Canvas Document Viewer Logic (Styled after ChatGPT / Gemini Canvas - Image 3) ---
+    let currentCanvasZoom = 1.0;
+    const canvasZoomLabel = document.getElementById("canvas-zoom-label");
+    const btnCanvasZoomIn = document.getElementById("btn-canvas-zoom-in");
+    const btnCanvasZoomOut = document.getElementById("btn-canvas-zoom-out");
+    const canvasDocSheet = document.getElementById("canvas-doc-sheet");
+    const btnCanvasDownload = document.getElementById("btn-canvas-download");
+    const btnCanvasExpand = document.getElementById("btn-canvas-expand");
+    const canvasSearchCount = document.getElementById("canvas-search-count");
+
+    function applyCanvasZoom(zoom) {
+        currentCanvasZoom = Math.max(0.5, Math.min(2.0, Math.round(zoom * 100) / 100));
+        if (canvasZoomLabel) {
+            canvasZoomLabel.textContent = `${Math.round(currentCanvasZoom * 100)}%`;
+        }
+        if (canvasDocSheet) {
+            canvasDocSheet.style.transform = `scale(${currentCanvasZoom})`;
+            canvasDocSheet.style.transformOrigin = "top center";
+        }
+    }
+
+    btnCanvasZoomIn?.addEventListener("click", () => {
+        applyCanvasZoom(currentCanvasZoom + 0.1);
+    });
+
+    btnCanvasZoomOut?.addEventListener("click", () => {
+        applyCanvasZoom(currentCanvasZoom - 0.1);
+    });
+
+    btnCanvasExpand?.addEventListener("click", () => {
+        if (documentContentModal) {
+            documentContentModal.classList.toggle("fullscreen");
+        }
+    });
+
+    btnCanvasDownload?.addEventListener("click", () => {
+        if (!currentInspectedAttachment) return;
+        const entry = currentInspectedAttachment;
+        const fname = entry.filename || "document.txt";
+        const fullText = (entry.pages || []).map(p => `--- Trang ${p.page_num || 1} ---\n${p.text || ""}`).join("\n\n");
+        const blob = new Blob([fullText], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fname.endsWith(".txt") ? fname : `${fname.replace(/\.[^.]+$/, "")}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    });
+
+    function formatCanvasBlock(text, pageNum, isFirstPage, filterQuery = "") {
+        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        if (!lines.length) return "";
+
+        let html = "";
+        if (!isFirstPage) {
+            html += `<div class="canvas-page-divider" data-page="${pageNum}"><span class="canvas-page-badge">Trang ${pageNum}</span></div>`;
+        }
+
+        const highlight = (str) => {
+            if (!filterQuery) return escapeHtml(str);
+            const safeQ = filterQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const re = new RegExp(`(${safeQ})`, "gi");
+            return escapeHtml(str).replace(re, '<mark class="canvas-mark">$1</mark>');
+        };
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+
+            // 1. Detect Main Document Title (H1) on first page
+            if (isFirstPage && i === 0 && (line.length < 90 || line === line.toUpperCase())) {
+                html += `<h1 class="canvas-h1">${highlight(line)}</h1>`;
+                continue;
+            }
+
+            // 2. Detect Subtitle
+            if (isFirstPage && (i === 1 || i === 2) && (line.toLowerCase().startsWith("tóm tắt") || line.toLowerCase().startsWith("hệ thống") || line.toLowerCase().startsWith("chủ biên"))) {
+                html += `<div class="canvas-subtitle">${highlight(line)}</div>`;
+                continue;
+            }
+
+            // 3. Detect Major Sections (H2: CHỦ ĐỀ, CHƯƠNG, BÀI, PHẦN)
+            if (/^(?:chủ\s*đề|chương|phần|bài)\s*\d+/i.test(line) || (line.length < 80 && line === line.toUpperCase() && !line.startsWith("-"))) {
+                html += `<h2 class="canvas-h2">${highlight(line)}</h2>`;
+                continue;
+            }
+
+            // 4. Detect Subsections (H3: 1., 2., A., I.)
+            if (/^(?:\d+|[A-Z]|[I|V|X]+)\.\s+/.test(line)) {
+                html += `<h3 class="canvas-h3">${highlight(line)}</h3>`;
+                continue;
+            }
+
+            // 5. Detect Bullet items
+            if (/^[•\-\*\+]\s+/.test(line)) {
+                const cleanContent = line.replace(/^[•\-\*\+]\s+/, "");
+                html += `<div class="canvas-bullet-line"><span class="canvas-bullet-dot">•</span><span class="canvas-bullet-text">${highlight(cleanContent)}</span></div>`;
+                continue;
+            }
+
+            // 6. Detect Formula / Callout Box
+            if (/^(?:định luật|công thức|quy ước|lưu ý|chú ý|định nghĩa|nguyên lý)/i.test(line)) {
+                html += `<div class="canvas-callout-box">${highlight(line)}</div>`;
+                continue;
+            }
+
+            // Regular paragraph
+            html += `<p class="canvas-p">${highlight(line)}</p>`;
+        }
+        return html;
+    }
+
     function renderDocumentContentPages(entry, filterQuery = "") {
         if (!docContentPagesList) return;
         const pages = (entry && Array.isArray(entry.pages)) ? entry.pages : [];
@@ -1966,27 +2138,43 @@ document.addEventListener("DOMContentLoaded", () => {
             ? pages.filter(p => String(p.text || "").toLowerCase().includes(q) || `trang ${p.page_num}`.includes(q))
             : pages;
 
+        if (canvasSearchCount) {
+            if (q) {
+                canvasSearchCount.hidden = false;
+                let count = 0;
+                pages.forEach(p => {
+                    const matches = (String(p.text || "").toLowerCase().match(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
+                    count += matches;
+                });
+                canvasSearchCount.textContent = `${count} kết quả`;
+            } else {
+                canvasSearchCount.hidden = true;
+            }
+        }
+
         if (!filteredPages.length) {
             docContentPagesList.innerHTML = `
-                <div class="doc-content-page-card" style="text-align: center; color: var(--text-muted); padding: 28px;">
-                    ${q ? "Không tìm thấy đoạn nội dung nào khớp với từ khóa tìm kiếm." : "Không có nội dung văn bản trong tài liệu này."}
+                <div class="canvas-empty-state">
+                    ${q ? `Không tìm thấy đoạn nội dung nào khớp với từ khóa "${escapeHtml(filterQuery)}".` : "Không có nội dung văn bản trong tài liệu này."}
                 </div>
             `;
             return;
         }
 
-        docContentPagesList.innerHTML = filteredPages.map(p => {
+        let fullHtml = "";
+        filteredPages.forEach((p, idx) => {
             const pageText = String(p.text || "").trim();
-            return `
-                <div class="doc-content-page-card">
-                    <div class="doc-content-page-header">
-                        <span class="doc-content-page-badge">📑 Trang ${p.page_num || 1}</span>
-                        <span class="doc-content-page-chars">${pageText.length.toLocaleString("vi-VN")} ký tự</span>
-                    </div>
-                    <div class="doc-content-page-text">${escapeHtml(pageText)}</div>
-                </div>
-            `;
-        }).join("");
+            if (pageText) {
+                fullHtml += formatCanvasBlock(pageText, p.page_num || (idx + 1), idx === 0, q);
+            }
+        });
+        docContentPagesList.innerHTML = fullHtml || `<div class="canvas-empty-state">Không có nội dung văn bản.</div>`;
+
+        // If search query is active and there's a match, scroll into view
+        if (q) {
+            const firstMark = docContentPagesList.querySelector(".canvas-mark");
+            firstMark?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
     }
 
     function openDocumentContentViewer(entry) {
@@ -1999,17 +2187,22 @@ document.addEventListener("DOMContentLoaded", () => {
         const srcPath = entry.src_path || `src/${fname}`;
 
         if (docContentModalTitle) {
-            docContentModalTitle.textContent = `📄 Nội dung: ${fname}`;
+            docContentModalTitle.textContent = `📄 ${fname}`;
         }
         if (docContentModalMeta) {
-            docContentModalMeta.textContent = `${totalPages} trang · ${totalChars.toLocaleString("vi-VN")} ký tự · Đã nạp vào nguồn dữ liệu học tập (${srcPath})`;
+            docContentModalMeta.textContent = `${totalPages} trang · ${totalChars.toLocaleString("vi-VN")} ký tự`;
         }
         if (docContentSrcBadge) {
-            docContentSrcBadge.textContent = `📂 Nguồn học tập: ${srcPath}`;
+            docContentSrcBadge.textContent = `📂 ${srcPath}`;
         }
         if (docContentSearchInput) {
             docContentSearchInput.value = "";
         }
+        if (canvasSearchCount) {
+            canvasSearchCount.hidden = true;
+        }
+
+        applyCanvasZoom(1.0);
 
         if (docContentImageBox && docContentImagePreview) {
             if (entry.isImage && entry.imageDataUrl) {
@@ -2031,6 +2224,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (documentContentModal) {
             documentContentModal.style.display = "none";
             documentContentModal.classList.remove("active");
+            documentContentModal.classList.remove("fullscreen");
         }
     }
 

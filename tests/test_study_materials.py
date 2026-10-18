@@ -398,5 +398,105 @@ def test_upload_webp_study_material(client):
     assert len(mat["flashcards"]) >= 1
 
 
+def test_canvas_document_viewer_ui_contract():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "static/index.html").read_text(encoding="utf-8")
+    css = (root / "static/style.css").read_text(encoding="utf-8")
+    js = (root / "static/app.js").read_text(encoding="utf-8")
+
+    # 1. Canvas Top Bar Controls & Action buttons
+    assert 'id="document-content-modal"' in html
+    assert 'class="modal canvas-document-modal"' in html
+    assert 'class="canvas-top-bar"' in html
+    assert 'id="btn-canvas-zoom-out"' in html
+    assert 'id="btn-canvas-zoom-in"' in html
+    assert 'id="canvas-zoom-label"' in html
+    assert 'id="btn-canvas-download"' in html
+    assert 'id="btn-canvas-expand"' in html
+    assert 'id="btn-doc-content-generate"' in html
+    assert 'id="btn-close-doc-content-modal"' in html
+
+    # 2. Canvas Document Sheet structure
+    assert 'id="canvas-doc-sheet"' in html
+    assert 'id="doc-content-pages-list"' in html
+    assert 'class="canvas-doc-flow"' in html
+
+    # 3. Canvas CSS & User message attachment pill
+    assert ".canvas-doc-sheet" in css
+    assert ".canvas-h1" in css
+    assert ".canvas-h2" in css
+    assert ".canvas-callout-box" in css
+    assert ".canvas-page-divider" in css
+    assert ".message-attachment-card" in css
+    assert ".message-attachment-icon" in css
+    assert ".message-attachment-meta" in css
+    assert "gradient(" not in css, "Flat design rule: No gradient in style.css"
+
+    # 4. Canvas JS methods & Zoom logic
+    assert "formatCanvasBlock" in js
+    assert "applyCanvasZoom" in js
+    assert "openDocumentContentViewer" in js
+
+
+def test_chat_immediate_query_with_attachment(client, tmp_path, monkeypatch):
+    import sqlite3
+    import app.config as cfg
+    from unittest.mock import patch
+
+    temp_src = tmp_path / "src"
+    temp_db = tmp_path / "knowledge_base.db"
+    monkeypatch.setattr(cfg, "SRC_DIR", temp_src)
+    monkeypatch.setattr(cfg, "DB_PATH", temp_db)
+
+    # 1. Upload Physics document
+    doc_text = (
+        "CHỦ ĐỀ 1: VẬT LÝ NHIỆT\n"
+        "1. Cấu trúc chất & Động học phân tử\n"
+        "Mô hình động học phân tử: Chất được cấu tạo từ các hạt nguyên tử phân tử luôn chuyển động hỗn loạn không ngừng. "
+        "Nhiệt độ càng cao tốc độ chuyển động trung bình của các hạt càng lớn.\n"
+        "2. Nội năng & Định luật 1 Nhiệt động lực học\n"
+        "Công thức định luật 1: Delta U = Q + W."
+    )
+    b64 = base64.b64encode(doc_text.encode("utf-8")).decode("ascii")
+
+    res = client.post("/api/materials/upload", json={
+        "filename": "On_Tap_Vat_Ly_12.txt",
+        "file_base64": b64,
+        "generate_study_set": False,
+        "persist_to_src": True,
+    })
+    assert res.status_code == 200
+
+    # 2. Directly ask question or request summary using attachment_filename
+    mock_llm_response = [
+        "TÓM TẮT LÝ THUYẾT ÔN TẬP VẬT LÝ 12 [S1]\n\n"
+        "Dựa trên file On_Tap_Vat_Ly_12 bạn gửi, mình tổng hợp lại kiến thức trọng tâm:\n"
+        "Chủ đề 1. Vật lý nhiệt: Cấu trúc chất và mô hình động học phân tử [S1].\n"
+        "Công thức: Delta U = Q + W [S1]."
+    ]
+
+    from app.ollama_client import OllamaClient
+
+    def fake_chat_stream(self, *args, **kwargs):
+        self.last_done_reason = "stop"
+        for part in mock_llm_response:
+            yield part
+
+    monkeypatch.setattr(OllamaClient, "chat_stream", fake_chat_stream)
+
+    chat_res = client.post("/api/chat", json={
+        "query": "Tóm tắt lý thuyết trong file",
+        "attachment_filename": "On_Tap_Vat_Ly_12.txt",
+        "save_history": False,
+    })
+    assert chat_res.status_code == 200
+    data = chat_res.json()
+    assert len(data.get("citations", [])) >= 1
+    assert "On_Tap_Vat_Ly_12" in data["citations"][0]["filename"]
+    assert "Vật lý nhiệt" in data["answer"] or "VẬT LÝ" in data["answer"]
+
+
+
 
 

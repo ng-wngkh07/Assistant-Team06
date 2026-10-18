@@ -277,14 +277,28 @@ def check_local_definition_and_catalog(text: str, concepts: List[str]) -> tuple[
 
 
 class HybridSearcher:
-    def __init__(self, db_path: Path = DB_PATH):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[Path] = None):
+        self._db_path = db_path
         self.ollama = OllamaClient()
+
+    @property
+    def db_path(self) -> Path:
+        if self._db_path is not None:
+            return self._db_path
+        from app.config import DB_PATH as CONFIG_DB_PATH
+        return CONFIG_DB_PATH
+
+    @db_path.setter
+    def db_path(self, val: Path):
+        self._db_path = val
 
     def get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         return conn
+
+    def connect(self) -> sqlite3.Connection:
+        return self.get_connection()
 
     @staticmethod
     def _clean_fts_query(query: str) -> str:
