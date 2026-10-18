@@ -455,13 +455,15 @@ class PDFExtractor:
                         cell_text = normalize_vietnamese_text(t.rows[0].cells[0].text or "").strip()
                         if not cell_text:
                             continue
+                        callout_lines = [f"> {ln.strip()}" for ln in cell_text.splitlines() if ln.strip()]
+                        callout_fmt = "\n".join(callout_lines)
                         current_blocks.append({
                             "block_id": f"p{len(pages)+1}_b{len(current_blocks)}",
                             "type": "callout",
                             "text": cell_text,
                         })
-                        current_text_parts.append(cell_text)
-                        current_chars += len(cell_text)
+                        current_text_parts.append(callout_fmt)
+                        current_chars += len(callout_fmt)
                     else:
                         rows_data = []
                         for r in t.rows:

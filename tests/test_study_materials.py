@@ -673,7 +673,34 @@ def test_chat_multiturn_followup_preserves_document_context(client, tmp_path, mo
     assert "On_Tap_Hoa_Hoc_12" in data2["citations"][0]["filename"]
 
 
+def test_download_material_raw_binary(client, tmp_path, monkeypatch):
+    import app.config as cfg
+    temp_src = tmp_path / "src"
+    temp_db = tmp_path / "knowledge_base.db"
+    monkeypatch.setattr(cfg, "SRC_DIR", temp_src)
+    monkeypatch.setattr(cfg, "DB_PATH", temp_db)
 
+    # 1. Upload DOCX fixture
+    fixture_path = Path(__file__).parent / "fixtures" / "documents" / "On_Tap_Hoa_Hoc_12.docx"
+    raw_bytes = fixture_path.read_bytes()
+    b64 = base64.b64encode(raw_bytes).decode("ascii")
 
+    upload_res = client.post("/api/materials/upload", json={
+        "filename": "On_Tap_Hoa_Hoc_12.docx",
+        "file_base64": b64,
+        "generate_study_set": False,
+        "persist_to_src": True,
+    })
+    assert upload_res.status_code == 200
 
+    # 2. Download raw file
+    dl_res = client.get("/api/materials/download?filename=On_Tap_Hoa_Hoc_12.docx")
+    assert dl_res.status_code == 200
+    assert dl_res.content == raw_bytes
+    assert "openxmlformats" in dl_res.headers.get("content-type", "")
+    assert "attachment" in dl_res.headers.get("content-disposition", "")
+    assert "On_Tap_Hoa_Hoc_12.docx" in dl_res.headers.get("content-disposition", "")
 
+    # 3. Nonexistent file returns 404
+    bad_res = client.get("/api/materials/download?filename=ghost_file.docx")
+    assert bad_res.status_code == 404

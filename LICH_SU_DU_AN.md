@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-18T10:45:00+07:00
-- Mục mới nhất: **[LOG-20261018-docx-extraction-grounded-qa](#log-20261018-docx-extraction-grounded-qa)**.
-- Nhật ký chung có **84 mục**: 32 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 59 mã YC và 25 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 18/10/2026.
+- Cập nhật: 2026-10-18T12:40:00+07:00
+- Mục mới nhất: **[LOG-20261018-canvas-attachment-fix-and-download](#log-20261018-canvas-attachment-fix-and-download)**.
+- Nhật ký chung có **85 mục**: 33 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 59 mã YC và 26 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 18/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1674,5 +1674,36 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
   + `node --test tests/chat_lifecycle_ui_yc206.test.cjs tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs`: PASS (28 passed).
   + `Get-ChildItem static\style.css | Select-String "gradient\("`: Không có gradient (tuân thủ thiết kế phẳng).
   + `python scripts/check_history.py --base origin/main`: PASS.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, bước tiếp: Đẩy commit và push lên nhánh `feat/chat-attachment-canvas-viewer`.
+
+<a id="log-20261018-canvas-attachment-fix-and-download"></a>
+### LOG-20261018-canvas-attachment-fix-and-download - 18/10/2026 12:40 (UTC+07)
+
+- Người thực hiện: Antigravity; loại: sửa lỗi Canvas hiển thị tài liệu dạng trang đơn liên tục, tải file nhị phân gốc, gắn card đính kèm bền vững trên tin nhắn và tăng giới hạn sinh câu trả lời tóm tắt toàn tệp.
+- Mục tiêu:
+  + Canvas đọc toàn file chuẩn Canvas (khớp Ảnh 3 thay vì bị ngắt thành nhiều trang như Ảnh 4): Loại bỏ hoàn toàn đường kẻ phân trang nhân tạo `TRANG X` trên các tệp văn bản phi-PDF (`.docx`, `.txt`, `.md`), gom toàn bộ nội dung thành một mặt giấy cuộn liên tục `canvas-doc-sheet`, trình bày đẹp mắt các callout box (`> `), tiêu đề `#` và bảng biểu.
+  + Tải về đúng định dạng gốc của tệp (khớp phản ánh tải về `.txt` thay vì `.docx`): Bổ sung API `/api/materials/download` trả về đúng file nhị phân gốc (`.docx`, `.pdf`, `.pptx`, v.v.) kèm `Content-Type` chuẩn và `Content-Disposition`, sửa nút `Tải tài liệu` trên thanh công cụ Canvas để tải về tệp gốc thay vì xuất file `.txt` tạo tạm từ client.
+  + Thẻ tệp đính kèm (`.message-attachment-card`) hiển thị nhất quán trên tin nhắn người dùng (khớp Ảnh 5 thay vì bị mất card như Ảnh 4): Đặt card đính kèm vào cột `.message-user-col` nằm ngay phía trên bong bóng câu hỏi của người dùng; bảo toàn card đính kèm xuyên suốt khi tải lại phiên từ lịch sử chat (`openSession`); cho phép nhấp vào card để tự động mở xem tệp trên Canvas ngay cả khi tệp chưa nằm trong bộ nhớ cache client (`/api/materials/inspect-library`).
+  + Khắc phục lỗi LLM từ chối trả lời tóm tắt tệp ("Mô hình chưa tạo được câu trả lời hoàn chỉnh do vượt quá độ dài quy định"): Tăng `max_gen_tokens` lên 2048 token cho các truy vấn tóm tắt tài liệu đính kèm, cô lập lịch sử chat khi tóm tắt tổng quan tệp để tránh làm loãng ngữ cảnh, xử lý ngắt đoạn mềm thay vì hủy toàn bộ bản nháp khi vượt ngân sách token, đồng thời dọn dẹp các lượt phản hồi lỗi cũ khỏi cơ sở dữ liệu lịch sử phiên.
+- Trước/sau thay đổi:
+  + Trước: Nút download trên Canvas chỉ lưu văn bản text thô `.txt`; tài liệu DOCX bị chia cắt bởi các vạch kẻ phân trang; câu hỏi tóm tắt tệp gặp lỗi cắt ngắn của LLM dẫn đến từ chối trả lời; tin nhắn người dùng bị mất card tệp đính kèm khi tải lại phiên hoặc hiển thị lệch vị trí.
+  + Sau: Nút download tải về chính xác file nhị phân gốc; Canvas hiển thị văn bản liền mạch phẳng chuyên nghiệp; LLM tóm tắt đầy đủ, chính xác toàn bộ nội dung tệp (hóa học, vật lý, sinh học) với nguồn trích dẫn; card tệp đính kèm hiển thị chuẩn phía trên câu hỏi người dùng và mở đọc tài liệu khi nhấp.
+- Phần/file sửa:
+  + `app/study_materials.py`: Bổ sung `resolve_raw_file` giải quyết file gốc từ đĩa/bộ nhớ; cập nhật `inspect_library_document` tái trích xuất phần nội dung trực tiếp từ đĩa cho tài liệu thư viện.
+  + `app/server.py`: Bổ sung endpoint `GET /api/materials/download`; bảo đảm `attachment_filename` luôn được truyền khi có `source_document_id`.
+  + `app/rag_agent.py`: Nâng `max_gen_tokens` lên 2048 cho truy vấn tài liệu đính kèm; cô lập ngữ cảnh tóm tắt; không hủy bỏ bản nháp hợp lệ khi độ dài vượt quá giới hạn.
+  + `app/history.py`: Lọc bỏ các lượt trả lời lỗi/từ chối cũ để tránh gây ô nhiễm ngữ cảnh hỏi đáp tệp.
+  + `scripts/dev.py`: Thiết lập cấu hình đầu ra UTF-8 trên Windows tránh lỗi UnicodeEncodeError CP1252.
+  + `static/app.js`: Tải tệp nhị phân gốc từ `/api/materials/download`; loại bỏ phân cách trang nhân tạo cho non-PDF và gom callout box; hiển thị card đính kèm phía trên tin nhắn trong `.message-user-col` và phục hồi qua các phiên; nạp tài liệu Canvas theo yêu cầu khi nhấp vào card.
+  + `static/style.css`: Thêm kiểu hiển thị `.message-user-col` và hoàn thiện kiểu phẳng Canvas.
+  + `static/index.html`: Cập nhật query string chống cache tài nguyên giao diện.
+  + `tests/test_study_materials.py`: Thêm ca kiểm thử `test_download_material_raw_binary` và kiểm thử tích hợp.
+  + `LICH_SU_DU_AN.md`: Cập nhật lịch sử thay đổi.
+- Kiểm thử phần mềm:
+  + `pytest tests/test_study_materials.py tests/test_learning_tools_ui_contract.py`: PASS (28 passed).
+  + `node --test tests/chat_lifecycle_ui_yc206.test.cjs tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs`: PASS (28 passed).
+  + `Get-ChildItem static\style.css | Select-String "gradient\("`: PASS (không có gradient).
+  + `scripts/check_history.py --base origin/main`: PASS.
 - Trạng thái: PASS.
 - Giới hạn, lỗi còn lại, bước tiếp: Đẩy commit và push lên nhánh `feat/chat-attachment-canvas-viewer`.

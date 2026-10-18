@@ -550,6 +550,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!activeAttachment && window.sessionActiveAttachment) {
             activeAttachment = window.sessionActiveAttachment;
         }
+        if (!activeAttachment && selectedSourcePage) {
+            activeAttachment = {
+                filename: selectedSourcePage.filename || selectedSourcePage.clean_title || selectedSourcePage.book_title || "Tài liệu đính kèm",
+                doc_id: selectedSourcePage.doc_id,
+            };
+        }
         if (activeAttachment) {
             window.sessionActiveAttachment = activeAttachment;
         }
@@ -1011,7 +1017,19 @@ document.addEventListener("DOMContentLoaded", () => {
             const latestCitedTurn = [...turns].reverse().find(turn => Array.isArray(turn.citations) && turn.citations.length);
             renderResumeControls(turns.length ? turns[turns.length - 1] : null, latestCitedTurn?.citations || []);
             turns.forEach(turn => {
-                appendMessage("user", turn.question);
+                let turnAttachment = null;
+                const scope = turn.search_scope || {};
+                const attFilename = scope.attachment_filename
+                    || (scope.kind === "document" && Array.isArray(turn.citations) && turn.citations[0]?.filename)
+                    || null;
+                if (attFilename) {
+                    turnAttachment = {
+                        filename: attFilename,
+                        doc_id: scope.document_id || (Array.isArray(turn.citations) && turn.citations[0]?.doc_id) || null,
+                    };
+                    window.sessionActiveAttachment = turnAttachment;
+                }
+                appendMessage("user", turn.question, { attachment: turnAttachment });
                 const asstEl = appendMessage("assistant", turn.answer);
                 if (turn.citations && turn.citations.length > 0) {
                     renderCitations(asstEl, turn.citations);
@@ -1355,21 +1373,58 @@ document.addEventListener("DOMContentLoaded", () => {
             `;
         }
 
-        msgDiv.innerHTML = `
-            <div class="message-avatar">${avatar}</div>
-            <div class="message-body">
-                ${attachmentHtml}
-                <div class="msg-content">${text ? renderMarkdown(text) : ""}</div>
-            </div>
-        `;
+        if (role === "user" && attachmentHtml) {
+            msgDiv.innerHTML = `
+                <div class="message-avatar">${avatar}</div>
+                <div class="message-user-col">
+                    ${attachmentHtml}
+                    <div class="message-body">
+                        <div class="msg-content">${text ? renderMarkdown(text) : ""}</div>
+                    </div>
+                </div>
+            `;
+        } else {
+            msgDiv.innerHTML = `
+                <div class="message-avatar">${avatar}</div>
+                <div class="message-body">
+                    ${attachmentHtml}
+                    <div class="msg-content">${text ? renderMarkdown(text) : ""}</div>
+                </div>
+            `;
+        }
         if (att) {
             const attCard = msgDiv.querySelector(".message-attachment-card");
-            attCard?.addEventListener("click", () => {
+            attCard?.addEventListener("click", async () => {
                 const stored = (typeof attachmentPreviewRegistry !== "undefined" && att.cardKey && attachmentPreviewRegistry.get(att.cardKey))
                     || att.material
                     || att;
-                if (stored && typeof openDocumentContentViewer === "function") {
-                    openDocumentContentViewer(stored);
+                if (!stored) return;
+                if ((stored.pages && stored.pages.length > 0) || (stored.extracted_pages && stored.extracted_pages.length > 0)) {
+                    if (typeof openDocumentContentViewer === "function") {
+                        openDocumentContentViewer(stored);
+                    }
+                    return;
+                }
+                try {
+                    const res = await fetch("/api/materials/inspect-library", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            filename: stored.filename,
+                            document_id: stored.doc_id || undefined,
+                            persist_to_src: false
+                        })
+                    });
+                    const data = await res.json();
+                    if (res.ok && data.material && typeof openDocumentContentViewer === "function") {
+                        openDocumentContentViewer(data.material);
+                    } else if (typeof openDocumentContentViewer === "function") {
+                        openDocumentContentViewer(stored);
+                    }
+                } catch (_) {
+                    if (typeof openDocumentContentViewer === "function") {
+                        openDocumentContentViewer(stored);
+                    }
                 }
             });
         }
@@ -2062,25 +2117,26 @@ document.addEventListener("DOMContentLoaded", () => {
     btnCanvasDownload?.addEventListener("click", () => {
         if (!currentInspectedAttachment) return;
         const entry = currentInspectedAttachment;
-        const fname = entry.filename || "document.txt";
-        const fullText = (entry.pages || []).map(p => `--- Trang ${p.page_num || 1} ---\n${p.text || ""}`).join("\n\n");
-        const blob = new Blob([fullText], { type: "text/plain;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
+        const fname = entry.filename || "document.docx";
+        const params = new URLSearchParams();
+        if (entry.filename) params.set("filename", entry.filename);
+        if (entry.material_id || entry.id) params.set("material_id", String(entry.material_id || entry.id));
+        if (entry.doc_id) params.set("document_id", String(entry.doc_id));
+        const downloadUrl = `/api/materials/download?${params.toString()}`;
         const a = document.createElement("a");
-        a.href = url;
-        a.download = fname.endsWith(".txt") ? fname : `${fname.replace(/\.[^.]+$/, "")}.txt`;
+        a.href = downloadUrl;
+        a.download = fname;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(url);
     });
 
-    function formatCanvasBlock(text, pageNum, isFirstPage, filterQuery = "") {
+    function formatCanvasBlock(text, pageNum, isFirstPage, filterQuery = "", showPageDivider = false) {
         const rawLines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
         if (!rawLines.length) return "";
 
         let html = "";
-        if (!isFirstPage) {
+        if (showPageDivider && !isFirstPage) {
             html += `<div class="canvas-page-divider" data-page="${pageNum}"><span class="canvas-page-badge">Trang ${pageNum}</span></div>`;
         }
 
@@ -2095,6 +2151,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
         for (let i = 0; i < rawLines.length; i++) {
             const line = rawLines[i];
+
+            // 0. Detect Blockquotes / Callout Boxes starting with '> '
+            if (line.startsWith("> ") || line === ">") {
+                const calloutLines = [];
+                while (i < rawLines.length && (rawLines[i].startsWith("> ") || rawLines[i] === ">")) {
+                    calloutLines.push(rawLines[i].replace(/^>\s?/, ""));
+                    i++;
+                }
+                i--; // Step back after loop
+                const calloutContent = calloutLines.map(highlight).join("<br>");
+                html += `<div class="canvas-callout-box">${calloutContent}</div>`;
+                continue;
+            }
 
             // 1. Detect Markdown Table
             if (line.startsWith("|") && line.endsWith("|")) {
@@ -2145,7 +2214,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             // 3. Detect Main Document Title (H1) on first page
-            if (isFirstPage && i === 0 && (line.length < 90 || line === line.toUpperCase())) {
+            if (isFirstPage && i === 0 && (line.length < 90 || line === line.toUpperCase()) && !line.startsWith("-") && !line.startsWith("•")) {
                 html += `<h1 class="canvas-h1">${highlight(line)}</h1>`;
                 continue;
             }
@@ -2157,7 +2226,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             // 5. Detect Major Sections (H2: CHỦ ĐỀ, CHƯƠNG, BÀI, PHẦN)
-            if (/^(?:chủ\s*đề|chương|phần|bài)\s*\d+/i.test(line) || (line.length < 80 && line === line.toUpperCase() && !line.startsWith("-"))) {
+            if (/^(?:chủ\s*đề|chương|phần|bài)\s*\d+/i.test(line) || (line.length < 80 && line === line.toUpperCase() && !line.startsWith("-") && !line.startsWith("•"))) {
                 html += `<h2 class="canvas-h2">${highlight(line)}</h2>`;
                 continue;
             }
@@ -2195,6 +2264,7 @@ document.addEventListener("DOMContentLoaded", () => {
             ? entry.extracted_pages
             : [];
         const q = (filterQuery || "").toLowerCase().trim();
+        const isPdf = Boolean(entry && entry.filename && entry.filename.toLowerCase().endsWith(".pdf"));
 
         const filteredPages = q
             ? pages.filter(p => String(p.text || "").toLowerCase().includes(q) || `trang ${p.page_num}`.includes(q))
@@ -2227,7 +2297,7 @@ document.addEventListener("DOMContentLoaded", () => {
         filteredPages.forEach((p, idx) => {
             const pageText = String(p.text || "").trim();
             if (pageText) {
-                fullHtml += formatCanvasBlock(pageText, p.page_num || (idx + 1), idx === 0, q);
+                fullHtml += formatCanvasBlock(pageText, p.page_num || (idx + 1), idx === 0, q, isPdf);
             }
         });
         docContentPagesList.innerHTML = fullHtml || `<div class="canvas-empty-state">Không có nội dung văn bản.</div>`;
@@ -2649,12 +2719,21 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || "Không thể đọc nội dung tài liệu thư viện");
 
+            const attachedMaterial = {
+                ...(data.material || {}),
+                cardKey: previewKey,
+                filename: (data.material && data.material.filename) || filename,
+                doc_id: data.material?.doc_id,
+                total_pages: data.material?.total_pages || 1,
+            };
+            window.sessionActiveAttachment = attachedMaterial;
+
             upsertAttachmentPreviewCard({
                 cardKey: previewKey,
                 filename: (data.material && data.material.filename) || filename,
                 isImage: false,
                 imageDataUrl: "",
-                material: data.material,
+                material: attachedMaterial,
                 loading: false
             });
             fetchKnowledgeBaseStatus();

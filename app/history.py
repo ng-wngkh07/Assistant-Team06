@@ -539,17 +539,44 @@ class HistoryStore:
         session_id: str,
         max_turns: int = 4,
         query: Optional[str] = None,
+        document_id: Optional[int] = None,
     ) -> List[Dict[str, str]]:
         """Retrieve completed turns from the session formatted for rag_agent chat_history.
 
         Supports bounded original-turn recall: when query mentions an earlier topic,
         retrieves matching older turns within the session while always preserving recent context.
+        Filters out refusal/insufficient-evidence turns and, when document_id is set,
+        only keeps turns belonging to the same document so earlier unrelated turns do not pollute Q&A.
         """
         with self._connect() as db:
-            rows = db.execute(
-                "SELECT turn_index, question, answer FROM session_turns WHERE session_id=? ORDER BY turn_index DESC LIMIT 512",
+            raw_rows = db.execute(
+                "SELECT turn_index, question, answer, search_scope_json FROM session_turns WHERE session_id=? ORDER BY turn_index DESC LIMIT 512",
                 (session_id,),
             ).fetchall()
+
+        if not raw_rows:
+            return []
+
+        refusal_prefixes = (
+            "tài liệu được cung cấp không cung cấp thông tin",
+            "[tài liệu được cung cấp không cung cấp thông tin",
+            "tôi chưa tìm thấy đủ căn cứ",
+            "tôi chưa có đủ thông tin",
+            "hiện chưa có đoạn trích phù hợp",
+        )
+        rows = []
+        for r in raw_rows:
+            ans_norm = (r["answer"] or "").strip().lower()
+            if any(ans_norm.startswith(p) or p in ans_norm[:180] for p in refusal_prefixes):
+                continue
+            if document_id is not None:
+                try:
+                    scope = json.loads(r["search_scope_json"] or "{}")
+                except Exception:
+                    scope = {}
+                if scope.get("document_id") != document_id:
+                    continue
+            rows.append(r)
 
         if not rows:
             return []

@@ -501,6 +501,49 @@ async def get_study_material_documents():
     return {"documents": docs}
 
 
+@app.get("/api/materials/download")
+async def download_study_material_file(
+    filename: Optional[str] = Query(None, max_length=1000),
+    material_id: Optional[str] = Query(None, max_length=128),
+    document_id: Optional[int] = Query(None, ge=1),
+):
+    from urllib.parse import quote
+
+    resolved = await run_in_threadpool(
+        study_material_manager.resolve_raw_file,
+        filename=filename,
+        material_id=material_id,
+        doc_id=document_id,
+    )
+    if not resolved:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tệp gốc để tải về.")
+
+    safe_name, raw_bytes = resolved
+    ext = Path(safe_name).suffix.lower()
+    mime_map = {
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".txt": "text/plain; charset=utf-8",
+        ".md": "text/markdown; charset=utf-8",
+        ".markdown": "text/markdown; charset=utf-8",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+    }
+    media_type = mime_map.get(ext, "application/octet-stream")
+    ascii_name = safe_name.encode("ascii", "ignore").decode("ascii") or f"document{ext}"
+    encoded_name = quote(safe_name)
+    return Response(
+        content=raw_bytes,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}'
+        },
+    )
+
+
 @app.get("/api/materials/{material_id}")
 async def get_study_material(material_id: str):
     mat = study_material_manager.get_material(material_id)
@@ -531,6 +574,8 @@ def requested_source_scope(req):
     doc = document_lookup.document(source_doc_id)
     if not doc or (req.source_page_num is not None and req.source_page_num > doc['total_pages']):
         raise HTTPException(status_code=404, detail='Không tìm thấy tài liệu hoặc trang nguồn đã chọn.')
+    if not getattr(req, "attachment_filename", None) and doc.get("filename"):
+        req.attachment_filename = doc["filename"]
     page = (source_doc_id, req.source_page_num) if req.source_page_num is not None else None
     return page, source_doc_id
 
@@ -1144,7 +1189,7 @@ def _chat_sync(req):
         if not sess:
             raise HTTPException(status_code=404, detail="Không tìm thấy phiên trò chuyện")
         # Store-authoritative durable server context bounded to last 8 turns with bounded original-turn recall
-        effective_history = [] if req.isolate_context else history_store.get_session_context(target_session_id, max_turns=8, query=req.query)
+        effective_history = [] if req.isolate_context else history_store.get_session_context(target_session_id, max_turns=8, query=req.query, document_id=source_document_id)
         create_on_completion = False
     else:
         # Legacy client fallback or new chat without session ID
@@ -1351,7 +1396,7 @@ async def chat_stream(req: ChatRequest):
         sess = history_store.get_session(target_session_id)
         if not sess:
             raise HTTPException(status_code=404, detail="Không tìm thấy phiên trò chuyện")
-        effective_history = [] if req.isolate_context else history_store.get_session_context(target_session_id, max_turns=8, query=req.query)
+        effective_history = [] if req.isolate_context else history_store.get_session_context(target_session_id, max_turns=8, query=req.query, document_id=source_document_id)
         create_on_completion = False
     else:
         effective_history = [] if req.isolate_context else (req.chat_history or [])
@@ -1424,7 +1469,7 @@ async def chat_stream(req: ChatRequest):
                     if not session_now:
                         yield f"data: {json.dumps({'type': 'error', 'content': 'Phiên đã bị xóa; câu hỏi chưa được xử lý.'}, ensure_ascii=False)}\n\n"
                         return
-                    effective_history = history_store.get_session_context(target_session_id, max_turns=8, query=req.query)
+                    effective_history = history_store.get_session_context(target_session_id, max_turns=8, query=req.query, document_id=source_document_id)
                     omitted = max(0, len(session_now.get("turns", [])) - 8)
                     if omitted:
                         yield f"data: {json.dumps({'type': 'context', 'history_turns_omitted': omitted, 'scope': 'stored_history_window'}, ensure_ascii=False)}\n\n"

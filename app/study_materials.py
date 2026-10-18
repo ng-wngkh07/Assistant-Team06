@@ -248,6 +248,7 @@ class StudyMaterialManager:
         self.ollama = ollama or OllamaClient()
         self.extractor = PDFExtractor()
         self._materials: Dict[str, Dict[str, Any]] = {}
+        self._raw_files: Dict[str, bytes] = {}
         self._lock = threading.Lock()
 
     def validate_file(self, filename: str, file_bytes: bytes) -> str:
@@ -429,6 +430,8 @@ class StudyMaterialManager:
                     f"Tài liệu '{filename}' không chứa đủ văn bản có thể đọc được ({result.total_chars} ký tự). "
                     "Nếu là tài liệu quét dạng ảnh, vui lòng kiểm tra chất lượng hình ảnh."
                 )
+            with self._lock:
+                self._raw_files[result.filename] = file_bytes
             return result
         finally:
             if temp_file.exists():
@@ -688,6 +691,56 @@ class StudyMaterialManager:
             self._materials[material_id] = record
         return record
 
+    def resolve_raw_file(
+        self,
+        filename: Optional[str] = None,
+        material_id: Optional[str] = None,
+        doc_id: Optional[int] = None,
+    ) -> Optional[Tuple[str, bytes]]:
+        """Resolve original binary file (filename, bytes) for downloading in original format (.docx, .pdf, etc.)."""
+        import sqlite3
+        from contextlib import closing
+        from app.config import BASE_DIR, DB_PATH, SRC_DIR
+
+        resolved_name = filename
+        if material_id and not resolved_name:
+            with self._lock:
+                mat = self._materials.get(material_id)
+                if mat:
+                    resolved_name = mat.get("filename")
+                    if not doc_id:
+                        doc_id = mat.get("doc_id")
+
+        if doc_id is not None and not resolved_name and DB_PATH.exists():
+            try:
+                with closing(sqlite3.connect(DB_PATH.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+                    row = db.execute("SELECT filename FROM documents WHERE id = ?", (doc_id,)).fetchone()
+                    if row:
+                        resolved_name = row[0]
+            except Exception:
+                pass
+
+        if not resolved_name:
+            return None
+
+        safe_name = Path(resolved_name).name
+        for folder in (SRC_DIR, BASE_DIR / "docs", BASE_DIR, BASE_DIR / "tests" / "fixtures" / "documents"):
+            if not folder or not folder.is_dir():
+                continue
+            candidate = folder / safe_name
+            if candidate.is_file():
+                try:
+                    return safe_name, candidate.read_bytes()
+                except Exception:
+                    pass
+
+        with self._lock:
+            raw_bytes = self._raw_files.get(safe_name)
+            if raw_bytes:
+                return safe_name, raw_bytes
+
+        return None
+
     def inspect_library_document(
         self,
         doc_id: Optional[int] = None,
@@ -698,12 +751,6 @@ class StudyMaterialManager:
         import sqlite3
         from contextlib import closing
         from app.config import BASE_DIR, DB_PATH, SRC_DIR
-
-        if filename:
-            with self._lock:
-                for mat in reversed(list(self._materials.values())):
-                    if (mat.get("filename") == filename or mat.get("clean_title") == filename) and mat.get("pages"):
-                        return mat
 
         doc = None
         rows = []
@@ -723,6 +770,37 @@ class StudyMaterialManager:
             except Exception as e:
                 logger.warning(f"Database lookup skipped in inspect_library_document: {e}")
 
+        target_filename = doc["filename"] if doc else filename
+
+        if target_filename:
+            with self._lock:
+                for mat in reversed(list(self._materials.values())):
+                    if (mat.get("filename") == target_filename or mat.get("clean_title") == target_filename) and mat.get("pages"):
+                        if doc and not mat.get("doc_id"):
+                            mat["doc_id"] = doc["id"]
+                        return mat
+
+        if target_filename:
+            safe_name = Path(target_filename).name
+            ext = Path(safe_name).suffix.lower()
+            if ext in {".docx", ".pptx", ".txt", ".md", ".markdown"} or not (doc and rows):
+                for folder in (SRC_DIR, BASE_DIR / "docs", BASE_DIR, BASE_DIR / "tests" / "fixtures" / "documents"):
+                    if not folder or not folder.is_dir():
+                        continue
+                    candidate = folder / safe_name
+                    if candidate.is_file():
+                        raw_bytes = candidate.read_bytes()
+                        extracted = self.extract_document(candidate.name, raw_bytes)
+                        ingest_info = {
+                            "saved_to_src": folder == SRC_DIR,
+                            "src_path": f"src/{candidate.name}",
+                            "doc_id": doc["id"] if doc else None,
+                            "chunks_indexed": len(rows) if rows else 0,
+                        }
+                        if persist_to_src or (doc and int(doc["total_pages"] or 0) != int(extracted.total_pages or 0)):
+                            ingest_info = self.ingest_to_src_and_index(candidate.name, raw_bytes, extracted)
+                        return self.store_extracted_document(extracted, ingestion_info=ingest_info)
+
         if doc and rows:
             page_map: Dict[int, List[str]] = {}
             total_chars = 0
@@ -735,26 +813,13 @@ class StudyMaterialManager:
             extracted_pages = [{"page_num": k, "text": "\n\n".join(v)} for k, v in sorted(page_map.items())]
             fake_res = PDFExtractionResult(filename=doc["filename"], filepath=SRC_DIR / doc["filename"])
             fake_res.clean_title = doc["clean_title"]
-            fake_res.total_pages = doc["total_pages"]
+            fake_res.total_pages = len(extracted_pages) or doc["total_pages"]
             fake_res.total_chars = total_chars
             fake_res.extracted_pages = extracted_pages
             return self.store_extracted_document(
                 fake_res,
                 ingestion_info={"saved_to_src": True, "src_path": f"src/{doc['filename']}", "doc_id": doc["id"]},
             )
-
-        if filename:
-            for folder in (SRC_DIR, BASE_DIR / "docs", BASE_DIR):
-                if not folder or not folder.is_dir():
-                    continue
-                candidate = folder / Path(filename).name
-                if candidate.is_file():
-                    raw_bytes = candidate.read_bytes()
-                    extracted = self.extract_document(candidate.name, raw_bytes)
-                    ingest_info = {"saved_to_src": folder == SRC_DIR, "src_path": f"src/{candidate.name}"}
-                    if persist_to_src:
-                        ingest_info = self.ingest_to_src_and_index(candidate.name, raw_bytes, extracted)
-                    return self.store_extracted_document(extracted, ingestion_info=ingest_info)
 
         raise StudyMaterialError(f"Không tìm thấy tài liệu '{doc_id or filename}' trong thư viện.")
 

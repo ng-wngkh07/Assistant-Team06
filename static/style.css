@@ -558,6 +558,19 @@ body {
     border-color: rgba(251, 113, 133, 0.25);
 }
 
+.message-user-col {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.message-user-col .message-body {
+    width: 100%;
+}
+
 .message-body code {
     background: #2a2b31;
     color: #fda4af;
@@ -4011,6 +4024,8 @@ body.sidebar-collapsed #btn-open-sidebar { display: inline-flex; }
     color: #64748b;
     padding: 48px 24px;
     font-size: 14.5px;
+}
+
 .canvas-table-wrapper {
     width: 100%;
     overflow-x: auto;

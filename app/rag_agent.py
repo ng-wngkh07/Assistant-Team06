@@ -538,8 +538,15 @@ class PsychologyAgent:
             build_evidence_catalog,
             resolve_evidence_ids,
         )
+        is_attached_doc_query = bool(attachment_filename or source_document_id) and bool(
+            re.search(
+                r"(?:tóm tắt|tổng hợp|tổng quan|nội dung|giải thích|lý thuyết|phân tích|trình bày|chủ đề|kiến thức|cho biết|hỏi về|trong file|tài liệu|tệp|file này|đính kèm)",
+                query,
+                re.I,
+            )
+        )
         resolved_level = resolve_processing_level(processing_level, query, compare_concepts)
-        max_gen_tokens = 1100 if resolved_level == "careful" else 900
+        max_gen_tokens = 2048 if is_attached_doc_query else (1100 if resolved_level == "careful" else 900)
 
         try:
             if source_page:
@@ -746,12 +753,12 @@ class PsychologyAgent:
         mode_instruction = answer_mode_instruction(answer_mode, compare_concepts=compare_concepts)
         attachment_notice = ""
         if attachment_filename or source_document_id:
-            att_title = attachment_filename or "tài liệu đính kèm"
+            att_title = attachment_filename or (retrieved_chunks[0].get("filename") if retrieved_chunks else "tài liệu đính kèm")
             attachment_notice = (
-                f"[Tài liệu đính kèm: {att_title}]\n"
-                "Hãy trả lời yêu cầu của người dùng một cách chính xác, mạch lạc và có cấu trúc rõ ràng dựa trên các đoạn nguồn của tài liệu đính kèm dưới đây. "
-                "Nếu người dùng yêu cầu tóm tắt lý thuyết hoặc nội dung, hãy tổng hợp đầy đủ các phần kiến thức cốt lõi có trong tài liệu và ghi mã trích dẫn [S#]. "
-                "Tuyệt đối chỉ sử dụng thông tin trong tài liệu đính kèm này, không đưa vào các môn học hoặc chủ đề khác không có trong tài liệu.\n\n"
+                f"Tài liệu đang xét: {att_title}\n"
+                "Yêu cầu xử lý: Hãy trả lời trực tiếp, đầy đủ và có cấu trúc rõ ràng dựa trên các đoạn nguồn S1..Sn của tài liệu đính kèm dưới đây. "
+                "Nếu người dùng yêu cầu tóm tắt nội dung hoặc lý thuyết trong file, hãy trình bày tên tài liệu, mô tả khái quát và tóm tắt lần lượt từng chủ đề/chương mục chính có trong tài liệu kèm mã trích dẫn [S#]. "
+                "Chỉ sử dụng thông tin có trong tài liệu đính kèm này.\n\n"
             )
         user_prompt = (
             "<user_query>\n"
@@ -764,7 +771,9 @@ class PsychologyAgent:
 
         try:
             capacity = context_capacity(model)
-            effective_chat_history = None if isolate_context else chat_history
+            if (attachment_filename or source_document_id) and token_counter is None:
+                capacity = max(capacity, 14000)
+            effective_chat_history = None if (isolate_context or is_attached_doc_query) else chat_history
             messages, context_info = build_context(
                 SYSTEM_PROMPT, user_prompt, context_parts,
                 effective_chat_history, capacity, max_gen_tokens,
@@ -833,7 +842,7 @@ class PsychologyAgent:
             return
 
         is_draft_truncated = getattr(generator, "last_done_reason", None) == "length"
-        if is_draft_truncated:
+        if is_draft_truncated and len(raw_answer.strip()) < 150:
             answer = "Mô hình chưa tạo được câu trả lời hoàn chỉnh do vượt quá độ dài quy định."
             yield {"type": "token", "content": answer}
             yield {
@@ -983,7 +992,7 @@ class PsychologyAgent:
                     }
                     return
 
-                if getattr(generator, "last_done_reason", None) == "length":
+                if getattr(generator, "last_done_reason", None) == "length" and len(repair_raw.strip()) < 150:
                     yield {"type": "token", "content": "Mô hình chưa tạo được câu trả lời hoàn chỉnh do vượt quá độ dài quy định."}
                     yield {
                         "type": "done",
