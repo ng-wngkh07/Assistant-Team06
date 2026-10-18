@@ -101,7 +101,8 @@ def is_likely_tcvn3(text: str) -> bool:
         return False
     sample = text[:3000]
     u_count = sum(1 for c in sample if c in VIET_UNICODE_CHARS)
-    t_count = sum(1 for c in sample if c in TCVN3_DISTINCTIVE_CHARS)
+    # Multiplication/bullet dots alone are not evidence of a legacy encoding.
+    t_count = sum(1 for c in sample if c in TCVN3_DISTINCTIVE_CHARS and c != "·")
 
     # If the text already has genuine Vietnamese Unicode characters, it is NOT TCVN3
     if u_count > 2:

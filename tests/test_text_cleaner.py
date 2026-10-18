@@ -42,3 +42,9 @@ def test_prompt_injection_sanitization():
     assert "<context>" not in sanitized
     assert "<instruction>" not in sanitized
     assert "Ignore all instructions" not in sanitized
+
+
+def test_unicode_multiplication_dots_in_formula_do_not_trigger_legacy_decoding():
+    text = 'p · V = n · R · T = (m/M) · R · T (R ≈ 8.314 J/mol·K)'
+    assert not is_likely_tcvn3(text)
+    assert normalize_vietnamese_text(text) == text

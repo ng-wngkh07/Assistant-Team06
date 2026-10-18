@@ -17,6 +17,64 @@ from app.study_materials import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_study_sources(tmp_path, monkeypatch):
+    """No live corpus/network/model may be touched by this software test module."""
+    import app.config as cfg
+    import app.server as server
+    import app.study_materials as sm
+    from app.indexer import KnowledgeIndexer
+    from app.document_lookup import DocumentLookup
+    from app.ollama_client import OllamaClient
+    from app.trained_client import TrainedModelClient
+    src = tmp_path / 'src'
+    src.mkdir()
+    (src / 'synthetic.txt').write_text('Entropy là độ bất định trung bình của một biến ngẫu nhiên rời rạc hữu hạn.', encoding='utf-8')
+    db = tmp_path / 'synthetic.db'
+    monkeypatch.setattr(cfg, 'DB_PATH', db)
+    monkeypatch.setattr(cfg, 'SRC_DIR', src)
+    monkeypatch.setattr(sm, 'DATA_DIR', tmp_path / 'data')
+    monkeypatch.setattr(OllamaClient, 'check_health', lambda self: False)
+    monkeypatch.setattr(TrainedModelClient, 'available', classmethod(lambda cls: False))
+    indexer = KnowledgeIndexer(db_path=db, src_dir=src)
+    indexer.index_all(ocr=False, embed_model=None)
+    monkeypatch.setattr(server, 'document_lookup', DocumentLookup(db_path=db, src_dir=src))
+    # materials_cache is a snapshot property; replace the actual session store.
+    monkeypatch.setattr(study_material_manager, "_materials", {})
+    # Attachment tests mock the Ollama boundary independently of the host's model.
+    monkeypatch.setattr(server.agent, "ollama", OllamaClient())
+    # API default is captured at import; tests explicitly select their mocked backend.
+    original_sync = server.agent.process_query_sync
+    original_stream = server.agent.process_query_stream
+    def sync_with_test_model(query, **kwargs):
+        kwargs["model"] = "test-ollama"
+        return original_sync(query, **kwargs)
+    def stream_with_test_model(query, **kwargs):
+        kwargs["model"] = "test-ollama"
+        yield from original_stream(query, **kwargs)
+    monkeypatch.setattr(server.agent, "process_query_sync", sync_with_test_model)
+    monkeypatch.setattr(server.agent, "process_query_stream", stream_with_test_model)
+    from app.history import HistoryStore
+    private_history = HistoryStore(tmp_path / "history.db")
+    monkeypatch.setattr(server, "_history_store", private_history)
+    monkeypatch.setattr(server.summarizer, "history_store", private_history)
+    yield
+
+
+def mock_recognized_image(monkeypatch):
+    """A readable image fixture uses OCR output, never file name or image metadata."""
+    from app.pdf_extractor import PDFExtractor, PDFExtractionResult
+    from pathlib import Path
+    text = 'Định lý Pythagoras phát biểu rằng trong tam giác vuông, bình phương cạnh huyền bằng tổng bình phương hai cạnh góc vuông.'
+    def extract(path, **kwargs):
+        result = PDFExtractionResult(filename=Path(path).name, filepath=Path(path))
+        result.total_pages = 1
+        result.total_chars = len(text)
+        result.extracted_pages = [{'page_num': 1, 'text': text, 'raw_text': text}]
+        return result
+    monkeypatch.setattr(PDFExtractor, 'extract_file', staticmethod(extract))
+
+
 @pytest.fixture
 def client():
     return TestClient(app)
@@ -172,6 +230,7 @@ def test_api_generate_from_library_document(client):
 
 
 def test_api_upload_image_png_and_jpeg(client, monkeypatch):
+    mock_recognized_image(monkeypatch)
     import io
     from PIL import Image, PngImagePlugin
 
@@ -200,7 +259,7 @@ def test_api_upload_image_png_and_jpeg(client, monkeypatch):
     assert len(data_png["material"]["quiz"]) >= 1
     assert len(data_png["material"]["flashcards"]) >= 1
 
-    # 2. Pure JPEG diagram image without metadata (exercises synthesized visual study fallback)
+    # 2. JPEG support with explicit recognized text; unreadable images are rejected separately.
     buf_jpg = io.BytesIO()
     img.save(buf_jpg, format="JPEG")
     b64_jpg = "data:image/jpeg;base64," + base64.b64encode(buf_jpg.getvalue()).decode("ascii")
@@ -378,7 +437,8 @@ def test_ingest_to_src_without_auto_quiz_and_on_demand_generate(client, tmp_path
     assert len(gen_mat["flashcards"]) >= 1
 
 
-def test_upload_webp_study_material(client):
+def test_upload_webp_study_material(client, monkeypatch):
+    mock_recognized_image(monkeypatch)
     import io
     from PIL import Image
     img = Image.new("RGB", (100, 50), color=(100, 150, 200))
@@ -578,20 +638,19 @@ def test_chat_immediate_qa_docx_chemistry_summary_and_specific(client, tmp_path,
     assert material["total_pages"] == 3
 
     # 2. Ask summary query: "tóm tắt nội dung có trong file"
-    mock_summary_response = [
-        "TỔNG HỢP NỘI DUNG ÔN TẬP HÓA HỌC 12 [S1]\n\n"
-        "Tài liệu bao gồm 5 chủ đề trọng tâm:\n"
-        "1. Ester - Lipid - Xà phòng [S1]\n"
-        "2. Carbohydrate (Glucose, Fructose, Saccharose, Tinh bột, Cellulose) [S2]\n"
-        "3. Hợp chất chứa Nitrogen (Amine, Amino acid, Peptide, Protein) [S2]\n"
-        "4. Polymer và mạng lưới tổng hợp [S3]\n"
-        "5. Đại cương kim loại và dãy điện hóa [S3]"
-    ]
-
+    # The model mock must cite only passages admitted under the real budget.
+    # The earlier mock assumed S3 was present and relied on automatic source
+    # assignment to hide invalid markers when that page was not admitted.
     def fake_chat_stream_summary(self, *args, **kwargs):
+        import re
+        from html import unescape
         self.last_done_reason = "stop"
-        for part in mock_summary_response:
-            yield part
+        prompt = kwargs["messages"][-1]["content"]
+        passages = re.findall(r'<document id="(S\d+)"[^>]*>\s*(.*?)\s*</document>', prompt, re.S)
+        assert passages, "The attachment overview must supply real admitted passages"
+        for source_id, text in passages:
+            excerpt = " ".join(unescape(text).split()[:30])
+            yield f"{excerpt} [{source_id}]\n"
 
     monkeypatch.setattr(OllamaClient, "chat_stream", fake_chat_stream_summary)
 
@@ -704,3 +763,29 @@ def test_download_material_raw_binary(client, tmp_path, monkeypatch):
     # 3. Nonexistent file returns 404
     bad_res = client.get("/api/materials/download?filename=ghost_file.docx")
     assert bad_res.status_code == 404
+
+
+def test_unreadable_image_api_rejects_before_persisting_or_generating(client, monkeypatch):
+    import io
+    from pathlib import Path
+    from PIL import Image, PngImagePlugin
+    from app.pdf_extractor import PDFExtractor, PDFExtractionResult
+    def empty_ocr(path, **kwargs):
+        return PDFExtractionResult(filename=Path(path).name, filepath=Path(path))
+    monkeypatch.setattr(PDFExtractor, 'extract_file', staticmethod(empty_ocr))
+    monkeypatch.setattr(StudyMaterialManager, '_run_windows_native_ocr', staticmethod(lambda p: ''))
+    def unexpected(*args, **kwargs):
+        pytest.fail('Unreadable image must not be saved, indexed or sent to generation')
+    monkeypatch.setattr(study_material_manager, 'ingest_to_src_and_index', unexpected)
+    monkeypatch.setattr(study_material_manager, 'generate_materials_from_pages', unexpected)
+    info = PngImagePlugin.PngInfo()
+    info.add_text('Description', 'Entropy là độ bất định trung bình của một biến ngẫu nhiên rời rạc hữu hạn.')
+    data = io.BytesIO()
+    Image.new('RGB', (100, 60), 'white').save(data, format='PNG', pnginfo=info)
+    response = client.post('/api/materials/upload', json={
+        'filename': 'chi_co_metadata.png',
+        'file_base64': base64.b64encode(data.getvalue()).decode('ascii'),
+        'persist_to_src': True,
+    })
+    assert response.status_code == 422
+    assert not study_material_manager.materials_cache

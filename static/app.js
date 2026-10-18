@@ -6,7 +6,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const sourceClearButton = document.getElementById("qa-source-clear");
     function updateSourceScopeLabel() {
         if (!selectedSourcePage || !sourceScope || !sourceLabel) return;
-        const range = selectedSourceMode === "document" ? "toàn tài liệu" : `trang ${selectedSourcePage.page_num}`;
+        const unit = /\.pdf$/i.test(selectedSourcePage.filename || "") ? "trang" : "phần";
+        const range = selectedSourceMode === "document" ? "toàn tài liệu" : `${unit} ${selectedSourcePage.page_num}`;
         sourceScope.hidden = false;
         sourceLabel.textContent = `Nguồn đang chọn: ${selectedSourcePage.title} · ${range}. `;
         if (sourceClearButton) sourceClearButton.textContent = "Tìm trong toàn bộ thư viện";
@@ -2322,7 +2323,7 @@ document.addEventListener("DOMContentLoaded", () => {
             docContentModalTitle.textContent = `📄 ${fname}`;
         }
         if (docContentModalMeta) {
-            docContentModalMeta.textContent = `${totalPages} trang · ${totalChars.toLocaleString("vi-VN")} ký tự`;
+            docContentModalMeta.textContent = `${totalPages} ${/\.pdf$/i.test(fname) ? "trang" : "phần"} · ${totalChars.toLocaleString("vi-VN")} ký tự`;
         }
         if (docContentSrcBadge) {
             docContentSrcBadge.textContent = `📂 ${srcPath}`;
@@ -2795,7 +2796,9 @@ document.addEventListener("DOMContentLoaded", () => {
             openStudyMaterial(data.material);
             syncGenerateButtonState();
             if (studyToolStatus) {
-                studyToolStatus.textContent = `✅ Đã tạo thành công ${(data.material.quiz || []).length} câu trắc nghiệm và ${(data.material.flashcards || []).length} flashcards cho "${filename}".`;
+                const isFallback = (data.material.generation && (data.material.generation.quiz === "extractive_fallback" || data.material.generation.flashcards === "extractive_fallback")) || Boolean(data.material.fallback_warning);
+                const provNotice = isFallback ? " [Nguồn: Trích xuất trực tiếp (fallback)]" : " [Nguồn: Mô hình AI]";
+                studyToolStatus.textContent = `✅ Đã tạo thành công ${(data.material.quiz || []).length} câu trắc nghiệm và ${(data.material.flashcards || []).length} flashcards cho "${filename}".${provNotice}`;
             }
         } catch (err) {
             hideStudyLoading();
@@ -2833,18 +2836,29 @@ document.addEventListener("DOMContentLoaded", () => {
             studyMaterialTitle.textContent = `📖 Bộ Ôn Luyện: ${material.filename}`;
         }
         const quizCount = (material.quiz || []).length;
+        const isFallback = (material.generation && (material.generation.quiz === "extractive_fallback" || material.generation.flashcards === "extractive_fallback")) || Boolean(material.fallback_warning);
+        const provLabel = isFallback
+            ? "Trích xuất trực tiếp (fallback)"
+            : (material.model ? `Mô hình AI: ${material.model}` : "Mô hình AI");
         if (studyMaterialSubtitle) {
-            studyMaterialSubtitle.textContent = `${quizCount} câu trắc nghiệm · ${totalCards} flashcards · ${material.total_pages || 1} trang`;
+            studyMaterialSubtitle.textContent = `${quizCount} câu trắc nghiệm · ${totalCards} flashcards · ${material.total_pages || 1} trang · Nguồn: ${provLabel} · Chưa xác minh đáp án đúng (không xác minh ngữ nghĩa)`;
         }
         if (quizBadgeCount) quizBadgeCount.textContent = String(quizCount);
         if (cardBadgeCount) cardBadgeCount.textContent = String(totalCards);
 
         if (sourceDocName) sourceDocName.textContent = `Tài liệu: ${material.filename}`;
         if (sourcePageCount) sourcePageCount.textContent = String(material.total_pages || 1);
-        if (sourceDocType) sourceDocType.textContent = (material.filename && material.filename.endsWith(".pdf")) ? "PDF Document" : "Văn bản học tập";
+        if (sourceDocType) {
+            const baseType = (material.filename && material.filename.endsWith(".pdf")) ? "PDF Document" : "Văn bản học tập";
+            sourceDocType.textContent = isFallback ? `${baseType} (Phương thức: Trích xuất trực tiếp - fallback)` : `${baseType} (Phương thức: ${material.model || "Mô hình AI"})`;
+        }
         if (sourceProcessedAt) sourceProcessedAt.textContent = new Date().toLocaleTimeString("vi-VN");
         if (sourceTextPreview) {
-            const previewText = (material.pages || []).map(p => `--- Trang ${p.page_num} ---\n${p.text}`).join("\n\n");
+            let previewText = (material.pages || []).map(p => `--- Trang ${p.page_num} ---\n${p.text}`).join("\n\n");
+            const warn = material.fallback_warning || (Array.isArray(material.warnings) && material.warnings.length ? material.warnings.join("; ") : "");
+            if (warn) {
+                previewText = `[CẢNH BÁO MINH BẠCH NGUỒN]: ${warn}\n(Đoạn trích hợp lệ đối chiếu nguồn, không là xác minh đáp án đúng)\n\n` + previewText;
+            }
             sourceTextPreview.textContent = previewText || "Không có trích đoạn văn bản thô.";
         }
 
@@ -2969,7 +2983,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (quizExplanationText) quizExplanationText.textContent = q.explanation || "Không có giải thích chi tiết.";
                 if (quizCitationPage) quizCitationPage.textContent = `Trang ${q.page_num || 1}`;
                 if (quizCitationQuote) {
-                    quizCitationQuote.textContent = q.evidence_quote ? `"${q.evidence_quote}"` : "(Tham khảo nội dung tổng quát từ tài liệu)";
+                    const quoteText = q.evidence_quote ? `"${q.evidence_quote}"` : "(Tham khảo nội dung tổng quát từ tài liệu)";
+                    quizCitationQuote.textContent = `${quoteText} — (Đoạn trích hợp lệ đối chiếu nguồn, không là xác minh đáp án đúng)`;
                 }
             } else {
                 quizFeedbackBox.hidden = true;
@@ -3080,7 +3095,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (cardBackText) cardBackText.textContent = card.back;
         if (cardCitationPage) cardCitationPage.textContent = `Trang ${card.page_num || 1}`;
         if (cardCitationQuote) {
-            cardCitationQuote.textContent = card.evidence_quote ? `"${card.evidence_quote}"` : "(Trích xuất từ nội dung tài liệu)";
+            const quoteText = card.evidence_quote ? `"${card.evidence_quote}"` : "(Trích xuất từ nội dung tài liệu)";
+            cardCitationQuote.textContent = `${quoteText} — (Đoạn trích hợp lệ đối chiếu nguồn, không là xác minh đáp án đúng)`;
         }
     }
 
@@ -3171,6 +3187,16 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!messagesContainer || !material) return;
         const quizCount = (material.quiz || []).length;
         const cardCount = (material.flashcards || []).length;
+        const isFallback = (material.generation && (material.generation.quiz === "extractive_fallback" || material.generation.flashcards === "extractive_fallback")) || Boolean(material.fallback_warning);
+        const provBadge = isFallback
+            ? `<span class="scope-pill" style="margin-left: 8px; font-size: 11px; background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);">⚠️ Trích xuất trực tiếp (fallback)</span>`
+            : `<span class="scope-pill" style="margin-left: 8px; font-size: 11px; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">🤖 Mô hình AI${material.model ? `: ${escapeHtml(material.model)}` : ""}</span>`;
+        const warningsList = (Array.isArray(material.warnings) ? material.warnings : []).filter(Boolean);
+        const warningNotice = (isFallback && material.fallback_warning)
+            ? `<div style="font-size: 0.82rem; color: #f59e0b; margin-top: 6px; padding: 6px 10px; background: rgba(245, 158, 11, 0.08); border-radius: 6px;">⚠️ ${escapeHtml(material.fallback_warning)}</div>`
+            : (warningsList.length > 0
+                ? `<div style="font-size: 0.82rem; color: #f59e0b; margin-top: 6px; padding: 6px 10px; background: rgba(245, 158, 11, 0.08); border-radius: 6px;">⚠️ ${warningsList.map(w => escapeHtml(w)).join("<br>")}</div>`
+                : "");
 
         messagesContainer.classList.add("has-chat");
 
@@ -3184,7 +3210,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div class="study-card-assistant">
                     <div class="study-card-header">
                         <span class="study-card-icon">📚</span>
-                        <div class="study-card-title">Đã sẵn sàng bộ học tập cho "${escapeHtml(material.filename)}"</div>
+                        <div class="study-card-title">Đã sẵn sàng bộ học tập cho "${escapeHtml(material.filename)}"${provBadge}</div>
                     </div>
                     <div class="study-card-details">
                         Hệ thống đã trích xuất thành công <strong>${material.total_pages || 1} trang</strong> từ tài liệu và tự động tạo:
@@ -3192,6 +3218,8 @@ document.addEventListener("DOMContentLoaded", () => {
                             <li><strong>${quizCount} câu hỏi trắc nghiệm</strong> (kèm giải thích chi tiết và trích dẫn đối chiếu từng trang).</li>
                             <li><strong>${cardCount} thẻ ghi nhớ Flashcard 3D</strong> phục vụ ghi nhớ thuật ngữ và khái niệm.</li>
                         </ul>
+                        ${warningNotice}
+                        <p style="font-size: 0.8rem; color: var(--text-muted); margin: 6px 0 0 0;"><em>Lưu ý: Đoạn trích hợp lệ dùng để đối chiếu nguồn, không là xác minh đáp án đúng.</em></p>
                     </div>
                     <div class="study-card-actions">
                         <button type="button" class="btn btn-primary btn-sm btn-reopen-study" data-material-id="${escapeHtml(material.id)}">

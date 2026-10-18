@@ -1,5 +1,5 @@
-# Agent Học Tập: chỉ cho phép tài sản dùng chung ở thư mục gốc.
-# Phạm vi chia sẻ: CONTRIBUTING.md. Không dùng git add -f để vượt quy tắc.
+# Study Agent: allow public project assets at the repository root.
+# Publication policy: CONTRIBUTING.md. Do not force-add ignored assets.
 /*
 !/.gitignore
 !/.gitattributes
@@ -18,8 +18,9 @@
 !/run.py
 !/start_app.command
 !/README_WINDOWS.md
-!/README_QUY_TAC.md
-!/LICH_SU_DU_AN.md
+!/CHANGELOG.md
+!/SECURITY.md
+
 !/DEFINITION_OF_DONE.md
 !/AGENT.md
 !/requirements-windows.txt
@@ -38,19 +39,18 @@
 !/data/
 !/.env.example
 
-# Tài liệu nhóm đã biên tập; hồ sơ/handoff/audit cá nhân vẫn giữ local.
+# Public product documentation; personal operational records remain local.
 /docs/*
-!/docs/team/
 !/docs/*.md
 
-# corpus/ chỉ chứa metadata văn bản; PDF/ảnh/gói nặng lưu ở kho riêng.
+# Source metadata only; original documents and large artifacts remain private.
 /corpus/**
 !/corpus/**/
 !/corpus/**/*.md
 !/corpus/**/*.json
 !/corpus/**/*.jsonl
 
-# src/ là tài liệu gốc; data/ chứa SQLite/vector/model/dữ liệu cá nhân.
+# Private sources, databases, vectors, models and personal data.
 /src/
 /data/*
 !/data/README.md
@@ -62,7 +62,7 @@
 /.gemini/
 /.antigravity/
 
-# Môi trường, cache, log, trạng thái máy và bí mật ở các thư mục được phép.
+# Environments, caches, logs, machine state and secrets.
 .venv/
 .train-venv/
 venv/
@@ -91,32 +91,23 @@ Thumbs.db
 *.safetensors
 *.gguf
 
-# PDF phan cong dung chung; chi cho phep dung artifact nay.
-!/output/
-/output/*
-!/output/pdf/
-/output/pdf/*
-!/output/pdf/PHAN_CHIA_NHIEM_VU_DO_AN_NHOM.pdf
+# Internal planning exports stay local.
+/output/
 
 # Windows installer manifest and helpers are shared; installers stay on each machine.
 !/requirements-windows-tools.json
-# One-off local trials and personal review/monitor tasks are not team tools.
+# One-off local trials and personal review or monitoring tasks stay local.
 /scripts/curate_v9_release.py
 /scripts/monitor_operations_smoke.py
 /scripts/codex_review_broad_answers.py
 
-# Chỉ chia sẻ rule project và backlog Lab 2; không mở cấu hình cá nhân.
+# Share only the project rule; personal agent settings stay local.
 !/.agents/
 /.agents/*
 !/.agents/rules/
 /.agents/rules/*
 !/.agents/rules/study-agent.md
-!/lab02/
-/lab02/*
-!/lab02/backlog/
-/lab02/backlog/*
-!/lab02/backlog/issues.csv
-!/lab02/backlog/create_issues.py
+/lab02/
 !/eval/
 /eval/*
 !/eval/cases.csv
