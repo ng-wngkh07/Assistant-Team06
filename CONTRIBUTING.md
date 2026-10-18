@@ -1,181 +1,47 @@
-# Đóng góp cho Agent Học Tập
+# Contributing
 
-Tài liệu này hướng dẫn báo lỗi, chuẩn bị môi trường, sửa mã/viết test, gửi PR và review.
-Cài/sử dụng ứng dụng theo [README](README.md), [Windows](README_WINDOWS.md) hoặc
-[Mac](README_MAC.md). Đọc [quy tắc](README_QUY_TAC.md), [phân công](docs/team/PHAN_CONG_6_NGUOI.md)
-và [nhật ký chung](LICH_SU_DU_AN.md) trước thay đổi; quy tắc cụ thể của dự án vẫn áp dụng.
+Start with a reproducible problem or a clear user outcome. Check existing issues and pull requests before opening new work. Keep each change small enough to review and preserve work already in progress.
 
-[Definition of Done](DEFINITION_OF_DONE.md) áp dụng cho mọi issue/PR. Sản phẩm
-chính là QA học tập; văn phòng là ví dụ Lab 2. Component ui/backend/retrieval-data/
-ai-service/evaluation/security trong #18–29 là phân công bài tập, không tự thay
-module sản phẩm hoặc nhiệm vụ của thành viên. Xem [ma trận tích hợp](docs/team/RA_SOAT_REPO_YC217.md).
+## Set up
 
-## Trách nhiệm và phối hợp
+Follow the [Windows](README_WINDOWS.md) or [macOS](README_MAC.md) guide. Use a separate demo or test data directory. Keep private documents, databases and model files outside the public change.
 
-TV1 tra cứu, TV2 QA, TV3 lịch từ ảnh chịu UI/API/test theo chức năng. TV4 (Mac)
-hợp nhất corpus/index/vector chính và training; TV5 giao diện/môi trường chung;
-TV6 kiểm thử/nghiệm thu/tài liệu. Năm người còn lại Windows. Mỗi vai trò có đầu ra và tiêu chí nghiệm thu trong bản phân công.
-
-Chốt Issue, chủ trì, tiêu chí và phần chung bị ảnh hưởng. Đọc log theo lỗi/file/chức năng
-và main mới nhất để giữ các sửa lỗi đã nghiệm thu. Sửa phần chung/ngoài phạm vi phải báo
-và thống nhất giải pháp/test/tương thích/migration/rollback với người bị ảnh hưởng.
-Giữ một người ghi module chung tại một thời điểm hoặc chia PR độc lập rõ ràng.
-
-## Báo lỗi và đề xuất
-
-Tạo Issue với:
-
-- Commit/branch, OS và kiến trúc, Python và profile demo/local.
-- Các bước tái hiện tối thiểu, điều mong đợi và kết quả thực tế.
-- Log/ảnh lỗi đã che bí mật và nội dung nguồn riêng; ghi test đã/chưa chạy, lỗi có tái hiện với demo không. Ưu tiên ví dụ tổng hợp tối thiểu.
-- Phạm vi ảnh hưởng và log/Issue cũ liên quan; không tự ghi dữ liệu cá nhân vào Issue.
-
-Đề xuất chức năng ghi mục tiêu, đầu vào/đầu ra, tiêu chí kiểm chứng và ảnh hưởng; chốt
-phạm vi với chủ trì trước làm rộng. Không suy chất lượng QA/VLM từ test mock. Dữ liệu, thông tin huấn luyện và hồ sơ nội bộ không đưa vào Issue/PR; phối hợp riêng với TV4 khi cần điều tra phần đó.
-
-## Chuẩn bị môi trường đóng góp
-
-Clone theo README. Mac dùng Python3.12 + `requirements-dev.txt`; Windows dùng
-`setup_windows.ps1 -DemoOnly` cho test nhẹ hoặc full cho model thật. Wrapper
-`requirements-windows.txt` include profile dev; `requirements.txt` chỉ là web runtime.
-Node22 dành cho test giao diện, cài theo hướng dẫn nền tảng. MLX có profile riêng
-Python3.13/Apple Silicon, chỉ dùng khi được giao phần đó; không cài vào venv web/Windows.
-
-`.env` riêng có thể trỏ nguồn/data/index thử nhưng không commit. Kiểm process env vì nó
-ưu tiên hơn .env; `scripts/dev.py` và launcher Windows nạp .env, bare `run.py` không tự nạp.
-Dùng demo hoặc clone/data riêng cho test, không ghi corpus/index chính hay tải/chạy model
-của máy đang có writer khác. Chỉ công bố điều kiện tái hiện phần mềm đã loại thông tin nội bộ; cấu hình riêng trao đổi qua kênh được kiểm soát.
-
-## Branch và thay đổi
-
-Sau khi nhận việc, từ checkout sạch đã giữ/cất thay đổi local:
+Before starting from a clean checkout:
 
 ```bash
 git fetch origin
 git switch main
 git pull --ff-only origin main
-git switch -c fix/qa/12-sua-trich-dan-tv2
+git switch -c fix/descriptive-name
 ```
 
-Đổi tên nhánh theo việc của mình: `<loai>/<phamvi>/<ma-viec>-<ma-vai-tro>`;
-loại feature/fix/refactor/test/docs/chore, phạm vi lookup/qa/timetable/training/shared.
-Không sao chép nguyên tên ví dụ cho nhiều việc. PR độc lập từ main; khi tiếp tục PR
-hiện hữu, làm trên đúng nhánh đã nhận, không tạo bản trùng. Không reset/hard checkout
-để làm mất sửa local hoặc force-push nhánh chung.
+Save local work before switching or updating branches. Use names such as `fix/attachment-source-scope` or `docs/local-setup`; use `codex/` for branches created by Codex. Names and titles should describe the change. Personal role codes, classroom milestones and internal acceptance assignments do not belong in public titles or documentation.
 
-Sau khi fetch, nhánh local đang chạy vẫn giữ nguyên cho đến khi bạn chủ động chuyển/cập nhật. Với PR hiện hữu, dùng `git switch <nhanh-PR>` và `git pull --ff-only origin <nhanh-PR>` khi checkout sạch. Nếu cần đưa main mới vào nhánh PR, merge `origin/main`, giải quyết xung đột và kiểm lại; không viết lại lịch sử chung. Khởi động lại đúng server và tải lại trình duyệt sau cập nhật UI/API.
+## Make and verify a change
 
-Tái hiện lỗi, giữ ca kiểm bảo vệ hành vi đúng, sửa phần nhỏ đủ tiêu chí; đọc diff/caller
-và kiểm hồi quy. Giữ phong cách module hiện có, không thêm thư viện/đổi format toàn repo
-khi chưa cần. Phần chung phải smoke cả tra cứu, QA và lịch. Không tắt test để che lỗi.
+1. Read the relevant implementation, tests and recent changelog entries.
+2. Reproduce the defect or define the intended behavior. For behavior changes, add a test that fails for the actual defect before fixing it.
+3. Update the implementation and affected documentation. Do not alter expected results to conceal a failure.
+4. Run the checks in [Testing](docs/testing.md). Report the environment, commands, results and checks that were not run.
+5. Add a concise entry under **Unreleased** in [CHANGELOG.md](CHANGELOG.md). Describe the user-visible result and any compatibility or data migration impact.
+6. Review the complete diff, including new files, for private content and unrelated edits.
 
-## Kiểm thử trước PR
+Documentation-only changes need a link, command and factual review; tests that do not apply may be marked N/A with a reason. Model behavior changes also need real-model evaluation and a separate content review.
 
-Mac từ gốc repo:
+## Pull requests
 
-```bash
-.venv/bin/python -m pip check
-.venv/bin/python -m pytest -c pytest.windows.ini
-node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs
-```
+Use a concrete title, for example `fix: keep attachment scope in follow-up questions`. Explain the problem, resulting behavior, validation and remaining limits. Link the issue when relevant; do not close unrelated or assigned work automatically.
 
-Windows:
+Use the [pull request template](.github/pull_request_template.md). A reviewer should be able to understand and reproduce the result without reading a chat or an internal work log. Keep private evidence and operational handoffs out of the PR.
 
-```powershell
-.venv\Scripts\python.exe -m pip check
-.\test_windows.ps1
-node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs
-```
+The repository owner merges after review and required checks. Approval and merge permission are separate controls. Do not bypass protection to work around failing tests. See [repository maintenance](docs/repository-maintenance.md). Automated reviewers use [AGENT.md](AGENT.md); the [project agent rule](.agents/rules/study-agent.md) keeps workspace constraints consistent.
 
-Feature suite dùng nguồn/data tạm/mock; không cần corpus/model cá nhân. Chạy thêm test
-liên quan phần sửa. Nếu sửa environment/installer, kiểm setup/PowerShell trên Windows;
-Mac PASS không được ghi thành Windows PASS. Nếu sửa UI chung, smoke ba chế độ.
-Model/ảnh thật, bộ cài full máy mới, POSIX/MLX/corpus tests có nghiệm thu riêng; ghi NOT_RUN
-khi chưa chạy. Xem [Team feature checks](https://github.com/ng-wngkh07/Assistant-Team06/actions/workflows/team-checks.yml).
+## Source and data safety
 
-Adapter Streamlit có phụ thuộc riêng ở `ui/requirements.txt`; xem [hướng dẫn UI](ui/README.md). Job `ui_adapter` kiểm thao tác thử lại, hủy, chat mới và giới hạn lịch sử trên Ubuntu. Chạy `python -m pytest tests/test_streamlit_flow.py` sau khi cài các phụ thuộc này; feature suite Windows/Mac vẫn giữ các kiểm tra hiện có.
+- Commit application code, synthetic fixtures, tests and public documentation only.
+- Keep `.env`, credentials, personal uploads, conversation history, SQLite databases, embeddings, datasets, model weights and private operational reports out of Git. Never force-add ignored assets.
+- Preserve original source files. Keep uncertain extraction or OCR explicitly unresolved.
+- Use one writer for each canonical index or model operation, and coordinate inference through the existing resource locks.
+- Do not change the serving model, activate an adapter or start training as a side effect of a software fix.
 
-Nâng dependency: sửa profile đúng và constraints tương ứng, giải quyết trong venv mới,
-kiểm pip check/import/runtime và CI Windows/Mac. Constraints web/Python3.12 không dùng
-cho .train-venv/Python3.13. Không freeze môi trường cá nhân vào repo mà chưa loại gói
-không liên quan/đường dẫn private và kiểm dependency graph. Nâng MLX phải review thêm
-API/tokenizer/cổng đánh giá; cài thư viện không phải quyền training/promote.
-
-## Nhật ký, commit và PR
-
-1. Thêm mục vào **LICH_SU_DU_AN.md ở gốc**: ID duy nhất, ngày/giờ Asia/Ho_Chi_Minh,
-   người/loại, lỗi/mục tiêu, trước/sau, file, ảnh hưởng, log liên quan, checks và giới hạn.
-   Thành viên dùng mẫu `LOG-YYYYMMDD-chucnang-maviec-tvN` trong file; giữ ID/ngày cũ,
-   không copy prompt, không tạo log riêng hay ghi vào archive local docs/project. Nhật ký công khai chỉ ghi thay đổi phần mềm; thông tin huấn luyện giữ local theo YC-214.
-2. Kiểm `git diff`, `git status` và `git diff --check`. Stage đúng file thay đổi,
-   kiểm `git diff --cached`; không `git add -f`. Commit mô tả kết quả cụ thể.
-3. `git push -u origin <nhanh-cua-ban>` rồi mở PR vào main theo mẫu của repo:
-   vấn đề/trước-sau, phạm vi/ảnh hưởng, Issue/log, OS/Python/profile, kiểm đã/chưa chạy,
-   phối hợp và rollback. Không đính kèm bí mật, nguồn riêng hoặc dữ liệu/thông tin huấn luyện, kể cả trong nội dung commit và bình luận. Tiếp tục PR hiện hữu bằng cách push đúng nhánh đó.
-4. Cập nhật nhánh từ origin/main trước merge, xử lý xung đột cùng chủ trì. Với log, giữ
-   cả mục hợp lệ và sửa ID trùng; không ghi đè cả file. Kiểm lại sau giải quyết xung đột.
-
-## Review và merge
-
-Workflow hiện tại chạy `features (windows-latest)`, `features (macos-latest)` và
-`history` cho PR. Kiểm kết quả trên đúng commit mới nhất, trạng thái nhánh, hội thoại
-và chính sách bảo vệ hiện hành trên GitHub trước merge. Không suy điều kiện merge
-từ một lần kiểm cũ hoặc từ chữ MERGEABLE.
-
-Nhóm review chéo theo quy trình, kể cả khi GitHub không bắt buộc approval. Reviewer khác tác giả đọc
-Files changed và bằng chứng → Review changes → Approve → Submit review. Commit mới
-sau review cần được đối chiếu lại; đủ checks không có nghĩa đã được nhóm duyệt. [GitHub hướng dẫn approval](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews).
-
-Chủ repo quản lý quyền tham gia qua **Settings → Collaborators** theo trách nhiệm đã chốt.
-Tài liệu phân công, Issue, PR và ví dụ giao việc dùng mã TV1-TV6; bảng ánh xạ tên thật/
-email/tài khoản liên hệ được quản lý riêng. Thông tin tác giả và bản quyền trong LICENSE
-và attribution Git được giữ nguyên.
-
-TV4 điều phối merge theo quy trình nhóm. Quyền thao tác thực tế phụ thuộc cấu hình GitHub;
-quy trình này không tự thay đổi quyền tài khoản hoặc chính sách bảo vệ nhánh.
-
-Cập nhật YC217, 16/10/2026: main đã có ruleset chỉ user owner được cập nhật qua PR;
-CI/protection cũ giữ riêng và không đổi. Review chéo vẫn là quy trình bắt buộc của
-nhóm; protection hiện không bắt buộc số approval. Xem [cấu hình và cách dựng lại](docs/team/QUYEN_MERGE_VA_BRANCH.md).
-Nhánh đã merge có thể xóa sau kiểm tích hợp và xác nhận không còn việc phụ thuộc;
-không bắt buộc xóa và không tự xóa nhánh của thành viên.
-
-Reviewer kiểm đúng tiêu chí, test/giới hạn, log, ranh giới tài sản và ảnh hưởng; phần chung
-cần review chủ trì bị ảnh hưởng. TV4 merge theo quy trình nhóm sau checks/review hợp lệ. TV6 kiểm tích hợp;
-nhóm đồng bộ main bằng fast-forward khi checkout sạch. Không tự tắt bảo vệ review,
-push trực tiếp main, force-push hoặc xoá main để vượt blocker. Training là đợt riêng,
-không tự chạy vì PR mã đã merge.
-
-## Tài sản được chia sẻ
-
-Git chứa app/UI/scripts/tests tổng hợp, requirements/constraints/config mẫu/CI/docs nhóm,
-nhật ký thay đổi phần mềm và PDF phân công được phép. Dữ liệu và thông tin huấn luyện
-không công bố trên GitHub theo YC-214; rà cả nội dung văn bản, tên/nội dung commit,
-mô tả PR và bình luận trước khi push, không chỉ rà phần mở rộng file. `.gitignore` dùng allowlist: file
-chia sẻ mới ở gốc phải thêm ngoại lệ chính xác và kiểm lại, không mở rộng cho data bí mật.
-Nguồn thật `src/`, dữ liệu riêng trong `data/` (trừ ngoại lệ công khai bên dưới), DB/vector/weights, .env, venv/cache, docs/project và
-cấu hình/tích hợp cá nhân giao riêng hoặc giữ local. Không merge SQLite/weights qua Git.
-
-Ngoại lệ Lab 2 được giới hạn đúng `data/offices.csv`, `data/README.md`,
-`eval/cases.csv`, `eval/run.py` và backlog công khai; không mở toàn `data/`.
-Hai file data chỉ chứa ví dụ/metadata công khai, được review quyền nguồn và thông
-tin cá nhân trước commit. Rule chung duy nhất là `.agents/rules/study-agent.md`;
-các file `.agents` khác vẫn local. Trước PR kiểm đầu ra xuất hiện trong diff,
-đặc biệt các file mới từng bị ignore. Không chạy lại `lab02/backlog/create_issues.py`
-để tạo lại #18–29; script không có cơ chế ngăn issue trùng.
-
-Bàn giao nguồn/model có version/hash/quyền và provenance theo [corpus/README.md](corpus/README.md).
-Một writer chính hợp nhất corpus/training; readiness live `complete: true`, OCR review,
-nguồn-trang-chunk-vector, dedup/split/tokenizer/tài nguyên phải đạt. Đánh giá candidate độc lập,
-giữ kiến thức cũ và rollback trước kích hoạt; loss/test xanh chưa đủ. Giấy phép [MIT](LICENSE)
-cho mã không thay quyền nguồn/model. Hai cải tiến nhỏ trong phân công còn là đề xuất.
-
-## Quản lý bí mật và dữ liệu nhạy cảm (Secrets)
-
-1. **Không commit bí mật:** Tuyệt đối không commit API keys, mật khẩu, access token hoặc thông tin bí mật cá nhân vào Git (bao gồm cả code, commit message, PR description và comment).
-2. **Cấu hình môi trường qua `.env`:**
-   - Sao chép file `.env.example` thành `.env` để cấu hình cục bộ: `cp .env.example .env`.
-   - File `.env` đã được liệt kê trong `.gitignore` và không bao giờ được thêm vào Git (`git add`).
-3. **Xử lý sự cố rò rỉ:** Nếu phát hiện bí mật bị commit nhầm:
-   - Ngay lập tức thu hồi/revoke token/key trên trang quản trị nhà cung cấp dịch vụ.
-   - Báo ngay cho nhóm trưởng (TV4) và người quản lý tài liệu (TV6) để loại bỏ commit khỏi lịch sử Git.
+Report suspected credential exposure privately to the repository owner and revoke the affected credential promptly. See [Security](SECURITY.md).

@@ -1,21 +1,21 @@
 ---
-name: Feature / task
-about: A unit of work for the sprint
-labels: feat
+name: Feature request
+about: Propose a concrete improvement to Study Agent
+labels: enhancement
 ---
-## Goal
-<user-visible outcome — link the use case>
+## User need
+
+Who needs this and what are they trying to do?
+
+## Proposed behavior
+
+Describe the expected outcome and relevant alternatives.
 
 ## Acceptance criteria
-- [ ] ...
-- [ ] ...
 
-## Component
-UI / backend / retrieval-data / AI service / evaluation / security
+- [ ] Observable result
+- [ ] Failure or boundary behavior
 
-## Size
-S (< 1 day) / M (1–2 days) — split anything larger
+## Scope and evidence
 
-## Completion
-Follow `DEFINITION_OF_DONE.md`; identify the owner, dependencies and affected files.
-Separate a mockup/proposal from implemented and verified product behaviour.
+Affected workflow, dependencies and synthetic examples. Keep internal work allocation and private content out of the report.

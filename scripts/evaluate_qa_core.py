@@ -103,7 +103,7 @@ def main():
                 calls=model.calls[before:]
                 checks={'response_kind':result['response_kind']==case['expected_kind'],
                         'generation_count':result['generation_calls']==len(calls),
-                        'citation_documents':all(c.get('doc_id') in case['gold_docs'] for c in result['citations'])}
+                        'citation_documents':{c.get('doc_id') for c in result['citations']} == set(case['gold_docs'])}
                 report['results'].append({'id':case['id'],'query':case['query'],'expected':case,
                     'seconds':time.monotonic()-started,'checks':checks,'result':result,'real_calls':calls})
             except Exception as exc:

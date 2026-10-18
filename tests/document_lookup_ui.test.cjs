@@ -95,7 +95,7 @@ test('Selecting a page for QA keeps the current question and requires an explici
     const { nodes, events, elements } = await render({ ...source, pdf_url: null, page_image_url: null });
     const question = elements.get('user-input');
     question.value = 'Quasar là gì?';
-    const useInQa = nodes.find(node => node.tagName === 'button' && node.textContent === 'Dùng trang làm phạm vi QA');
+    const useInQa = nodes.find(node => node.tagName === 'button' && node.textContent === 'Dùng phần làm phạm vi QA');
     assert.ok(useInQa, 'Each source result should be selectable as a retrieval scope');
     useInQa.listeners.click();
     assert.equal(question.value, 'Quasar là gì?');
@@ -117,4 +117,12 @@ test('A selected source can open the practice tab and start practice for that ex
     assert.equal(events[0].detail.chunk_id, 24);
     assert.equal(events[0].detail.title, 'study_demo.md');
     assert.equal(events[1].detail, 'practice');
+});
+
+test('Source selection retains the real filename for chat attachments and section labels', async () => {
+    const {nodes, events} = await render(source);
+    const select = nodes.find(node => node.textContent === 'Dùng phần làm phạm vi QA');
+    assert.ok(select, 'Non-PDF sources must be described as reading sections');
+    select.listeners.click();
+    assert.equal(events[0].detail.filename, source.filename);
 });

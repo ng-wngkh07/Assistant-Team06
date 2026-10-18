@@ -156,7 +156,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 ask.addEventListener("click", () => {
                     const input = document.getElementById("user-input");
                     const draft = `Hãy giải thích nội dung ${sourceUnit} ${pageNum} trong tài liệu «${item.book_title || item.filename}».`;
-                    document.dispatchEvent(new CustomEvent("app-source-selected", {detail:{doc_id:docId, page_num:pageNum, chunk_id:Number(item.chunk_id), title:item.book_title || item.filename}}));
+                    document.dispatchEvent(new CustomEvent("app-source-selected", {detail:{doc_id:docId, page_num:pageNum, chunk_id:Number(item.chunk_id), filename:item.filename, title:item.book_title || item.filename}}));
                     input.value = input.value.trim() ? `${input.value}\n\n${draft}` : draft;
                     setMode("qa");
                     input.dispatchEvent(new Event("input"));
@@ -166,12 +166,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 const useInQa = document.createElement("button");
                 useInQa.type = "button";
                 useInQa.className = "btn btn-outline btn-sm";
-                useInQa.textContent = "Dùng trang làm phạm vi QA";
+                useInQa.textContent = `Dùng ${sourceUnit} làm phạm vi QA`;
                 useInQa.title = "Giữ nguyên câu hỏi trong ô nhập và truy xuất lại bằng chứng khi bạn gửi.";
                 useInQa.addEventListener("click", () => {
                     document.dispatchEvent(new CustomEvent("app-source-selected", {detail:{
                         doc_id:docId, page_num:pageNum, chunk_id:Number(item.chunk_id),
-                        title:item.book_title || item.filename,
+                        filename:item.filename, title:item.book_title || item.filename,
                     }}));
                     setMode("qa");
                     document.getElementById("user-input")?.focus();
@@ -184,7 +184,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 practice.addEventListener("click", () => {
                     document.dispatchEvent(new CustomEvent("app-source-selected", {detail:{
                         doc_id:docId, page_num:pageNum, chunk_id:Number(item.chunk_id),
-                        title:item.book_title || item.filename,
+                        filename:item.filename, title:item.book_title || item.filename,
                     }}));
                     document.dispatchEvent(new CustomEvent("app-open-tool-tab", {detail:"practice"}));
                     document.dispatchEvent(new CustomEvent("app-start-practice"));
