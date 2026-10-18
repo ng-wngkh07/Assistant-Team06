@@ -89,12 +89,12 @@ jobs:
           for run in report["runs"]:
               for result in run.get("results", []):
                   result.get("partialFingerprints", {}).pop("primaryLocationLineHash", None)
-          path.write_text(json.dumps(report), encoding="utf-8")
+          Path("github-results.sarif").write_text(json.dumps(report), encoding="utf-8")
           PYTHON
 
       # Upload the SARIF file generated in the previous step
       - name: Upload SARIF results file
-        if: ${{ !cancelled() && hashFiles('results.sarif') != '' }}
+        if: ${{ !cancelled() && hashFiles('github-results.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: results.sarif
+          sarif_file: github-results.sarif
