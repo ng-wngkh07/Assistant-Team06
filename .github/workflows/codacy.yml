@@ -46,6 +46,9 @@ jobs:
           # Check https://github.com/codacy/codacy-analysis-cli#project-token to get your project token from your Codacy repository
           # You can also omit the token and run the tools that support default configurations
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
+          # Scan the Python backend with Bandit without requiring Codacy account settings.
+          # CodeQL handles the cross-language analysis in its separate workflow.
+          tool: bandit
           # Do not silently accept a report when a configured analyzer fails.
           verbose: false
           upload: false
