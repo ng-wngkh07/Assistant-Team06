@@ -47,8 +47,12 @@ jobs:
           # You can also omit the token and run the tools that support default configurations
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           # Do not silently accept a report when a configured analyzer fails.
+          verbose: false
+          upload: false
+          allow-network: false
+          force-file-permissions: false
           fail-if-incomplete: true
-          tool-timeout: 600
+          tool-timeout: 10minutes
           output: results.sarif
           format: sarif
           # Adjust severity of non-security issues
