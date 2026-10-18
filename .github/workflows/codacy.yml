@@ -37,7 +37,7 @@ jobs:
     steps:
       # Checkout the repository to the GitHub Actions runner
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # CLI 7.9.25 bundles better-files 3.8.0, whose BOM decoder can split
       # valid UTF-8 characters at a read-buffer boundary (upstream issue #326).
@@ -74,6 +74,23 @@ jobs:
             --commit-uuid "$GITHUB_SHA" \
             --fail-if-incomplete --tool-timeout 10minutes \
             --gh-code-scanning-compat --max-allowed-issues 2147483647
+
+      # Codacy emits an MD5 value under GitHub's line-hash property. Let the
+      # upload action calculate its supported fingerprint from unchanged source.
+      - name: Prepare GitHub fingerprints
+        if: ${{ !cancelled() && hashFiles('results.sarif') != '' }}
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          from pathlib import Path
+          path = Path("results.sarif")
+          report = json.loads(path.read_text(encoding="utf-8"))
+          for run in report["runs"]:
+              for result in run.get("results", []):
+                  result.get("partialFingerprints", {}).pop("primaryLocationLineHash", None)
+          path.write_text(json.dumps(report), encoding="utf-8")
+          PYTHON
 
       # Upload the SARIF file generated in the previous step
       - name: Upload SARIF results file
