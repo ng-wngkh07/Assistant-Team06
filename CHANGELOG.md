@@ -4,6 +4,10 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ## Unreleased
 
+### Added
+
+- Scan Python, JavaScript, GitHub Actions and the standalone Apple Vision Swift helper with CodeQL; compile the helper explicitly on macOS.
+
 ### Changed
 
 - Reorganize public documentation in English around product usage, setup, architecture, testing and maintenance. Remove internal allocation and submission records from public guides.
