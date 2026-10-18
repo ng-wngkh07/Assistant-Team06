@@ -15,10 +15,32 @@ from app.searcher import HybridSearcher
 
 
 class DocumentLookup:
-    def __init__(self, db_path: Path = DB_PATH, src_dir: Path = SRC_DIR):
-        self.db_path = db_path
-        self.src_dir = src_dir
+    def __init__(self, db_path: Optional[Path] = None, src_dir: Optional[Path] = None):
+        self._db_path = db_path
+        self._src_dir = src_dir
         self.ollama = OllamaClient()
+
+    @property
+    def db_path(self) -> Path:
+        if self._db_path is not None:
+            return self._db_path
+        from app.config import DB_PATH as CONFIG_DB_PATH
+        return CONFIG_DB_PATH
+
+    @db_path.setter
+    def db_path(self, val: Path):
+        self._db_path = val
+
+    @property
+    def src_dir(self) -> Path:
+        if self._src_dir is not None:
+            return self._src_dir
+        from app.config import SRC_DIR as CONFIG_SRC_DIR
+        return CONFIG_SRC_DIR
+
+    @src_dir.setter
+    def src_dir(self, val: Path):
+        self._src_dir = val
 
     def connect(self):
         db = sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True)
@@ -37,7 +59,7 @@ class DocumentLookup:
 
     SUPPORTED_EXTENSIONS = {
         ".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown",
-        ".png", ".jpg", ".jpeg"
+        ".png", ".jpg", ".jpeg", ".webp"
     }
 
     def supported_path(self, filename: str) -> Optional[Path]:
@@ -66,6 +88,31 @@ class DocumentLookup:
                 "SELECT id, filename, clean_title, total_pages FROM documents "
                 "WHERE id=? AND status IN ('indexed','ocr_partial_reviewed')", (doc_id,)
             ).fetchone()
+        if not row or not self.supported_path(row["filename"]):
+            return None
+        return dict(row)
+
+    def document_by_filename(self, filename: str) -> Optional[dict]:
+        with closing(self.connect()) as db:
+            row = db.execute(
+                "SELECT id, filename, clean_title, total_pages FROM documents "
+                "WHERE (filename=? OR clean_title=?) AND status IN ('indexed','ocr_partial_reviewed')",
+                (filename, filename)
+            ).fetchone()
+            if not row:
+                base_name = Path(filename).name
+                row = db.execute(
+                    "SELECT id, filename, clean_title, total_pages FROM documents "
+                    "WHERE (filename=? OR clean_title=?) AND status IN ('indexed','ocr_partial_reviewed')",
+                    (base_name, base_name)
+                ).fetchone()
+            if not row:
+                stem = Path(filename).stem
+                row = db.execute(
+                    "SELECT id, filename, clean_title, total_pages FROM documents "
+                    "WHERE (filename LIKE ? OR clean_title LIKE ?) AND status IN ('indexed','ocr_partial_reviewed')",
+                    (f"%{stem}%", f"%{stem}%")
+                ).fetchone()
         if not row or not self.supported_path(row["filename"]):
             return None
         return dict(row)

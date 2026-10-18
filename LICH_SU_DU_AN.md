@@ -2,9 +2,9 @@
 
 <!-- PROJECT_HISTORY_SCHEMA: 3 -->
 - File chung duy nhất: `LICH_SU_DU_AN.md` ở gốc, push cùng mã nguồn.
-- Cập nhật: 2026-10-18T00:05:00+07:00
-- Mục mới nhất: **[YC-227](#yc-227)**.
-- Nhật ký chung có **82 mục**: 30 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 59 mã YC và 23 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 18/10/2026.
+- Cập nhật: 2026-10-18T12:55:00+07:00
+- Mục mới nhất: **[LOG-20261018-docx-pure-xml-ci-fix](#log-20261018-docx-pure-xml-ci-fix)**.
+- Nhật ký chung có **86 mục**: 34 môi trường/chức năng, 6 tổ chức/tài liệu, 6 phát hành/đồng bộ GitHub, 20 rà soát/nghiệm thu, 11 làm rõ kiến trúc/quyền/quy trình, 9 dữ liệu corpus/huấn luyện. Có 59 mã YC và 27 mã LOG duy nhất; giữ nguyên các ID/ngày cũ. Hiệu chỉnh ngày 18/10/2026.
 - [Quy tắc](README_QUY_TAC.md), [phân công 6 người](docs/team/PHAN_CONG_6_NGUOI.md),
   [quy trình PR](CONTRIBUTING.md), [Windows](README_WINDOWS.md).
 
@@ -1618,3 +1618,116 @@ YC-168 biên tập YC-167 theo yêu cầu mới; bản trước hiệu chỉnh v
 - Trạng thái: PASS.
 - Giới hạn, lỗi còn lại, bước tiếp: Dịch vụ cục bộ đang chạy ổn định; người dùng chỉ cần làm mới trang web (F5 / Cmd+Shift+R) để trải nghiệm đầy đủ tính năng.
 
+<a id="log-20261018-chat-attachment-canvas-viewer"></a>
+### LOG-20261018-chat-attachment-canvas-viewer - 18/10/2026 10:20 (UTC+07)
+
+- Người thực hiện: Antigravity; loại: tính năng tương tác tài liệu đính kèm tức thì trong khung chat và giao diện đọc tài liệu Canvas liền mạch.
+- Mục tiêu:
+  + Tương tác trực tiếp với tài liệu vừa upload: Cho phép người dùng upload tài liệu lên và đặt câu hỏi hoặc yêu cầu Agent tóm tắt, giải thích ngay lập tức dựa trên nội dung tệp. Lời nhắc của người dùng trong khung chat hiển thị card đính kèm tài liệu trực quan (`[📄 filename.ext | Tài liệu học tập]`) có thể click để mở tài liệu.
+  + Giao diện đọc tài liệu Canvas liền mạch: Chuyển đổi giao diện đọc tài liệu từ dạng phân trang chia cắt dòng (Image 4) sang giao diện Canvas toàn trang hiện đại (chuẩn ChatGPT/Gemini Canvas - Image 3), hiển thị tài liệu dạng trang giấy liên tục (`canvas-doc-sheet`) với thanh công cụ Canvas (tiêu đề, tìm kiếm từ khóa kèm số lượng khớp, thanh thu phóng Zoom 50% - 150%, nút tải tệp, nút phóng to mở rộng toàn màn hình và nút chuyển nhanh tạo trắc nghiệm/flashcard).
+  + Nguồn dữ liệu tức thì: Bổ sung định tuyến `attachment_filename` trong API `/api/chat` và luồng stream `/api/chat/stream`, truy xuất ngữ cảnh chính xác từ tệp đính kèm và trích dẫn trực tiếp nguồn tài liệu.
+- Trước/sau thay đổi:
+  + Trước: Người dùng tải file lên chỉ hiển thị thông báo tải thành công, không thể hỏi đáp ngay dựa trên file vừa đính kèm. Khung modal đọc tài liệu bị cắt vụn thành từng hộp trang nhỏ lẻ, gây khó khăn cho việc đọc và theo dõi nội dung.
+  + Sau: Người dùng có thể đính kèm file và gửi câu hỏi ngay (như "Tóm tắt lý thuyết trong file"); giao diện chat hiển thị card đính kèm trong tin nhắn người dùng và Agent trả lời tổng quan có trích dẫn nguồn `[S1]`. Modal đọc file chuyển sang canvas tài liệu khổ rộng, cuộn mượt mà với đầy đủ công cụ zoom, tìm kiếm và tải xuống.
+- Phần/file sửa:
+  + `static/index.html`: Chuyển `#document-content-modal` sang Canvas Document Modal với `.canvas-top-bar`, `.canvas-viewport`, `.canvas-doc-sheet`, các điều khiển zoom, tìm kiếm, tải về và mở rộng toàn màn hình.
+  + `static/style.css`: Thêm bộ style Canvas document viewer phẳng (zero gradient), `.message-attachment-card` cho bong bóng chat người dùng.
+  + `static/app.js`: Tích hợp `activeAttachment` vào luồng chat gửi câu hỏi, hiển thị card đính kèm trong tin nhắn chat, triển khai bộ render Canvas liền mạch `renderDocumentContentPages`, điều khiển thu phóng `applyCanvasZoom`, tải tài liệu và mở rộng fullscreen.
+  + `app/document_lookup.py`: Bổ sung `document_by_filename`, hỗ trợ định dạng `.webp`, cấu hình dynamic property cho `db_path` và `src_dir`.
+  + `app/searcher.py`: Cấu hình dynamic property `db_path` và bổ sung phương thức `connect()` cho `HybridSearcher`.
+  + `app/server.py`: Mở rộng `ChatRequest` với `attachment_filename`, cập nhật `requested_source_scope` tự động nhận diện tài liệu đính kèm, chuyển tiếp vào `agent.process_query_sync` và `agent.process_query_stream`.
+  + `app/rag_agent.py`: Nhận diện truy vấn tài liệu đính kèm `is_attached_doc_query`, gắn chú thích tài liệu nguồn và trích xuất đoạn ngữ cảnh phục vụ trả lời.
+  + `tests/test_study_materials.py`: Bổ sung 2 ca kiểm thử UI contract và API chat tức thì: `test_canvas_document_viewer_ui_contract` và `test_chat_immediate_query_with_attachment`.
+  + `LICH_SU_DU_AN.md`: Ghi nhật ký phát triển và kiểm định hệ thống.
+- Kiểm thử phần mềm:
+  + `pytest tests/test_study_materials.py`: PASS (17 passed).
+  + `pytest tests/test_learning_tools_ui_contract.py`: PASS (6 passed).
+  + `node --test tests/chat_lifecycle_ui_yc206.test.cjs tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs`: PASS (28 passed).
+  + Kiểm tra quy tắc phẳng: Không sử dụng `gradient(` trong `static/style.css`.
+  + `scripts/check_history.py --base main`: PASS.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, bước tiếp: Đẩy commit lên branch `main` và thông báo tới người dùng.
+
+<a id="log-20261018-docx-extraction-grounded-qa"></a>
+### LOG-20261018-docx-extraction-grounded-qa - 18/10/2026 10:45 (UTC+07)
+
+- Người thực hiện: Antigravity; loại: sửa lỗi trích xuất tài liệu DOCX theo cấu trúc phân cấp, hiển thị bảng biểu và hỏi đáp ngữ cảnh cô lập theo tài liệu tải lên.
+- Mục tiêu:
+  + Khắc phục triệt để lỗi tài liệu DOCX (`On_Tap_Hoa_Hoc_12.docx`) bị phân mảnh nghiêm trọng thành 67 "trang" rời rạc, mỗi dòng văn bản đơn lẻ biến thành một trang; bảo toàn đầy đủ cấu trúc phân cấp (Tiêu đề, Heading 1/2/3, danh sách đầu dòng, khung chú thích) và cấu trúc bảng đa cột dưới định dạng Markdown bảng. Phân trang tự nhiên gắn kết (~1200 - 2200 ký tự hoặc theo mốc phân mục lớn), tạo thành đúng 3 trang liền mạch chuẩn Canvas (khớp Ảnh 2 thay vì lỗi ở Ảnh 1).
+  + Khắc phục triệt để lỗi hỏi đáp tài liệu đính kèm bị lạc đề sang kho dữ liệu toàn cục (Vật lý nhiệt, Tâm lý học, Công nghệ sinh học khi hỏi tóm tắt tệp Hoá học - Ảnh 3): Đảm bảo khi truy vấn có tài liệu đính kèm (`source_document_id` / `attachment_filename`), luồng RAG cô lập 100% không gian tìm kiếm trong tệp đó, không trộn lẫn các môn học khác.
+  + Duy trì ngữ cảnh tài liệu qua nhiều lượt hỏi đáp (multi-turn follow-up): Lưu giữ `sessionActiveAttachment` ở client và kế thừa `document_id` từ phiên trò chuyện ở server để người dùng tiếp tục đặt các câu hỏi tiếp nối về tài liệu mà không bị mất phạm vi.
+- Trước/sau thay đổi:
+  + Trước: `extract_docx` lặp từng đoạn thô và ô bảng, gán `total_pages = len(paras)`, biến 35 đoạn + 32 ô bảng thành 67 trang cắt vụn; bảng biểu bị trải phẳng thành các dòng rời rạc không thể đọc. Phía client gửi nhầm thuộc tính `material.doc_id` dẫn tới thiếu `source_document_id`; server fallback tìm kiếm toàn thư viện và LLM bị rò rỉ ngữ cảnh kiến thức môn khác.
+  + Sau: `extract_docx` dùng `python-docx` đọc tuần tự theo trật tự trực quan các phần tử khối XML (`w:p`, `w:tbl`), chuyển bảng thành Markdown table, nhận diện tiêu đề/callout và gom trang đọc tự nhiên đúng 3 trang (Trang 1: 1.148 ký tự, Trang 2: 1.517 ký tự, Trang 3: 1.173 ký tự). Client gửi chuẩn `source_document_id`, lưu ngữ cảnh phiên; server cô lập truy xuất chỉ trong tài liệu được chỉ định; Agent tóm tắt và trả lời chính xác kiến thức Ester, Lipid, Carbohydrate, Hợp chất chứa Nitơ, Polyme.
+- Phần/file sửa:
+  + `app/pdf_extractor.py`: Viết lại `extract_docx` với kiểm tra ZIP magic bytes, đọc cấu trúc phân cấp XML theo thứ tự thân tài liệu, trích xuất bảng biểu markdown đa cột, gom trang tự nhiên theo ngữ nghĩa.
+  + `static/app.js`: Cập nhật `formatCanvasBlock` hỗ trợ hiển thị bảng biểu markdown (`.canvas-table-wrapper`, `.canvas-table`), tiêu đề `#` và callout; sửa `sessionActiveAttachment` duy trì ngữ cảnh tài liệu qua các lượt hỏi tiếp nối.
+  + `static/style.css`: Thêm kiểu hiển thị bảng phẳng (zero gradient) cho Canvas viewer (`.canvas-table`, `th`, `td`).
+  + `app/server.py`: Kế thừa `document_id` và `attachment_filename` từ lịch sử phiên hiện tại khi người dùng hỏi các câu hỏi tiếp nối.
+  + `app/rag_agent.py`: Cô lập tuyệt đối tập đoạn trích truy xuất theo `source_document_id`, mở rộng truy xuất tổng quan cho câu hỏi tóm tắt tệp và cập nhật thông báo giới hạn dữ liệu rõ ràng.
+  + `tests/test_study_materials.py`: Bổ sung 4 ca kiểm thử chuyên sâu: `test_extract_docx_hierarchical_structure_and_tables`, `test_extract_docx_edge_cases`, `test_chat_immediate_qa_docx_chemistry_summary_and_specific`, `test_chat_multiturn_followup_preserves_document_context`.
+  + `tests/fixtures/documents/On_Tap_Hoa_Hoc_12.docx`: Lưu tệp mẫu thực tế làm fixture kiểm thử.
+  + `LICH_SU_DU_AN.md`: Cập nhật nhật ký phát triển.
+- Kiểm thử phần mềm:
+  + `pytest tests/test_study_materials.py`: PASS (21 passed).
+  + `pytest tests/test_learning_tools_ui_contract.py`: PASS (6 passed).
+  + `node --test tests/chat_lifecycle_ui_yc206.test.cjs tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs`: PASS (28 passed).
+  + `Get-ChildItem static\style.css | Select-String "gradient\("`: Không có gradient (tuân thủ thiết kế phẳng).
+  + `python scripts/check_history.py --base origin/main`: PASS.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, bước tiếp: Đẩy commit và push lên nhánh `feat/chat-attachment-canvas-viewer`.
+
+<a id="log-20261018-canvas-attachment-fix-and-download"></a>
+### LOG-20261018-canvas-attachment-fix-and-download - 18/10/2026 12:40 (UTC+07)
+
+- Người thực hiện: Antigravity; loại: sửa lỗi Canvas hiển thị tài liệu dạng trang đơn liên tục, tải file nhị phân gốc, gắn card đính kèm bền vững trên tin nhắn và tăng giới hạn sinh câu trả lời tóm tắt toàn tệp.
+- Mục tiêu:
+  + Canvas đọc toàn file chuẩn Canvas (khớp Ảnh 3 thay vì bị ngắt thành nhiều trang như Ảnh 4): Loại bỏ hoàn toàn đường kẻ phân trang nhân tạo `TRANG X` trên các tệp văn bản phi-PDF (`.docx`, `.txt`, `.md`), gom toàn bộ nội dung thành một mặt giấy cuộn liên tục `canvas-doc-sheet`, trình bày đẹp mắt các callout box (`> `), tiêu đề `#` và bảng biểu.
+  + Tải về đúng định dạng gốc của tệp (khớp phản ánh tải về `.txt` thay vì `.docx`): Bổ sung API `/api/materials/download` trả về đúng file nhị phân gốc (`.docx`, `.pdf`, `.pptx`, v.v.) kèm `Content-Type` chuẩn và `Content-Disposition`, sửa nút `Tải tài liệu` trên thanh công cụ Canvas để tải về tệp gốc thay vì xuất file `.txt` tạo tạm từ client.
+  + Thẻ tệp đính kèm (`.message-attachment-card`) hiển thị nhất quán trên tin nhắn người dùng (khớp Ảnh 5 thay vì bị mất card như Ảnh 4): Đặt card đính kèm vào cột `.message-user-col` nằm ngay phía trên bong bóng câu hỏi của người dùng; bảo toàn card đính kèm xuyên suốt khi tải lại phiên từ lịch sử chat (`openSession`); cho phép nhấp vào card để tự động mở xem tệp trên Canvas ngay cả khi tệp chưa nằm trong bộ nhớ cache client (`/api/materials/inspect-library`).
+  + Khắc phục lỗi LLM từ chối trả lời tóm tắt tệp ("Mô hình chưa tạo được câu trả lời hoàn chỉnh do vượt quá độ dài quy định"): Tăng `max_gen_tokens` lên 2048 token cho các truy vấn tóm tắt tài liệu đính kèm, cô lập lịch sử chat khi tóm tắt tổng quan tệp để tránh làm loãng ngữ cảnh, xử lý ngắt đoạn mềm thay vì hủy toàn bộ bản nháp khi vượt ngân sách token, đồng thời dọn dẹp các lượt phản hồi lỗi cũ khỏi cơ sở dữ liệu lịch sử phiên.
+- Trước/sau thay đổi:
+  + Trước: Nút download trên Canvas chỉ lưu văn bản text thô `.txt`; tài liệu DOCX bị chia cắt bởi các vạch kẻ phân trang; câu hỏi tóm tắt tệp gặp lỗi cắt ngắn của LLM dẫn đến từ chối trả lời; tin nhắn người dùng bị mất card tệp đính kèm khi tải lại phiên hoặc hiển thị lệch vị trí.
+  + Sau: Nút download tải về chính xác file nhị phân gốc; Canvas hiển thị văn bản liền mạch phẳng chuyên nghiệp; LLM tóm tắt đầy đủ, chính xác toàn bộ nội dung tệp (hóa học, vật lý, sinh học) với nguồn trích dẫn; card tệp đính kèm hiển thị chuẩn phía trên câu hỏi người dùng và mở đọc tài liệu khi nhấp.
+- Phần/file sửa:
+  + `app/study_materials.py`: Bổ sung `resolve_raw_file` giải quyết file gốc từ đĩa/bộ nhớ; cập nhật `inspect_library_document` tái trích xuất phần nội dung trực tiếp từ đĩa cho tài liệu thư viện.
+  + `app/server.py`: Bổ sung endpoint `GET /api/materials/download`; bảo đảm `attachment_filename` luôn được truyền khi có `source_document_id`.
+  + `app/rag_agent.py`: Nâng `max_gen_tokens` lên 2048 cho truy vấn tài liệu đính kèm; cô lập ngữ cảnh tóm tắt; không hủy bỏ bản nháp hợp lệ khi độ dài vượt quá giới hạn.
+  + `app/history.py`: Lọc bỏ các lượt trả lời lỗi/từ chối cũ để tránh gây ô nhiễm ngữ cảnh hỏi đáp tệp.
+  + `scripts/dev.py`: Thiết lập cấu hình đầu ra UTF-8 trên Windows tránh lỗi UnicodeEncodeError CP1252.
+  + `static/app.js`: Tải tệp nhị phân gốc từ `/api/materials/download`; loại bỏ phân cách trang nhân tạo cho non-PDF và gom callout box; hiển thị card đính kèm phía trên tin nhắn trong `.message-user-col` và phục hồi qua các phiên; nạp tài liệu Canvas theo yêu cầu khi nhấp vào card.
+  + `static/style.css`: Thêm kiểu hiển thị `.message-user-col` và hoàn thiện kiểu phẳng Canvas.
+  + `static/index.html`: Cập nhật query string chống cache tài nguyên giao diện.
+  + `tests/test_study_materials.py`: Thêm ca kiểm thử `test_download_material_raw_binary` và kiểm thử tích hợp.
+  + `LICH_SU_DU_AN.md`: Cập nhật lịch sử thay đổi.
+- Kiểm thử phần mềm:
+  + `pytest tests/test_study_materials.py tests/test_learning_tools_ui_contract.py`: PASS (28 passed).
+  + `node --test tests/chat_lifecycle_ui_yc206.test.cjs tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs`: PASS (28 passed).
+  + `Get-ChildItem static\style.css | Select-String "gradient\("`: PASS (không có gradient).
+  + `scripts/check_history.py --base origin/main`: PASS.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, bước tiếp: Đẩy commit và push lên nhánh `feat/chat-attachment-canvas-viewer`.
+
+<a id="log-20261018-docx-pure-xml-ci-fix"></a>
+### LOG-20261018-docx-pure-xml-ci-fix - 18/10/2026 12:55 (UTC+07)
+
+- Người thực hiện: Antigravity; loại: sửa lỗi kiểm thử CI đa nền tảng bằng bộ trích xuất tài liệu DOCX thuần chuẩn thư viện tiêu chuẩn Python (zero external dependencies).
+- Mục tiêu:
+  + Khắc phục triệt để lỗi CI GitHub Actions bị crash trên cả macOS và Windows (`Failing after 16s/31s`) tại bước `python scripts/dev.py demo`: Bước demo index toàn bộ tài liệu trong `tests/fixtures/documents/` (bao gồm các tệp `.docx` mẫu), nhưng trước đó mã nguồn dùng `import docx` (thư viện bên thứ ba `python-docx` không nằm trong danh mục `requirements-windows.txt` và `constraints-web-py312.txt`), dẫn đến lỗi `ModuleNotFoundError: No module named 'docx'` và ném `RuntimeError: Demo indexing failed`.
+  + Chuyển đổi toàn bộ logic trích xuất cấu trúc văn bản phân cấp, bảng Markdown và callout của DOCX sang thư viện tiêu chuẩn `xml.etree.ElementTree` và `zipfile` tích hợp sẵn trong Python core. Không phụ thuộc bất kỳ package bên thứ ba nào, hoàn toàn tương thích trên mọi hệ điều hành (Windows, Linux, macOS).
+- Trước/sau thay đổi:
+  + Trước: `extract_docx` import `docx`, `Paragraph`, `Table`; môi trường CI chuẩn (không cài thêm wheel ngoài) bị lỗi import và dừng luồng kiểm thử `scripts/dev.py demo`.
+  + Sau: `extract_docx` đọc tuần tự phần tử `body` qua `ET.fromstring(z.read('word/document.xml'))`, giữ nguyên 100% cấu trúc headings (`#`, `##`, `###`), danh sách bullet (`•`), callout (`> `) và bảng Markdown đa cột (`.canvas-table`). `scripts/dev.py demo` chạy trơn tru với 0 lỗi.
+- Phần/file sửa:
+  + `app/pdf_extractor.py`: Viết lại `extract_docx` bằng pure Python `xml.etree.ElementTree` và `zipfile`.
+  + `app/rag_agent.py`: Bảo toàn hợp đồng `generation_failed` cho các câu hỏi thông thường khi chạm trần token (`is_draft_truncated and not (is_attached_doc_query and len(raw_answer.strip()) >= 150)`), vượt qua kiểm thử hồi quy `test_study_agent_c_f_g.py`.
+  + `LICH_SU_DU_AN.md`: Bổ sung nhật ký thay đổi và kiểm định CI.
+- Kiểm thử phần mềm:
+  + `python scripts/dev.py demo`: PASS (32 files, 0 errors).
+  + `python scripts/dev.py check`: PASS.
+  + `pytest -c pytest.windows.ini`: PASS (650 passed, 15 skipped, 0 failed).
+  + `pytest tests/test_study_materials.py tests/test_learning_tools_ui_contract.py`: PASS (28 passed).
+  + `node --test tests/chat_lifecycle_ui_yc206.test.cjs tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs`: PASS (28 passed).
+  + `scripts/check_history.py --base origin/main`: PASS.
+- Trạng thái: PASS.
+- Giới hạn, lỗi còn lại, bước tiếp: Commit và push lên `feat/chat-attachment-canvas-viewer`.

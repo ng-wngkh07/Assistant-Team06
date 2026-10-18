@@ -558,6 +558,19 @@ body {
     border-color: rgba(251, 113, 133, 0.25);
 }
 
+.message-user-col {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+
+.message-user-col .message-body {
+    width: 100%;
+}
+
 .message-body code {
     background: #2a2b31;
     color: #fda4af;
@@ -3547,5 +3560,588 @@ body.sidebar-collapsed #btn-open-sidebar { display: inline-flex; }
     overflow-wrap: anywhere;
     word-break: break-word;
 }
+
+/* =========================================================================
+   Canvas Document Viewer (Styled after ChatGPT / Gemini Canvas - Image 3)
+   ========================================================================= */
+.canvas-document-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(8, 11, 18, 0.88);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    box-sizing: border-box;
+}
+
+.canvas-document-modal.active {
+    display: flex !important;
+}
+
+.canvas-modal-content {
+    width: min(1160px, calc(100vw - 32px));
+    height: min(92vh, 880px);
+    max-width: 1160px;
+    background: #0f131c;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 18px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+    transition: all 0.25s ease;
+}
+
+/* Fullscreen mode */
+.canvas-document-modal.fullscreen {
+    padding: 0;
+}
+
+.canvas-document-modal.fullscreen .canvas-modal-content {
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: 100% !important;
+    border-radius: 0 !important;
+    border: none !important;
+}
+
+/* --- Canvas Top Navigation Bar (Image 3) --- */
+.canvas-top-bar {
+    background: #141824;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+
+.canvas-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 200px;
+    flex: 1 1 auto;
+}
+
+.canvas-file-icon {
+    font-size: 24px;
+    line-height: 1;
+}
+
+.canvas-doc-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.canvas-doc-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #f1f5f9;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 320px;
+}
+
+.canvas-doc-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+}
+
+.canvas-doc-meta {
+    font-size: 11.5px;
+    color: #94a3b8;
+}
+
+.canvas-src-badge {
+    display: inline-block;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: #60a5fa;
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    border-radius: 6px;
+    padding: 1px 6px;
+}
+
+.canvas-bar-center {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1 1 260px;
+    max-width: 360px;
+}
+
+.canvas-search-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 6px 12px;
+    transition: border-color 0.15s ease;
+}
+
+.canvas-search-box:focus-within {
+    border-color: #3b82f6;
+    background: rgba(255, 255, 255, 0.07);
+}
+
+.canvas-search-icon {
+    font-size: 13px;
+    opacity: 0.7;
+}
+
+.canvas-search-input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #f8fafc;
+    font-size: 13px;
+    width: 100%;
+}
+
+.canvas-search-input::placeholder {
+    color: #64748b;
+}
+
+.canvas-search-count {
+    font-size: 11px;
+    color: #94a3b8;
+    white-space: nowrap;
+}
+
+.canvas-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+/* Zoom controls */
+.canvas-zoom-group {
+    display: flex;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 2px 4px;
+}
+
+.canvas-tool-btn {
+    background: transparent;
+    border: none;
+    color: #cbd5e1;
+    font-size: 15px;
+    font-weight: 700;
+    width: 24px;
+    height: 24px;
+    cursor: pointer;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.canvas-tool-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+}
+
+.canvas-zoom-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #e2e8f0;
+    padding: 0 8px;
+    min-width: 44px;
+    text-align: center;
+    user-select: none;
+}
+
+/* Action buttons */
+.canvas-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    color: #e2e8f0;
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.canvas-action-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.25);
+    color: #ffffff;
+}
+
+.canvas-primary-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #e11d48;
+    border: 1px solid #f43f5e;
+    border-radius: 8px;
+    color: #ffffff;
+    font-size: 12.5px;
+    font-weight: 700;
+    padding: 6px 14px;
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(225, 29, 72, 0.35);
+    transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+.canvas-primary-btn:hover {
+    background: #be123c;
+    transform: translateY(-1px);
+}
+
+.canvas-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #cbd5e1;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.canvas-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+}
+
+.canvas-close-btn {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.canvas-close-btn:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+/* --- Canvas Viewport & Sheet (Image 3) --- */
+.canvas-viewport {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: auto;
+    padding: 32px 24px;
+    background: #090c12;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.canvas-image-box {
+    margin-bottom: 24px;
+    max-width: 840px;
+    width: 100%;
+    text-align: center;
+    background: #141824;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 16px;
+}
+
+.canvas-image-preview {
+    max-width: 100%;
+    max-height: 380px;
+    object-fit: contain;
+    border-radius: 8px;
+}
+
+.canvas-sheet-wrapper {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+}
+
+/* Clean white paper document sheet (ChatGPT/Gemini Canvas style) */
+.canvas-doc-sheet {
+    background: #ffffff;
+    color: #0f172a;
+    width: 100%;
+    max-width: 820px;
+    min-height: 1000px;
+    padding: 56px 64px;
+    border-radius: 4px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+    box-sizing: border-box;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.75;
+    font-size: 15px;
+    transition: transform 0.15s ease-out;
+}
+
+.canvas-doc-flow {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Document Typography Elements (Matching Image 3) */
+.canvas-h1 {
+    font-size: 23px;
+    font-weight: 800;
+    text-align: center;
+    color: #1e3a8a;
+    margin: 0 0 8px 0;
+    letter-spacing: -0.3px;
+    line-height: 1.35;
+    text-transform: uppercase;
+}
+
+.canvas-subtitle {
+    font-size: 13.5px;
+    font-style: italic;
+    color: #64748b;
+    text-align: center;
+    margin: 0 0 28px 0;
+    line-height: 1.5;
+}
+
+.canvas-h2 {
+    font-size: 17px;
+    font-weight: 700;
+    color: #1d4ed8;
+    margin: 28px 0 12px 0;
+    padding-bottom: 6px;
+    border-bottom: 2px solid #dbeafe;
+    text-transform: uppercase;
+    letter-spacing: 0.2px;
+}
+
+.canvas-h3 {
+    font-size: 15px;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 18px 0 8px 0;
+    line-height: 1.45;
+}
+
+.canvas-p {
+    font-size: 14.5px;
+    color: #334155;
+    margin: 0 0 12px 0;
+    line-height: 1.72;
+}
+
+.canvas-bullet-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin: 0 0 6px 0;
+    font-size: 14.5px;
+    color: #334155;
+    line-height: 1.68;
+}
+
+.canvas-bullet-dot {
+    color: #2563eb;
+    font-weight: 700;
+    line-height: 1.68;
+    flex-shrink: 0;
+}
+
+.canvas-bullet-text {
+    flex: 1;
+}
+
+.canvas-callout-box {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-left: 4px solid #2563eb;
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin: 16px 0;
+    font-size: 14px;
+    line-height: 1.65;
+    color: #1e293b;
+}
+
+/* Subtle continuous page transition divider */
+.canvas-page-divider {
+    border-top: 1px dashed #cbd5e1;
+    margin: 40px 0 32px 0;
+    position: relative;
+    text-align: center;
+}
+
+.canvas-page-badge {
+    display: inline-block;
+    position: relative;
+    top: -11px;
+    background: #f1f5f9;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 14px;
+    border-radius: 9999px;
+    border: 1px solid #e2e8f0;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.canvas-mark {
+    background: #fef08a;
+    color: #713f12;
+    padding: 1px 3px;
+    border-radius: 3px;
+}
+
+.canvas-empty-state {
+    text-align: center;
+    color: #64748b;
+    padding: 48px 24px;
+    font-size: 14.5px;
+}
+
+.canvas-table-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    margin: 20px 0;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+}
+
+.canvas-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    line-height: 1.6;
+    text-align: left;
+    background: #ffffff;
+}
+
+.canvas-table th {
+    background: #f8fafc;
+    color: #1e293b;
+    font-weight: 700;
+    padding: 10px 14px;
+    border-bottom: 2px solid #cbd5e1;
+    border-right: 1px solid #e2e8f0;
+}
+
+.canvas-table th:last-child {
+    border-right: none;
+}
+
+.canvas-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid #f1f5f9;
+    border-right: 1px solid #f1f5f9;
+    color: #334155;
+    vertical-align: top;
+}
+
+.canvas-table td:last-child {
+    border-right: none;
+}
+
+.canvas-table tr:last-child td {
+    border-bottom: none;
+}
+
+.canvas-table tr:hover td {
+    background: #f8fafc;
+}
+
+/* =========================================================================
+   User Message Attachment Card (Image 2)
+   ========================================================================= */
+.message-attachment-card {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    background: #181d29;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    max-width: 320px;
+    text-align: left;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    user-select: none;
+}
+
+.message.user .message-attachment-card {
+    margin-left: auto;
+}
+
+.message-attachment-card:hover {
+    background: #202737;
+    border-color: #3b82f6;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+}
+
+.message-attachment-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    border-radius: 8px;
+    color: #60a5fa;
+    flex-shrink: 0;
+}
+
+.message-attachment-meta {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.message-attachment-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #f1f5f9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+}
+
+.message-attachment-sub {
+    font-size: 11px;
+    color: #94a3b8;
+    text-transform: capitalize;
+    margin-top: 1px;
+}
+
 
 

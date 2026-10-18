@@ -11,7 +11,7 @@
             try { localStorage.setItem("theme", "dark"); } catch (e) {}
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=yc207-ui11">
+    <link rel="stylesheet" href="/static/style.css?v=yc228-canvas-fix">
     <link rel="stylesheet" href="/static/theme.css?v=3-contrast-fix">
     <style>
         /* Ambient gradient glowing orbs */
@@ -1574,30 +1574,79 @@
         </div>
     </div>
 
-    <!-- Document Content Viewer Modal (Opens when clicking an attached file/folder card) -->
-    <div id="document-content-modal" class="modal">
-        <div class="modal-content study-material-modal-content" style="max-width: 880px; width: min(880px, calc(100vw - 32px)); height: min(88vh, 840px);">
-            <div class="modal-header">
-                <div class="study-material-title-group">
-                    <h2 id="doc-content-modal-title">📄 Nội dung tài liệu</h2>
-                    <span id="doc-content-modal-meta" class="study-material-meta">Đã nạp vào nguồn dữ liệu học tập (src/)</span>
+    <!-- Document Content Viewer Modal (Canvas Reader styled after ChatGPT / Gemini Canvas - Image 3) -->
+    <div id="document-content-modal" class="modal canvas-document-modal" role="dialog" aria-modal="true" aria-labelledby="doc-content-modal-title">
+        <div class="modal-content canvas-modal-content">
+            <!-- Canvas Top Navigation Bar (Image 3) -->
+            <div class="canvas-top-bar">
+                <div class="canvas-bar-left">
+                    <span class="canvas-file-icon">📄</span>
+                    <div class="canvas-doc-info">
+                        <h2 id="doc-content-modal-title" class="canvas-doc-title">Nội dung tài liệu</h2>
+                        <div class="canvas-doc-meta-row">
+                            <span id="doc-content-modal-meta" class="canvas-doc-meta">Đang tải thông tin...</span>
+                            <span id="doc-content-src-badge" class="canvas-src-badge">📂 src/</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="study-material-header-actions" style="display: flex; align-items: center; gap: 10px;">
-                    <button type="button" id="btn-doc-content-generate" class="btn btn-primary btn-sm" title="Tạo bộ câu hỏi trắc nghiệm và Flashcard từ tài liệu này">
-                        ⚡ Tạo Trắc nghiệm &amp; Flashcard
+
+                <div class="canvas-bar-center">
+                    <div class="canvas-search-box">
+                        <span class="canvas-search-icon">🔍</span>
+                        <input type="text" id="doc-content-search-input" class="canvas-search-input" placeholder="Tìm kiếm từ khóa trong tài liệu...">
+                        <span id="canvas-search-count" class="canvas-search-count" hidden>0 kết quả</span>
+                    </div>
+                </div>
+
+                <div class="canvas-bar-right">
+                    <!-- Zoom Controls (like 78% in Image 3) -->
+                    <div class="canvas-zoom-group">
+                        <button type="button" id="btn-canvas-zoom-out" class="canvas-tool-btn" title="Thu nhỏ (Zoom out)" aria-label="Thu nhỏ">−</button>
+                        <span id="canvas-zoom-label" class="canvas-zoom-label">100%</span>
+                        <button type="button" id="btn-canvas-zoom-in" class="canvas-tool-btn" title="Phóng to (Zoom in)" aria-label="Phóng to">+</button>
+                    </div>
+
+                    <!-- Download Document Button -->
+                    <button type="button" id="btn-canvas-download" class="canvas-action-btn" title="Tải tài liệu về máy">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        <span>Tải về</span>
                     </button>
-                    <button type="button" class="btn-close-modal" id="btn-close-doc-content-modal" aria-label="Đóng">&times;</button>
+
+                    <!-- Fast Action: Tạo Quiz & Flashcard -->
+                    <button type="button" id="btn-doc-content-generate" class="canvas-primary-btn" title="Tạo bộ câu hỏi trắc nghiệm và Flashcard từ tài liệu này">
+                        ⚡ Tạo Quiz &amp; Flashcard
+                    </button>
+
+                    <!-- Expand / Split View Toggle -->
+                    <button type="button" id="btn-canvas-expand" class="canvas-icon-btn" title="Toàn màn hình / Khôi phục" aria-label="Toàn màn hình">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="15 3 21 3 21 9"></polyline>
+                            <polyline points="9 21 3 21 3 15"></polyline>
+                            <line x1="21" y1="3" x2="14" y2="10"></line>
+                            <line x1="3" y1="21" x2="10" y2="14"></line>
+                        </svg>
+                    </button>
+
+                    <!-- Close Button -->
+                    <button type="button" class="btn-close-modal canvas-close-btn" id="btn-close-doc-content-modal" aria-label="Đóng">&times;</button>
                 </div>
             </div>
-            <div class="study-material-body" style="gap: 14px;">
-                <div class="doc-content-toolbar" style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-                    <input type="text" id="doc-content-search-input" class="form-input" placeholder="🔍 Tìm kiếm từ khóa hoặc đoạn văn bên trong tài liệu..." style="flex: 1; min-width: 220px;">
-                    <span id="doc-content-src-badge" class="scope-pill active" style="font-size: 11.5px;">📂 Nguồn: src/</span>
+
+            <!-- Canvas Viewport with Paper Document Sheet -->
+            <div class="canvas-viewport" id="canvas-viewport">
+                <div id="doc-content-image-box" class="canvas-image-box" style="display: none;">
+                    <img id="doc-content-image-preview" src="" alt="Hình ảnh đính kèm" class="canvas-image-preview">
                 </div>
-                <div id="doc-content-image-box" style="display: none; text-align: center; background: rgba(10, 13, 20, 0.75); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 14px;">
-                    <img id="doc-content-image-preview" src="" alt="Hình ảnh đính kèm" style="max-width: 100%; max-height: 340px; object-fit: contain; border-radius: 10px;">
+
+                <div class="canvas-sheet-wrapper">
+                    <article class="canvas-doc-sheet" id="canvas-doc-sheet">
+                        <div id="doc-content-pages-list" class="canvas-doc-flow"></div>
+                    </article>
                 </div>
-                <div id="doc-content-pages-list" class="doc-content-pages-list" style="display: flex; flex-direction: column; gap: 14px; flex: 1; overflow-y: auto; padding-right: 4px;"></div>
             </div>
         </div>
     </div>
@@ -1611,8 +1660,8 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=yc207-ui11"></script>
-    <script src="/static/document-lookup.js?v=yc207-ui11"></script>
+    <script src="/static/app.js?v=yc228-canvas-fix"></script>
+    <script src="/static/document-lookup.js?v=yc228-canvas-fix"></script>
     <script src="/static/timetable.js?v=yc195-02"></script>
     <script src="/static/layout.js?v=yc195-02"></script>
     <script src="/static/practice.js?v=yc206-ui02"></script>
