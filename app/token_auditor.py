@@ -34,7 +34,11 @@ def _run_exact_audit_local(
         raise FileNotFoundError(f"Thư mục mô hình không tồn tại: {model_dir}")
 
     try:
-        tokenizer = AutoTokenizer.from_pretrained(str(model_dir), trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            str(model_dir),
+            trust_remote_code=False,
+            local_files_only=True,
+        )
     except Exception as exc:
         raise RuntimeError(f"Không thể khởi tạo AutoTokenizer từ {model_dir}: {exc}")
 

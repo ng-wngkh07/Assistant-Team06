@@ -644,8 +644,10 @@ def run_candidate_audit(
         accepted_ids = {x.get("source_id") for x in rejudged_accepted}
 
         for def_id in known_defect_ids:
-            assert def_id not in accepted_ids, f"Defect {def_id} was found in accepted!"
-            assert def_id in all_rejected_ids, f"Defect {def_id} was NOT recorded in rejected!"
+            if def_id in accepted_ids:
+                raise ValueError(f"Defect {def_id} was found in accepted!")
+            if def_id not in all_rejected_ids:
+                raise ValueError(f"Defect {def_id} was NOT recorded in rejected!")
             print(f"  Verified defect isolation: {def_id} -> REJECTED (absent from accepted)")
 
         # Save audited report
@@ -777,8 +779,10 @@ def run_candidate_audit(
 
             # 6. Sanity assertion
             new_acc_text = accepted_file.read_text(encoding="utf-8")
-            assert "src-5446-suc-man-19733" not in new_acc_text, "CRITICAL: 19733 still in accepted.jsonl!"
-            assert "src-473711314-Ta-36308" not in new_acc_text, "CRITICAL: 36308 still in accepted.jsonl!"
+            if "src-5446-suc-man-19733" in new_acc_text:
+                raise ValueError("CRITICAL: 19733 still in accepted.jsonl!")
+            if "src-473711314-Ta-36308" in new_acc_text:
+                raise ValueError("CRITICAL: 36308 still in accepted.jsonl!")
             print("  Xác minh an toàn: Cả hai mẫu lỗi 19733 và 36308 đã bị loại bỏ 100% khỏi accepted.jsonl.")
 
 

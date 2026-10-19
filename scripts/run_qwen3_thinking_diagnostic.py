@@ -101,7 +101,8 @@ def run_diagnostic():
         })
 
     logger.info("Planned calls: %d", len(calls_plan))
-    assert len(calls_plan) == 4, f"Expected exactly 4 calls, got {len(calls_plan)}"
+    if len(calls_plan) != 4:
+        raise ValueError(f"Expected exactly 4 calls, got {len(calls_plan)}")
 
     results = []
     pid = os.getpid()

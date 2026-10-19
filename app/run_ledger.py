@@ -43,6 +43,13 @@ TERMINAL_STATUSES = {
     STATUS_CANCELLED, STATUS_KILLED_ABNORMAL,
 }
 
+VALID_STATUSES = {
+    STATUS_CREATED, STATUS_PREFLIGHT, STATUS_RUNNING,
+    STATUS_COMPLETED, STATUS_PROMOTED, STATUS_REJECTED,
+    STATUS_FAILED, STATUS_OOM, STATUS_BLOCKED,
+    STATUS_CANCELLED, STATUS_KILLED_ABNORMAL,
+}
+
 _ledger_lock = threading.Lock()
 
 
@@ -228,30 +235,61 @@ class RunLedger:
         """Block unchanged execution failures and quality rejections without remediation.
 
         Remediation must be a structured dict with diagnosis, evidence, and code_diff_hash.
+        Fails closed on unreadable files, malformed JSON, or invalid record schemas.
         """
         for path in sorted(self.runs_dir.glob("run-*.json")):
             try:
-                entry = json.loads(path.read_text(encoding="utf-8"))
-                if entry.get("signature_hash") == signature_hash:
-                    status = entry.get("status")
-                    if status in (STATUS_FAILED, STATUS_OOM, STATUS_KILLED_ABNORMAL, STATUS_BLOCKED, STATUS_REJECTED):
-                        is_valid_remediation = (
-                            isinstance(remediation, dict)
-                            and bool(str(remediation.get("diagnosis", "")).strip())
-                            and bool(str(remediation.get("evidence", "")).strip())
-                            and bool(str(remediation.get("code_diff_hash", "")).strip())
-                            and len(str(remediation.get("diagnosis", ""))) >= 15
-                            and len(str(remediation.get("evidence", ""))) >= 15
-                        )
-                        if not is_valid_remediation:
-                            msg = (
-                                f"CHẶN CHẠY LẠI: Chữ ký cấu hình trùng lặp với run '{entry['run_id']}' "
-                                f"(kết thúc với trạng thái '{status}'). Yêu cầu hồ sơ khắc phục cấu trúc "
-                                "chứa {diagnosis, evidence, code_diff_hash} với giải trình kiểm chứng được."
-                            )
-                            return True, msg, entry
-            except Exception:
+                raw_text = path.read_text(encoding="utf-8")
+                entry = json.loads(raw_text)
+            except Exception as e:
+                return True, f"Bản ghi ledger không thể đọc hoặc JSON lỗi tại {path.name}: {e}", None
+
+            if not isinstance(entry, dict):
+                return True, f"Bản ghi ledger tại {path.name} không phải là dict hợp lệ", None
+
+            run_id = entry.get("run_id")
+            if not isinstance(run_id, str) or not run_id.strip():
+                return True, f"Bản ghi ledger tại {path.name} thiếu hoặc sai kiểu 'run_id'", None
+
+            status = entry.get("status")
+            if not isinstance(status, str) or status not in VALID_STATUSES:
+                return True, f"Bản ghi ledger tại {path.name} có trạng thái không hợp lệ: {status!r}", None
+
+            if "signature_hash" not in entry:
+                return True, f"Bản ghi ledger tại {path.name} thiếu trường 'signature_hash'", None
+
+            sig = entry["signature_hash"]
+            if sig is None:
+                manifest_dict = entry.get("manifest")
+                dataset_dict = manifest_dict.get("dataset") if isinstance(manifest_dict, dict) else None
+                is_pending = isinstance(dataset_dict, dict) and dataset_dict.get("dataset_sha256") == "pending_preflight"
+                is_valid_provisional = (
+                    (status in (STATUS_CREATED, STATUS_PREFLIGHT) and (manifest_dict is None or is_pending))
+                    or (status in (STATUS_FAILED, STATUS_OOM, STATUS_BLOCKED, STATUS_CANCELLED, STATUS_KILLED_ABNORMAL) and is_pending)
+                )
+                if not is_valid_provisional:
+                    return True, f"Bản ghi ledger tại {path.name} có signature_hash=null không hợp lệ với trạng thái '{status}'", None
                 continue
+            elif not isinstance(sig, str) or not sig.strip():
+                return True, f"Bản ghi ledger tại {path.name} có 'signature_hash' không hợp lệ: {sig!r}", None
+
+            if sig == signature_hash:
+                if status in (STATUS_FAILED, STATUS_OOM, STATUS_KILLED_ABNORMAL, STATUS_BLOCKED, STATUS_REJECTED):
+                    is_valid_remediation = (
+                        isinstance(remediation, dict)
+                        and bool(str(remediation.get("diagnosis", "")).strip())
+                        and bool(str(remediation.get("evidence", "")).strip())
+                        and bool(str(remediation.get("code_diff_hash", "")).strip())
+                        and len(str(remediation.get("diagnosis", ""))) >= 15
+                        and len(str(remediation.get("evidence", ""))) >= 15
+                    )
+                    if not is_valid_remediation:
+                        msg = (
+                            f"CHẶN CHẠY LẠI: Chữ ký cấu hình trùng lặp với run '{run_id}' "
+                            f"(kết thúc với trạng thái '{status}'). Yêu cầu hồ sơ khắc phục cấu trúc "
+                            "chứa {diagnosis, evidence, code_diff_hash} với giải trình kiểm chứng được."
+                        )
+                        return True, msg, entry
         return False, None, None
 
     def create_run(

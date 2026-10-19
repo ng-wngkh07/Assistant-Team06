@@ -7,3 +7,4 @@ uvicorn>=0.28,<1
 requests>=2.31,<3
 numpy>=1.26,<3
 pillow>=10,<13
+defusedxml>=0.7.1,<1

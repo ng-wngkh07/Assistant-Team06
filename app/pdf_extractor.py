@@ -5,7 +5,7 @@ import shutil
 import zipfile
 import posixpath
 import subprocess
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -357,11 +357,14 @@ class PDFExtractor:
                     return result
                 xml_content = z.read("word/document.xml")
 
-            root = ET.fromstring(xml_content)
+            root = ET.fromstring(xml_content, forbid_dtd=True)
             w_ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
             body = root.find(f"{w_ns}body")
             if body is None:
                 result.error_message = "Tài liệu DOCX không chứa phần thân body hợp lệ."
+                result.extracted_pages = []
+                result.total_pages = 0
+                result.total_chars = 0
                 return result
 
             pages = []
@@ -508,6 +511,9 @@ class PDFExtractor:
 
             if not pages:
                 result.error_message = "Tài liệu DOCX không chứa văn bản có thể trích xuất."
+                result.extracted_pages = []
+                result.total_pages = 0
+                result.total_chars = 0
                 return result
 
             result.total_pages = len(pages)
@@ -515,6 +521,10 @@ class PDFExtractor:
             result.total_chars = sum(p["char_count"] for p in pages)
         except Exception as e:
             result.error_message = f"Lỗi đọc tài liệu DOCX: {e}"
+            result.extracted_pages = []
+            result.total_pages = 0
+            result.total_chars = 0
+            result.failed_pages = []
         return result
 
     @classmethod
@@ -526,7 +536,7 @@ class PDFExtractor:
         rns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
         def paragraphs(xml):
-            root = ET.fromstring(xml)
+            root = ET.fromstring(xml, forbid_dtd=True)
             return [''.join(n.text or '' for n in p.iterfind('.//a:t', ns))
                     for p in root.iter('{'+ns['a']+'}p')]
 
@@ -542,8 +552,8 @@ class PDFExtractor:
             result.file_size_bytes = filepath.stat().st_size
             result.file_hash = cls.calculate_file_hash(filepath)
             with zipfile.ZipFile(filepath) as z:
-                presentation = ET.fromstring(z.read('ppt/presentation.xml'))
-                rels = {x.attrib['Id']: x.attrib for x in ET.fromstring(z.read('ppt/_rels/presentation.xml.rels'))}
+                presentation = ET.fromstring(z.read('ppt/presentation.xml'), forbid_dtd=True)
+                rels = {x.attrib['Id']: x.attrib for x in ET.fromstring(z.read('ppt/_rels/presentation.xml.rels'), forbid_dtd=True)}
                 slides = presentation.findall('p:sldIdLst/p:sldId', ns)
                 result.total_pages = len(slides)
                 for page, slide in enumerate(slides, 1):
@@ -551,7 +561,7 @@ class PDFExtractor:
                     text = '\n'.join(p for p in paragraphs(z.read(path)) if p.strip())
                     relpath = posixpath.join(posixpath.dirname(path), '_rels', posixpath.basename(path)+'.rels')
                     if relpath in z.namelist():
-                        for rel in ET.fromstring(z.read(relpath)):
+                        for rel in ET.fromstring(z.read(relpath), forbid_dtd=True):
                             if rel.attrib.get('Type', '').endswith('/notesSlide'):
                                 notes = '\n'.join(p for p in paragraphs(z.read(target(posixpath.dirname(path), rel.attrib))) if p.strip())
                                 if notes:
@@ -572,6 +582,10 @@ class PDFExtractor:
                 result.is_scanned = not any(p['has_text'] for p in result.extracted_pages)
         except Exception as e:
             result.error_message = f'Lỗi đọc tài liệu PPTX: {e}'
+            result.extracted_pages = []
+            result.total_pages = 0
+            result.total_chars = 0
+            result.failed_pages = []
         return result
 
     @classmethod

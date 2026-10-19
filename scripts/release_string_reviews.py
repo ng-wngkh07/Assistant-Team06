@@ -1,3 +1,9 @@
+"""Manual historical tool to compile and verify C++ string transcript reviews.
+
+WARNING: This manual historical tool automatically compiles and executes C++
+source code extracted from input review files. It requires operator-trusted
+inputs stored in the repository-local directory; shared /tmp inputs are removed.
+"""
 import json, hashlib, sys, fcntl, subprocess, datetime, shutil
 from pathlib import Path
 from datetime import timezone
@@ -7,8 +13,8 @@ sys.path.insert(0, str(ROOT))
 from app.source_page_reviews import validate_page_review
 from scripts.index_source_reviews import apply_reviews
 
-D = {int(k): v for k, v in json.loads(Path('/tmp/corpus-all-remaining-codex/string-transcripts.json').read_text()).items()}
 O = ROOT / 'data/evaluation/corpus-review-20261005/all-remaining-20261005'
+D = {int(k): v for k, v in json.loads((O / 'string-transcripts.json').read_text(encoding='utf-8')).items()}
 B = O / 'string-source-checks'
 B.mkdir(parents=True, exist_ok=True)
 
@@ -44,14 +50,15 @@ for key, source in programs.items():
     runs = []
     for inp, expect in cases[key]:
         r = subprocess.run([str(exe)], input=inp, capture_output=True, text=True, timeout=5, check=True)
-        assert expect in r.stdout, f'Mismatch in {key}: expected "{expect}", got "{r.stdout}"'
+        if expect not in r.stdout:
+            raise RuntimeError(f'Mismatch in {key}: expected "{expect}", got "{r.stdout}"')
         runs.append(dict(input=inp, output=r.stdout.strip(), state='PASS'))
     report.append(dict(program=key, compile='PASS', cases=runs, source_sha256=sha(p)))
 
 (B / 'independent-evidence.json').write_text(json.dumps(dict(programs=report, training_started=False), ensure_ascii=False, indent=2))
 
 # 2. Build and validate reviews
-rows = json.loads(Path('/tmp/corpus-all-remaining-codex/string-rows.json').read_text())
+rows = json.loads((O / 'string-rows.json').read_text(encoding='utf-8'))
 paths = []
 source_hash = sha(ROOT / 'src' / rows[0]['filename'])
 folder = ROOT / 'data/evaluation/corpus-completion-20261004/source-reviews' / source_hash

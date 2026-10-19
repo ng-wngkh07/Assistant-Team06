@@ -1,7 +1,7 @@
 """Curate v8_multidomain_grounded release with strict verbatim source provenance.
 
 Requirements from Codex:
-1. Verbatim raw passages extracted from exact PDF pages (checked via assert span in doc[p-1].get_text()).
+1. Verbatim raw passages extracted from exact PDF pages (checked with an explicit source-span validation gate).
 2. Minimum 24 train + 6 valid examples.
 3. Whole-file disjointness across Train, Valid, and Holdout.
 4. Excludes 3 frozen holdout files (CS202_Week6.pdf, Chuong 5_Cheo hoa ma tran.pdf, OpenStax - Psychology.pdf).
@@ -61,7 +61,8 @@ def get_verbatim_slice(rel_path: str, page_num: int, start_needle: str, end_need
     idx_end += len(end_needle)
     
     span = text[idx_start:idx_end]
-    assert span in text, "Span phải là trích đoạn thực tế của trang"
+    if span not in text:
+        raise ValueError("Span phải là trích đoạn thực tế của trang")
     file_sha = sha256_file(full_path)
     return span, file_sha, idx_start, idx_end
 
@@ -406,7 +407,8 @@ def build_dataset():
     # Perform exact Token Audit
     report = audit_dataset_exact(OUTPUT_DIR, max_seq_length=1024)
     (OUTPUT_DIR / "token_audit.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    assert not report["has_violations"], f"Token audit có vi phạm: {report['violations']}"
+    if report["has_violations"]:
+        raise ValueError(f"Token audit có vi phạm: {report['violations']}")
 
     # Write approval.json
     approval = {

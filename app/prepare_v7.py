@@ -319,7 +319,8 @@ def generate_v7_dataset(output_dir: Path) -> Dict[str, Any]:
         db.row_factory = sqlite3.Row
         allowed_books, holdout_books = get_book_partition(db)
         print(f"Eligible training books: {len(allowed_books)}, Frozen holdout books: {len(holdout_books)}")
-        assert len(allowed_books) >= 27, f"Expected at least 27 allowed books, got {len(allowed_books)}"
+        if len(allowed_books) < 27:
+            raise ValueError(f"Expected at least 27 allowed books, got {len(allowed_books)}")
 
         sources = extract_curated_source_records(db, allowed_books)
 
@@ -459,9 +460,12 @@ def generate_v7_dataset(output_dir: Path) -> Dict[str, Any]:
     print(f"Distinct Valid Samples: {len(valid_unique)} (Target: >= 200)")
     print(f"Concept Groups: {concept_groups} (Target: >= 400)")
 
-    assert len(train_unique) >= 2048, f"Train samples ({len(train_unique)}) below 2048 threshold!"
-    assert len(valid_unique) >= 200, f"Valid samples ({len(valid_unique)}) below 200 threshold!"
-    assert concept_groups >= 400, f"Concept groups ({concept_groups}) below 400 threshold!"
+    if len(train_unique) < 2048:
+        raise ValueError(f"Train samples ({len(train_unique)}) below 2048 threshold!")
+    if len(valid_unique) < 200:
+        raise ValueError(f"Valid samples ({len(valid_unique)}) below 200 threshold!")
+    if concept_groups < 400:
+        raise ValueError(f"Concept groups ({concept_groups}) below 400 threshold!")
 
     # 5. Write Immutable Dataset Files
     train_bytes = "".join(json.dumps(s, ensure_ascii=False) + "\n" for s in train_unique).encode("utf-8")

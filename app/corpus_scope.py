@@ -312,14 +312,21 @@ def validate_page_number(page_val, filename: str, root: Optional[Path] = None) -
                         with fitz.open(src_path) as pdf:
                             total_pages = len(pdf)
                     except Exception:
-                        pass
+                        total_pages = None
             else:
                 try:
                     from app.pdf_extractor import PDFExtractor
-                    total_pages = PDFExtractor.extract_file(src_path).total_pages
+                    ext_res = PDFExtractor.extract_file(src_path)
+                    if ext_res.error_message:
+                        total_pages = None
+                    else:
+                        total_pages = ext_res.total_pages
                 except Exception:
-                    pass
-            if total_pages is not None and page_int > total_pages:
+                    total_pages = None
+
+            if total_pages is None or total_pages <= 0:
+                raise ValueError(f"Không thể xác định số trang vật lý của tệp nguồn: {filename}")
+            if page_int > total_pages:
                 raise ValueError(f"Page {page_int} out of range for {filename} (max physical pages: {total_pages})")
 
     return page_int
