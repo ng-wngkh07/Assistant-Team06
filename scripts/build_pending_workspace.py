@@ -52,7 +52,8 @@ def build_item(
 
     for idx, c in enumerate(claims_spec, 1):
         ans_id = c["answer_sentence_id"]
-        assert ans_id in ans_sent_map, f"Unknown answer_sentence_id {ans_id} in {source_id}"
+        if ans_id not in ans_sent_map:
+            raise ValueError(f"Unknown answer_sentence_id {ans_id} in {source_id}")
         ans_s = ans_sent_map[ans_id]
 
         # Verify evidence spans against source text
@@ -60,7 +61,8 @@ def build_item(
         ev_span_offsets = []
         for sp in ev_spans:
             resolved = resolve_exact_source_span_offsets(source_text, sp)
-            assert resolved is not None, f"Failed to resolve evidence span '{sp}' in {source_id}"
+            if resolved is None:
+                raise ValueError(f"Failed to resolve evidence span '{sp}' in {source_id}")
             verbatim, s_off, e_off = resolved
             ev_span_offsets.append({
                 "text": verbatim,
@@ -1006,7 +1008,8 @@ def build_all_records() -> List[Dict[str, Any]]:
 
 def main():
     records = build_all_records()
-    assert len(records) == 22, f"Expected 22 records (16 drafts + 6 controls), got {len(records)}"
+    if len(records) != 22:
+        raise ValueError(f"Expected 22 records (16 drafts + 6 controls), got {len(records)}")
 
     out_dir = BASE_DIR / "data" / "training" / "v7_pending_review"
     out_dir.mkdir(parents=True, exist_ok=True)

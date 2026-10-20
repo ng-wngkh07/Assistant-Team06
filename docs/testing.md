@@ -35,6 +35,17 @@ GitHub Actions runs three automated security workflows:
 
 These checks do not become required merge checks automatically. The repository owner manages required checks through the branch rules.
 
+## Security hardening and validation
+
+The security regression suite uses synthetic Office files, tokenizer stubs and temporary run records. It verifies these boundaries:
+
+- **Office XML**: DOCX document XML and the PPTX presentation, relationships, slides and notes used by extraction are parsed with `defusedxml.ElementTree` and `forbid_dtd=True`. DTDs and entities are rejected, including UTF-16 input. Any extraction failure discards partial pages and character counts. Ordinary XML escaping, Unicode, slide order and notes remain supported.
+- **Tokenizer auditing**: `app/token_auditor.py` loads built-in tokenizers with `trust_remote_code=False` and `local_files_only=True`. Install the required tokenizer files locally; tokenizers requiring custom Python code are rejected.
+- **Run ledger**: Duplicate checks block unreadable JSON and invalid required guard fields, even when remediation is supplied. Valid runs stopped before manifest binding may retain a null signature with a `pending_preflight` dataset. Running or successful runs require a signature. Repair invalid records from retained evidence before retrying; the check does not delete history.
+- **Acceptance gates**: Dataset preparation, candidate rejudging, source review and diagnostic tools raise explicit exceptions so their checks remain active under `python -O`. Optimization tests execute only isolated guard statements, without running dataset-producing scripts.
+- **Physical source pages**: Page validation raises `ValueError` when an existing source cannot be parsed or its physical page count cannot be determined. Form validation without a source file retains its existing behavior.
+- **Historical C++ review tool**: `scripts/release_string_reviews.py` now reads `string-transcripts.json` and `string-rows.json` from the ignored directory `data/evaluation/corpus-review-20261005/all-remaining-20261005`. Place reviewed inputs there explicitly; there is no shared `/tmp` fallback. This manual tool compiles and executes source from its inputs, so it requires operator-trusted files and is excluded from automated runtime validation.
+
 ## Real-model acceptance
 
 For changes to retrieval, prompts, evidence validation or generated study content:

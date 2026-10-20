@@ -4,6 +4,15 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ## Unreleased
 
+### Security
+
+- Parse DOCX and PPTX XML documents using `defusedxml` with forbidden DTD and entity expansion to prevent XML injection and external entity attacks; discard partial output when parsing fails.
+- Restrict `AutoTokenizer` in token auditing to local files with disabled remote code execution (`trust_remote_code=False`, `local_files_only=True`).
+- Reject malformed records, missing signatures, and invalid statuses during duplicate run ledger checks to prevent silent bypass of quality gates.
+- Replace runtime assertions across dataset preparation and validation tools with explicit exception gates to ensure enforcement under Python optimization.
+- Fail closed during source page validation when physical page counts cannot be established from existing files.
+- Move manual historical C++ review script inputs from shared temporary directories to repository-local storage.
+
 ### Added
 
 - Scan Python, JavaScript, GitHub Actions and the standalone Apple Vision Swift helper with CodeQL; compile the helper explicitly on macOS.
