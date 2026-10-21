@@ -1083,7 +1083,7 @@ document.addEventListener("DOMContentLoaded", () => {
             messagesContainer.innerHTML = initialWelcomeHTML || `
                 <div class="message assistant welcome-card">
                     <div class="message-avatar">
-                        <img src="/static/logo.jpg" alt="BaMiTiKa AI" class="hero-avatar-img">
+                        <img src="/static/logo.jpg" alt="ARYM AI" class="hero-avatar-img">
                     </div>
                     <div class="message-body">
                         <h3>Xin chào! Bạn muốn học gì hôm nay?</h3>
@@ -2341,6 +2341,9 @@ document.addEventListener("DOMContentLoaded", () => {
             if (entry.isImage && entry.imageDataUrl) {
                 docContentImagePreview.src = entry.imageDataUrl;
                 docContentImageBox.style.display = "block";
+            } else if (entry.isImage) {
+                docContentImagePreview.src = `/api/materials/download?filename=${encodeURIComponent(entry.filename || "")}&material_id=${encodeURIComponent(entry.id || entry.material_id || "")}`;
+                docContentImageBox.style.display = "block";
             } else {
                 docContentImagePreview.src = "";
                 docContentImageBox.style.display = "none";
@@ -2546,6 +2549,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 ...(data.material || {}),
                 cardKey: previewKey,
                 filename: file.name,
+                isImage: isImageFile,
+                imageDataUrl: isImageFile ? base64Data : "",
                 doc_id: data.material?.doc_id,
                 total_pages: data.material?.total_pages || 1,
             };
