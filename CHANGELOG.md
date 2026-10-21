@@ -19,12 +19,16 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Changed
 
+- Update application branding to ARYM AI across UI navigation, headers, welcome cards, and accessibility attributes.
+- Support standard DD/MM/YYYY date input with keyboard entry and visual calendar picker for semester timetable export.
 - Reorganize public documentation in English around product usage, setup, architecture, testing and maintenance. Remove internal allocation and submission records from public guides.
 - Preserve the existing attachment and document-viewer behavior while updating the question-answering integration against current main.
 - Add GitHub Actions security workflows for actionlint syntax linting, Dependency Review and Gitleaks secret detection, with workflow instructions in testing documentation.
 
 ### Fixed
 
+- Allow uploading images without readable text as chat attachments and canvas viewer documents without triggering OCR character threshold errors.
+- Prevent exporting empty iCalendar (.ics) files when no confirmed timetable events exist, validating semester date boundaries and recurring events.
 - Regenerate citation repairs from admitted sources using JSON-safe formula notation, without copying a failed draft.
 - Extract image transcripts through a strict OCR response schema and reject uniform images as empty content. Keep unverified OCR outside training.
 - Reject quiz language drift and options that repeat another option with extra words. Show source evidence as the explanation.

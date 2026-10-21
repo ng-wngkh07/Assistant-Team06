@@ -3,6 +3,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Literal
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Query, Response, Request
@@ -397,7 +398,11 @@ async def upload_and_generate_materials(req: MaterialUploadRequest):
         raise HTTPException(status_code=400, detail=f"Dữ liệu tệp tải lên (Base64) không hợp lệ: {e}")
 
     def run_extraction_and_generation():
-        extracted = study_material_manager.extract_document(req.filename, file_bytes)
+        extracted = study_material_manager.extract_document(
+            req.filename,
+            file_bytes,
+            allow_image_without_text=not req.generate_study_set,
+        )
         should_persist = req.persist_to_src if req.persist_to_src is not None else ("PYTEST_CURRENT_TEST" not in os.environ)
         ingestion_info = None
         if should_persist:
@@ -1001,21 +1006,35 @@ async def clear_timetable():
 
 @app.get("/api/timetable/export.ics")
 async def export_timetable_ics(
-    start_date: str = Query(..., description="Start date of semester in YYYY-MM-DD"),
-    end_date: str = Query(..., description="End date of semester in YYYY-MM-DD"),
+    start_date: Optional[str] = Query(None, description="Start date of semester in YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="End date of semester in YYYY-MM-DD"),
 ):
     try:
+        now_dt = datetime.now()
+        s_date = start_date or now_dt.strftime("%Y-%m-%d")
+        e_date = end_date or (now_dt + timedelta(weeks=16)).strftime("%Y-%m-%d")
+
         entries = await run_in_threadpool(timetable_store.get_confirmed_entries)
-        ics_content = timetable_ics.generate_ics(entries, start_date, end_date)
+        if not entries:
+            raise HTTPException(
+                status_code=400,
+                detail="Thời khóa biểu hiện chưa có môn học nào để xuất lịch. Vui lòng thêm môn học trước."
+            )
+        ics_content = timetable_ics.generate_ics(entries, s_date, e_date)
         return Response(
             content=ics_content,
-            media_type="text/calendar",
+            media_type="text/calendar; charset=utf-8",
             headers={
-                "Content-Disposition": f'attachment; filename="timetable_{start_date}_{end_date}.ics"'
+                "Content-Disposition": f'attachment; filename="timetable_{s_date}_{e_date}.ics"'
             },
         )
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.exception("Lỗi xuất lịch sang ICS")
+        raise HTTPException(status_code=500, detail=f"Lỗi xuất tệp lịch .ics: {e}")
 
 
 @app.get("/", response_class=HTMLResponse)

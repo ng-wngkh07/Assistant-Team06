@@ -64,6 +64,9 @@ def generate_ics(
     - start_time and end_time must be HH:MM
     - Events recur weekly until end_date
     """
+    if not entries:
+        raise ValueError("Thời khóa biểu hiện chưa có môn học nào để xuất lịch.")
+
     start_date, end_date = validate_date_range(start_date_str, end_date_str)
 
     byday_map = {
@@ -95,6 +98,7 @@ def generate_ics(
     ]
 
     time_regex = re.compile(r"^\d{1,2}:\d{2}$")
+    events_count = 0
 
     for entry in entries:
         course = str(entry.get("course", "")).strip()
@@ -150,6 +154,10 @@ def generate_ics(
             "STATUS:CONFIRMED",
             "END:VEVENT",
         ])
+        events_count += 1
+
+    if events_count == 0:
+        raise ValueError("Không có môn học nào trong khoảng thời gian đã chọn để xuất lịch.")
 
     lines.append("END:VCALENDAR")
     return "\r\n".join(_fold_line(line) for line in lines) + "\r\n"

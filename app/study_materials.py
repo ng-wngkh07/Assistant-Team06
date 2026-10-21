@@ -327,6 +327,7 @@ class StudyMaterialManager:
         filename: str,
         file_bytes: bytes,
         result: PDFExtractionResult,
+        allow_without_text: bool = False,
     ) -> PDFExtractionResult:
         """Fallback extraction for image files when primary VisionOCRManager is offline or returns sparse text."""
         collected_parts: List[str] = []
@@ -345,7 +346,7 @@ class StudyMaterialManager:
         raw_ocr_text = "\n".join(part for part in collected_parts if part).strip()
         final_text = normalize_vietnamese_text(raw_ocr_text)
 
-        if len(final_text) < MIN_EXTRACT_CHARS:
+        if len(final_text) < MIN_EXTRACT_CHARS and not allow_without_text:
             raise StudyMaterialError(
                 f"Tài liệu hình ảnh '{filename}' không có đủ văn bản nhận diện được qua OCR ({len(final_text)} ký tự). "
                 "Hệ thống không thể đọc được nội dung chữ để tạo câu hỏi ôn tập."
@@ -358,26 +359,35 @@ class StudyMaterialManager:
         except Exception:
             pass
 
+        has_detected_text = len(final_text) >= MIN_EXTRACT_CHARS
+        clean_title = PDFExtractionResult._clean_title(filename) or Path(filename).stem
+        display_text = final_text if final_text else f"[Tài liệu hình ảnh: {clean_title}]"
+
         result.doc_type = "image"
         result.unit_name = "hình ảnh"
         result.total_pages = 1
-        result.ocr_pages = 1
-        result.total_chars = len(final_text)
+        result.ocr_pages = 1 if has_detected_text else 0
+        result.total_chars = len(display_text)
         result.extracted_pages = [{
             "page_num": 1,
-            "text": final_text,
-            "raw_text": final_text,
-            "raw_capture": {"raw_text": final_text, "char_count": len(final_text), "has_text": True},
-            "blocks": [{"block_id": "p1_b0", "bbox": [0, 0, width, height], "type": "image", "text": final_text}],
-            "quality_warnings": result.quality_warnings,
-            "needs_review": True,
-            "char_count": len(final_text),
-            "has_text": True,
+            "text": display_text,
+            "raw_text": display_text,
+            "raw_capture": {"raw_text": display_text, "char_count": len(display_text), "has_text": has_detected_text},
+            "blocks": [{"block_id": "p1_b0", "bbox": [0, 0, width, height], "type": "image", "text": display_text}],
+            "quality_warnings": result.quality_warnings if has_detected_text else ["image_low_or_no_text"],
+            "needs_review": not has_detected_text,
+            "char_count": len(display_text),
+            "has_text": has_detected_text,
             "unit_type": "hình ảnh",
         }]
         return result
 
-    def extract_document(self, filename: str, file_bytes: bytes) -> PDFExtractionResult:
+    def extract_document(
+        self,
+        filename: str,
+        file_bytes: bytes,
+        allow_image_without_text: bool = False,
+    ) -> PDFExtractionResult:
         """Extract text content from uploaded file bytes safely via PDFExtractor."""
         ext = self.validate_file(filename, file_bytes)
         is_image = ext in IMAGE_EXTENSIONS
@@ -398,15 +408,21 @@ class StudyMaterialManager:
 
             # Fallback OCR / image analysis for uploaded images
             if is_image and (result.total_chars < MIN_EXTRACT_CHARS or not result.extracted_pages):
-                result = self._extract_image_fallback(temp_file, filename, file_bytes, result)
+                result = self._extract_image_fallback(
+                    temp_file, filename, file_bytes, result, allow_without_text=allow_image_without_text
+                )
 
             result.filename = Path(filename).name
             result.clean_title = PDFExtractionResult._clean_title(filename)
 
-            if result.total_chars < MIN_EXTRACT_CHARS or not result.extracted_pages:
+            if not is_image and (result.total_chars < MIN_EXTRACT_CHARS or not result.extracted_pages):
                 raise StudyMaterialError(
                     f"Tài liệu '{filename}' không chứa đủ văn bản có thể đọc được ({result.total_chars} ký tự). "
                     "Nếu là tài liệu quét dạng ảnh, vui lòng kiểm tra chất lượng hình ảnh."
+                )
+            if is_image and not result.extracted_pages:
+                raise StudyMaterialError(
+                    f"Không thể đọc hoặc trích xuất tệp hình ảnh '{filename}'."
                 )
             with self._lock:
                 self._raw_files[result.filename] = file_bytes
@@ -438,6 +454,16 @@ class StudyMaterialManager:
 
         if not passages:
             raise StudyMaterialError("Không có nội dung văn bản hợp lệ để tạo câu hỏi ôn tập.")
+
+        real_passages = [
+            p for p in passages
+            if not str(p.get("text", "")).strip().startswith("[Tài liệu hình ảnh:")
+        ]
+        if not real_passages:
+            raise StudyMaterialError(
+                "Tài liệu hình ảnh này không có đủ nội dung văn bản để tạo câu hỏi ôn tập (Quiz & Flashcards). "
+                "Vui lòng chọn tài liệu văn bản hoặc ảnh chụp tài liệu có chữ rõ ràng."
+            )
 
         # Context budget enforcement via token_counter or conservative estimation
         import app.token_counter as tc_mod

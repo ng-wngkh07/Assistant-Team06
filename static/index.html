@@ -4,7 +4,7 @@
     <link rel="icon" href="/static/logo.jpg">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BaMiTiKa AI - Trợ Lý Học Tập Cục Bộ</title>
+    <title>ARYM AI - Trợ Lý Học Tập Cục Bộ</title>
     <script>
         /* Giao diện tối cố định (Dark Mode Only) */
         (function () {
@@ -657,10 +657,10 @@
             <div class="sidebar-top">
                 <div class="brand">
                     <div class="brand-icon">
-                        <img src="/static/logo.jpg" alt="BaMiTiKa AI Logo" class="brand-avatar-img">
+                        <img src="/static/logo.jpg" alt="ARYM AI Logo" class="brand-avatar-img">
                     </div>
                     <div class="brand-text">
-                        <h2>BaMiTiKa AI</h2>
+                        <h2>ARYM AI</h2>
                     </div>
                 </div>
                 <button type="button" id="btn-collapse-sidebar" class="icon-btn" title="Thu gọn thanh bên" aria-label="Thu gọn thanh bên">‹</button>
@@ -1095,13 +1095,21 @@
                                 <strong class="timetable-export-title" style="font-size: 0.88rem; display: block; margin-bottom: 4px;">📅 Xuất lịch sang Google Calendar / Apple Calendar (.ics)</strong>
                                 <p style="font-size: 0.78rem; color: var(--text-secondary); margin: 0 0 10px 0;">Nhập ngày bắt đầu và kết thúc học kỳ để tạo các sự kiện lặp lại hàng tuần (múi giờ Asia/Ho_Chi_Minh):</p>
                                 <form id="form-export-ics" style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
-                                    <div style="flex: 1 1 130px; min-width: 120px;">
-                                        <label for="export-start-date" style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 2px;">Ngày bắt đầu kỳ:</label>
-                                        <input type="date" id="export-start-date" required class="form-input" style="width: 100%; font-size: 0.82rem; padding: 4px 8px;">
+                                    <div style="flex: 1 1 140px; min-width: 130px;">
+                                        <label for="export-start-date" style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 2px;">Ngày bắt đầu kỳ (DD/MM/YYYY):</label>
+                                        <div style="position: relative; display: flex; align-items: center;">
+                                            <input type="text" id="export-start-date" required class="form-input date-dmy-input" placeholder="DD/MM/YYYY" maxlength="10" autocomplete="off" style="width: 100%; font-size: 0.82rem; padding: 4px 28px 4px 8px;">
+                                            <button type="button" class="btn-picker-toggle" data-for="export-start-date" title="Chọn ngày từ lịch" style="position: absolute; right: 4px; background: none; border: none; cursor: pointer; font-size: 13px; color: var(--text-muted); padding: 2px 4px;">📅</button>
+                                            <input type="date" id="export-start-date-picker" tabindex="-1" style="position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none;">
+                                        </div>
                                     </div>
-                                    <div style="flex: 1 1 130px; min-width: 120px;">
-                                        <label for="export-end-date" style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 2px;">Ngày kết thúc kỳ:</label>
-                                        <input type="date" id="export-end-date" required class="form-input" style="width: 100%; font-size: 0.82rem; padding: 4px 8px;">
+                                    <div style="flex: 1 1 140px; min-width: 130px;">
+                                        <label for="export-end-date" style="font-size: 0.75rem; color: var(--text-secondary); display: block; margin-bottom: 2px;">Ngày kết thúc kỳ (DD/MM/YYYY):</label>
+                                        <div style="position: relative; display: flex; align-items: center;">
+                                            <input type="text" id="export-end-date" required class="form-input date-dmy-input" placeholder="DD/MM/YYYY" maxlength="10" autocomplete="off" style="width: 100%; font-size: 0.82rem; padding: 4px 28px 4px 8px;">
+                                            <button type="button" class="btn-picker-toggle" data-for="export-end-date" title="Chọn ngày từ lịch" style="position: absolute; right: 4px; background: none; border: none; cursor: pointer; font-size: 13px; color: var(--text-muted); padding: 2px 4px;">📅</button>
+                                            <input type="date" id="export-end-date-picker" tabindex="-1" style="position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none;">
+                                        </div>
                                     </div>
                                     <button type="submit" class="btn btn-sm btn-primary" style="background: #16a34a; border-color: #16a34a; flex: 0 0 auto;">📥 Tải tệp .ics</button>
                                 </form>
@@ -1169,7 +1177,7 @@
                 <!-- Welcome greeting -->
                 <div class="message assistant welcome-card">
                     <div class="message-avatar">
-                        <img src="/static/logo.jpg" alt="BaMiTiKa AI" class="hero-avatar-img">
+                        <img src="/static/logo.jpg" alt="ARYM AI" class="hero-avatar-img">
                     </div>
                     <div class="message-body">
                         <h3>Xin chào! Bạn muốn học gì hôm nay?</h3>
