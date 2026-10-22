@@ -112,3 +112,6 @@ Thumbs.db
 /eval/*
 !/eval/cases.csv
 !/eval/run.py
+
+# Calendar/timetable screenshot samples
+!/calendar_src/
