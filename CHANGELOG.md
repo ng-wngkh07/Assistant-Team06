@@ -16,6 +16,7 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 ### Added
 
 - Scan Python, JavaScript, GitHub Actions and the standalone Apple Vision Swift helper with CodeQL; compile the helper explicitly on macOS.
+- Add sample university timetable and course-registration screenshots in `calendar_src/` as references for timetable import.
 
 ### Changed
 
