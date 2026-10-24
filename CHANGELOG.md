@@ -21,8 +21,6 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 - Report missing timetable fields, clipped course names and invalid time ranges in editable drafts, including cached results. Keep insufficient-information learning examples separate from positive schedule labels and training approval.
 - Scan Python, JavaScript, GitHub Actions and the standalone Apple Vision Swift helper with CodeQL; compile the helper explicitly on macOS.
 - Add sample university timetable and course-registration screenshots in `calendar_src/` as references for timetable import.
-- Provide a read-only Qwen3.5-9B training-plan draft with model configuration checks and separated base, dataset and adapter paths.
-- Add a public, synthetic 12-topic corpus with 96 review cases and a 14-course image/JSON timetable fixture for isolated debugging; these fixtures are not approved training data or an independent model-quality holdout.
 
 ### Changed
 
