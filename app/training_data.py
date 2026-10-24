@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 from xml.sax.saxutils import escape
 
-import requests
 
-from app.config import DB_PATH, DEFAULT_CHAT_MODEL, OLLAMA_BASE_URL
+from app.config import DB_PATH, DEFAULT_CHAT_MODEL, OLLAMA_BASE_URL, TRAINED_MODEL_NAME
+from app.model_resolver import is_mlx_model
 from app.text_cleaner import sanitize_for_prompt_context
 from app.bilingual_terms import translation_guidance, translation_is_plausible
 from app.answer_format import clean_answer
@@ -406,18 +406,33 @@ def translate_excerpt(text: str, model: str = DEFAULT_CHAT_MODEL, *, retry: bool
         {"role": "user", "content":
          ("The previous translation was incomplete or in the wrong language. " if retry else "")
          + "Translate ALL into Vietnamese. " + translation_guidance(text) + "\n\n" + text}]
-    if model in (DEFAULT_CHAT_MODEL, "qwen2.5-3b-4bit", "local"):
+    import sys
+    if sys.platform == "darwin":
+        if not is_mlx_model(model):
+            raise RuntimeError(f"Mô hình {model} không được hỗ trợ trên macOS (chỉ hỗ trợ MLX)")
         from app.trained_client import TrainedModelClient
-        client = TrainedModelClient()
+        client = TrainedModelClient(model_name=model)
         if not client.available():
-            raise RuntimeError("Mô hình 3B dùng chung chưa sẵn sàng cho dịch văn bản")
+            raise RuntimeError(f"Mô hình {model} dùng chung chưa sẵn sàng cho dịch văn bản")
+        content = client.chat_complete(messages, temperature=0, seed=0, max_tokens=1100).strip()
+    elif is_mlx_model(model):
+        from app.trained_client import TrainedModelClient
+        client = TrainedModelClient(model_name=model)
+        if not client.available():
+            raise RuntimeError(f"Mô hình {model} dùng chung chưa sẵn sàng cho dịch văn bản")
         content = client.chat_complete(messages, temperature=0, seed=0, max_tokens=1100).strip()
     else:
-        response = requests.post(f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat",
-            json={"model":model,"stream":False,"think":False,"messages":messages,
-                  "options":{"temperature":0,"num_predict":1100,"repeat_penalty":1.12}},timeout=240)
-        response.raise_for_status()
-        content = response.json()["message"]["content"]
+        from app.ollama_client import OllamaClient
+        client = OllamaClient()
+        client._verify_model_locality(model)
+        resp = client.chat_sync(
+            messages=messages,
+            model=model,
+            temperature=0,
+            num_predict=1100,
+            num_ctx=8192,
+        )
+        content = resp.get("message", {}).get("content", "")
         if not isinstance(content, str):
             raise ValueError("Mô hình không trả bản dịch dạng chuỗi")
         content = content.strip()
@@ -446,10 +461,13 @@ def ask_teacher(pair: dict, model: str = DEFAULT_CHAT_MODEL, translation_model: 
             "Không bịa nghiên cứu, cơ chế, số liệu hoặc tên tác giả."
         )
     from app.trained_client import TrainedModelClient
-    if model in ("local", "qwen2.5-3b-4bit", DEFAULT_CHAT_MODEL):
-        if not TrainedModelClient.available():
-            raise RuntimeError("Mô hình 3B dùng chung chưa sẵn sàng")
-        client = TrainedModelClient()
+    import sys
+    if sys.platform == "darwin":
+        if not is_mlx_model(model):
+            raise RuntimeError(f"Mô hình {model} không được hỗ trợ trên macOS (chỉ hỗ trợ MLX)")
+        if not TrainedModelClient.available(model_name=model):
+            raise RuntimeError(f"Mô hình {model} dùng chung chưa sẵn sàng")
+        client = TrainedModelClient(model_name=model)
         stream = client.chat_stream([
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": prompt},
@@ -459,26 +477,38 @@ def ask_teacher(pair: dict, model: str = DEFAULT_CHAT_MODEL, translation_model: 
         if not m:
             raise ValueError(f"Không nhận được JSON hợp lệ từ teacher model: {resp_text}")
         data = json.loads(m.group(0))
-    elif model == "local":
-        raise RuntimeError("Mô hình base 3B chưa sẵn sàng cho teacher inference")
+    elif is_mlx_model(model):
+        if not TrainedModelClient.available(model_name=model):
+            raise RuntimeError(f"Mô hình {model} dùng chung chưa sẵn sàng")
+        client = TrainedModelClient(model_name=model)
+        stream = client.chat_stream([
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": prompt},
+        ], max_tokens=900)
+        resp_text = "".join(stream).strip()
+        m = re.search(r"\{.*\}", resp_text, re.DOTALL)
+        if not m:
+            raise ValueError(f"Không nhận được JSON hợp lệ từ teacher model: {resp_text}")
+        data = json.loads(m.group(0))
     else:
-        response = requests.post(
-            f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat",
-            json={
-                "model": model,
-                "stream": False,
-                "format": {"type": "object", "properties": {"items": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"type": "object", "properties": {"question": {"type": "string"}, "answer": {"type": "string"}}, "required": ["question", "answer"]}}}, "required": ["items"]},
-                "think": False,
-                "options": {"temperature": 0.2, "num_predict": 900, "repeat_penalty": 1.12},
-                "messages": [
-                    {"role": "system", "content": SYSTEM},
-                    {"role": "user", "content": prompt},
-                ],
-            },
-            timeout=240,
+        from app.ollama_client import OllamaClient
+        client = OllamaClient()
+        client._verify_model_locality(model)
+        resp = client.chat_sync(
+            messages=[
+                {"role": "system", "content": SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            model=model,
+            temperature=0.2,
+            num_predict=900,
+            num_ctx=8192,
         )
-        response.raise_for_status()
-        data = json.loads(response.json()["message"]["content"])
+        content_text = resp.get("message", {}).get("content", "")
+        m = re.search(r"\{.*\}", content_text, re.DOTALL)
+        if not m:
+            raise ValueError(f"Không nhận được JSON hợp lệ từ teacher model: {content_text}")
+        data = json.loads(m.group(0))
     nested = data.get("translations", {})
     if not isinstance(nested, dict):
         nested = {}
@@ -634,7 +664,7 @@ def prepare(db_path: Path, output_dir: Path, pairs_per_book: int = 1, limit_book
                 try:
                     generated = ask_teacher(pair, model=model)
                     break
-                except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError):
+                except (Exception, ValueError, KeyError, json.JSONDecodeError):
                     if attempt:
                         raise
             record = {"key": key, "pair": pair, "teacher_model": model, "translation_model": DEFAULT_CHAT_MODEL, **generated}
@@ -644,7 +674,7 @@ def prepare(db_path: Path, output_dir: Path, pairs_per_book: int = 1, limit_book
             seen.add(key)
             seen_sources.add(source_key)
             print(f'[{number}/{len(selected)}] {pair["filename"][:42]}: {len(generated["items"])} ví dụ ({generated["language"]})', flush=True)
-        except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as error:
+        except (Exception, ValueError, KeyError, json.JSONDecodeError) as error:
             print(f'[{number}/{len(selected)}] Bỏ qua {pair["filename"][:42]}: {error}', flush=True)
 
     return write_training_files([record for record in existing if basic_record_quality(record)], output_dir, model)

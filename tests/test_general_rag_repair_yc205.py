@@ -80,10 +80,10 @@ def _configure_stub_context(tmp_path, monkeypatch):
 def test_citation_repair_is_skipped_if_its_final_prompt_exceeds_capacity(monkeypatch, tmp_path):
     import app.rag_agent as rag
     # Exact counter deliberately permits the original prompt but rejects the
-    # structured repair schema. The model must never
+    # repair instruction (the primary MLX prompt also uses JSON). The model must never
     # receive the overflowing prompt.
     def count(messages):
-        return 8000 if any('"source_ids"' in m['content'] and '"claims"' in m['content'] for m in messages) else 400
+        return 8000 if any('Trả lời user_query chỉ bằng <context>' in m['content'] for m in messages) else 400
     monkeypatch.setattr(rag,'get_exact_token_counter',lambda:count)
     _configure_stub_context(tmp_path, monkeypatch)
     model=RecordingModel('Câu trả lời chưa có trích dẫn.')
@@ -104,7 +104,7 @@ def test_invalid_citation_without_valid_id_has_specific_failure():
 def test_invalid_citation_remains_specific_when_repair_cannot_fit(monkeypatch, tmp_path):
     import app.rag_agent as rag
     def count(messages):
-        return 8000 if any('"source_ids"' in m['content'] and '"claims"' in m['content'] for m in messages) else 400
+        return 8000 if any('Trả lời user_query chỉ bằng <context>' in m['content'] for m in messages) else 400
     monkeypatch.setattr(rag,'get_exact_token_counter',lambda:count)
     _configure_stub_context(tmp_path, monkeypatch)
     model=RecordingModel('Câu trả lời ghi mã không có trong nguồn [S99].')
@@ -133,7 +133,7 @@ def test_unreviewed_machine_translation_is_not_answer_evidence():
     original='Classical conditioning pairs a neutral stimulus with an unconditioned stimulus.'
     translated='Bản dịch máy sai: phản ứng không điều kiện là phản ứng đã học.'
     class Translation:
-        def translate(self,chunks): return {0:translated}
+        def get_cached(self,chunks): return {0:translated}
     model=RecordingModel('Điều kiện hóa cổ điển ghép kích thích trung tính với kích thích không điều kiện [S1].')
     result=PsychologyAgent(searcher=RecordingSearcher([make_chunk(original)]),ollama=model,translator=Translation()).process_query_sync('điều kiện hóa cổ điển là gì',model='test',embed_model=None,isolate_context=True,processing_level='standard')
     prompt=model.calls[0]['messages'][-1]['content']

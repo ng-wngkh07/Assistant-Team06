@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import sqlite3
 import struct
@@ -114,6 +115,17 @@ class KnowledgeIndexer:
                 quality_metadata TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS corpus_vector_provenance (
+                chunk_id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+                text_sha256 TEXT NOT NULL,
+                model_digest TEXT NOT NULL,
+                vector_sha256 TEXT NOT NULL,
+                dimensions INTEGER NOT NULL,
+                full_text INTEGER NOT NULL,
+                embedded_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_provenance_digest ON corpus_vector_provenance(model_digest);
             """)
 
             # Migration: Ensure pipeline_version column exists in documents
@@ -144,11 +156,26 @@ class KnowledgeIndexer:
         Populate embeddings for all chunks that currently have embedding IS NULL.
         Allows adding vector search capability to already indexed files.
         """
-        resolved_model = self.ollama.find_best_embed_model(embed_model) or embed_model
-        test_emb = self.ollama.get_embedding("test", model=resolved_model)
-        if test_emb is None:
-            logger.info(f"Mô hình embedding '{resolved_model}' chưa khả dụng trong Ollama để bổ sung embedding.")
-            return 0
+        use_native = False
+        native_client = None
+        native_embed_models = {"bge-m3-mlx-fp16", "bge-m3-mlx", "native-bge", "bge-m3"}
+        is_native_target = (embed_model in native_embed_models) or (embed_model is None and sys.platform == "darwin")
+
+        if sys.platform == "darwin" and is_native_target:
+            from app.native_embedding import NativeEmbeddingClient, BGE_NATIVE_IDENTITY
+            if NativeEmbeddingClient.available():
+                use_native = True
+                native_client = NativeEmbeddingClient()
+                resolved_model = native_client.get_identity()
+            else:
+                logger.info("Mô hình native MLX embedding chưa khả dụng trên Mac; không thể bổ sung embedding.")
+                return 0
+        else:
+            resolved_model = self.ollama.find_best_embed_model(embed_model) or embed_model
+            test_emb = self.ollama.get_embedding("test", model=resolved_model)
+            if test_emb is None:
+                logger.info(f"Mô hình embedding '{resolved_model}' chưa khả dụng trong Ollama để bổ sung embedding.")
+                return 0
 
         with self.get_connection() as conn:
             if limit > 0:
@@ -167,19 +194,33 @@ class KnowledgeIndexer:
 
         logger.info(f"Bắt đầu bổ sung embedding cho {total_missing} đoạn chỉ mục bằng mô hình '{resolved_model}'...")
         count = 0
+        import hashlib
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).isoformat()
 
         with self.get_connection() as conn:
             for start in range(0, total_missing, batch_size):
                 batch = missing_chunks[start:start + batch_size]
-                vectors = self.ollama.get_batch_embeddings(
-                    [row["text"] for row in batch], model=resolved_model
-                )
+                if use_native and native_client:
+                    vectors = native_client.get_batch_embeddings([row["text"] for row in batch])
+                else:
+                    vectors = self.ollama.get_batch_embeddings(
+                        [row["text"] for row in batch], model=resolved_model
+                    )
                 for row, vec in zip(batch, vectors):
                     if vec:
+                        vec_blob = pack_vector(vec)
                         conn.execute(
                             "UPDATE chunks SET embedding = ? WHERE id = ?",
-                            (pack_vector(vec), row["id"]),
+                            (vec_blob, row["id"]),
                         )
+                        text_sha = hashlib.sha256(row["text"].encode("utf-8")).hexdigest()
+                        vec_sha = hashlib.sha256(vec_blob).hexdigest()
+                        conn.execute("""
+                            INSERT OR REPLACE INTO corpus_vector_provenance
+                            (chunk_id, text_sha256, model_digest, vector_sha256, dimensions, full_text, embedded_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (row["id"], text_sha, resolved_model, vec_sha, len(vec), 1, now_iso))
                         count += 1
                 conn.commit()
                 if progress_callback:
@@ -227,16 +268,33 @@ class KnowledgeIndexer:
         report["symlink_violations"] = discovery.get("symlink_violations", [])
 
         # Check if embedding model is functional
-        resolved_embed_model = self.ollama.find_best_embed_model(embed_model) if embed_model else None
+        resolved_embed_model = None
         can_embed = False
-        if resolved_embed_model:
-            test_emb = self.ollama.get_embedding("test", model=resolved_embed_model)
-            if test_emb is not None:
-                can_embed = True
-                report["embedding_enabled"] = True
-                logger.info(f"Đã kích hoạt mô hình embedding Ollama: {resolved_embed_model}")
+        native_embed_models = {"bge-m3-mlx-fp16", "bge-m3-mlx", "native-bge", "bge-m3"}
+        is_native_target = (embed_model in native_embed_models) or (embed_model is None and sys.platform == "darwin")
+
+        if embed_model:
+            if sys.platform == "darwin" and is_native_target:
+                from app.native_embedding import NativeEmbeddingClient, BGE_NATIVE_IDENTITY
+                if NativeEmbeddingClient.available():
+                    can_embed = True
+                    resolved_embed_model = "bge-m3-mlx-fp16"
+                    report["embedding_enabled"] = True
+                    logger.info(f"Đã kích hoạt mô hình native MLX embedding: {resolved_embed_model}")
+                else:
+                    can_embed = False
+                    report["embedding_enabled"] = False
+                    logger.info("Mô hình native MLX embedding chưa khả dụng.")
             else:
-                logger.info(f"Mô hình embedding '{resolved_embed_model}' chưa khả dụng trong Ollama.")
+                resolved_embed_model = self.ollama.find_best_embed_model(embed_model)
+                if resolved_embed_model:
+                    test_emb = self.ollama.get_embedding("test", model=resolved_embed_model)
+                    if test_emb is not None:
+                        can_embed = True
+                        report["embedding_enabled"] = True
+                        logger.info(f"Đã kích hoạt mô hình embedding Ollama: {resolved_embed_model}")
+                    else:
+                        logger.info(f"Mô hình embedding '{resolved_embed_model}' chưa khả dụng trong Ollama.")
 
         indexed_map = self.get_indexed_files_map()
         force_ocr_files = force_ocr_files or set()
@@ -419,7 +477,7 @@ class KnowledgeIndexer:
             # Prepare embeddings before modifying the database.
             # If embedding fails, an exception is raised and the transaction is never started,
             # retaining the previous index intact.
-            prepared = self._prepare_chunk_rows(all_chunks, can_embed, resolved_embed_model)
+            prepared_rows, prov_rows = self._prepare_chunk_rows(all_chunks, can_embed, resolved_embed_model)
 
             # Determine final status for documents with chunks
             doc_status = "indexed"
@@ -433,7 +491,7 @@ class KnowledgeIndexer:
                     extract_res, status=doc_status, is_scanned=extract_res.is_scanned,
                     extracted_pages_count=extracted_pages_count, connection=conn,
                 )
-                chunks_inserted = self._insert_chunk_rows(conn, doc_id, prepared)
+                chunks_inserted = self._insert_chunk_rows(conn, doc_id, prepared_rows, prov_rows)
                 self._save_quality_record(conn, doc_id, extract_res)
 
             report["indexed_files"] += 1
@@ -571,33 +629,77 @@ class KnowledgeIndexer:
         embed_model: Optional[str] = None
     ) -> int:
         """Insert chunk records and optional embeddings in one transaction."""
-        rows = self._prepare_chunk_rows(chunks, can_embed, embed_model)
+        rows, prov_rows = self._prepare_chunk_rows(chunks, can_embed, embed_model)
         with self.get_connection() as conn:
-            return self._insert_chunk_rows(conn, doc_id, rows)
+            return self._insert_chunk_rows(conn, doc_id, rows, prov_rows)
 
     def _prepare_chunk_rows(self, chunks, can_embed, embed_model):
         rows = []
+        prov_rows = []
+        use_native = False
+        native_client = None
+        native_embed_models = {"bge-m3-mlx-fp16", "bge-m3-mlx", "native-bge", "bge-m3"}
+        is_native_target = (embed_model in native_embed_models) or (embed_model is None and sys.platform == "darwin")
+        if sys.platform == "darwin" and can_embed and is_native_target:
+            from app.native_embedding import NativeEmbeddingClient, BGE_NATIVE_IDENTITY
+            if NativeEmbeddingClient.available():
+                use_native = True
+                native_client = NativeEmbeddingClient()
+            else:
+                raise RuntimeError("Mô hình MLX embedding chưa sẵn sàng trên Mac; không được hạ cấp sang HTTP.")
+
+        import hashlib
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).isoformat()
+
         for start in range(0, len(chunks), 32):
             batch = chunks[start:start + 32]
-            vectors = (
-                self.ollama.get_batch_embeddings([c["text"] for c in batch], model=embed_model)
-                if can_embed and embed_model else [None] * len(batch)
-            )
+            if can_embed and embed_model:
+                if use_native and native_client:
+                    vectors = native_client.get_batch_embeddings([c["text"] for c in batch])
+                    model_digest = getattr(native_client, "get_identity", lambda: BGE_NATIVE_IDENTITY)()
+                else:
+                    vectors = self.ollama.get_batch_embeddings([c["text"] for c in batch], model=embed_model)
+                    model_digest = embed_model
+            else:
+                vectors = [None] * len(batch)
+                model_digest = None
             if len(vectors) != len(batch):
                 raise ValueError("Embedding count does not match chunk count")
             if can_embed and embed_model and any(not vec for vec in vectors):
                 raise RuntimeError("Embedding backend did not return every requested vector")
             for c, vec in zip(batch, vectors):
+                row_idx = len(rows)
+                blob = pack_vector(vec) if vec else None
                 rows.append((c["book_title"], c["filename"], c["page_num"],
-                             c["chunk_index"], c["text"], pack_vector(vec) if vec else None))
-        return rows
+                             c["chunk_index"], c["text"], blob))
+                if blob and model_digest:
+                    t_sha = hashlib.sha256(c["text"].encode("utf-8")).hexdigest()
+                    v_sha = hashlib.sha256(blob).hexdigest()
+                    prov_rows.append((row_idx, t_sha, model_digest, v_sha, len(vec), 1, now_iso))
+        return rows, prov_rows
 
     @staticmethod
-    def _insert_chunk_rows(conn, doc_id, rows):
-        conn.executemany("""
-            INSERT INTO chunks (doc_id, book_title, filename, page_num, chunk_index, text, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, [(doc_id, *row) for row in rows])
+    def _insert_chunk_rows(conn, doc_id, rows, prov_rows=None):
+        if isinstance(rows, tuple) and len(rows) == 2 and prov_rows is None:
+            rows, prov_rows = rows
+        inserted_ids = []
+        for row in rows:
+            cursor = conn.execute("""
+                INSERT INTO chunks (doc_id, book_title, filename, page_num, chunk_index, text, embedding)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (doc_id, *row))
+            inserted_ids.append(cursor.lastrowid)
+
+        if prov_rows:
+            p_data = []
+            for row_idx, t_sha, m_digest, v_sha, dims, full_text, emb_at in prov_rows:
+                chunk_id = inserted_ids[row_idx]
+                p_data.append((chunk_id, t_sha, m_digest, v_sha, dims, full_text, emb_at))
+            conn.executemany("""
+                INSERT OR REPLACE INTO corpus_vector_provenance (chunk_id, text_sha256, model_digest, vector_sha256, dimensions, full_text, embedded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, p_data)
         return len(rows)
 
     def get_status(self) -> Dict[str, Any]:

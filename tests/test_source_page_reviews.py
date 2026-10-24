@@ -42,7 +42,7 @@ def reviewed_corpus(tmp_path):
     (runtime/'corpus_completion_policy.json').write_text(json.dumps({'require_complete_corpus':True,'embedding_model_digest':'pinned'}))
     with idx.get_connection() as db:
         db.execute('CREATE TABLE corpus_source_pages(filename,page_num,source_sha256,state,chunks_sha256,review_path,review_sha256,checked_at,PRIMARY KEY(filename,page_num))')
-        db.execute('CREATE TABLE corpus_vector_provenance(chunk_id,text_sha256,model_digest,vector_sha256,dimensions,full_text,embedded_at)')
+        db.execute('CREATE TABLE IF NOT EXISTS corpus_vector_provenance(chunk_id,text_sha256,model_digest,vector_sha256,dimensions,full_text,embedded_at)')
         texts = [r['text'] for r in db.execute('SELECT text FROM chunks ORDER BY chunk_index')]
         db.execute('INSERT INTO corpus_source_pages VALUES(?,?,?,?,?,?,?,?)',('scanned.pdf',1,digest(source),'text_verified',hashlib.sha256(json.dumps(texts,ensure_ascii=False).encode()).hexdigest(),str(old),digest(old),'now'))
         for r in db.execute('SELECT id,text FROM chunks').fetchall():
@@ -91,7 +91,13 @@ def test_page_sync_publishes_printed_review_instead_of_native_text(tmp_path, mon
         for row in db.execute('SELECT id,text FROM chunks').fetchall():
             blob = pack_vector([1.]+[0.]*1023)
             db.execute('UPDATE chunks SET embedding=? WHERE id=?',(blob,row['id']))
-            db.execute('INSERT INTO corpus_vector_provenance VALUES(?,?,?,?,?,?,?)',(row['id'],hashlib.sha256(row['text'].encode()).hexdigest(),'pinned',hashlib.sha256(blob).hexdigest(),1024,1,'now'))
+            proof = (row['id'],hashlib.sha256(row['text'].encode()).hexdigest(),'pinned',hashlib.sha256(blob).hexdigest(),1024,1,'now')
+            existing = db.execute('SELECT * FROM corpus_vector_provenance WHERE chunk_id=?',(row['id'],)).fetchone()
+            if existing:
+                # Sync preserves a vector already bound to unchanged reviewed text.
+                assert tuple(existing) == proof
+            else:
+                db.execute('INSERT INTO corpus_vector_provenance VALUES(?,?,?,?,?,?,?)',proof)
     assert audit_corpus(tmp_path)['complete']
 
 
@@ -192,3 +198,28 @@ def test_sync_runner_uses_portable_lock_without_direct_fcntl_import(monkeypatch)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert module.fcntl is file_lock
+
+
+
+def test_changed_review_sync_discards_old_vector_and_proof(tmp_path, monkeypatch):
+    idx, review, _, reviews = reviewed_corpus(tmp_path)
+    with idx.get_connection() as db:
+        old_ids = {row['id'] for row in db.execute('SELECT id FROM chunks')}
+        assert db.execute('SELECT COUNT(*) FROM corpus_vector_provenance').fetchone()[0] > 0
+    review['reviewed_at'] = '2026-10-04T02:00:00Z'
+    review['transcript'] = 'A corrected reviewed equation: x = -2.'
+    (reviews/'001-corrected.json').write_text(json.dumps(review))
+    spec = importlib.util.spec_from_file_location('changed_review_sync_test', Path(__file__).resolve().parents[1]/'scripts/complete_corpus.py')
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    monkeypatch.setattr(module, 'ROOT', tmp_path)
+    monkeypatch.setattr(module, 'OUT', tmp_path/'data/evaluation/corpus-completion-20261004')
+    monkeypatch.setattr(module, 'KnowledgeIndexer', lambda: idx)
+    module.page_coverage()
+    with idx.get_connection() as db:
+        rows = db.execute('SELECT id,text,embedding FROM chunks').fetchall()
+        assert rows and all(row['embedding'] is None for row in rows)
+        assert all(row['id'] not in old_ids for row in rows)
+        assert any(review['transcript'] in row['text'] for row in rows)
+        assert db.execute('SELECT COUNT(*) FROM corpus_vector_provenance').fetchone()[0] == 0
+        assert db.execute('PRAGMA foreign_key_check').fetchall() == []
+    assert not audit_corpus(tmp_path)['complete']

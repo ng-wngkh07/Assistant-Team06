@@ -15,31 +15,80 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Added
 
+- Show the last packed context budget, output reserve and omitted-history warning, with an explicit new-chat action that preserves the next draft. Label live draft byte size separately from token usage.
+- Report missing timetable fields, clipped course names and invalid time ranges in editable drafts, including cached results. Keep insufficient-information learning examples separate from positive schedule labels and training approval.
 - Scan Python, JavaScript, GitHub Actions and the standalone Apple Vision Swift helper with CodeQL; compile the helper explicitly on macOS.
 - Add sample university timetable and course-registration screenshots in `calendar_src/` as references for timetable import.
+- Provide a read-only Qwen3.5-9B training-plan draft with model configuration checks and separated base, dataset and adapter paths.
+- Add a public, synthetic 12-topic corpus with 96 review cases and a 14-course image/JSON timetable fixture for isolated debugging; these fixtures are not approved training data or an independent model-quality holdout.
 
 ### Changed
+
+- Bound native text prefill to 128 tokens per step to reduce transient memory, and report model load, prefill and generation diagnostics without dropping prompt tokens.
+- Reuse up to 128 validated query embeddings in process memory, keyed by model directory, freshly verified artifact content, token limit and query digest. Revalidate stored chunk provenance on every retrieval.
+- In Fast mode, reuse cached citation-preview translations without waiting for optional translation generation. Keep original source text as the evidence for answers.
 
 - Update application branding to ARYM AI across UI navigation, headers, welcome cards, and accessibility attributes.
 - Support standard DD/MM/YYYY date input with keyboard entry and visual calendar picker for semester timetable export.
 - Reorganize public documentation in English around product usage, setup, architecture, testing and maintenance. Remove internal allocation and submission records from public guides.
-- Preserve the existing attachment and document-viewer behavior while updating the question-answering integration against current main.
+- Replace large attachment previews in the chat composer with compact, keyboard-accessible file banners. Keep explicit document opening and removal, reduce composer height and preserve independent message scrolling.
 - Add GitHub Actions security workflows for actionlint syntax linting, Dependency Review and Gitleaks secret detection, with workflow instructions in testing documentation.
+- Default QA to Fast, suggest Careful for complex requests without resubmitting the question, and preserve explicit mode choices. Practice keeps its fixed verification workflow.
+- Select the pinned local MLX Qwen3.5 9B 4-bit base on Apple Silicon with an 8192-token operational budget. Keep legacy 3B identity and adapter compatibility separate; model installation does not authorize training or adapter activation.
+- Prefer paragraph, line, sentence and word boundaries when indexing new text, retaining exact source slices and configured overlap. After accepted hybrid retrieval, add bounded adjacent chunks from the same document, filename and page as independent citation sources; preserve existing indexes and evidence gates.
+- Consume canonical material filenames after upload in the client interface for preview, active attachment scoping, QA, downloads, and generation.
 
 ### Fixed
 
+- Exclude numbered answer labels from factual audits while preserving numeric claims. Prefer compact evidence identifiers that resolve to exact source passages, retaining full claim coverage and fail-closed verification.
+- Request intermediate equalities for explicitly requested worked calculations, and clarify the two-endpoint source-line format during bounded citation repair.
+- Reject a single requested limit replaced by a neighboring quotient in the same source. Keep formula-transcription repair separate from extra line-format guidance, preserving the requested function and its condition.
+- Check the native query embedding's actual model identity against the stored-vector basis before using a cached vector or starting its worker. A changed model falls back to lexical retrieval rather than mixing vector spaces.
+- Retain complete worked-solution instructions when citation repair omits a malformed draft, including source conditions and explanations for the requested parts. Use a focused source-translation instruction for explicit native yes/no and true/false questions in both generation attempts, while retaining the calculation and theorem instructions for other requests.
+- Clear the draft-size indicator immediately after sending, including deterministic replies that do not emit a context-budget event.
+
+- Preserve exact-exercise solution requirements in native source-line repairs. Explain malformed or invalid line ranges and unsupported copied input values without repeating the rejected draft; retain all evidence checks and the two-call limit.
+
+- Keep each structured QA claim bound to one source and its own evidence range; rejected multi-source claims receive explicit repair guidance without repeating the invalid draft.
+- Resolve structured 9B evidence selections against exact admitted source lines, rejecting invalid ranges and omitted referenced function premises while retaining the single-repair limit.
+- Limit optional development reload scanning to backend source files so model artifacts, datasets and runtime evidence are not repeatedly traversed. Static UI changes need a browser refresh; launcher/configuration changes need a server restart.
+- Keep unreadable course names nullable during weekday corroboration. Distinguish registration windows and unscheduled registration forms from class meetings; normalize literal mobile weekday labels and corroborate unique course-code grid columns with local OCR.
+- Preserve numbered Markdown exercises when headings and bodies occupy separate reading sections, with separate question and answer provenance; keep unanswered exercises explicit and render heading markers as readable titles.
+- Include a matching adjacent numbered Markdown answer as a separately citable reading section after validating the stored exercise identity; retain document and explicit-page scope.
+- Preserve decimal, scientific and signed values during claim cleanup. Reject unsupported bare measured values in answer repairs without claiming general arithmetic validation.
+- Keep citation repairs focused on the requested result and its source conditions rather than repeating unrelated retrieved exercises.
+- Keep private reasoning removed when switching exercise answer views, and remove citation-only parentheses without changing mathematical calls or conditions.
+- Bind native image caches to actual weight, tokenizer and processor content so same-size file changes invalidate cached recognition.
+- Use the selected native runtime in macOS command-line embedding checks and status, with the selected QA base as the preparation/audit default; avoid legacy model-service probes and false adapter-readiness labels.
+- Reject a source/question quotient restated with an erased named function, including citation-repair output. Preserve explicit uncertainty when formula validation fails.
+- Restore native curation parsing and calibration, bind model provenance to actual weight/tokenizer bytes, and avoid nested model admission locks. Preparation and calibration remain separate from training authorization.
 - Allow uploading images without readable text as chat attachments and canvas viewer documents without triggering OCR character threshold errors.
 - Prevent exporting empty iCalendar (.ics) files when no confirmed timetable events exist, validating semester date boundaries and recurring events.
+- Reject incomplete timetable export rows, preserve confirmed subject identities and user edits, and express the final semester recurrence boundary in UTC. Make replacement of the existing schedule an explicit confirmation choice.
+- Reject quiz distractors that overlap a correct zero comparison, switch its quantity or substitute a generic category for a bit/byte value. Retain one bounded repair for repeated one-character spans and the labeled fallback for ambiguous generated questions.
+- Careful QA excludes standalone discourse labels from factual audits while retaining inline conditions and short mathematical claims.
+- Preserve the selected local model identity across translation, query normalization and source preparation/audit calls. Separate native Mac and legacy Ollama identities and invalidate translation caches when the backend changes.
+- Normalize supported LaTeX fractions, roots, grouped powers, sets and symbols into readable math while preserving identifier case, grouping and source attribution. Unsupported or malformed math requires bounded repair or an explicit refusal; retain unsupported compound vector notation for validation.
+- Require complete opening premises in definitions and theorems. Preserve mathematical predicates and exercise-specific conditions; reject question echoes and empty cited labels. Prefer a complete source passage over overlapping fragments during citation repair.
+- Retrieve compact and spaced differentials using their complete operands, preserve source-bound escaped comparisons, and validate selected-page vectors without changing relevance thresholds or borrowing another page.
+- Forward explicit Ollama reasoning and seed controls for diagnostics, keeping private reasoning out of final answers and recording final usage counts.
+- Rebuild citation-repair context from admitted source blocks and one resolved question, excluding old history. Preserve source-backed applicability conditions and assign claims by actual support rather than source position. Normalize escaped comparison symbols only against the cited original expression, preserving literal encoded source content and rejecting unsupported comparisons.
+- Resolve approved legacy evidence images after moving the project using the same project name and evaluation path, while retaining source and image hashes, immutable approvals, and traversal and symlink checks.
+- Retain original binary download capability for session-only uploads without durable indexing, for both extraction-only and study-generation paths.
+- Preserve reviewed text chunks, vector embeddings, provenance and document identity on repeat identical uploads without destructive re-extraction or chunk replacement.
+- Propagate resource admission busy exceptions (`GPUBusyError` HTTP 503 and `DialogueBusyError` HTTP 409 with `Retry-After`) during upload embedding admission instead of masking them behind offline fallback.
+- Protect source allocation across separate processes using portable cross-process locking and atomic exclusive file creation; roll back failed indexing attempts without leaking raw cache entries or unlinking preexisting sources.
+- Fail closed with HTTP 503 before publishing an upload when zero searchable chunks are prepared, accurately report vector readiness from stored rows, and preserve review uncertainty on scanned uploads without claiming automatic OCR verification.
+- Preserve original bytes, document records, and chunk scopes on upload filename collision by allocating canonical filenames with content-hash suffixes, keeping identical repeats idempotent.
+- Return HTTP 503 with safe non-leaking diagnostics and clean newly created uploaded files on indexing or database failure without altering preexisting sources.
+- Distinguish durable uploaded RAG source persistence from parameter training without automatic training approval, and accurately report offline keyword-retrievable chunks when vector embeddings are unavailable.
+- Build model quizzes as source clozes so the original context and conditions remain visible. Reject repeated or out-of-source answer spans, duplicate questions and ambiguous overlapping options; retain the labeled fallback when generation fails.
 - Regenerate citation repairs from admitted sources using JSON-safe formula notation, without copying a failed draft.
 - Extract image transcripts through a strict OCR response schema and reject uniform images as empty content. Keep unverified OCR outside training.
 - Reject quiz language drift and options that repeat another option with extra words. Show source evidence as the explanation.
-
 - Preserve multiplication dots in Unicode formulas instead of misclassifying them as legacy Vietnamese encoding.
-
 - Show a recoverable model error without exposing runtime tracebacks or local paths in chat.
-
 - Retain filenames and reading-section labels when selecting non-PDF sources for QA. Recognize requests to state a law without requiring the instruction words in the source.
-
 - Reject missing or invalid citations, truncated answers and incomplete comparison repairs instead of assigning sources automatically.
 - Keep attachment questions within the selected document and page, retain configured context limits and require evidence for named topics.
 - Reject unreadable image uploads without turning metadata into study content. Validate generated material against the exact source and page.
@@ -178,4 +227,5 @@ history-id: LOG-20261018-docx-pure-xml-ci-fix
 history-id: YC-228
 history-id: YC-229
 history-id: YC-230
+history-id: YC-234
 -->

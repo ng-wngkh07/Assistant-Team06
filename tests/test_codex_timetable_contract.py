@@ -85,16 +85,33 @@ def test_overlapping_manual_schedule_requires_resolution(client):
     assert len(client.get("/api/timetable").json()["entries"]) == 1
 
 
-def fake_vision(monkeypatch, output, done_reason="stop", digest="d" * 64):
+def fake_vision(monkeypatch, output, done_reason="stop", digest="d" * 64, *, legacy=False):
     from app import timetable_vision as vision
-    tag_response = SimpleNamespace(status_code=200, json=lambda: {"models": [
-        {"name": "qwen2.5vl:3b", "digest": digest}
-    ]})
-    model_response = SimpleNamespace(status_code=200, text="", json=lambda: {
-        "response": json.dumps(output), "done_reason": done_reason, "done": True
-    })
-    monkeypatch.setattr(vision.requests, "get", lambda *a, **kw: tag_response)
-    monkeypatch.setattr(vision.requests, "post", lambda *a, **kw: model_response)
+    from app.native_vision import NativeVisionClient
+    monkeypatch.setattr(vision, "sys", SimpleNamespace(platform="win32" if legacy else "darwin"))
+    def fixture_digest():
+        if not digest:
+            raise vision.VLMUnavailableError("Fixture has no verified model digest")
+        return digest
+    monkeypatch.setattr(vision, "get_vlm_digest", fixture_digest)
+    monkeypatch.setattr(NativeVisionClient, "available", classmethod(lambda cls, *a, **kw: True))
+    def generate(self, *args, **kwargs):
+        if done_reason == "length":
+            raise ValueError("Fixture output reached token length limit")
+        return {"text": json.dumps(output), "finish_reason": done_reason}
+    monkeypatch.setattr(NativeVisionClient, "generate_from_image", generate)
+    if legacy:
+        model_response = SimpleNamespace(status_code=200, text="", json=lambda: {
+            "response": json.dumps(output), "done_reason": done_reason, "done": True
+        })
+        import requests
+        def legacy_post(session, url, **kwargs):
+            assert session.trust_env is False
+            assert kwargs.get("allow_redirects") is False
+            if url.endswith("/api/show"):
+                return SimpleNamespace(status_code=200, json=lambda: {"details": {"format": "gguf", "family": "qwen"}})
+            return model_response
+        monkeypatch.setattr(requests.Session, "post", legacy_post)
     monkeypatch.setattr(vision.gpu_coordinator, "acquire_for_inference", lambda **kw: nullcontext())
     monkeypatch.setattr(vision.gpu_coordinator, "check_inference_allowed", lambda: (True, ""))
 
@@ -121,6 +138,15 @@ def test_missing_image_fields_stay_unknown_in_draft(client, monkeypatch):
     assert entry["weekday"] is None
     assert entry["start_time"] is None and entry["end_time"] is None
     assert client.get("/api/timetable").json()["entries"] == []
+
+
+def test_unreadable_course_stays_unknown_without_failing_ocr_corroboration(client, monkeypatch):
+    fake_vision(monkeypatch, {"entries": [{"course": None, "weekday_label": "Thứ 2",
+                "start_time": "08:00", "end_time": "09:00"}], "uncertainties": ["Tên môn bị mờ"]})
+    response = image_request(client)
+    assert response.status_code == 200, response.text
+    assert response.json()['entries'][0]['course'] is None
+    assert client.get('/api/timetable').json()['entries'] == []
 
 
 @pytest.mark.parametrize("output", [
@@ -204,15 +230,20 @@ def test_large_image_is_bounded_for_inference_and_uses_schema(client, monkeypatc
     import io
     from PIL import Image
     from app import timetable_vision as vision
-    fake_vision(monkeypatch, {"entries": [], "uncertainties": []})
-    post = vision.requests.post
+    fake_vision(monkeypatch, {"entries": [], "uncertainties": []}, legacy=True)
+    import requests
+    post = requests.Session.post
     seen = []
-    def capture(*args, **kwargs):
-        seen.append(kwargs["json"])
-        return post(*args, **kwargs)
-    monkeypatch.setattr(vision.requests, "post", capture)
+    def capture(session, url, **kwargs):
+        if url.endswith("/api/generate"):
+            seen.append(kwargs["json"])
+        return post(session, url, **kwargs)
+    monkeypatch.setattr(requests.Session, "post", capture)
     buf = io.BytesIO()
-    Image.new("RGB", (3000, 1000), "white").save(buf, "PNG")
+    large = Image.new("RGB", (3000, 1000), "white")
+    from PIL import ImageDraw
+    ImageDraw.Draw(large).text((20, 20), "Timetable", fill="black")
+    large.save(buf, "PNG")
     response = client.post("/api/timetable/extract", json={"filename": "large.png", "image_base64": base64.b64encode(buf.getvalue()).decode()})
     assert response.status_code == 200, response.text
     assert isinstance(seen[0]["format"], dict)
@@ -232,3 +263,46 @@ def test_confirmation_preserves_original_and_reviewed_edits(client, monkeypatch)
     assert stored["entries"][0]["course"] == "Read from image"
     assert stored["confirmed_at"]
     assert stored["confirmed_entries"][0]["course"] == "Corrected course"
+
+
+def test_incomplete_image_reports_missing_fields_and_retains_readable_values(client, monkeypatch):
+    fake_vision(monkeypatch, {"entries": [{"course": "Math", "weekday_label": None,
+                "start_time": None, "end_time": None, "period": "1-3"}], "uncertainties": []})
+    result = image_request(client).json()
+    assessment = result["data_sufficiency"]
+    assert assessment["status"] == "insufficient_information"
+    assert assessment["missing_fields"] == [{"row": 1, "fields": ["weekday", "start_time", "end_time"]}]
+    assert result["entries"][0]["course"] == "Math"
+    assert result["entries"][0]["start_time"] is None
+    assert any("gửi thêm ảnh" in warning.lower() for warning in result["uncertainties"])
+    restored = client.get("/api/timetable/drafts/" + result["draft_id"]).json()
+    assert restored["uncertainties"] == result["uncertainties"]
+    cached = image_request(client).json()
+    assert cached["cached"] is True
+    assert cached["data_sufficiency"] == assessment
+    assert cached["uncertainties"] == result["uncertainties"]
+
+
+@pytest.mark.parametrize("course,start,end,missing", [
+    (None, "08:00", "09:00", "course"),
+    ("Math...", "08:00", "09:00", "course_full_text"),
+    ("Math", "12:00", "12:00", "valid_time_range"),
+])
+def test_incomplete_or_invalid_rows_cannot_claim_sufficient_information(client, monkeypatch, course, start, end, missing):
+    fake_vision(monkeypatch, {"entries": [{"course": course, "weekday_label": "Monday",
+                "start_time": start, "end_time": end}], "uncertainties": []})
+    response = image_request(client)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["data_sufficiency"]["status"] == "insufficient_information"
+    assert missing in result["data_sufficiency"]["missing_fields"][0]["fields"]
+    assert client.get("/api/timetable").json()["entries"] == []
+
+
+def test_complete_visible_rows_do_not_assert_full_semester_coverage(client, monkeypatch):
+    fake_vision(monkeypatch, {"entries": [{"course": "Math", "weekday_label": "Monday",
+                "start_time": "08:00", "end_time": "09:00"}], "uncertainties": []})
+    result = image_request(client).json()
+    assert result["data_sufficiency"]["status"] == "visible_rows_have_required_fields"
+    assert result["data_sufficiency"]["scope"] == "visible_image_only"
+    assert result["data_sufficiency"]["full_schedule_verified"] is False

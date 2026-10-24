@@ -25,7 +25,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Any, List, Set, Tuple, Optional
 
-import requests
 
 from app.config import BASE_DIR, DB_PATH, OLLAMA_BASE_URL
 from app.text_cleaner import sanitize_for_prompt_context
@@ -115,19 +114,43 @@ def compute_digest(obj: Any) -> str:
     return hashlib.sha256(json.dumps(obj, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+DEFAULT_CURATION_MODEL = "qwen3.5-9b-4bit" if sys.platform == "darwin" else "qwen2.5:7b"
+
 def get_ollama_model_digest(model_name: str, default: Optional[str] = None) -> str:
     """Fetch exact model sha256 digest from Ollama tags endpoint.
     Strict fail-closed: if Ollama is unreachable or model is absent and default is not provided,
     raises RuntimeError. Never returns hardcoded digests or sha256 of model name."""
+    if sys.platform == "darwin":
+        from app.model_resolver import is_mlx_model
+        if is_mlx_model(model_name):
+            from app.model_resolver import resolve_mlx_model_dir
+            from app.trained_client import TrainedModelClient
+            root = resolve_mlx_model_dir(model_name)
+            if not TrainedModelClient._verify_weights(root):
+                raise RuntimeError("Missing or incomplete local MLX artifact")
+            files = set(root.glob("*.safetensors"))
+            names = ("config.json", "tokenizer.json", "tokenizer_config.json",
+                     "special_tokens_map.json", "chat_template.jinja", "model.safetensors.index.json")
+            files.update(root / name for name in names)
+            digest = hashlib.sha256()
+            for path in sorted(files):
+                digest.update(path.name.encode("utf-8") + b"\0")
+                if path.is_file():
+                    with path.open("rb") as stream:
+                        digest.update(hashlib.file_digest(stream, "sha256").digest())
+                else:
+                    digest.update(b"missing")
+            return "mlx-sha256:" + digest.hexdigest()
+        raise RuntimeError(f"Chỉ cho phép mô hình MLX cục bộ trên macOS, nhận: {model_name}")
     try:
-        resp = requests.get(f"{OLLAMA_BASE_URL.rstrip('/')}/api/tags", timeout=5)
-        if resp.status_code == 200:
-            models = resp.json().get("models", [])
-            for m in models:
-                if m.get("name") == model_name or m.get("model") == model_name:
-                    digest = m.get("digest")
-                    if digest:
-                        return digest
+        from app.ollama_client import OllamaClient
+        client = OllamaClient()
+        client._verify_model_locality(model_name)
+        for m in client.list_models():
+            if m.get("name") == model_name or m.get("model") == model_name:
+                digest = m.get("digest")
+                if digest:
+                    return digest
     except Exception as e:
         logger.debug("Could not fetch model digest from Ollama: %s", e)
     if default is not None:
@@ -934,7 +957,7 @@ def get_group_key(filename: str, page_num: int) -> str:
 # ---------------------------------------------------------------------------
 # Calibration Suite for Judge
 # ---------------------------------------------------------------------------
-def run_judge_calibration(judge_model: str = "qwen2.5:7b") -> Dict[str, Any]:
+def run_judge_calibration(judge_model: str = DEFAULT_CURATION_MODEL) -> Dict[str, Any]:
     """Verify that the judge model strictly distinguishes supported vs unsupported claims and extrapolations."""
     calibration_cases = [
         {
@@ -1115,49 +1138,57 @@ def run_judge_calibration(judge_model: str = "qwen2.5:7b") -> Dict[str, Any]:
             answer=case["answer"]
         )
         try:
-            with gpu_coordinator.acquire_for_inference():
-                resp = requests.post(
-                    f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat",
-                    json={
-                        "model": judge_model,
-                        "stream": False,
-                        "think": False,
-                        "format": "json",
-                        "options": {"temperature": 0.0, "num_predict": 400},
-                        "messages": [{"role": "user", "content": prompt}]
-                    },
-                    timeout=90
-                )
-            if resp.status_code == 200:
-                raw_text = resp.json()["message"]["content"].strip()
-                verdict = validate_and_parse_judge_verdict(
-                    raw_payload=raw_text,
-                    source_text=case["source"],
-                    question=case["question"],
-                    target_answer=case["answer"],
-                    judge_model=judge_model,
-                    model_digest=j_digest,
-                    prompt_template_sha256=prompt_tpl_hash,
-                    calibration_version=CALIBRATION_PROTOCOL_VERSION,
-                    require_vietnamese=True
-                )
-                supported = verdict["supported"]
-                match = (supported == case["expected_supported"])
-                results.append({
-                    "id": case["id"],
-                    "type": case["type"],
-                    "match": match,
-                    "supported": supported,
-                    "expected": case["expected_supported"],
-                    "evidence_spans": verdict["evidence_spans"],
-                    "reason": verdict["reason"],
-                    "verdict_digest": verdict.get("verdict_digest"),
-                    "full_verdict": verdict
-                })
-                if not match:
-                    all_passed = False
+            if sys.platform == "darwin":
+                from app.model_resolver import is_mlx_model
+                if not is_mlx_model(judge_model):
+                    raise RuntimeError(f"Chỉ hỗ trợ mô hình MLX cục bộ trên macOS, nhận: {judge_model}")
+                from app.trained_client import TrainedModelClient
+                native_client = TrainedModelClient(model_name=judge_model)
+                raw_text = native_client.chat_complete(
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0,
+                    max_tokens=400,
+                ).strip()
+                done_reason = native_client.last_done_reason
             else:
-                results.append({"id": case["id"], "type": case["type"], "match": False, "error": resp.status_code})
+                from app.ollama_client import OllamaClient
+                client = OllamaClient()
+                client._verify_model_locality(judge_model)
+                with gpu_coordinator.acquire_for_inference():
+                    resp = client.chat_sync(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=judge_model,
+                        temperature=0.0,
+                        num_predict=400,
+                    )
+                raw_text = resp.get("message", {}).get("content", "").strip()
+                done_reason = resp.get("done_reason")
+            verdict = validate_and_parse_judge_verdict(
+                raw_payload=raw_text,
+                source_text=case["source"],
+                question=case["question"],
+                target_answer=case["answer"],
+                judge_model=judge_model,
+                model_digest=j_digest,
+                prompt_template_sha256=prompt_tpl_hash,
+                calibration_version=CALIBRATION_PROTOCOL_VERSION,
+                require_vietnamese=True,
+                done_reason=done_reason,
+            )
+            supported = verdict["supported"]
+            match = (supported == case["expected_supported"])
+            results.append({
+                "id": case["id"],
+                "type": case["type"],
+                "match": match,
+                "supported": supported,
+                "expected": case["expected_supported"],
+                "evidence_spans": verdict["evidence_spans"],
+                "reason": verdict["reason"],
+                "verdict_digest": verdict.get("verdict_digest"),
+                "full_verdict": verdict
+            })
+            if not match:
                 all_passed = False
         except Exception as exc:
             results.append({"id": case["id"], "type": case["type"], "match": False, "error": str(exc)})
@@ -1176,7 +1207,7 @@ def run_judge_calibration(judge_model: str = "qwen2.5:7b") -> Dict[str, Any]:
     }
 
 
-def ensure_judge_calibrated(judge_model: str = "qwen2.5:7b") -> Dict[str, Any]:
+def ensure_judge_calibrated(judge_model: str = DEFAULT_CURATION_MODEL) -> Dict[str, Any]:
     """Fail-closed calibration gate. Raises RuntimeError if judge does not pass calibration."""
     calib = run_judge_calibration(judge_model=judge_model)
     if not calib["all_passed"]:
@@ -1197,7 +1228,7 @@ def ensure_judge_calibrated(judge_model: str = "qwen2.5:7b") -> Dict[str, Any]:
 def call_teacher_model(
     src: Dict[str, Any],
     facet: str = "overview",
-    teacher_model: str = "qwen2.5:7b",
+    teacher_model: str = DEFAULT_CURATION_MODEL,
     max_retries: int = 3
 ) -> Optional[Dict[str, Any]]:
     """Generate question, substantive answer, and discrete claims using local teacher model with retry."""
@@ -1214,49 +1245,59 @@ def call_teacher_model(
 
     for attempt in range(max_retries):
         try:
-            with gpu_coordinator.acquire_for_inference():
-                resp = requests.post(
-                    f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat",
-                    json={
-                        "model": teacher_model,
-                        "stream": False,
-                        "think": False,
-                        "format": "json",
-                        "options": {"temperature": 0.2, "num_predict": 500, "repeat_penalty": 1.1},
-                        "messages": [{"role": "user", "content": prompt}]
-                    },
-                    timeout=180
+            if sys.platform == "darwin":
+                from app.model_resolver import is_mlx_model
+                if not is_mlx_model(teacher_model):
+                    raise RuntimeError(f"Chỉ hỗ trợ mô hình MLX cục bộ trên macOS, nhận: {teacher_model}")
+                from app.trained_client import TrainedModelClient
+                native_client = TrainedModelClient(model_name=teacher_model)
+                raw_msg = native_client.chat_complete(
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2,
+                    max_tokens=500,
                 )
-            if resp.status_code == 200:
-                raw_msg = resp.json()["message"]["content"]
-                try:
-                    content = json.loads(raw_msg)
-                except Exception as json_err:
-                    logger.warning("Teacher JSON decode error (attempt %d): %s; raw: %s", attempt + 1, json_err, raw_msg[:100])
+                if native_client.last_done_reason != "stop":
+                    raise RuntimeError("Native teacher generation did not finish")
+            else:
+                from app.ollama_client import OllamaClient
+                client = OllamaClient()
+                client._verify_model_locality(teacher_model)
+                with gpu_coordinator.acquire_for_inference():
+                    resp = client.chat_sync(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=teacher_model,
+                        temperature=0.2,
+                        num_predict=500,
+                    )
+                raw_msg = resp.get("message", {}).get("content", "")
+            try:
+                content = json.loads(raw_msg)
+            except Exception as json_err:
+                logger.warning("Teacher JSON decode error (attempt %d): %s; raw: %s", attempt + 1, json_err, raw_msg[:100])
+                time.sleep(1)
+                continue
+            q = content.get("question", "").strip()
+            a = content.get("answer", "").strip()
+            claims = content.get("claims", [])
+            if q and a and isinstance(claims, list) and len(claims) > 0:
+                # Strict Vietnamese instruction-following and citation check
+                vi_q_count = len(VI_CHARS.findall(q))
+                vi_a_count = len(VI_CHARS.findall(a))
+                is_en_q = (len(q) >= 20 and vi_q_count < 2 and detect_language(q) == "en")
+                is_en_a = (len(a) >= 30 and vi_a_count < 3 and detect_language(a) == "en")
+                has_s1 = "[S1]" in a
+                if is_en_q or is_en_a or not has_s1:
+                    logger.warning(
+                        "Teacher output language/citation violation (attempt %d) for chunk %s: en_q=%s en_a=%s has_s1=%s",
+                        attempt + 1, src.get("chunk_id"), is_en_q, is_en_a, has_s1
+                    )
                     time.sleep(1)
                     continue
-                q = content.get("question", "").strip()
-                a = content.get("answer", "").strip()
-                claims = content.get("claims", [])
-                if q and a and isinstance(claims, list) and len(claims) > 0:
-                    # Strict Vietnamese instruction-following and citation check
-                    vi_q_count = len(VI_CHARS.findall(q))
-                    vi_a_count = len(VI_CHARS.findall(a))
-                    is_en_q = (len(q) >= 20 and vi_q_count < 2 and detect_language(q) == "en")
-                    is_en_a = (len(a) >= 30 and vi_a_count < 3 and detect_language(a) == "en")
-                    has_s1 = "[S1]" in a
-                    if is_en_q or is_en_a or not has_s1:
-                        logger.warning(
-                            "Teacher output language/citation violation (attempt %d) for chunk %s: en_q=%s en_a=%s has_s1=%s",
-                            attempt + 1, src.get("chunk_id"), is_en_q, is_en_a, has_s1
-                        )
-                        time.sleep(1)
-                        continue
-                    return {
-                        "question": q,
-                        "answer": a,
-                        "claims": claims
-                    }
+                return {
+                    "question": q,
+                    "answer": a,
+                    "claims": claims
+                }
         except Exception as exc:
             logger.warning("Teacher call attempt %d failed for chunk %s: %s", attempt + 1, src.get("chunk_id"), exc)
             time.sleep(2 ** attempt)
@@ -1271,7 +1312,7 @@ def call_judge_model(
     src: Dict[str, Any],
     candidate_item: Dict[str, Any],
     facet: str = "overview",
-    judge_model: str = "qwen2.5:7b",
+    judge_model: str = DEFAULT_CURATION_MODEL,
     max_retries: int = 3,
     expected_judge_digest: Optional[str] = None,
     require_citation: bool = False
@@ -1332,37 +1373,45 @@ def call_judge_model(
 
     for attempt in range(max_retries):
         try:
-            with gpu_coordinator.acquire_for_inference():
-                resp = requests.post(
-                    f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat",
-                    json={
-                        "model": judge_model,
-                        "stream": False,
-                        "think": False,
-                        "format": "json",
-                        "options": {"temperature": 0.0, "num_predict": 400},
-                        "messages": [{"role": "user", "content": prompt}]
-                    },
-                    timeout=120
-                )
-            if resp.status_code == 200:
-                resp_data = resp.json()
-                content_str = resp_data.get("message", {}).get("content", "").strip()
-                done_reason = resp_data.get("done_reason")
-                return validate_and_parse_judge_verdict(
-                    raw_payload=content_str,
-                    source_text=text,
-                    question=question,
-                    target_answer=answer,
-                    judge_model=judge_model,
-                    model_digest=m_digest,
-                    prompt_template_sha256=prompt_tpl_hash,
-                    target_sha256=target_hash,
-                    calibration_version=CALIBRATION_PROTOCOL_VERSION,
-                    require_vietnamese=True,
-                    require_citation=require_citation,
-                    done_reason=done_reason
-                )
+            if sys.platform == "darwin":
+                from app.model_resolver import is_mlx_model
+                if not is_mlx_model(judge_model):
+                    raise RuntimeError(f"Chỉ hỗ trợ mô hình MLX cục bộ trên macOS, nhận: {judge_model}")
+                from app.trained_client import TrainedModelClient
+                native_client = TrainedModelClient(model_name=judge_model)
+                content_str = native_client.chat_complete(
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0,
+                    max_tokens=400,
+                ).strip()
+                done_reason = native_client.last_done_reason
+            else:
+                from app.ollama_client import OllamaClient
+                client = OllamaClient()
+                client._verify_model_locality(judge_model)
+                with gpu_coordinator.acquire_for_inference():
+                    resp = client.chat_sync(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=judge_model,
+                        temperature=0.0,
+                        num_predict=400,
+                    )
+                content_str = resp.get("message", {}).get("content", "").strip()
+                done_reason = resp.get("done_reason")
+            return validate_and_parse_judge_verdict(
+                raw_payload=content_str,
+                source_text=text,
+                question=question,
+                target_answer=answer,
+                judge_model=judge_model,
+                model_digest=m_digest,
+                prompt_template_sha256=prompt_tpl_hash,
+                target_sha256=target_hash,
+                calibration_version=CALIBRATION_PROTOCOL_VERSION,
+                require_vietnamese=True,
+                require_citation=require_citation,
+                done_reason=done_reason
+            )
         except Exception as exc:
             logger.warning("Judge call attempt %d failed for chunk %s: %s", attempt + 1, src.get("chunk_id"), exc)
             time.sleep(2 ** attempt)
@@ -1559,8 +1608,8 @@ def curate_candidates_workspace(
     work_dir: Path,
     batch_size: int = 5,
     max_sources_to_curate: Optional[int] = None,
-    teacher_model: str = "qwen2.5:7b",
-    judge_model: str = "qwen2.5:7b"
+    teacher_model: str = DEFAULT_CURATION_MODEL,
+    judge_model: str = DEFAULT_CURATION_MODEL
 ) -> Dict[str, Any]:
     """Generate real candidates via Ollama teacher & calibrated judge with checkpointing and flock serialization."""
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -2613,8 +2662,8 @@ if __name__ == "__main__":
     parser.add_argument("--calibrate", action="store_true", help="Run judge calibration suite")
     parser.add_argument("--publish", action="store_true", help="Attempt gated publish")
     parser.add_argument("--max-sources", type=int, default=None)
-    parser.add_argument("--judge-model", type=str, default="qwen2.5:7b")
-    parser.add_argument("--teacher-model", type=str, default="qwen2.5:7b")
+    parser.add_argument("--judge-model", type=str, default=DEFAULT_CURATION_MODEL)
+    parser.add_argument("--teacher-model", type=str, default=DEFAULT_CURATION_MODEL)
     args = parser.parse_args()
 
     if args.calibrate:

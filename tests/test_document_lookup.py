@@ -89,6 +89,11 @@ def test_busy_hybrid_falls_back_without_starting_embedding(client, monkeypatch):
 
 
 def test_hybrid_scopes_vectors_to_selected_book(client, monkeypatch):
+    # Keep this 2-dimensional legacy fixture explicit; native 1024D provenance has its own tests.
+    from types import SimpleNamespace
+    from app import document_lookup
+    monkeypatch.setattr(document_lookup, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(document_lookup, "DEFAULT_EMBED_MODEL", "legacy-test-embedding")
     monkeypatch.setattr(server.document_lookup.ollama, 'get_embedding', lambda *a, **k: [1, 0])
     response = client.get('/api/documents/search', params={'q': 'khác', 'document_id': 2, 'method': 'hybrid', 'limit': 1})
     assert response.status_code == 200

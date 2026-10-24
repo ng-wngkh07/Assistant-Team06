@@ -24,27 +24,46 @@ class ContextLimitError(ValueError):
     pass
 
 
+import threading
+
+
 class DialogueGate:
     """One local inference request, including its context read and history commit.
 
     Unlike the training coordinator's shared inference lock, this is exclusive
     across threads and web processes. Never expires or interrupts a running job.
+    Supports re-entrant acquisition within the same thread to prevent nested deadlock.
     """
     def __init__(self, path=None):
         self.path = Path(path or DATA_DIR / "runtime/dialogue.lock")
+        self._local = threading.local()
 
     @contextmanager
     def acquire(self):
+        depth = getattr(self._local, "depth", 0)
+        if depth > 0:
+            self._local.depth = depth + 1
+            try:
+                yield
+            finally:
+                self._local.depth -= 1
+            return
+
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a+b") as handle:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise DialogueBusyError(BUSY_TEXT) from exc
+            self._local.depth = 1
             try:
                 yield
             finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
+                self._local.depth = 0
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+                except OSError:
+                    pass
 
 
 dialogue_gate = DialogueGate()
@@ -58,7 +77,7 @@ HELP_MESSAGE = """Chào bạn! Tôi là **Study Agent** — trợ lý hỗ trợ
 
 ### 2. 💬 Hỏi đáp học tập có nguồn dẫn (QA & RAG)
 - Trả lời câu hỏi dựa trên nội dung tài liệu học tập kèm trích dẫn nguồn (tên tài liệu, số trang); nếu tài liệu chưa có hoặc thiếu căn cứ minh chứng, hệ thống sẽ nói rõ chưa đủ thông tin thay vì phỏng đoán.
-- Hỗ trợ 3 mức xử lý: **Tự động**, **Thông thường** và **Kiểm tra kỹ** (đối chiếu nhận định với nguồn).
+- Mặc định trả lời **Nhanh**; bạn có thể chọn **Kiểm tra kỹ** để đối chiếu nhận định với nguồn. Câu hỏi phức tạp có thể nhận gợi ý đổi chế độ; lựa chọn thuộc về bạn.
 - Duy trì ngữ cảnh hội thoại: bạn có thể hỏi nối tiếp như *"điều đó là gì?"*, *"cho ví dụ cụ thể"*.
 - Thu hẹp phạm vi: bạn có thể giới hạn lượt tìm kiếm vào tài liệu hoặc trang cụ thể theo nhu cầu.
 
@@ -107,13 +126,31 @@ def dialogue_intent(query, history):
 
 
 def context_capacity(model):
-    if model != TRAINED_MODEL_NAME:
+    from app.model_resolver import is_mlx_model, resolve_mlx_model_dir
+    if not is_mlx_model(model):
         return 8192
     try:
-        config = json.loads((MLX_MODEL_DIR / "config.json").read_text())
-        limit = int(config["max_position_embeddings"])
+        model_dir = resolve_mlx_model_dir(model)
+        # Check if MLX_MODEL_DIR was explicitly patched in this module
+        patched_model_dir = globals().get("MLX_MODEL_DIR")
+        if patched_model_dir is not None and str(patched_model_dir) != str(MLX_MODEL_DIR):
+            model_dir = Path(patched_model_dir)
+        config_path = Path(model_dir) / "config.json"
+        if not config_path.is_file():
+            raise ContextLimitError(f"Không tìm thấy tệp cấu hình mô hình tại {config_path}")
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        text_cfg = config.get("text_config") if isinstance(config.get("text_config"), dict) else {}
+        limit_val = (
+            text_cfg.get("max_position_embeddings")
+            or text_cfg.get("seq_length")
+            or config.get("max_position_embeddings")
+            or config.get("seq_length")
+        )
+        if limit_val is None:
+            raise ContextLimitError("insufficient window")
+        limit = int(limit_val)
         if limit < 2048:
-            raise ValueError("insufficient window")
+            raise ContextLimitError("insufficient window")
         setting = globals().get("MLX_CONTEXT_TOKENS", MLX_CONTEXT_TOKENS)
         try:
             req = int(setting)
@@ -122,6 +159,8 @@ def context_capacity(model):
         except (TypeError, ValueError):
             req = 8192
         return min(req, limit)
+    except ContextLimitError:
+        raise
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise ContextLimitError("Chưa xác minh được giới hạn ngữ cảnh của mô hình đã huấn luyện.") from exc
 

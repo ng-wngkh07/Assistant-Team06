@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional, Set, Tuple
 from app.config import DEFAULT_CHAT_MODEL, TRAINED_MODEL_NAME
 from app.gpu_lock import gpu_coordinator, GPUBusyError
 from app.history import HistoryStore, generate_fallback_title
+from app.model_resolver import is_mlx_model
 from app.ollama_client import OllamaClient
 
 logger = logging.getLogger("psychology_agent.summarizer")
@@ -87,11 +88,16 @@ class TopicSummarizer:
         self._active_sessions.add(session_id)
         try:
             from app.trained_client import TrainedModelClient
-            use_mlx = not self._client_injected and model in (TRAINED_MODEL_NAME, "qwen2.5-3b-4bit", "local")
-            if use_mlx and not TrainedModelClient.available():
-                self.history_store.set_summary_status(session_id, "pending")
-                return {"status":"fallback", "title":session.get("title") or fallback_title,
-                        "summary":session.get("summary"), "reason":"model_unavailable"}
+            use_mlx = not self._client_injected and is_mlx_model(model)
+            if use_mlx:
+                try:
+                    mlx_ok = TrainedModelClient.available(model_name=model)
+                except TypeError:
+                    mlx_ok = TrainedModelClient.available()
+                if not mlx_ok:
+                    self.history_store.set_summary_status(session_id, "pending")
+                    return {"status":"fallback", "title":session.get("title") or fallback_title,
+                            "summary":session.get("summary"), "reason":"model_unavailable"}
 
             # 1. Check LLM availability
             if not use_mlx and not self.ollama.check_health():
@@ -150,7 +156,7 @@ class TopicSummarizer:
             # 4. Invoke LLM under GPU lock using real chat_complete
             try:
                 with gpu_coordinator.acquire_for_inference():
-                    selected_client = TrainedModelClient() if use_mlx else self.ollama
+                    selected_client = TrainedModelClient(model_name=model) if use_mlx else self.ollama
                     if use_mlx:
                         raw_text = selected_client.chat_complete(
                             messages=messages,

@@ -55,6 +55,42 @@ document.addEventListener("DOMContentLoaded", () => {
     const recentSourcesDivider = document.getElementById("recent-sources-divider");
     const resumeSourceHeader = document.getElementById("resume-source-header");
     const processingLevelSelect = document.getElementById("processing-level");
+    const contextUsage = document.getElementById("context-usage");
+    const contextDraft = document.getElementById("context-draft");
+    const contextNewChat = document.getElementById("btn-context-new-chat");
+    function resetContextUsage() {
+        if (contextUsage) { contextUsage.hidden = true; contextUsage.textContent = ""; }
+        if (contextNewChat) contextNewChat.hidden = true;
+    }
+    function updateDraftSize() {
+        if (!contextDraft) return;
+        // This is only draft size: retrieval and the chat template are not yet known.
+        const bytes = new TextEncoder().encode(userInput.value).length;
+        contextDraft.hidden = !bytes;
+        contextDraft.textContent = bytes ? `Bản nháp: ${bytes.toLocaleString("vi-VN")} byte UTF-8 (không phải token). Dung lượng context được tính khi gửi, gồm nguồn và lịch sử.` : "";
+    }
+    function showContextUsage(info) {
+        const capacity = Number(info.context_capacity);
+        const input = Number(info.input_estimate), reserve = Number(info.output_reserve);
+        if (!contextUsage || !(capacity > 0) || !Number.isFinite(input) || !Number.isFinite(reserve)) return;
+        const used = input + reserve;
+        const omitted = Number(info.history_turns_omitted || 0) + Number(info.store_history_turns_omitted || 0);
+        const method = info.budget_method === "exact_tokenizer" ? "tokenizer chính xác" : "ước lượng bảo thủ";
+        contextUsage.hidden = false;
+        contextUsage.textContent = `Lần gửi gần nhất: ${used.toLocaleString("vi-VN")} / ${capacity.toLocaleString("vi-VN")} token, gồm ${reserve.toLocaleString("vi-VN")} dự phòng trả lời (${method}).`;
+        if (omitted) contextUsage.textContent += ` Đã bỏ ${omitted} lượt cũ khỏi đầu vào; lịch sử vẫn được lưu.`;
+        if (used / capacity >= 0.8 || omitted) contextUsage.textContent += " Nên mở chat mới khi chuyển chủ đề; nêu lại dữ kiện cần giữ.";
+        if (contextNewChat) contextNewChat.hidden = !(used / capacity >= 0.8 || omitted);
+        updateDraftSize();
+    }
+    resetContextUsage();
+    contextNewChat?.addEventListener("click", () => {
+        // Preserve an unsent draft while offering an explicit session transition.
+        const draft = userInput.value;
+        startNewChat();
+        userInput.value = draft;
+        updateDraftSize();
+    });
 
     function closeRecentSourcesMenu() {
         if (recentSourcesMenu) recentSourcesMenu.hidden = true;
@@ -226,8 +262,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Event Listeners
     userInput.addEventListener("input", () => {
+        updateDraftSize();
         userInput.style.height = "auto";
-        userInput.style.height = Math.min(userInput.scrollHeight, 140) + "px";
+        userInput.style.height = Math.min(userInput.scrollHeight, 96) + "px";
     });
 
     let isComposing = false;
@@ -330,7 +367,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (processingLevelSelect) {
         try {
             const savedLevel = localStorage.getItem("qa_processing_level");
-            if (["auto", "standard", "careful"].includes(savedLevel)) processingLevelSelect.value = savedLevel;
+            if (["standard", "careful"].includes(savedLevel)) processingLevelSelect.value = savedLevel;
+            else if (savedLevel === "auto") processingLevelSelect.value = "standard";
         } catch (_) {}
         processingLevelSelect.addEventListener("change", () => {
             try { localStorage.setItem("qa_processing_level", processingLevelSelect.value); } catch (_) {}
@@ -535,6 +573,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // Reset input
         userInput.value = "";
         userInput.style.height = "auto";
+        updateDraftSize();
 
         // Remove welcome card and exit welcome-mode
         const welcomeCard = messagesContainer.querySelector(".welcome-card");
@@ -601,13 +640,14 @@ document.addEventListener("DOMContentLoaded", () => {
         let responseKind = "";
         let responseScope = {};
         let historyWasTrimmed = false;
+        let storedHistoryOmitted = 0;
         let passagesWereTrimmed = false;
 
         try {
             const reqBody = {
                 query: query,
                 temperature: 0.2,
-                processing_level: processingLevelSelect?.value || "auto",
+                processing_level: processingLevelSelect?.value || "standard",
                 session_id: targetSessionId,
                 request_id: requestId
             };
@@ -674,6 +714,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     assistantMsgEl.querySelector(".message-body")?.classList.add("crisis-box");
                     contentDiv.innerHTML = renderMarkdown(accumulatedAnswer);
                 } else if (event.type === "context") {
+                    if (event.scope === "stored_history_window") storedHistoryOmitted = Number(event.history_turns_omitted || 0);
+                    else showContextUsage({...event, store_history_turns_omitted: storedHistoryOmitted + Number(event.store_history_turns_omitted || 0)});
                     if (event.history_turns_omitted || event.store_history_turns_omitted) historyWasTrimmed = true;
                     if (event.passages_omitted) passagesWereTrimmed = true;
                 } else if (event.type === "done") {
@@ -701,7 +743,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         const metaBox = document.createElement("div");
                         metaBox.className = "processing-meta text-muted";
                         metaBox.style.cssText = "margin-top: 6px; font-size: 0.8rem; color: var(--text-muted, #6b7280);";
-                        const levelLabel = event.resolved_processing_level === "careful" ? "Kiểm tra kỹ" : "Thông thường";
+                        const levelLabel = event.resolved_processing_level === "careful" ? "Kiểm tra kỹ" : "Nhanh";
                         let statusText = "";
                         if (event.check_status === "verified") {
                             statusText = " · Đã qua đối chiếu tự động";
@@ -713,6 +755,31 @@ document.addEventListener("DOMContentLoaded", () => {
                         const callsText = event.generation_calls ? ` (${event.generation_calls} lượt xử lý)` : "";
                         metaBox.textContent = `Mức xử lý: ${levelLabel}${statusText}${callsText}`;
                         assistantMsgEl.querySelector(".message-body")?.appendChild(metaBox);
+                    }
+                    if (event.suggest_careful && event.resolved_processing_level !== "careful") {
+                        const suggBox = document.createElement("div");
+                        suggBox.className = "careful-suggestion-card";
+                        suggBox.style.cssText = "margin-top: 8px; padding: 8px 12px; background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 6px; font-size: 0.82rem; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;";
+                        const msgText = document.createElement("span");
+                        msgText.textContent = event.careful_suggestion || "💡 Câu hỏi có nhiều ý hoặc yêu cầu đối chiếu sâu. Bạn có thể chọn mức 'Kiểm tra kỹ' để đối chiếu kỹ hơn.";
+                        suggBox.appendChild(msgText);
+                        const switchBtn = document.createElement("button");
+                        switchBtn.type = "button";
+                        switchBtn.className = "btn-switch-careful";
+                        switchBtn.textContent = "Chuyển sang Kiểm tra kỹ";
+                        switchBtn.style.cssText = "padding: 4px 10px; font-size: 0.8rem; border-radius: 4px; border: 1px solid var(--primary, #3b82f6); background: var(--primary, #3b82f6); color: #fff; cursor: pointer; white-space: nowrap;";
+                        switchBtn.addEventListener("click", () => {
+                            if (processingLevelSelect) {
+                                processingLevelSelect.value = "careful";
+                                try { localStorage.setItem("qa_processing_level", "careful"); } catch (_) {}
+                            }
+                            switchBtn.textContent = "Đã chọn Kiểm tra kỹ ✓";
+                            switchBtn.disabled = true;
+                            switchBtn.style.opacity = "0.7";
+                            switchBtn.style.cursor = "default";
+                        });
+                        suggBox.appendChild(switchBtn);
+                        assistantMsgEl.querySelector(".message-body")?.appendChild(suggBox);
                     }
                     if (responseKind === "insufficient_evidence") {
                         addRecoveryActions(assistantMsgEl, query, responseScope, {
@@ -999,6 +1066,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (requestedView !== viewRevision || isGenerating) return;
 
             currentSessionId = data.id;
+            resetContextUsage();
             sessionStorage.setItem("active_session_id", data.id);
             sessionActiveTitle.textContent = data.title || "Cuộc trò chuyện";
             sessionBar.style.display = "flex";
@@ -1068,6 +1136,7 @@ document.addEventListener("DOMContentLoaded", () => {
         isLoadingSession = false;
         btnSend.disabled = false;
         currentSessionId = null;
+        resetContextUsage();
         sessionStorage.removeItem("active_session_id");
         clientChatHistory = [];
         window.sessionActiveAttachment = null;
@@ -1094,6 +1163,7 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelectorAll(".session-item").forEach(el => el.classList.remove("active"));
         userInput.value = "";
         userInput.style.height = "auto";
+        updateDraftSize();
         chatStatus.textContent = "";
         if (!autoRestore) {
             userInput.focus();
@@ -1307,10 +1377,16 @@ document.addEventListener("DOMContentLoaded", () => {
                 claimsContainer.appendChild(claimsList);
                 detail.appendChild(claimsContainer);
             }
-            if (typeof c.snippet === "string" && c.snippet.trim()) {
+            const evidenceQuotes = Array.isArray(c.evidence_quotes)
+                ? c.evidence_quotes.filter(text => typeof text === "string" && text.trim())
+                : [];
+            const sourcePassage = evidenceQuotes.length
+                ? [...new Set(evidenceQuotes)].join("\n\n")
+                : (typeof c.snippet === "string" ? c.snippet.trim() : "");
+            if (sourcePassage) {
                 const quote = document.createElement("blockquote");
                 quote.className = "citation-snippet";
-                quote.textContent = c.snippet.trim();
+                quote.textContent = sourcePassage;
                 detail.appendChild(quote);
             }
             async function attachOriginalPage() {
@@ -1506,7 +1582,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (data.default_model_available) {
                     modelReadyLabel = usesMlx
                         ? (adapted ? "🟢 Mô hình đã kiểm định sẵn sàng" : "🟢 Mô hình gốc sẵn sàng")
-                        : "🟢 Mô hình phát triển Ollama sẵn sàng";
+                        : `🟢 Mô hình ${name} sẵn sàng`;
                     ollamaStatus.textContent = modelReadyLabel;
                     ollamaStatus.className = "status-indicator connected";
                 } else {
@@ -1750,7 +1826,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const pageNum = parseInt(document.getElementById("ocr-run-page").value || "1", 10);
             const btnRun = document.getElementById("btn-run-ocr");
             if (btnRun) btnRun.disabled = true;
-            if (ocrRunStatusMsg) ocrRunStatusMsg.textContent = "⏳ Đang chạy OCR bằng qwen2.5vl:3b...";
+            if (ocrRunStatusMsg) ocrRunStatusMsg.textContent = "⏳ Đang chạy OCR bằng mô hình thị giác cục bộ...";
             try {
                 const res = await fetch("/api/ocr/run-page", {
                     method: "POST",
@@ -1974,29 +2050,6 @@ document.addEventListener("DOMContentLoaded", () => {
         return { cls: "icon-doc", label: "≡" };
     }
 
-    function buildDocSheetPreviewHtml(filename, material) {
-        const cleanTitle = (material && (material.clean_title || material.filename)) || filename || "Tài liệu học tập";
-        const rawPages = (material && Array.isArray(material.pages)) ? material.pages : [];
-        const rawText = rawPages.map(p => p.text || "").join("\n").trim();
-        const lines = rawText
-            ? rawText.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
-            : [];
-
-        const heading1 = lines[0] || `1. Tổng quan: ${cleanTitle}`;
-        const body1 = lines.slice(1, 5).join(" ") || "Tài liệu học tập đã được trích xuất nội dung và nạp vào nguồn dữ liệu src/.";
-        const heading2 = lines[5] || "2. Nội dung trọng tâm & Khái niệm";
-        const body2 = lines.slice(6, 11).join(" ") || "Nhấn vào thẻ tệp này để xem toàn bộ nội dung chi tiết bên trong tài liệu.";
-
-        return `
-            <div class="attachment-doc-sheet">
-                <div class="attachment-doc-heading">${escapeHtml(heading1)}</div>
-                <div class="attachment-doc-lines">${escapeHtml(body1)}</div>
-                <div class="attachment-doc-subheading">${escapeHtml(heading2)}</div>
-                <div class="attachment-doc-lines">${escapeHtml(body2)}</div>
-            </div>
-        `;
-    }
-
     function upsertAttachmentPreviewCard({ cardKey, filename, isImage = false, imageDataUrl = "", material = null, loading = false }) {
         if (!chatAttachmentPreviewTray) return null;
         const key = cardKey || filename || `att-${Date.now()}`;
@@ -2023,29 +2076,15 @@ document.addEventListener("DOMContentLoaded", () => {
         syncGenerateButtonState();
 
         const badge = getFileBadgeMeta(filename);
-        const thumbHtml = (isImage && imageDataUrl)
-            ? `<img src="${imageDataUrl}" alt="${escapeHtml(filename)}" class="attachment-thumb-img">`
-            : buildDocSheetPreviewHtml(filename, material);
-
-        const loadingHtml = loading
-            ? `<div class="attachment-loading-overlay"><div class="attachment-loading-spinner"></div></div>`
-            : "";
-
-        cardEl.title = material
-            ? `Nhấn để xem nội dung bên trong: ${filename}`
-            : `Đang xử lý: ${filename}`;
-
         cardEl.innerHTML = `
-            <button type="button" class="attachment-card-remove" title="Xóa tệp đính kèm" aria-label="Xóa tệp đính kèm">&times;</button>
-            <div class="attachment-card-thumb">
-                ${thumbHtml}
-                ${loadingHtml}
-            </div>
-            <div class="attachment-card-footer">
-                <span class="attachment-file-icon ${badge.cls}">${badge.label}</span>
+            <button type="button" class="attachment-card-open" title="${escapeHtml(filename)}">
+                <span class="attachment-file-icon ${badge.cls}" aria-hidden="true">${badge.label}</span>
                 <span class="attachment-file-name">${escapeHtml(filename)}</span>
-            </div>
+                <span class="attachment-file-status">${loading ? "Đang xử lý…" : "Mở tệp"}</span>
+            </button>
+            <button type="button" class="attachment-card-remove" title="Xóa tệp đính kèm" aria-label="Xóa tệp đính kèm">&times;</button>
         `;
+        cardEl.setAttribute("aria-busy", String(loading));
 
         const btnRemove = cardEl.querySelector(".attachment-card-remove");
         btnRemove?.addEventListener("click", (ev) => {
@@ -2053,7 +2092,7 @@ document.addEventListener("DOMContentLoaded", () => {
             removeAttachmentPreviewCard(key);
         });
 
-        cardEl.onclick = () => {
+        cardEl.querySelector(".attachment-card-open").onclick = () => {
             const storedEntry = attachmentPreviewRegistry.get(key) || material;
             if (storedEntry) {
                 openDocumentContentViewer(storedEntry);
@@ -2545,10 +2584,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 throw new Error(detailMsg);
             }
 
+            const canonicalFilename = (data.material && data.material.filename) || file.name;
             const attachedMaterial = {
                 ...(data.material || {}),
                 cardKey: previewKey,
-                filename: file.name,
+                filename: canonicalFilename,
                 isImage: isImageFile,
                 imageDataUrl: isImageFile ? base64Data : "",
                 doc_id: data.material?.doc_id,
@@ -2558,7 +2598,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             upsertAttachmentPreviewCard({
                 cardKey: previewKey,
-                filename: file.name,
+                filename: canonicalFilename,
                 isImage: isImageFile,
                 imageDataUrl: isImageFile ? base64Data : "",
                 material: attachedMaterial,
@@ -2569,11 +2609,25 @@ document.addEventListener("DOMContentLoaded", () => {
             syncGenerateButtonState();
 
             const pagesCount = (data.material && data.material.total_pages) || 1;
+            const chunksCount = (data.material && data.material.chunks_indexed) || 0;
+            const isKeywordOnly = Boolean(data.material && data.material.vectors_ready === false);
             if (chatStatus) {
-                chatStatus.textContent = `✅ Sẵn sàng hỏi đáp: Đã nạp "${file.name}" (${pagesCount} trang). Bạn có thể đặt câu hỏi hoặc yêu cầu tóm tắt tài liệu ngay!`;
+                if (chunksCount === 0) {
+                    chatStatus.textContent = `⚠️ Đã nạp tệp "${canonicalFilename}" nhưng tài liệu chưa có đoạn nội dung tra cứu.`;
+                } else if (isKeywordOnly) {
+                    chatStatus.textContent = `✅ Sẵn sàng hỏi đáp (từ khóa): Đã nạp "${canonicalFilename}" (${pagesCount} trang, ${chunksCount} đoạn). Tìm kiếm ngữ nghĩa tạm ngắt kết nối.`;
+                } else {
+                    chatStatus.textContent = `✅ Sẵn sàng hỏi đáp: Đã nạp "${canonicalFilename}" (${pagesCount} trang, ${chunksCount} đoạn). Bạn có thể đặt câu hỏi hoặc yêu cầu tóm tắt tài liệu ngay!`;
+                }
             }
             if (studyToolStatus) {
-                studyToolStatus.textContent = `✅ Đã nạp thành công "${file.name}" (${pagesCount} trang) vào nguồn học tập (src/). Sẵn sàng hỏi đáp và ôn luyện.`;
+                if (chunksCount === 0) {
+                    studyToolStatus.textContent = `⚠️ Đã nạp "${canonicalFilename}" nhưng chưa có đoạn trích xuất khả dụng trong chỉ mục.`;
+                } else if (isKeywordOnly) {
+                    studyToolStatus.textContent = `✅ Đã nạp thành công "${canonicalFilename}" (${pagesCount} trang, chế độ tra cứu từ khóa) vào nguồn học tập (src/). Sẵn sàng hỏi đáp và ôn luyện.`;
+                } else {
+                    studyToolStatus.textContent = `✅ Đã nạp thành công "${canonicalFilename}" (${pagesCount} trang, ${chunksCount} đoạn) vào nguồn học tập (src/). Sẵn sàng hỏi đáp và ôn luyện.`;
+                }
             }
         } catch (err) {
             removeAttachmentPreviewCard(previewKey);

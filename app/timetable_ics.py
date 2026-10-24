@@ -7,7 +7,15 @@ using the Asia/Ho_Chi_Minh timezone (+07:00).
 import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Tuple
+
+
+def _get_vn_timezone():
+    try:
+        return ZoneInfo("Asia/Ho_Chi_Minh")
+    except Exception:
+        return timezone(timedelta(hours=7))
 
 
 def _escape_text(value: str) -> str:
@@ -97,28 +105,57 @@ def generate_ics(
         "END:VTIMEZONE",
     ]
 
-    time_regex = re.compile(r"^\d{1,2}:\d{2}$")
+    clock_regex = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
     events_count = 0
 
     for entry in entries:
-        course = str(entry.get("course", "")).strip()
+        if not isinstance(entry, dict):
+            raise ValueError("Mỗi mục trong danh sách thời khóa biểu phải là một đối tượng từ điển.")
+
+        if "course" not in entry or entry["course"] is None:
+            raise ValueError("Tên môn học không hợp lệ hoặc thiếu tên môn")
+        course = str(entry["course"]).strip()
         if not course:
-            continue
+            raise ValueError("Tên môn học không được để trống")
 
-        raw_weekday = int(entry.get("weekday", 1))
+        if "weekday" not in entry or entry["weekday"] is None:
+            raise ValueError("Thứ trong tuần không được để trống")
+        raw_w = entry["weekday"]
+        if isinstance(raw_w, bool) or isinstance(raw_w, float):
+            raise ValueError("Thứ trong tuần không hợp lệ (không chấp nhận boolean hoặc số thực)")
+        try:
+            if isinstance(raw_w, str):
+                if not raw_w.strip().isdigit():
+                    raise ValueError("Thứ trong tuần không hợp lệ")
+                raw_weekday = int(raw_w.strip())
+            elif isinstance(raw_w, int):
+                raw_weekday = raw_w
+            else:
+                raise ValueError("Thứ trong tuần không hợp lệ")
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"Thứ trong tuần không hợp lệ: {err}")
+
         if raw_weekday not in byday_map:
-            continue
+            raise ValueError(f"Thứ trong tuần phải từ 1 đến 7 (nhận được: {raw_weekday})")
 
-        start_time_str = str(entry.get("start_time", "")).strip()
-        end_time_str = str(entry.get("end_time", "")).strip()
+        if "start_time" not in entry or "end_time" not in entry:
+            raise ValueError("Thiếu giờ bắt đầu hoặc giờ kết thúc")
+        st_val = entry.get("start_time")
+        et_val = entry.get("end_time")
+        if not st_val or not et_val:
+            raise ValueError("Giờ bắt đầu và kết thúc không được để trống")
+        start_time_str = str(st_val).strip()
+        end_time_str = str(et_val).strip()
 
-        if not time_regex.match(start_time_str) or not time_regex.match(end_time_str):
-            # Cannot schedule an event without clock times
-            continue
+        if not clock_regex.match(start_time_str):
+            raise ValueError(f"Giờ bắt đầu '{start_time_str}' không đúng định dạng 24h HH:MM")
+        if not clock_regex.match(end_time_str):
+            raise ValueError(f"Giờ kết thúc '{end_time_str}' không đúng định dạng 24h HH:MM")
 
-        # Format times as HHMM00
         sh, sm = [int(x) for x in start_time_str.split(":")]
         eh, em = [int(x) for x in end_time_str.split(":")]
+        if (eh * 60 + em) <= (sh * 60 + sm):
+            raise ValueError(f"Giờ kết thúc ({end_time_str}) phải sau giờ bắt đầu ({start_time_str})")
 
         # Python weekday: 0 = Mon, 6 = Sun
         target_py_weekday = raw_weekday - 1
@@ -131,7 +168,8 @@ def generate_ics(
         event_uid = f"{uuid.uuid4()}@agent-hoctap.local"
         dtstart = f"{first_event_date.strftime('%Y%m%d')}T{sh:02d}{sm:02d}00"
         dtend = f"{first_event_date.strftime('%Y%m%d')}T{eh:02d}{em:02d}00"
-        until_str = f"{end_date.strftime('%Y%m%d')}T235959Z"
+        local_end_dt = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=_get_vn_timezone())
+        until_str = local_end_dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
         room = str(entry.get("room") or "")
         notes = str(entry.get("notes") or "")

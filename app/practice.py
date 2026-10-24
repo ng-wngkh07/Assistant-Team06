@@ -124,8 +124,12 @@ class PracticeService:
         messages = [{"role": "user", "content": prompt}]
         system_prompt = "Bạn là trợ lý học tập bám sát tài liệu. Hãy tuân thủ định dạng dữ liệu được yêu cầu."
         target_model = model or DEFAULT_CHAT_MODEL
-        if target_model in (TRAINED_MODEL_NAME, "qwen2.5-3b-4bit", "tam-ly-mlx", "mlx-3b", "local"):
-            client = TrainedModelClient()
+        from app.model_resolver import is_mlx_model
+        if is_mlx_model(target_model):
+            try:
+                client = TrainedModelClient(model_name=target_model)
+            except TypeError:
+                client = TrainedModelClient()
             result = client.chat_complete(
                 messages,
                 system_prompt=system_prompt,
@@ -134,6 +138,8 @@ class PracticeService:
             )
             if getattr(client, "last_done_reason", None) != "stop":
                 raise PracticeGenerationError("Mô hình bị gián đoạn hoặc vượt quá độ dài quy định.")
+            result = re.sub(r"(?is)<\s*(?:think|analysis|reasoning)\b[^>]*>.*?<\s*/\s*(?:think|analysis|reasoning)\s*>", "", result)
+            result = re.sub(r"(?is)^.*?<\s*/\s*(?:think|analysis|reasoning)\s*>", "", result).strip()
             return result
         result = self.ollama.chat_complete(
             messages,
@@ -142,9 +148,12 @@ class PracticeService:
             num_predict=max_tokens,
             num_ctx=8192,
             system_prompt=system_prompt,
+            think=False,
         )
         if getattr(self.ollama, "last_done_reason", None) != "stop":
             raise PracticeGenerationError("Mô hình bị gián đoạn hoặc vượt quá độ dài quy định.")
+        result = re.sub(r"(?is)<\s*(?:think|analysis|reasoning)\b[^>]*>.*?<\s*/\s*(?:think|analysis|reasoning)\s*>", "", result)
+        result = re.sub(r"(?is)^.*?<\s*/\s*(?:think|analysis|reasoning)\s*>", "", result).strip()
         return result
 
     def _generate_text(
@@ -370,6 +379,7 @@ class PracticeService:
         res = {
             "practice_id": practice_id,
             "count": len(questions),
+            "processing_level": "careful",
             "questions": [
                 {
                     "id": question["id"],

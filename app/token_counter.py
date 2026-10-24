@@ -22,14 +22,11 @@ from app.config import BASE_DIR, MLX_MODEL_DIR
 logger = logging.getLogger(__name__)
 
 
-def _find_model_dir() -> Optional[Path]:
-    candidates = [
-        MLX_MODEL_DIR,
-        BASE_DIR / "data" / "models" / "qwen2.5-3b-4bit",
-    ]
-    for p in candidates:
-        if p.exists() and (p / "tokenizer.json").exists():
-            return p
+def _find_model_dir(model_name: Optional[str] = None) -> Optional[Path]:
+    from app.model_resolver import resolve_mlx_model_dir
+    p = resolve_mlx_model_dir(model_name)
+    if p.exists() and (p / "tokenizer.json").exists():
+        return p
     return None
 
 
@@ -207,27 +204,28 @@ class TokenizerWorkerClient:
                     pass
 
 
-_worker_client: Optional[TokenizerWorkerClient] = None
+_worker_clients: Dict[str, TokenizerWorkerClient] = {}
 _client_lock = threading.Lock()
 
 
-def get_exact_token_counter() -> Optional[Callable[[List[Dict[str, str]]], int]]:
-    """Return exact tokenizer counting callable, or None if unavailable/unsupported."""
-    global _worker_client
+def get_exact_token_counter(model_name: Optional[str] = None) -> Optional[Callable[[List[Dict[str, str]]], int]]:
+    """Return exact tokenizer counting callable for the specified model, or None if unavailable."""
     if sys.platform == "win32":
         return None
 
-    model_dir = _find_model_dir()
+    model_dir = _find_model_dir(model_name)
     train_py = _find_train_python()
     if not model_dir or not train_py:
         return None
 
+    key = str(model_dir.resolve())
     with _client_lock:
-        if _worker_client is None:
-            _worker_client = TokenizerWorkerClient(model_dir, train_py)
+        if key not in _worker_clients:
+            _worker_clients[key] = TokenizerWorkerClient(model_dir, train_py)
+        worker = _worker_clients[key]
 
     def counter(messages: List[Dict[str, str]]) -> int:
-        return _worker_client.count(messages)
+        return worker.count(messages)
 
     return counter
 
@@ -236,7 +234,7 @@ def _run_server(model_dir: Path) -> None:
     """Run persistent JSON-RPC server on stdin/stdout using transformers.AutoTokenizer."""
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True, trust_remote_code=False)
 
     for line in sys.stdin:
         line = line.strip()
@@ -246,7 +244,10 @@ def _run_server(model_dir: Path) -> None:
             req = json.loads(line)
             if "messages" in req:
                 prompt = tokenizer.apply_chat_template(
-                    req["messages"], tokenize=False, add_generation_prompt=True
+                    req["messages"],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
                 )
                 count = len(tokenizer.encode(prompt))
                 print(json.dumps({"count": count}), flush=True)
@@ -254,7 +255,10 @@ def _run_server(model_dir: Path) -> None:
                 counts = []
                 for msgs in req["batch"]:
                     prompt = tokenizer.apply_chat_template(
-                        msgs, tokenize=False, add_generation_prompt=True
+                        msgs,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                        enable_thinking=False,
                     )
                     counts.append(len(tokenizer.encode(prompt)))
                 print(json.dumps({"counts": counts}), flush=True)

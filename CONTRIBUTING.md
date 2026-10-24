@@ -45,3 +45,7 @@ The repository owner merges after review and required checks. Approval and merge
 - Do not change the serving model, activate an adapter or start training as a side effect of a software fix.
 
 Report suspected credential exposure privately to the repository owner and revoke the affected credential promptly. See [Security](SECURITY.md).
+
+## Publish verified changes
+
+After an important change or defect fix, complete the applicable checks, review the diff for private data, commit to the feature branch, push it to origin, and open or update its pull request. This is standing project authorization; contributors and agents should not wait for another reminder. Keep a failing or incomplete change local with its concrete blocker. Do not publish weights, private sources or operational reports. This rule does not authorize merging main, bypassing branch protection, training or adapter activation.

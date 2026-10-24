@@ -34,19 +34,36 @@ DB_PATH = DATA_DIR / "knowledge_base.db"
 # Ensure data directory exists
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# Ollama settings
+# Model settings
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-DEFAULT_CHAT_MODEL = os.getenv("DEFAULT_CHAT_MODEL", "qwen2.5:3b" if sys.platform == "win32" else "qwen2.5-3b-4bit")
+DEFAULT_CHAT_MODEL = os.getenv(
+    "DEFAULT_CHAT_MODEL",
+    "qwen3.5-9b-4bit" if sys.platform == "darwin" else ("qwen2.5:3b" if sys.platform == "win32" else "qwen2.5-3b-4bit")
+)
 DEFAULT_EMBED_MODEL = os.getenv("DEFAULT_EMBED_MODEL", "bge-m3")
 TRAINED_MODEL_NAME = os.getenv("TRAINED_MODEL_NAME", "qwen2.5-3b-4bit")
 OLLAMA_AUX_CHAT_MODEL = os.getenv("OLLAMA_AUX_CHAT_MODEL", "qwen2.5vl:3b")
-MLX_MODEL_DIR = DATA_DIR / "models" / "qwen2.5-3b-4bit"
+MLX_9B_MODEL_DIR = Path(
+    os.getenv("MLX_MODEL_DIR")
+    or os.getenv("MLX_9B_MODEL_DIR")
+    or str(DATA_DIR / "models" / "qwen3.5-9b-4bit")
+)
+MLX_3B_MODEL_DIR = Path(
+    os.getenv("MLX_3B_MODEL_DIR")
+    or str(DATA_DIR / "models" / "qwen2.5-3b-4bit")
+)
+MLX_BGE_MODEL_DIR = Path(
+    os.getenv("MLX_BGE_MODEL_DIR")
+    or os.getenv("BGE_MODEL_DIR")
+    or str(DATA_DIR / "models" / "bge-m3-mlx-fp16")
+)
+MLX_MODEL_DIR = MLX_9B_MODEL_DIR if sys.platform == "darwin" else MLX_3B_MODEL_DIR
 MLX_ADAPTER_DIR = DATA_DIR / "adapters" / "psychology-v1"
 MLX_CONTEXT_TOKENS = _context_tokens_setting("MLX_CONTEXT_TOKENS", 8192, 2048, 32768)
-# Unified single base model for training and inference based on real 16GB RAM profile:
-TRAINING_MODEL_DIR = Path(os.getenv("TRAINING_MODEL_DIR", str(MLX_MODEL_DIR)))
-TRAINING_MODEL_REPO = "mlx-community/Qwen2.5-3B-Instruct-4bit"
-TRAINING_MODEL_REVISION = "4f83f8f146fdf28b512a06562b671d7af4fab457"
+# Base model configuration for training pipeline
+TRAINING_MODEL_DIR = Path(os.getenv("TRAINING_MODEL_DIR", str(MLX_9B_MODEL_DIR if sys.platform == "darwin" else MLX_3B_MODEL_DIR)))
+TRAINING_MODEL_REPO = "mlx-community/Qwen3.5-9B-4bit" if sys.platform == "darwin" else "mlx-community/Qwen2.5-3B-Instruct-4bit"
+TRAINING_MODEL_REVISION = "8b2b98c00a6b4d291155e4890773ca8f769aee53" if sys.platform == "darwin" else "4f83f8f146fdf28b512a06562b671d7af4fab457"
 
 # Text chunking settings
 CHUNK_SIZE_CHARS = 1200

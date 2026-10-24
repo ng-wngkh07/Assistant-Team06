@@ -8,6 +8,7 @@ From the repository root, using the project Python environment:
 
 ```bash
 python -m pip check
+python -m compileall -q app
 python -m pytest -c pytest.windows.ini -rs
 python scripts/dev.py check --profile local
 node --test tests/*.test.cjs
@@ -45,6 +46,10 @@ The security regression suite uses synthetic Office files, tokenizer stubs and t
 - **Acceptance gates**: Dataset preparation, candidate rejudging, source review and diagnostic tools raise explicit exceptions so their checks remain active under `python -O`. Optimization tests execute only isolated guard statements, without running dataset-producing scripts.
 - **Physical source pages**: Page validation raises `ValueError` when an existing source cannot be parsed or its physical page count cannot be determined. Form validation without a source file retains its existing behavior.
 - **Historical C++ review tool**: `scripts/release_string_reviews.py` now reads `string-transcripts.json` and `string-rows.json` from the ignored directory `data/evaluation/corpus-review-20261005/all-remaining-20261005`. Place reviewed inputs there explicitly; there is no shared `/tmp` fallback. This manual tool compiles and executes source from its inputs, so it requires operator-trusted files and is excluded from automated runtime validation.
+
+## Public debugging corpus
+
+The [extended fixture guide](../tests/fixtures/EXTENDED_CORPUS.md) describes 12 synthetic topics, 96 review cases and a 14-course timetable PNG/JSON pair. Portable tests index these sources in temporary databases and check timetable draft/confirmation/export behavior. The case manifest contains content rubrics and simple/complex labels; it is not a precomputed model benchmark or approved training set. Image extraction quality and actual model answers require separate live evaluation and source review.
 
 ## Real-model acceptance
 

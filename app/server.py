@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import re
+import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Literal
@@ -31,7 +32,7 @@ from app.dialogue import dialogue_gate, DialogueBusyError, BUSY_TEXT
 from app import timetable_store, timetable_vision, timetable_ics
 from app.practice import PracticeGenerationError, PracticeService, PracticeSessionNotFound
 from app.learning import LearningService
-from app.study_materials import study_material_manager, StudyMaterialError
+from app.study_materials import study_material_manager, StudyMaterialError, StudyMaterialIndexError
 from app.input_policy import (
     validate_query_text,
     validate_chat_history,
@@ -144,7 +145,7 @@ summarizer = TopicSummarizer(history_store=history_store)
 class ChatRequest(BaseModel):
     query: str
     chat_history: Optional[List[Dict[str, Any]]] = None
-    processing_level: Literal["auto", "standard", "careful"] = "auto"
+    processing_level: Literal["auto", "standard", "careful"] = "standard"
     answer_mode: Literal["quick", "steps", "compare", "summary", "step_by_step", "comparison", "normal"] = "quick"
     explanation_mode: Optional[Literal["quick", "steps", "compare", "summary", "step_by_step", "comparison", "normal"]] = None
     isolate_context: Optional[bool] = False
@@ -190,11 +191,15 @@ class ChatRequest(BaseModel):
         return self
 
 
+QueryRequest = ChatRequest
+
+
 class PracticeGenerateRequest(BaseModel):
     source_document_id: int = Field(ge=1)
     source_page_num: int = Field(ge=1)
     source_chunk_id: Optional[int] = Field(default=None, ge=1)
     count: int = Field(default=3, ge=1, le=3)
+    processing_level: Optional[str] = "careful"
 
 
 class PracticeAnswerRequest(BaseModel):
@@ -271,6 +276,7 @@ class LearningGenerateRequest(BaseModel):
     purpose: Literal["practice", "review"] = "practice"
     weak_topics: Optional[list[str]] = None
     model: Optional[str] = None
+    processing_level: Optional[str] = "careful"
 
     @field_validator("topic")
     @classmethod
@@ -292,6 +298,7 @@ class LearningExercisesRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=20)
     solve_missing: bool = False
     model: Optional[str] = None
+    processing_level: Optional[str] = "careful"
 
     @field_validator("topic")
     @classmethod
@@ -403,21 +410,27 @@ async def upload_and_generate_materials(req: MaterialUploadRequest):
             file_bytes,
             allow_image_without_text=not req.generate_study_set,
         )
-        should_persist = req.persist_to_src if req.persist_to_src is not None else ("PYTEST_CURRENT_TEST" not in os.environ)
+        should_persist = True if req.persist_to_src is None else bool(req.persist_to_src)
         ingestion_info = None
         if should_persist:
             ingestion_info = study_material_manager.ingest_to_src_and_index(req.filename, file_bytes, extracted)
         if not req.generate_study_set:
-            return study_material_manager.store_extracted_document(extracted, ingestion_info=ingestion_info)
-        record = study_material_manager.generate_materials_from_pages(
-            extracted,
-            quiz_count=req.quiz_count,
-            flashcard_count=req.flashcard_count,
-            difficulty=req.difficulty,
-            model=DEFAULT_CHAT_MODEL,
+            record = study_material_manager.store_extracted_document(extracted, ingestion_info=ingestion_info)
+        else:
+            record = study_material_manager.generate_materials_from_pages(
+                extracted,
+                quiz_count=req.quiz_count,
+                flashcard_count=req.flashcard_count,
+                difficulty=req.difficulty,
+                model=DEFAULT_CHAT_MODEL,
+            )
+            if ingestion_info:
+                record.update(ingestion_info)
+        study_material_manager.cache_raw_file(
+            record.get("filename") or getattr(extracted, "filename", None) or req.filename,
+            file_bytes,
+            material_id=record.get("id"),
         )
-        if ingestion_info:
-            record.update(ingestion_info)
         return record
 
     try:
@@ -429,20 +442,30 @@ async def upload_and_generate_materials(req: MaterialUploadRequest):
             "id": record["id"],
         }
     except StudyMaterialError as exc:
+        study_material_manager.evict_raw_file(req.filename)
         raise HTTPException(status_code=422, detail=str(exc))
+    except StudyMaterialIndexError as exc:
+        study_material_manager.evict_raw_file(req.filename)
+        raise HTTPException(
+            status_code=503,
+            detail="Không thể lưu hoặc cập nhật chỉ mục tài liệu vào cơ sở tri thức. Vui lòng thử lại sau."
+        )
     except GPUBusyError as exc:
+        study_material_manager.evict_raw_file(req.filename)
         raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
     except DialogueBusyError as exc:
+        study_material_manager.evict_raw_file(req.filename)
         raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
     except Exception as exc:
+        study_material_manager.evict_raw_file(req.filename)
         logger.exception("Lỗi xử lý tài liệu tải lên")
-        raise HTTPException(status_code=500, detail=f"Lỗi xử lý tài liệu tải lên: {exc}")
+        raise HTTPException(status_code=500, detail="Lỗi xử lý tài liệu tải lên. Vui lòng thử lại sau.")
 
 
 @app.post("/api/materials/inspect-library")
 async def inspect_library_document_endpoint(req: MaterialLibraryInspectRequest):
     def run_lib_inspect():
-        should_persist = req.persist_to_src if req.persist_to_src is not None else ("PYTEST_CURRENT_TEST" not in os.environ)
+        should_persist = True if req.persist_to_src is None else bool(req.persist_to_src)
         return study_material_manager.inspect_library_document(
             doc_id=req.document_id,
             filename=req.filename,
@@ -459,9 +482,18 @@ async def inspect_library_document_endpoint(req: MaterialLibraryInspectRequest):
         }
     except StudyMaterialError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    except StudyMaterialIndexError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Không thể lưu hoặc cập nhật chỉ mục tài liệu vào cơ sở tri thức. Vui lòng thử lại sau."
+        )
+    except GPUBusyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
+    except DialogueBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
     except Exception as exc:
         logger.exception("Lỗi đọc nội dung tài liệu thư viện")
-        raise HTTPException(status_code=500, detail=f"Lỗi đọc nội dung tài liệu thư viện: {exc}")
+        raise HTTPException(status_code=500, detail="Lỗi đọc nội dung tài liệu thư viện. Vui lòng thử lại sau.")
 
 
 @app.post("/api/materials/generate-from-library")
@@ -860,6 +892,13 @@ class TimetableConfirmRequest(BaseModel):
     draft_id: str
     entries: List[TimetableConfirmEntry]
     replace_existing: bool = False
+    clear_existing: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def resolve_replace(self):
+        if self.clear_existing is not None:
+            self.replace_existing = bool(self.clear_existing or self.replace_existing)
+        return self
 
 
 class TimetableManualEntryRequest(BaseModel):
@@ -1006,26 +1045,22 @@ async def clear_timetable():
 
 @app.get("/api/timetable/export.ics")
 async def export_timetable_ics(
-    start_date: Optional[str] = Query(None, description="Start date of semester in YYYY-MM-DD"),
-    end_date: Optional[str] = Query(None, description="End date of semester in YYYY-MM-DD"),
+    start_date: str = Query(..., description="Start date of semester in YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date of semester in YYYY-MM-DD"),
 ):
     try:
-        now_dt = datetime.now()
-        s_date = start_date or now_dt.strftime("%Y-%m-%d")
-        e_date = end_date or (now_dt + timedelta(weeks=16)).strftime("%Y-%m-%d")
-
         entries = await run_in_threadpool(timetable_store.get_confirmed_entries)
         if not entries:
             raise HTTPException(
                 status_code=400,
                 detail="Thời khóa biểu hiện chưa có môn học nào để xuất lịch. Vui lòng thêm môn học trước."
             )
-        ics_content = timetable_ics.generate_ics(entries, s_date, e_date)
+        ics_content = timetable_ics.generate_ics(entries, start_date, end_date)
         return Response(
             content=ics_content,
             media_type="text/calendar; charset=utf-8",
             headers={
-                "Content-Disposition": f'attachment; filename="timetable_{s_date}_{e_date}.ics"'
+                "Content-Disposition": f'attachment; filename="timetable_{start_date}_{end_date}.ics"'
             },
         )
     except HTTPException:
@@ -1045,7 +1080,8 @@ async def serve_index():
     return HTMLResponse(content="<h1>Study QA Agent Backend Running</h1><p>index.html not found in static/</p>")
 
 def _requires_mlx_model():
-    return DEFAULT_CHAT_MODEL in (TRAINED_MODEL_NAME, "qwen2.5-3b-4bit", "tam-ly-mlx", "mlx-3b", "local")
+    from app.model_resolver import is_mlx_model
+    return is_mlx_model(DEFAULT_CHAT_MODEL)
 
 
 def _inference_model_available(mlx_available, models):
@@ -1057,24 +1093,37 @@ def _inference_model_available(mlx_available, models):
 
 @app.get("/api/health")
 async def health_check():
-    ollama_ok = ollama.check_health()
+    requires_mlx = _requires_mlx_model()
+    ollama_ok = False if requires_mlx else ollama.check_health()
     gpu_status = gpu_coordinator.get_status()
     gpu_busy = bool(gpu_status.get("busy", False))
     mlx_available = TrainedModelClient.available()
-    models = ollama.list_models() if ollama_ok and not gpu_busy and not _requires_mlx_model() else []
+    models = [] if (requires_mlx or gpu_busy or not ollama_ok) else ollama.list_models()
     model_ready = _inference_model_available(mlx_available, models)
+
+    if sys.platform == "darwin":
+        from app.native_vision import NativeVisionClient
+        from app.native_embedding import NativeEmbeddingClient
+        qa_ready = bool(mlx_available and not gpu_busy)
+        vision_ready = bool(NativeVisionClient.available() and not gpu_busy)
+        embedding_ready = bool(NativeEmbeddingClient.available() and not gpu_busy)
+    else:
+        names = {m.get("name") for m in models} if models else set()
+        qa_ready = bool(model_ready and not gpu_busy)
+        vision_ready = bool(any("qwen2.5vl:3b" in m for m in names) and not gpu_busy)
+        embedding_ready = bool(any("bge-m3" in m for m in names) and not gpu_busy)
 
     if gpu_busy:
         service_state = "degraded"
         service_message = f"GPU đang bận huấn luyện (PID {gpu_status.get('pid')}) - Suy luận tạm thời bị chặn, web hoạt động bình thường"
         inference_ready = False
-    elif not ollama_ok:
+    elif not _requires_mlx_model() and not ollama_ok:
         service_state = "degraded"
         service_message = "Ollama mất kết nối"
         inference_ready = False
     elif not model_ready:
         service_state = "degraded"
-        service_message = ("Mô hình MLX nền tảng cục bộ chưa khả dụng" if _requires_mlx_model()
+        service_message = (f"Mô hình MLX {DEFAULT_CHAT_MODEL} chưa khả dụng" if _requires_mlx_model()
                            else f"Mô hình Ollama {DEFAULT_CHAT_MODEL} chưa khả dụng")
         inference_ready = False
     else:
@@ -1093,39 +1142,63 @@ async def health_check():
         "ollama_url": ollama.base_url,
         "mlx_available": mlx_available,
         "inference_ready": inference_ready,
+        "qa_ready": qa_ready,
+        "vision_ready": vision_ready,
+        "embedding_ready": embedding_ready,
+        "features": {
+            "qa": qa_ready,
+            "vision": vision_ready,
+            "embedding": embedding_ready,
+        },
         "gpu": gpu_status
     }
 
 @app.get("/api/models")
 async def get_models():
     from app.active_registry import active_registry
+    from app.model_resolver import is_9b_model
     registry_info = active_registry.get_active_info()
-    models = ollama.list_models() if ollama.check_health() else []
+    is_mlx = _requires_mlx_model()
+    models = [] if is_mlx else (ollama.list_models() if ollama.check_health() else [])
     # Exclude vision auxiliary models from QA list; vision is only for OCR
     qa_models = [
         m for m in models
         if "vl" not in m.get("name", "").lower() and "vision" not in m.get("name", "").lower()
     ]
+    if is_mlx:
+        if is_9b_model(DEFAULT_CHAT_MODEL):
+            active_adapter = None
+            model_mode = "unadapted_base"
+            model_description = "Qwen3.5 9B (MLX Nền tảng cục bộ - unadapted base)"
+        else:
+            active_adapter = registry_info.get("active_adapter")
+            model_mode = registry_info.get("mode", "unadapted_base")
+            model_description = (
+                "Qwen2.5 3B (MLX Nền tảng cục bộ - unadapted base)"
+                if registry_info.get("mode") == "unadapted_base"
+                else f"Qwen2.5 3B (MLX LoRA - {registry_info.get('active_adapter', {}).get('id')})"
+            )
+    else:
+        active_adapter = None
+        model_mode = "unadapted_base"
+        model_description = f"{DEFAULT_CHAT_MODEL} (Ollama - unadapted base)"
     return {
         "models": qa_models,
         "default_model": DEFAULT_CHAT_MODEL,
-        "default_model_backend": "mlx" if _requires_mlx_model() else "ollama",
+        "default_model_backend": "mlx" if is_mlx else "ollama",
         "default_model_available": _inference_model_available(TrainedModelClient.available(), models),
-        "trained_model": TRAINED_MODEL_NAME if TrainedModelClient.available() else None,
-        "active_adapter": registry_info.get("active_adapter"),
-        "model_mode": registry_info.get("mode", "unadapted_base"),
-        "model_description": (
-            "Qwen2.5 3B (MLX Nền tảng cục bộ - unadapted base)"
-            if registry_info.get("mode") == "unadapted_base"
-            else f"Qwen2.5 3B (MLX LoRA - {registry_info.get('active_adapter', {}).get('id')})"
-        ),
+        "trained_model": DEFAULT_CHAT_MODEL if (is_mlx and TrainedModelClient.available()) else (TRAINED_MODEL_NAME if TrainedModelClient.available() else None),
+        "active_adapter": active_adapter,
+        "model_mode": model_mode,
+        "model_description": model_description,
     }
 
 @app.get("/api/status")
 async def get_index_status():
     status = indexer.get_status()
-    ollama_ok = ollama.check_health()
-    models = ollama.list_models() if ollama_ok else []
+    requires_mlx = _requires_mlx_model()
+    ollama_ok = False if requires_mlx else ollama.check_health()
+    models = [] if (requires_mlx or not ollama_ok) else ollama.list_models()
     gpu_status = gpu_coordinator.get_status()
     gpu_busy = bool(gpu_status.get("busy", False))
     mlx_available = TrainedModelClient.available()
@@ -1135,13 +1208,13 @@ async def get_index_status():
         service_state = "degraded"
         service_message = f"GPU đang bận huấn luyện (PID {gpu_status.get('pid')}) - Suy luận tạm thời bị chặn, web hoạt động bình thường"
         inference_ready = False
-    elif not ollama_ok:
+    elif not _requires_mlx_model() and not ollama_ok:
         service_state = "degraded"
         service_message = "Ollama mất kết nối"
         inference_ready = False
     elif not model_ready:
         service_state = "degraded"
-        service_message = ("Mô hình MLX nền tảng cục bộ chưa khả dụng" if _requires_mlx_model()
+        service_message = (f"Mô hình MLX {DEFAULT_CHAT_MODEL} chưa khả dụng" if _requires_mlx_model()
                            else f"Mô hình Ollama {DEFAULT_CHAT_MODEL} chưa khả dụng")
         inference_ready = False
     else:
@@ -1154,7 +1227,7 @@ async def get_index_status():
         "service_message": service_message,
         "inference_ready": inference_ready,
         "knowledge_base": status,
-        "trained_model": {"name": TRAINED_MODEL_NAME, "available": mlx_available},
+        "trained_model": {"name": DEFAULT_CHAT_MODEL if _requires_mlx_model() else TRAINED_MODEL_NAME, "available": mlx_available},
         "ollama": {
             "connected": ollama_ok,
             "url": ollama.base_url,

@@ -378,3 +378,124 @@ def test_vietnamese_quiz_rejects_language_drift_across_question_and_choices():
     result = StudyMaterialManager(Responses([drift], [card()])).generate_materials_from_pages(source(), model='test-remote')
     assert result['generation']['quiz'] == 'extractive_fallback'
     assert '不确定' not in str(result['quiz'])
+
+
+def test_quiz_cloze_keeps_source_conditions_and_ignores_model_question():
+    text = 'Nếu đồng xu có hai mặt đồng xác suất thì entropy bằng 1 bit.'
+    q = {'format': 'source_cloze', 'answer': '1 bit',
+         'distractors': ['0 bit', '2 bit', '3 bit'], 'evidence_id': 'Q1',
+         'question': 'Entropy luôn bằng bao nhiêu?'}
+    result = StudyMaterialManager(Responses([q], [])).generate_materials_from_pages(source(text), model='test-remote')
+    assert result['generation']['quiz'] == 'model'
+    item = result['quiz'][0]
+    assert item['format'] == 'source_cloze'
+    assert text.replace('1 bit', '[…]') in item['question']
+    assert 'luôn' not in item['question']
+    assert next(c['text'] for c in item['choices'] if c['label'] == item['answer']) == '1 bit'
+    assert item['evidence_quote'] == text
+
+
+@pytest.mark.parametrize('changes', [
+    {'answer': '4 bit'}, {'distractors': ['độ bất định trung bình', 'tốc độ', 'khối lượng']},
+    {'distractors': ['tốc độ', 'tốc độ', 'khối lượng']},
+    {'distractors': ['tốc độ', 'khối lượng']},
+    {'distractors': ['tốc độ', 'khối lượng', 3]},
+    {'answer': ''}, {'answer': TEXT},
+])
+def test_quiz_cloze_requires_a_real_span_and_three_distinct_distractors(changes):
+    q = {'format': 'source_cloze', 'answer': 'độ bất định trung bình',
+         'distractors': ['tốc độ', 'khối lượng', 'khoảng cách'], 'evidence_id': 'Q1', **changes}
+    result = StudyMaterialManager(Responses([q], [])).generate_materials_from_pages(source(), model='test-remote')
+    assert result['generation']['quiz'] == 'extractive_fallback'
+
+
+def test_quiz_cloze_rejects_a_span_with_multiple_occurrences():
+    text = 'Entropy được đo bằng bit. Một bit là đơn vị thông tin.'
+    q = {'format': 'source_cloze', 'answer': 'bit',
+         'distractors': ['joule', 'watt', 'ampe'], 'evidence_id': 'Q1'}
+    result = StudyMaterialManager(Responses([q], [])).generate_materials_from_pages(source(text), model='test-remote')
+    assert result['generation']['quiz'] == 'extractive_fallback'
+
+
+def test_quiz_cloze_cannot_leave_its_answer_visible_with_different_case():
+    text = 'Điện trở có đơn vị ôm. Định luật Ôm là I = U/R, với R>0.'
+    q = {'format': 'source_cloze', 'answer': 'Ôm',
+         'distractors': ['Ampere', 'Volt', 'Watt'], 'evidence_id': 'Q1'}
+    result = StudyMaterialManager(Responses([q], [])).generate_materials_from_pages(source(text), model='test-remote')
+    assert result['generation']['quiz'] == 'extractive_fallback'
+
+
+def test_duplicate_model_cloze_questions_are_not_published_twice():
+    q = {'format': 'source_cloze', 'answer': 'độ bất định trung bình',
+         'distractors': ['tốc độ', 'khối lượng', 'khoảng cách'], 'evidence_id': 'Q1'}
+    result = StudyMaterialManager(Responses([q, q], [])).generate_materials_from_pages(source(), model='test-remote')
+    assert result['generation']['quiz'] == 'model'
+    assert len(result['quiz']) == 1
+
+
+def test_cloze_math_choices_keep_operators_that_change_the_answer():
+    text = 'Điều kiện P(B)>0 là bắt buộc để phép chia có nghĩa.'
+    q = {'format': 'source_cloze', 'answer': 'P(B)>0',
+         'distractors': ['P(B)<=0', 'P(B)<0', 'P(B)=0'], 'evidence_id': 'Q1'}
+    result = StudyMaterialManager(Responses([q], [])).generate_materials_from_pages(source(text), model='test-remote')
+    assert result['generation']['quiz'] == 'model'
+    assert {c['text'] for c in result['quiz'][0]['choices']} == {'P(B)>0', 'P(B)<=0', 'P(B)<0', 'P(B)=0'}
+
+
+def test_cloze_cannot_use_a_legacy_quote_to_drop_source_conditions():
+    text = 'Nếu đồng xu có hai mặt đồng xác suất, entropy là 1 bit.'
+    q = {'format': 'source_cloze', 'answer': '1 bit', 'page_num': 2,
+         'evidence_quote': 'entropy là 1 bit.', 'distractors': ['0 bit', '2 bit', '3 bit']}
+    result = StudyMaterialManager(Responses([q], [])).generate_materials_from_pages(source(text), model='test-remote')
+    assert result['generation']['quiz'] == 'extractive_fallback'
+
+
+@pytest.mark.parametrize('repaired', [True, False])
+def test_repeated_cloze_span_gets_at_most_one_source_bound_repair(repaired):
+    text = 'Bayes yêu cầu P(B)>0. P(B) là xác suất của biến cố B.'
+    bad = {'format': 'source_cloze', 'answer': 'P(B)', 'evidence_id': 'Q1',
+           'distractors': ['P(A)', 'P(A|B)', 'P(B|A)']}
+    good = {**bad, 'answer': 'P(B)>0', 'distractors': ['P(B)=0', 'P(B)<0', 'P(B)<=0']}
+    client = Responses([], [])
+    client.responses = iter([json.dumps({'questions': [bad]}),
+                             json.dumps({'questions': [good if repaired else bad]}),
+                             json.dumps({'flashcards': []})])
+    result = StudyMaterialManager(client).generate_materials_from_pages(source(text), model='test-remote')
+    assert len(client.calls) == 3  # Two quiz attempts and one flashcard turn.
+    assert result['generation']['quiz'] == ('model' if repaired else 'extractive_fallback')
+    from html import unescape
+    assert text in unescape(client.calls[1]['messages'][0]['content'])
+
+
+def test_cloze_repair_is_skipped_when_its_prompt_would_exceed_the_budget(monkeypatch):
+    import app.study_materials as sm
+    import app.token_counter as tc
+    monkeypatch.setattr(sm, 'MLX_CONTEXT_TOKENS', 2000)
+    monkeypatch.setattr(tc, 'get_exact_token_counter', lambda: lambda messages: 200)
+    text = 'Entropy được đo bằng bit. Một bit là đơn vị thông tin.'
+    q = {'format': 'source_cloze', 'answer': 'bit',
+         'distractors': ['joule', 'watt', 'ampe'], 'evidence_id': 'Q1'}
+    client = Responses([q], [])
+    result = StudyMaterialManager(client).generate_materials_from_pages(source(text), model='test-remote')
+    assert len(client.calls) == 2
+    assert result['generation']['quiz'] == 'extractive_fallback'
+    assert all(c['num_ctx'] == 2000 for c in client.calls)
+
+
+@pytest.mark.parametrize('repaired', [True, False])
+def test_duplicate_cloze_distractors_get_one_repair_without_publishing_duplicates(repaired):
+    text = 'Its entropy is one bit. A certain outcome has zero entropy.'
+    bad = {'format': 'source_cloze', 'answer': 'bit', 'evidence_id': 'Q1',
+           'distractors': ['byte', 'kilobyte', ' BYTE ']}
+    good = {**bad, 'distractors': ['byte', 'joule', 'watt']}
+    client = Responses([], [])
+    client.responses = iter([json.dumps({'questions': [bad]}),
+                             json.dumps({'questions': [good if repaired else bad]}),
+                             json.dumps({'flashcards': []})])
+    result = StudyMaterialManager(client).generate_materials_from_pages(source(text), model='test-remote')
+    assert len(client.calls) == 3
+    assert result['generation']['quiz'] == ('model' if repaired else 'extractive_fallback')
+    if repaired:
+        assert len({c['text'].strip().casefold() for c in result['quiz'][0]['choices']}) == 4
+    from html import unescape
+    assert text in unescape(client.calls[1]['messages'][0]['content'])

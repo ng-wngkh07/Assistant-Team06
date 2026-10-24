@@ -1,6 +1,7 @@
 """Read-only document lookup, independent of chat and conversation history."""
 
 import sqlite3
+import sys
 from contextlib import closing
 from pathlib import Path
 from typing import Optional
@@ -143,8 +144,35 @@ class DocumentLookup:
         notice = ""
         if method == "hybrid":
             try:
-                with gpu_coordinator.acquire_for_inference():
-                    vec = self.ollama.get_embedding(query, model=DEFAULT_EMBED_MODEL)
+                use_native = False
+                native_embed_models = {"bge-m3-mlx-fp16", "bge-m3-mlx", "native-bge", "bge-m3"}
+                if sys.platform == "darwin":
+                    from app.native_embedding import NativeEmbeddingClient
+                    if NativeEmbeddingClient.available():
+                        use_native = True
+                    else:
+                        vec = None
+                elif DEFAULT_EMBED_MODEL in native_embed_models:
+                    from app.native_embedding import NativeEmbeddingClient
+                    if NativeEmbeddingClient.available():
+                        use_native = True
+                    else:
+                        vec = None
+                else:
+                    use_native = False
+
+                from app.native_embedding import BGE_NATIVE_IDENTITY
+                expected_identity = BGE_NATIVE_IDENTITY
+
+                if use_native:
+                    from app.native_embedding import NativeEmbeddingClient
+                    vec = NativeEmbeddingClient().get_embedding(query)
+                elif sys.platform == "darwin":
+                    vec = None
+                else:
+                    with gpu_coordinator.acquire_for_inference():
+                        vec = self.ollama.get_embedding(query, model=DEFAULT_EMBED_MODEL)
+
                 if vec is None:
                     notice = "Tìm ngữ nghĩa chưa khả dụng; đang hiển thị kết quả từ khóa."
                 else:
@@ -153,19 +181,42 @@ class DocumentLookup:
                     if not np.isfinite(q).all() or norm == 0:
                         raise ValueError("Invalid embedding")
                     q /= norm
+                    import hashlib
                     with closing(self.connect()) as db:
-                        rows = db.execute(
-                            f"SELECT id AS chunk_id, doc_id, book_title, filename, page_num, "
-                            f"chunk_index, text, embedding FROM chunks "
-                            f"WHERE doc_id IN ({scope}) AND embedding IS NOT NULL", ids
-                        ).fetchall()
+                        if use_native:
+                            sql = f"""
+                                SELECT c.id AS chunk_id, c.doc_id, c.book_title, c.filename, c.page_num,
+                                       c.chunk_index, c.text, c.embedding,
+                                       p.text_sha256, p.model_digest, p.vector_sha256, p.dimensions, p.full_text
+                                FROM chunks c
+                                INNER JOIN corpus_vector_provenance p ON p.chunk_id = c.id
+                                WHERE c.doc_id IN ({scope}) AND c.embedding IS NOT NULL
+                                  AND p.model_digest = ? AND p.full_text = 1 AND p.dimensions = ?
+                            """
+                            rows = db.execute(sql, [*ids, expected_identity, len(q)]).fetchall()
+                        else:
+                            rows = db.execute(
+                                f"SELECT id AS chunk_id, doc_id, book_title, filename, page_num, "
+                                f"chunk_index, text, embedding FROM chunks "
+                                f"WHERE doc_id IN ({scope}) AND embedding IS NOT NULL", ids
+                            ).fetchall()
                     for row in rows:
-                        v = unpack_vector(row["embedding"])
+                        blob = row["embedding"]
+                        if not blob:
+                            continue
+                        if use_native:
+                            actual_t = hashlib.sha256(row["text"].encode("utf-8")).hexdigest()
+                            actual_v = hashlib.sha256(blob).hexdigest()
+                            if actual_t != row["text_sha256"] or actual_v != row["vector_sha256"]:
+                                continue
+                        v = unpack_vector(blob)
                         vn = np.linalg.norm(v)
                         if v.shape == q.shape and vn > 0 and np.isfinite(v).all():
+                            if use_native and abs(vn - 1.0) > 1e-3:
+                                continue
                             score = float(np.dot(q, v / vn))
                             if score >= 0.15:
-                                item = {k: row[k] for k in row.keys() if k != "embedding"}
+                                item = {k: row[k] for k in row.keys() if k not in ("embedding", "text_sha256", "model_digest", "vector_sha256", "dimensions", "full_text")}
                                 semantic.append((score, item))
                     semantic.sort(key=lambda x: (-x[0], x[1]["chunk_id"]))
                     semantic = [item for _, item in semantic[:limit * 3]]

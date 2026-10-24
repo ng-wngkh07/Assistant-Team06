@@ -12,7 +12,7 @@
             try { localStorage.setItem("theme", "dark"); } catch (e) {}
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=yc228-canvas-fix">
+    <link rel="stylesheet" href="/static/style.css?v=compact-chat-20261023">
     <link rel="stylesheet" href="/static/theme.css?v=3-contrast-fix">
     <style>
         /* Ambient gradient glowing orbs */
@@ -179,9 +179,10 @@
             border: 1px solid rgba(255, 255, 255, 0.08) !important;
             box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5) !important;
             border-radius: 20px !important;
-            padding: 14px 16px 12px 18px !important;
+            padding: 8px 12px !important;
         }
         .chat-form textarea {
+            flex: 0 0 auto !important;
             width: 100% !important;
             background: transparent !important;
             color: #ffffff !important;
@@ -190,7 +191,8 @@
             border: none !important;
             outline: none !important;
             resize: none !important;
-            min-height: 48px !important;
+            min-height: 28px !important;
+            max-height: 96px !important;
         }
         .chat-form textarea::placeholder {
             color: #64748b !important;
@@ -214,8 +216,8 @@
             min-height: 0 !important;
             height: 100% !important;
             position: relative !important;
-            gap: 16px !important;
-            padding: 16px 24px !important;
+            gap: 8px !important;
+            padding: 12px 20px !important;
             box-sizing: border-box !important;
         }
 
@@ -309,6 +311,7 @@
         }
 
         .messages-container.has-chat > .message:not(.welcome-card) {
+            flex-shrink: 0 !important;
             width: 100% !important;
             max-width: 900px !important;
             margin: 0 auto !important;
@@ -374,10 +377,25 @@
         }
 
         .qa-panel:not([hidden]) .chat-form {
-            max-width: 900px !important;
+            max-width: 760px !important;
             width: 100% !important;
             margin: 0 auto !important;
+            gap: 4px !important;
             box-sizing: border-box !important;
+        }
+
+        .qa-panel .input-area #chat-request-status {
+            font-size: 12px;
+            line-height: 1.35;
+            max-height: 34px;
+            overflow-y: auto;
+            margin-top: 4px;
+        }
+        @media (max-width: 640px), (max-height: 560px) {
+            .qa-panel:not([hidden]) { padding: 8px !important; gap: 6px !important; }
+            .qa-panel .chat-form-bottom { padding-top: 4px; margin-top: 0; }
+            .qa-panel .scope-pill { display: none; }
+            #session-summary-box { max-height: 64px; overflow-y: auto; }
         }
 
         /* ================= Learning Tools & Timetable Panels ================= */
@@ -751,6 +769,7 @@
                             <div>
                                 <h2>Tạo câu hỏi theo chủ đề</h2>
                                 <p class="text-muted">Câu hỏi do AI tạo từ tài liệu trong thư viện hoặc tệp tải lên; từng câu có trang và trích dẫn để đối chiếu.</p>
+                                <p class="practice-mode-notice text-muted" style="margin-top: 4px; font-size: 0.82rem;">🧠 <strong>Mức xử lý cố định: Kiểm tra kỹ</strong> (đối chiếu 2 bước qua nguồn trích dẫn, độc lập với chế độ hỏi đáp bên ngoài).</p>
                             </div>
                         </div>
                         <div class="learning-generate-form">
@@ -888,7 +907,7 @@
                         <div class="form-row checkbox-row">
                             <label class="checkbox-label" for="exercise-solve-missing">
                                 <input type="checkbox" id="exercise-solve-missing">
-                                <span>Giải bài tập chưa có đáp án bằng AI (kèm kiểm định hai bước)</span>
+                                <span>Giải bài tập chưa có đáp án bằng AI (kèm kiểm định hai bước · Mức xử lý cố định: Kiểm tra kỹ)</span>
                             </label>
                         </div>
                         <p id="learning-exercise-status" class="tool-status text-muted" role="status" aria-live="polite">Nhập chủ đề để tìm bài tập có sẵn trong thư viện tài liệu.</p>
@@ -925,7 +944,7 @@
             <section id="timetable-panel" class="timetable-panel" aria-label="Thời khóa biểu từ ảnh" hidden>
                 <div class="timetable-header">
                     <h2>📅 Lập Thời Khóa Biểu từ Ảnh</h2>
-                    <p class="lookup-description">Tải ảnh chụp thời khóa biểu (PNG, JPEG, WebP). Hệ thống AI cục bộ (Qwen2.5-VL 3B) sẽ trích xuất thành bản nháp để bạn đối chiếu, sửa và xác nhận trước khi lưu. Dữ liệu chỉ lưu trên máy này.</p>
+                    <p class="lookup-description">Tải ảnh chụp thời khóa biểu (PNG, JPEG, WebP). Hệ thống AI cục bộ sẽ trích xuất thành bản nháp để bạn đối chiếu, sửa và xác nhận trước khi lưu. Dữ liệu chỉ lưu trên máy này.</p>
                 </div>
 
                 <div class="timetable-grid">
@@ -938,7 +957,7 @@
                                 <div class="dropzone-content">
                                     <span class="dropzone-icon" style="font-size: 2.5rem; display: block; margin-bottom: 8px;">🖼️</span>
                                     <p style="margin: 0 0 6px 0; font-weight: 600;">Kéo thả ảnh vào đây hoặc bấm để chọn tệp</p>
-                                    <small class="text-muted">Hỗ trợ PNG, JPEG, WebP (Tối đa 15MB). Ảnh lưu cục bộ, không đưa vào dữ liệu huấn luyện.</small>
+                                    <small class="text-muted">Hỗ trợ PNG, JPEG, WebP (Tối đa 15MB). Ảnh lưu cục bộ. Huấn luyện cần gắn nhãn và phê duyệt riêng.</small>
                                 </div>
                             </div>
 
@@ -955,7 +974,7 @@
 
                             <div id="timetable-extract-loading" class="timetable-loading-box" style="display: none;">
                                 <div class="spinner" style="margin: 0 auto 10px auto;"></div>
-                                <strong id="timetable-extract-status" style="display: block; font-size: 0.9rem;">Đang phân tích ảnh bằng Qwen2.5-VL 3B cục bộ...</strong>
+                                <strong id="timetable-extract-status" style="display: block; font-size: 0.9rem;">Đang phân tích ảnh bằng mô hình thị giác cục bộ...</strong>
                                 <small class="text-muted" style="display: block; margin-top: 4px;">Ảnh được phân tích trên máy này. Vui lòng chờ.</small>
                             </div>
                         </div>
@@ -1187,6 +1206,11 @@
 
             <!-- Chat Input Area -->
             <div class="input-area">
+                <div class="context-status" aria-live="polite">
+                    <span id="context-usage" hidden></span>
+                    <span id="context-draft" hidden></span>
+                    <button type="button" id="btn-context-new-chat" class="btn btn-outline btn-sm" hidden>Mở chat mới, giữ bản nháp</button>
+                </div>
                 <div id="qa-source-scope" hidden style="margin-bottom:8px; font-size:0.85rem;">
                     <span id="qa-source-label"></span>
                     <button type="button" id="qa-source-clear" class="btn btn-outline btn-sm">Tìm trong toàn bộ thư viện</button>
@@ -1196,7 +1220,7 @@
                     <textarea 
                         id="user-input" 
                         placeholder="Đặt câu hỏi học tập..." 
-                        rows="2"
+                        rows="1"
                         required
                     ></textarea>
                     <div class="chat-form-bottom">
@@ -1223,11 +1247,10 @@
                                 </div>
                                 <input type="file" id="material-file-input" style="display: none;" accept=".pdf,.docx,.pptx,.txt,.md,.png,.jpg,.jpeg,.webp">
                             </div>
-                            <div class="processing-level-pill" title="Mức xử lý câu hỏi">
+                            <div class="processing-level-pill" title="Nhanh: trả lời theo nguồn. Kiểm tra kỹ: thêm lượt đối chiếu từng nhận định, có thể chậm hơn.">
                                 <span class="pill-icon">🧠</span>
                                 <select id="processing-level" class="pill-select" aria-label="Mức xử lý">
-                                    <option value="auto" selected>Tự động</option>
-                                    <option value="standard">Thông thường</option>
+                                    <option value="standard" selected>Nhanh</option>
                                     <option value="careful">Kiểm tra kỹ</option>
                                 </select>
                             </div>
@@ -1324,7 +1347,7 @@
                         <input type="number" id="ocr-run-page" min="1" value="1" class="form-input" style="width: 100%; font-size: 0.82rem;">
                     </div>
                     <div>
-                        <button type="submit" id="btn-run-ocr" class="btn btn-primary btn-sm">▶ Chạy OCR (qwen2.5vl:3b)</button>
+                        <button type="submit" id="btn-run-ocr" class="btn btn-primary btn-sm">▶ Chạy OCR thị giác</button>
                     </div>
                 </form>
                 <div style="display: flex; gap: 8px; margin-bottom: 12px; justify-content: space-between; align-items: center;">
@@ -1669,7 +1692,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=qa-final-20261018"></script>
+    <script src="/static/app.js?v=compact-chat-20261023b"></script>
     <script src="/static/document-lookup.js?v=qa-final-20261018"></script>
     <script src="/static/timetable.js?v=yc195-02"></script>
     <script src="/static/layout.js?v=yc195-02"></script>

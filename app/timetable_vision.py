@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import re
+import sys
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -23,7 +24,7 @@ from app import timetable_store
 logger = logging.getLogger(__name__)
 
 VLM_MODEL_NAME = "qwen2.5vl:3b"
-PROMPT_VERSION = "v4-timetable-schema-bounded"
+PROMPT_VERSION = "v5-timetable-literal-weekdays"
 MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 15 MB
 MAX_PIXELS = 40_000_000  # Decompression safety (e.g. 8000x5000)
 MAX_INFERENCE_EDGE = 1600
@@ -94,17 +95,23 @@ class VLMOutputInvalidError(Exception):
 
 
 def get_vlm_digest() -> str:
-    """Retrieve official qwen2.5vl:3b digest from local Ollama. Fail closed (503) if not found."""
+    """Bind recognition to local artifact bytes on Mac; verify legacy model metadata elsewhere."""
+    if sys.platform == "darwin":
+        from app.native_vision import NativeVisionClient
+        if NativeVisionClient.available():
+            return NativeVisionClient().get_identity()
+        raise VLMUnavailableError("Mô hình MLX Vision cục bộ chưa sẵn sàng trên Mac.")
     try:
-        resp = requests.get(f"{OLLAMA_BASE_URL.rstrip('/')}/api/tags", timeout=3)
-        if resp.status_code == 200:
-            for m in resp.json().get("models", []):
-                name = m.get("name", "")
-                model = m.get("model", "")
-                if VLM_MODEL_NAME in (name, model) or name.startswith(VLM_MODEL_NAME):
-                    digest = m.get("digest")
-                    if digest:
-                        return digest
+        from app.ollama_client import OllamaClient
+        client = OllamaClient()
+        client._verify_model_locality(VLM_MODEL_NAME)
+        for m in client.list_models():
+            name = m.get("name", "")
+            model = m.get("model", "")
+            if VLM_MODEL_NAME in (name, model) or name.startswith(VLM_MODEL_NAME):
+                digest = m.get("digest")
+                if digest:
+                    return digest
     except Exception as e:
         logger.error("Failed to query Ollama for VLM digest: %s", e)
     raise VLMUnavailableError(f"Mô hình VLM '{VLM_MODEL_NAME}' không khả dụng hoặc chưa có trong Ollama.")
@@ -179,6 +186,11 @@ def normalize_weekday(val: Any) -> Optional[int]:
         n = int(s)
         return n if 1 <= n <= 7 else None
 
+    # Mobile calendars abbreviate Vietnamese Thứ as Th, often before a date.
+    abbreviated = re.search(r"(?<!\w)th\s*([2-7])(?!\d)", s)
+    if abbreviated:
+        return int(abbreviated.group(1)) - 1
+
     vn_text_map = [
         ("thứ 2", 1), ("thứ hai", 1), ("t2", 1), ("thu 2", 1), ("thu hai", 1), ("monday", 1), ("mon", 1),
         ("thứ 3", 2), ("thứ ba", 2), ("t3", 2), ("thu 3", 2), ("thu ba", 2), ("tuesday", 2), ("tue", 2),
@@ -239,26 +251,100 @@ def detect_conflicts(entries: List[Dict[str, Any]]) -> List[str]:
     return warnings
 
 
+def assess_timetable_completeness(entries, classification=None):
+    """Describe missing visible fields without inferring unseen lessons or dates."""
+    missing = []
+    labels = {
+        "course": "tên môn", "course_full_text": "tên môn đầy đủ (đang bị cắt)",
+        "weekday": "thứ học", "start_time": "giờ bắt đầu", "end_time": "giờ kết thúc",
+        "valid_time_range": "khoảng giờ hợp lệ (giờ kết thúc phải sau giờ bắt đầu)",
+    }
+    warnings = []
+    for index, entry in enumerate(entries, 1):
+        fields = []
+        course = entry.get("course") or ""
+        if not course.strip():
+            fields.append("course")
+        elif re.search(r"\.{3}|…", course):
+            fields.append("course_full_text")
+        if entry.get("weekday") not in range(1, 8):
+            fields.append("weekday")
+        for field in ("start_time", "end_time"):
+            if not entry.get(field):
+                fields.append(field)
+        start, end = entry.get("start_time"), entry.get("end_time")
+        if start and end and end <= start:
+            fields.append("valid_time_range")
+        if fields:
+            missing.append({"row": index, "fields": fields})
+            warnings.append(f"Buổi {index} thiếu hoặc chưa rõ: {', '.join(labels[field] for field in fields)}. "
+                            "Vui lòng gửi thêm ảnh đầy đủ, rõ hơn hoặc tự bổ sung thông tin vào bản nháp.")
+    if classification == "registration_windows":
+        status = "not_class_timetable"
+        warnings.append("Đây là thời hạn đăng ký, chưa phải lịch các buổi học. Vui lòng gửi ảnh thời khóa biểu đã xếp.")
+    elif not entries:
+        status = "insufficient_information"
+        warnings.append("Chưa đọc được buổi học có đủ dữ kiện từ ảnh. Vui lòng gửi thêm ảnh thời khóa biểu đầy đủ, rõ hơn hoặc tự nhập thông tin.")
+    else:
+        status = "insufficient_information" if missing else "visible_rows_have_required_fields"
+    warnings.append("Bản nháp chỉ phản ánh phần ảnh đọc được; hãy kiểm tra phần bị cắt và phạm vi ngày trước khi xác nhận hoặc xuất lịch.")
+    return {"status": status, "missing_fields": missing, "scope": "visible_image_only",
+            "full_schedule_verified": False}, warnings
+
+
+def with_completeness(record):
+    """Apply deterministic warnings to fresh and cached drafts alike."""
+    result = dict(record)
+    assessment, warnings = assess_timetable_completeness(result.get("entries", []), result.get("classification"))
+    result["data_sufficiency"] = assessment
+    result["uncertainties"] = list(dict.fromkeys([*result.get("uncertainties", []), *warnings]))
+    return result
+
+
+def get_processing_options() -> Dict[str, Any]:
+    from app.timetable_table import local_ocr_identity
+    ocr_identity = local_ocr_identity()
+    if sys.platform == "darwin":
+        return {
+            "temperature": 0.0,
+            "max_tokens": 2048,
+            "num_predict": 2048,
+            "model": "qwen3.5-9b-4bit-mlx",
+            "extractor": "native_mlx_vlm",
+            "max_image_edge": 1024,
+            "image_processing": "exif-rgb-png-v1",
+            "weekday_ocr_identity": ocr_identity,
+            "schema_sha256": hashlib.sha256(json.dumps(OUTPUT_SCHEMA, sort_keys=True).encode()).hexdigest(),
+        }
+    return {**PROCESSING_OPTIONS, "weekday_ocr_identity": ocr_identity}
+
+
+def get_cache_version() -> str:
+    return PROMPT_VERSION + ":" + hashlib.sha256(
+        json.dumps(get_processing_options(), sort_keys=True).encode()
+    ).hexdigest()
+
+
 def call_vlm_extract(
     image_bytes: bytes,
     image_hash: str,
     filename: str,
     timeout_seconds: float = 90.0,
 ) -> Dict[str, Any]:
-    """Execute qwen2.5vl:3b under GPU lock to extract timetable into draft.
+    """Execute local vision model under GPU lock to extract timetable into draft.
 
-    Checks cache first. If not cached, acquires GPU inference lock and queries Ollama.
+    Checks cache first. If not cached, acquires GPU inference lock and queries local VLM.
     """
     # Dense registration tables are read from literal cell positions on CPU.
     # The VLM remains the fallback for calendars and other image layouts.
     from app.timetable_table import extract_registered_table, cache_is_current, VERSION as TABLE_VERSION
     candidate = timetable_store.get_latest_image_cache(image_hash, TABLE_VERSION)
     literal = candidate if cache_is_current(candidate) else extract_registered_table(image_bytes)
-    if literal is not None and literal['entries']:
+    if literal is not None and (literal['entries'] or literal.get('classification') in ('registration_windows', 'incomplete_registration')):
         digest = 'local-ocr:' + literal['engine_digest']
         version = literal['version']
         cached = timetable_store.get_vlm_cache(image_hash, digest, version)
-        record = cached or literal
+        record = with_completeness(cached or literal)
         if not cached:
             timetable_store.set_vlm_cache(image_hash, digest, version, literal)
         draft_id = uuid.uuid4().hex
@@ -267,12 +353,17 @@ def call_vlm_extract(
             options={'engine':literal['engine'], 'cpu_only':True, 'literal_cells':True})
         return {'draft_id':draft_id, 'status':'draft', 'filename':filename, 'image_hash':image_hash,
             'model_digest':digest, 'entries':record['entries'], 'uncertainties':record['uncertainties'],
-            'has_periods_without_clock_time':False, 'cached':bool(cached), 'extraction_method':'literal_table_ocr'}
+            'has_periods_without_clock_time':False, 'cached':bool(cached), 'extraction_method':'literal_table_ocr',
+            'classification':record.get('classification', 'registered_classes'),
+            'data_sufficiency':record['data_sufficiency']}
     model_digest = get_vlm_digest()
+    proc_options = get_processing_options()
+    cache_version = get_cache_version()
 
     # 1. Check cache
-    cached_data = timetable_store.get_vlm_cache(image_hash, model_digest, CACHE_VERSION)
+    cached_data = timetable_store.get_vlm_cache(image_hash, model_digest, cache_version)
     if cached_data:
+        cached_data = with_completeness(cached_data)
         draft_id = uuid.uuid4().hex
         entries = cached_data.get("entries", [])
         uncertainties = cached_data.get("uncertainties", [])
@@ -285,7 +376,7 @@ def call_vlm_extract(
             raw_model_output=cached_data.get("raw_output", ""),
             model_digest=model_digest,
             prompt_version=PROMPT_VERSION,
-            options=PROCESSING_OPTIONS,
+            options=proc_options,
         )
         return {
             "draft_id": draft_id,
@@ -297,57 +388,125 @@ def call_vlm_extract(
             "uncertainties": uncertainties,
             "has_periods_without_clock_time": cached_data.get("has_periods_without_clock_time", False),
             "cached": True,
+            "data_sufficiency": cached_data["data_sufficiency"],
         }
+
+    # Blank image safeguard: check uniform pixels before calling any model
+    with Image.open(io.BytesIO(image_bytes)) as orig_img:
+        rgba = orig_img.convert("RGBA")
+        background = Image.new("RGBA", rgba.size, "white")
+        background.alpha_composite(rgba)
+        if all(low == high for low, high in background.convert("RGB").getextrema()):
+            blank = with_completeness({"entries": [], "uncertainties": []})
+            draft_id = uuid.uuid4().hex
+            timetable_store.save_draft(
+                draft_id=draft_id,
+                image_hash=image_hash,
+                filename=filename,
+                entries=[],
+                uncertainties=blank["uncertainties"],
+                raw_model_output='{"entries":[],"uncertainties":[]}',
+                model_digest=model_digest,
+                prompt_version=PROMPT_VERSION,
+                options=proc_options,
+            )
+            return {
+                "draft_id": draft_id,
+                "status": "draft",
+                "filename": filename,
+                "image_hash": image_hash,
+                "model_digest": model_digest,
+                "entries": [],
+                "uncertainties": blank["uncertainties"],
+                "data_sufficiency": blank["data_sufficiency"],
+                "has_periods_without_clock_time": False,
+                "cached": False,
+            }
 
     # 2. Check GPU coordinator and acquire lock
     allowed, busy_msg = gpu_coordinator.check_inference_allowed()
     if not allowed:
         raise GPUBusyError(busy_msg)
 
-    # Keep the original untouched; only the inference copy is oriented and bounded.
-    with Image.open(io.BytesIO(image_bytes)) as original:
-        prepared = ImageOps.exif_transpose(original).convert("RGB")
-        was_resized = max(prepared.size) > MAX_INFERENCE_EDGE
-        prepared.thumbnail((MAX_INFERENCE_EDGE, MAX_INFERENCE_EDGE), Image.Resampling.LANCZOS)
-        buf = io.BytesIO()
-        prepared.save(buf, "PNG")
-    b64_img = base64.b64encode(buf.getvalue()).decode("utf-8")
-    payload = {
-        "model": VLM_MODEL_NAME,
-        "prompt": SYSTEM_PROMPT,
-        "images": [b64_img],
-        "format": OUTPUT_SCHEMA,
-        "stream": False,
-        "keep_alive": "0s",  # unload immediately to conserve unified memory on 16GB Mac
-        "options": MODEL_OPTIONS,
-    }
+    raw_response = None
+    was_resized = False
+    if sys.platform == "darwin":
+        from app.native_vision import NativeVisionClient
+        if NativeVisionClient.available():
+            try:
+                native_vlm = NativeVisionClient()
+                v_res = native_vlm.generate_from_image(
+                    image_bytes,
+                    prompt=SYSTEM_PROMPT + "\nĐọc tất cả các buổi học trong ảnh. Chỉ xuất JSON.",
+                    timeout_seconds=max(timeout_seconds, 360),
+                )
+                raw_response = v_res.get("text", "").strip()
+            except ValueError as ve:
+                raise VLMOutputInvalidError(str(ve)) from ve
+            except Exception as exc:
+                logger.error("Native MLX Vision extraction failed: %s", exc)
+                raise VLMUnavailableError(f"Dịch vụ MLX Vision cục bộ không khả dụng: {exc}") from exc
+        else:
+            raise VLMUnavailableError("Mô hình MLX Vision cục bộ chưa sẵn sàng trên Mac.")
+    else:
+        # Non-Mac fallback: Keep the original untouched; only the inference copy is oriented and bounded.
+        with Image.open(io.BytesIO(image_bytes)) as original:
+            prepared = ImageOps.exif_transpose(original).convert("RGB")
+            was_resized = max(prepared.size) > MAX_INFERENCE_EDGE
+            prepared.thumbnail((MAX_INFERENCE_EDGE, MAX_INFERENCE_EDGE), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            prepared.save(buf, "PNG")
+        b64_img = base64.b64encode(buf.getvalue()).decode("utf-8")
+        payload = {
+            "model": VLM_MODEL_NAME,
+            "prompt": SYSTEM_PROMPT,
+            "images": [b64_img],
+            "format": OUTPUT_SCHEMA,
+            "stream": False,
+            "keep_alive": "0s",  # unload immediately to conserve unified memory on 16GB Mac
+            "options": MODEL_OPTIONS,
+        }
+
+        try:
+            from app.ollama_client import OllamaClient
+            client = OllamaClient()
+            client._verify_model_locality(VLM_MODEL_NAME)
+            with gpu_coordinator.acquire_for_inference(timeout=3.0):
+                resp = client.session.post(
+                    f"{client.base_url}/api/generate",
+                    json=payload,
+                    timeout=timeout_seconds,
+                    allow_redirects=False,
+                )
+        except Exception as e:
+            if isinstance(e, GPUBusyError):
+                raise
+            logger.error("Ollama VLM request error: %s", e)
+            raise VLMUnavailableError(f"Dịch vụ Ollama VLM không khả dụng: {e}")
+
+        if resp.status_code != 200:
+            logger.error("Ollama VLM returned status %s: %s", resp.status_code, resp.text[:200])
+            raise VLMUnavailableError(f"Ollama trả về mã lỗi {resp.status_code}: {resp.text[:200]}")
+
+        res_json = resp.json()
+        raw_response = res_json.get("response", "").strip()
+        done_reason = res_json.get("done_reason")
+        if done_reason == "length":
+            raise VLMOutputInvalidError("Phản hồi của mô hình chạm giới hạn độ dài token; kết quả bị cắt cụt.")
+
+    # 3. Parse JSON output (accepting exactly one bounded JSON fence if returned)
+    cleaned_response = raw_response.strip()
+    if cleaned_response.startswith("```"):
+        m_fence = re.match(r"^```(?:json)?\s*\n(.*?)\n```$", cleaned_response, flags=re.DOTALL | re.IGNORECASE)
+        if m_fence:
+            cleaned_response = m_fence.group(1).strip()
+        else:
+            m_inline = re.match(r"^```(?:json)?\s*(\{.*\})\s*```$", cleaned_response, flags=re.DOTALL | re.IGNORECASE)
+            if m_inline:
+                cleaned_response = m_inline.group(1).strip()
 
     try:
-        with gpu_coordinator.acquire_for_inference(timeout=3.0):
-            resp = requests.post(
-                f"{OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-                json=payload,
-                timeout=timeout_seconds,
-            )
-    except requests.exceptions.RequestException as e:
-        logger.error("Ollama VLM request error: %s", e)
-        raise VLMUnavailableError(f"Dịch vụ Ollama VLM không khả dụng: {e}")
-    except GPUBusyError:
-        raise
-
-    if resp.status_code != 200:
-        logger.error("Ollama VLM returned status %s: %s", resp.status_code, resp.text[:200])
-        raise VLMUnavailableError(f"Ollama trả về mã lỗi {resp.status_code}: {resp.text[:200]}")
-
-    res_json = resp.json()
-    raw_response = res_json.get("response", "").strip()
-    done_reason = res_json.get("done_reason")
-    if done_reason == "length":
-        raise VLMOutputInvalidError("Phản hồi của mô hình chạm giới hạn độ dài token; kết quả bị cắt cụt.")
-
-    # 3. Parse JSON output
-    try:
-        parsed = json.loads(raw_response)
+        parsed = json.loads(cleaned_response)
         if not isinstance(parsed, dict) or "entries" not in parsed:
             raise ValueError("JSON does not contain 'entries' array")
     except Exception as e:
@@ -420,18 +579,36 @@ def call_vlm_extract(
             "Vui lòng nhập giờ hoặc áp dụng bảng quy đổi tiết học."
         )
 
+    # Corroborate a grid column only from a unique, literal course-code location.
+    # Never fill a missing column by guessing or treating OCR as training approval.
+    from app.timetable_table import read_grid_weekdays
+    try:
+        day_evidence = read_grid_weekdays(image_bytes) if any(re.search(r'[A-Z]{2,8}\d{4,10}', e.get('course') or '') for e in normalized_entries) else {}
+    except (OSError, ValueError, RuntimeError) as exc:
+        logger.warning('Local weekday corroboration unavailable: %s', exc)
+        day_evidence = {}
+    for entry in normalized_entries:
+        codes = re.findall(r'\b[A-Z]{2,8}\d{4,10}\b', entry.get('course') or '')
+        if len(codes) == 1 and codes[0] in day_evidence:
+            evidence = day_evidence[codes[0]]
+            if entry['weekday'] != evidence['weekday']:
+                uncertainties.append(f"{entry['course']}: đối chiếu cột {evidence['header']} trên ảnh gốc để sửa thứ mô hình đọc; cần kiểm tra bản nháp trước khi xác nhận.")
+            entry['weekday'] = evidence['weekday']
+            entry['weekday_evidence'] = evidence
+
     # Check time slot conflicts
     conflicts = detect_conflicts(normalized_entries)
     uncertainties.extend(conflicts)
 
     # 5. Save cache
-    cache_record = {
+    cache_record = with_completeness({
         "entries": normalized_entries,
         "uncertainties": uncertainties,
         "has_periods_without_clock_time": has_periods_without_clock_time,
         "raw_output": raw_response,
-    }
-    timetable_store.set_vlm_cache(image_hash, model_digest, CACHE_VERSION, cache_record)
+    })
+    uncertainties = cache_record["uncertainties"]
+    timetable_store.set_vlm_cache(image_hash, model_digest, cache_version, cache_record)
 
     # 6. Save draft
     draft_id = uuid.uuid4().hex
@@ -444,7 +621,7 @@ def call_vlm_extract(
         raw_model_output=raw_response,
         model_digest=model_digest,
         prompt_version=PROMPT_VERSION,
-        options=PROCESSING_OPTIONS,
+        options=proc_options,
     )
 
     return {
@@ -457,4 +634,5 @@ def call_vlm_extract(
         "uncertainties": uncertainties,
         "has_periods_without_clock_time": has_periods_without_clock_time,
         "cached": False,
+        "data_sufficiency": cache_record["data_sufficiency"],
     }

@@ -136,19 +136,19 @@ def test_mlx_inference_applies_requested_sampler_and_seed(monkeypatch, tmp_path,
     assert kwargs.get("temp", args[0] if args else None) == 0.17
 
 
-def test_default_query_normalization_uses_shared_base(monkeypatch):
+def test_explicit_legacy_query_normalization_uses_shared_base(monkeypatch):
     from app import query_normalizer as qn
     from app.trained_client import TrainedModelClient
     calls = []
     monkeypatch.setattr(TrainedModelClient, "available", classmethod(lambda cls: True))
     monkeypatch.setattr(TrainedModelClient, "chat_complete", lambda self, *a, **k:
                         calls.append((a, k)) or '{"normalized_query":"ánh xạ tuyến tính là gì?"}')
-    monkeypatch.setattr(qn.requests, "post", lambda *a, **k: pytest.fail("Default MLX query sent to Ollama"))
-    assert qn.normalize_query_with_model("anh xa tuyen tinh la gi?") == "ánh xạ tuyến tính là gì?"
+    monkeypatch.setattr(qn.requests, "post", lambda *a, **k: pytest.fail("Explicit MLX query sent to Ollama"))
+    assert qn.normalize_query_with_model("anh xa tuyen tinh la gi?", model="qwen2.5-3b-4bit") == "ánh xạ tuyến tính là gì?"
     assert len(calls) == 1
 
 
-def test_default_training_teacher_uses_shared_base(monkeypatch):
+def test_explicit_legacy_training_teacher_uses_shared_base(monkeypatch):
     from app import training_data as td
     from app.trained_client import TrainedModelClient
     calls = []
@@ -156,18 +156,18 @@ def test_default_training_teacher_uses_shared_base(monkeypatch):
     response = json.dumps({"items": [{"question": "Hai nguồn này giải thích điều kiện như thế nào?", "answer": answer}]}, ensure_ascii=False)
     monkeypatch.setattr(TrainedModelClient, "available", classmethod(lambda cls: True))
     monkeypatch.setattr(TrainedModelClient, "chat_stream", lambda self, *a, **k: calls.append((a, k)) or iter([response]))
-    monkeypatch.setattr(td.requests, "post", lambda *a, **k: pytest.fail("Default teacher sent to a second text base"))
+    monkeypatch.setattr(td.requests, "post", lambda *a, **k: pytest.fail("Explicit MLX teacher sent to another model"))
     pair = {"filename": "sample.pdf", "book_title": "sample", "sources": [
         {"id": "S1", "book_title": "sample", "filename": "sample.pdf", "page_num": 1,
          "text": "Các vectơ độc lập phải thỏa mãn điều kiện rõ ràng từ nguồn thứ nhất."},
         {"id": "S2", "book_title": "sample", "filename": "sample.pdf", "page_num": 2,
          "text": "Kết luận phải được nêu theo các điều kiện cụ thể có trong nguồn thứ hai."}]}
-    result = td.ask_teacher(pair)
+    result = td.ask_teacher(pair, model="qwen2.5-3b-4bit")
     assert result["items"][0]["answer"] == answer
     assert len(calls) == 1
 
 
-def test_default_summary_uses_shared_base_and_records_truncation(tmp_path, monkeypatch):
+def test_explicit_legacy_summary_uses_shared_base_and_records_truncation(tmp_path, monkeypatch):
     from contextlib import nullcontext
     from app.history import HistoryStore
     from app.topic_summarizer import TopicSummarizer
@@ -182,10 +182,10 @@ def test_default_summary_uses_shared_base_and_records_truncation(tmp_path, monke
         self.last_done_reason = 'length'
         return json.dumps({'title':'Ánh xạ tuyến tính', 'summary':'Bảo toàn phép cộng và phép nhân vô hướng.'})
     monkeypatch.setattr(TrainedModelClient, 'chat_complete', answer)
-    monkeypatch.setattr(summarizer.ollama, 'check_health', lambda: pytest.fail('Default summary consulted Ollama'))
+    monkeypatch.setattr(summarizer.ollama, 'check_health', lambda: pytest.fail('Explicit MLX summary consulted Ollama'))
     monkeypatch.setattr(gpu_lock.gpu_coordinator, 'check_inference_allowed', lambda: (True,''))
     monkeypatch.setattr(gpu_lock.gpu_coordinator, 'acquire_for_inference', lambda **k: nullcontext())
-    result = summarizer.summarize_session_sync(sid)
+    result = summarizer.summarize_session_sync(sid, model="qwen2.5-3b-4bit")
     assert result['status'] != 'completed'
     assert store.get_session(sid)['summary_status'] == 'pending'
 

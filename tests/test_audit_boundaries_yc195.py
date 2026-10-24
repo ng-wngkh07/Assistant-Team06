@@ -191,3 +191,62 @@ def test_decoding_source_entities_does_not_accept_an_opposite_inequality_quote()
     report=json.dumps({'claims':[{'statement':statement,'source_id':'S1','evidence_quote':statement,'verdict':'supported'}],'overall_verdict':'supported'})
     status,_=audit_draft_answer(report,{'S1'},{'S1':admitted},draft=statement+' [S1]')
     assert status!='verified'
+
+
+@pytest.mark.parametrize("label", ["Trong đó:", "**Trong đó:**", "**Trong đó**:", "__Trong đó:__"])
+def test_standalone_discourse_label_does_not_need_source_evidence(label):
+    from app.reasoning_policy import extract_draft_claims, check_claim_coverage
+    claim = "x + 2y ≠ 0."
+    draft = label + "\n" + claim + " [S1]"
+    assert extract_draft_claims(draft) == [claim]
+    assert check_claim_coverage(draft, [{"statement": claim, "verdict": "supported"}])
+
+
+@pytest.mark.parametrize("claim", ["Trong đó: x + 2y = 0.", "Điều kiện: x + 2y = 0.", "x = 0:"])
+def test_discourse_label_filter_cannot_hide_inline_facts_or_short_math(claim):
+    from app.reasoning_policy import extract_draft_claims, check_claim_coverage
+    assert extract_draft_claims(claim) == [claim]
+    assert not check_claim_coverage(claim, [])
+
+
+def test_numbered_answer_labels_are_not_separate_auditor_claims():
+    from app.reasoning_policy import extract_draft_claims, check_claim_coverage
+    statements = [
+        'Hàm f(x) liên tục tại 0: Đúng.',
+        'Hàm f(x) có đạo hàm tại 0: Sai, vì giới hạn không tồn tại.',
+        'Hàm có tiếp tuyến đứng; hệ số góc không xác định.',
+    ]
+    draft = '\n'.join(f'{index}. {text}' for index, text in enumerate(statements, 1)) + ' [S1]'
+    assert extract_draft_claims(draft) == statements
+    verified = [{'statement': text, 'verdict': 'supported'} for text in statements]
+    assert check_claim_coverage(draft, verified)
+    assert not check_claim_coverage(draft, verified[:-1])
+
+
+@pytest.mark.parametrize('statement', ['0.4 là xác suất.', '1.', '-2 < 0.', '1 / 2 = 0.5.'])
+def test_numbered_label_removal_preserves_numeric_and_math_statements(statement):
+    from app.reasoning_policy import extract_draft_claims, check_claim_coverage
+    assert extract_draft_claims(statement) == [statement]
+    assert not check_claim_coverage(statement, [])
+
+
+def test_compact_auditor_skeleton_resolves_exact_catalog_evidence_and_rejects_unknown_ids():
+    import html
+    from app.reasoning_policy import build_auditor_messages, audit_draft_answer
+    statement = 'Stack dùng LIFO.'
+    messages = build_auditor_messages('Stack là gì?', statement + ' [S1]', '',
+                                      sources_map={'S1': SOURCE})
+    payload = json.loads(html.unescape(messages[-1]['content'].split('\n', 1)[1]))
+    skeleton = payload['required_output']['claims']
+    assert skeleton == [{'statement': statement, 'source_id': '', 'evidence_id': '', 'verdict': ''}]
+    evidence_id = next(iter(payload['evidence_catalog']['S1']))
+    report = {'claims': [{'statement': statement, 'source_id': 'S1', 'evidence_id': evidence_id,
+                          'verdict': 'supported'}], 'overall_verdict': 'supported'}
+    status, claims = audit_draft_answer(json.dumps(report), {'S1'}, {'S1': SOURCE},
+                                       draft=statement, evidence_catalog=payload['evidence_catalog'])
+    assert status == 'verified'
+    assert claims[0]['evidence_quote'] == SOURCE
+    report['claims'][0]['evidence_id'] = 'E999999'
+    status, _ = audit_draft_answer(json.dumps(report), {'S1'}, {'S1': SOURCE},
+                                   draft=statement, evidence_catalog=payload['evidence_catalog'])
+    assert status != 'verified'

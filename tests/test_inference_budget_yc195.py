@@ -8,7 +8,7 @@ from app import trained_client
 
 def test_mlx_bridge_forwards_request_context_limit(monkeypatch):
     observed = []
-    monkeypatch.setattr(trained_client.TrainedModelClient, 'available', lambda self: True)
+    monkeypatch.setattr(trained_client.TrainedModelClient, 'available', lambda *args, **kwargs: True)
     monkeypatch.setattr(trained_client.active_registry, 'get_active_adapter_dir', lambda: None)
 
     def completed(*args, **kwargs):

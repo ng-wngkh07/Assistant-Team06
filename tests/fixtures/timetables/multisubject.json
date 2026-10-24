@@ -1,0 +1,112 @@
+{
+  "synthetic": true,
+  "license": "CC0-1.0",
+  "training_allowed": false,
+  "weekday_convention": "ISO 1=Monday,7=Sunday; Vietnamese Thứ 2 maps to 1",
+  "start_date": "2026-10-05",
+  "end_date": "2026-10-18",
+  "expected_weekly_events": 14,
+  "expected_occurrences": 28,
+  "entries": [
+    {
+      "course": "Xác suất Bayes",
+      "weekday": 1,
+      "start_time": "08:15",
+      "end_time": "09:45",
+      "room": "DEMO-11"
+    },
+    {
+      "course": "Entropy rời rạc",
+      "weekday": 1,
+      "start_time": "13:30",
+      "end_time": "15:00",
+      "room": "DEMO-12"
+    },
+    {
+      "course": "Trung bình mẫu",
+      "weekday": 2,
+      "start_time": "08:15",
+      "end_time": "09:45",
+      "room": "DEMO-21"
+    },
+    {
+      "course": "Nồng độ mol",
+      "weekday": 2,
+      "start_time": "13:30",
+      "end_time": "15:00",
+      "room": "DEMO-22"
+    },
+    {
+      "course": "Tỉ lệ GC của ADN",
+      "weekday": 3,
+      "start_time": "08:15",
+      "end_time": "09:45",
+      "room": "DEMO-31"
+    },
+    {
+      "course": "Thời gian truyền dữ liệu",
+      "weekday": 3,
+      "start_time": "13:30",
+      "end_time": "15:00",
+      "room": "DEMO-32"
+    },
+    {
+      "course": "Khóa chính và khóa ngoại",
+      "weekday": 4,
+      "start_time": "08:15",
+      "end_time": "09:45",
+      "room": "DEMO-41"
+    },
+    {
+      "course": "Tìm kiếm nhị phân",
+      "weekday": 4,
+      "start_time": "13:30",
+      "end_time": "15:00",
+      "room": "DEMO-42"
+    },
+    {
+      "course": "Mệnh đề kéo theo",
+      "weekday": 5,
+      "start_time": "08:15",
+      "end_time": "09:45",
+      "room": "DEMO-51"
+    },
+    {
+      "course": "Chi phí cơ hội",
+      "weekday": 5,
+      "start_time": "13:30",
+      "end_time": "15:00",
+      "room": "DEMO-52"
+    },
+    {
+      "course": "Ánh sáng và khoảng cách",
+      "weekday": 6,
+      "start_time": "08:15",
+      "end_time": "09:45",
+      "room": "DEMO-61"
+    },
+    {
+      "course": "Đổi đơn vị diện tích",
+      "weekday": 6,
+      "start_time": "13:30",
+      "end_time": "15:00",
+      "room": "DEMO-62"
+    },
+    {
+      "course": "Đại số tuyến tính",
+      "weekday": 7,
+      "start_time": "08:15",
+      "end_time": "09:45",
+      "room": "DEMO-71"
+    },
+    {
+      "course": "Vật lý cơ bản",
+      "weekday": 7,
+      "start_time": "13:30",
+      "end_time": "15:00",
+      "room": "DEMO-72"
+    }
+  ],
+  "image_file": "multisubject.png",
+  "image_sha256": "c384c4b41d1949fd24adf472622cf78d499f2c0e0fe049441b325c3869eb4a16"
+}

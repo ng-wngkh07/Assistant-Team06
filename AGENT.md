@@ -11,6 +11,10 @@ Review changes against the actual repository state, current callers and [Contrib
 5. Tests must isolate source, history and model boundaries. Do not change expected values to hide defects. Model-facing changes need real-model evidence and a separate content review.
 6. One writer owns a file scope at a time. Verify release of ownership before a handoff or work on an isolated snapshot.
 
+## Publication after verified work
+
+The project owner authorizes committing and pushing important changes and defect fixes to a feature branch after applicable verification and privacy review. Open or update the pull request without waiting for another reminder. Report the pushed revision and remaining limits. Incomplete or failing changes remain local with their blocker. This is not permission to merge main, change protections, publish private data, train, or activate adapters.
+
 ## Required checks
 
 ```bash
@@ -20,4 +24,8 @@ node --test tests/*.test.cjs
 python scripts/check_history.py --base origin/main
 ```
 
-Record OS, Python, revision, skipped checks and limits. A green suite does not establish corpus completeness, model acceptance or permission to train, publish or merge. Do not claim that this file alone activates an external review integration.
+Record OS, Python, revision, skipped checks and limits. A green suite does not establish corpus completeness or model acceptance. Branch publication requires the applicable verification and privacy review above; training and merging need their own authorization. Do not claim that this file alone activates an external review integration.
+
+## Local model execution only
+
+Inference, embeddings, OCR/vision, dataset generation, evaluation and training must run on local models and local files. External model APIs, cloud teachers and automatic cloud fallback are prohibited. Missing artifacts or unavailable local capability must produce an explicit unavailable/HOLD result. Researching public documentation is separate from product model execution. Upload persistence and retrieval do not authorize fine-tuning or adapter activation; unreviewed sources remain excluded from training.

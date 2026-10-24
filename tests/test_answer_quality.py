@@ -18,16 +18,19 @@ def test_prompt_normalization_preserves_meaning_and_handles_missing_accents():
 
 
 def test_model_rewrite_cannot_remove_negation_or_numbers(monkeypatch):
-    class Response:
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"message": {"content": '{"normalized_query":"Tôi có 2 triệu chứng lo âu?"}'}}
-
-    monkeypatch.setattr("app.query_normalizer.requests.post", lambda *_args, **_kwargs: Response())
+    from app.trained_client import TrainedModelClient
+    from app import model_resolver
+    from types import SimpleNamespace
+    monkeypatch.setattr(model_resolver, "sys", SimpleNamespace(platform="darwin"))
+    calls = []
+    monkeypatch.setattr(TrainedModelClient, 'available', staticmethod(lambda *a, **kw: True))
+    def complete(self, **kwargs):
+        calls.append(kwargs)
+        return '{"normalized_query":"Tôi có 2 triệu chứng lo âu?"}'
+    monkeypatch.setattr(TrainedModelClient, 'chat_complete', complete)
     original = "Tôi không có 2 triệu chứng lo âu?"
-    assert normalize_query_with_model(original, model="qwen2.5:7b") == original
+    assert normalize_query_with_model(original, model="qwen3.5-9b-4bit") == original
+    assert len(calls) == 1
 
 
 def test_bad_jung_translation_is_rejected():
@@ -116,3 +119,56 @@ def test_cli_shows_only_final_answer_even_when_internal_sources_exist(monkeypatc
     assert "Câu trả lời hoàn chỉnh." in output
     assert "Sách nội bộ" not in output
     assert "NGUỒN ĐỐI CHIẾU" not in output
+
+
+def test_citation_only_parentheses_are_removed_without_changing_math_or_conditions():
+    assert clean_answer('n=0.2 mol (từ [S2]). V=0.5 L ([S3]).') == 'n=0.2 mol. V=0.5 L.'
+    assert clean_answer('Lưu ý từ [S1]: V>0 là thể tích dung dịch.') == 'Lưu ý: V>0 là thể tích dung dịch.'
+    assert clean_answer('Hàm f() (khi x>0) bằng 2 [S1].') == 'Hàm f() (khi x>0) bằng 2.'
+
+
+def test_decimal_scientific_and_signed_claims_are_not_list_prefixes():
+    from app.answer_format import extract_citation_claims
+    for value in ('2.5e4 cm²','0.4 mol/L','-2 m','+3 m'):
+        assert extract_citation_claims(value+' [S1]',['S1'])=={'S1':[value]}
+    assert extract_citation_claims('1. Kết quả là 5 [S1]',['S1'])=={'S1':['Kết quả là 5']}
+
+
+def test_inline_source_intro_keeps_the_complete_supported_statement():
+    from app.answer_format import extract_citation_claims
+    assert extract_citation_claims(
+        "1. **Công thức tính:** Theo tài liệu [S1], nồng độ c=n/V khi V>0.", {"S1"}
+    ) == {"S1": ["Công thức tính:** nồng độ c=n/V khi V>0."]}
+    assert extract_citation_claims(
+        "Kết quả: Tài liệu [S2] cho biết c=0.4 mol/L.", {"S2"}
+    ) == {"S2": ["Kết quả: Tài liệu cho biết c=0.4 mol/L."]}
+
+
+def test_claims_do_not_attach_the_next_independently_cited_sentence():
+    from app.answer_format import extract_citation_claims
+    assert extract_citation_claims(
+        "Mẫu gồm 2, 4, 9 [S1]. Trung bình bằng 5 [S2].", {"S1", "S2"}
+    ) == {"S1": ["Mẫu gồm 2, 4, 9"], "S2": ["Trung bình bằng 5"]}
+
+
+def test_mid_sentence_citation_keeps_predicate_and_following_condition():
+    from app.answer_format import extract_citation_claims
+    assert extract_citation_claims(
+        'Nguyên tắc cơ bản [S1] là khóa chính không nhận NULL.', {'S1'}
+    ) == {'S1': ['Nguyên tắc cơ bản là khóa chính không nhận NULL.']}
+    assert extract_citation_claims(
+        'c=n/V [S1], với V>0 là thể tích dung dịch.', {'S1'}
+    ) == {'S1': ['c=n/V, với V>0 là thể tích dung dịch.']}
+
+
+def test_next_line_citation_attributes_only_the_immediately_preceding_paragraph():
+    from app.answer_format import extract_citation_claims
+    assert extract_citation_claims('Kết quả là 3.\n\n[S2]', {'S2'}) == {'S2': ['Kết quả là 3.']}
+    assert extract_citation_claims('Giá trị bằng 8 [S1].\nKết quả bằng 3.\n[S2]', {'S1','S2'}) == {'S1':['Giá trị bằng 8'], 'S2':['Kết quả bằng 3.']}
+    assert extract_citation_claims('[S2]\nKết quả là 3.', {'S2'}) == {}
+    assert extract_citation_claims('Kết quả là 3.\nNguồn: [S2]', {'S2'}) == {}
+
+
+def test_inline_citation_before_a_clause_separator_does_not_absorb_empty_label():
+    from app.answer_format import extract_citation_claims
+    assert extract_citation_claims('Với n=2 [S1], ta có:\nKết quả là 4 [S2].', {'S1','S2'}) == {'S1':['Với n=2'], 'S2':['Kết quả là 4']}
