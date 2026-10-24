@@ -145,6 +145,8 @@ print("PASS")
 
 @pytest.mark.parametrize('available', [True, False])
 def test_native_mlx_health_needs_no_ollama_daemon(tmp_path, monkeypatch, available):
+    import sys
+    monkeypatch.setattr(sys, 'platform', 'darwin')
     monkeypatch.setattr(server, 'DEFAULT_CHAT_MODEL', 'qwen3.5-9b-4bit')
     monkeypatch.setattr(server, 'history_store', HistoryStore(tmp_path/'native-history.db'))
     monkeypatch.setattr(server.TrainedModelClient, 'available', lambda *args, **kwargs: available)

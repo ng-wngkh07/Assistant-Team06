@@ -11,6 +11,11 @@ from test_study_agent_c_f_g import RecordingSearcher, NoTranslation, make_chunk
 SOURCE = 'Entropy đo độ bất định trung bình của biến ngẫu nhiên.'
 
 
+@pytest.fixture(autouse=True)
+def mocked_answer_context(native_context_metadata):
+    """All answer clients in this module are explicit recording fakes."""
+
+
 @pytest.mark.parametrize('complete_array,claim,accepted', [
     (True, SOURCE, True),  # Only the outer object brace is omitted.
     (False, SOURCE, False),  # The claims array is also incomplete.
@@ -441,6 +446,8 @@ def test_original_source_language_is_not_mistaken_for_answer_language_drift():
 
 
 def test_native_primary_prose_must_repair_into_quote_bound_claims(monkeypatch):
+    import sys
+    monkeypatch.setattr(sys, 'platform', 'darwin')
     import app.rag_agent as rag
     from app.trained_client import TrainedModelClient
 

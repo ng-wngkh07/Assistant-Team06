@@ -1,6 +1,7 @@
 """Native curation transport must retain real parsing and artifact provenance."""
 import ast
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ def test_all_application_modules_parse():
         ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Native curation requires POSIX worker locks; training is unsupported on Windows')
 def test_native_curation_identity_is_bound_to_weights_and_tokenizer(tmp_path, monkeypatch):
     from app import curate_dataset_v7 as curation, model_resolver
     monkeypatch.setattr(curation.sys, 'platform', 'darwin')
@@ -31,6 +33,8 @@ def test_native_curation_identity_is_bound_to_weights_and_tokenizer(tmp_path, mo
 
 @pytest.fixture
 def native_curation(monkeypatch):
+    if sys.platform == 'win32':
+        pytest.skip('Native curation requires POSIX worker locks; training is unsupported on Windows')
     from app import curate_dataset_v7 as module
     import app.trained_client as trained
     monkeypatch.setattr(module.sys, 'platform', 'darwin')

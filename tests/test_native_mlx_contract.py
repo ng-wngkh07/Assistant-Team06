@@ -140,6 +140,7 @@ def test_sharded_model_missing_one_weight_file_is_unavailable(tmp_path):
 @pytest.mark.skipif(sys.platform != 'darwin', reason='Mac deployment default; Windows keeps its explicit local compatibility path')
 def test_mac_default_names_native_9b_without_an_environment_override(tmp_path):
     env = os.environ.copy(); env.pop('DEFAULT_CHAT_MODEL', None); env.pop('TRAINED_MODEL_NAME', None)
+    env.pop('MLX_MODEL_DIR', None); env.pop('MLX_9B_MODEL_DIR', None)
     env['AGENT_DATA_DIR'] = str(tmp_path)
     code = 'import json; from app.config import DEFAULT_CHAT_MODEL, MLX_MODEL_DIR; print(json.dumps([DEFAULT_CHAT_MODEL,str(MLX_MODEL_DIR)]))'
     result = subprocess.run([sys.executable, '-c', code], cwd=ROOT, env=env, capture_output=True, text=True, check=True)

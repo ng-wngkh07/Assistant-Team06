@@ -161,6 +161,7 @@ def test_mac_embedding_cli_missing_native_never_backfills_or_uses_http(monkeypat
 def test_training_preparation_cli_defaults_to_selected_qa_model(monkeypatch, command, handler):
     import run
     captured = []
+    monkeypatch.setattr(run.sys, 'platform', 'darwin')
     monkeypatch.setattr(run, 'DEFAULT_CHAT_MODEL', 'qwen3.5-9b-4bit')
     monkeypatch.setattr(run.sys, 'argv', ['run.py', command])
     monkeypatch.setattr(run, handler, lambda args: captured.append(args))

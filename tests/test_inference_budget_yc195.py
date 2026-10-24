@@ -21,7 +21,7 @@ def test_mlx_bridge_forwards_request_context_limit(monkeypatch):
 
 
 @pytest.mark.parametrize("model_capacity,input_size,num_ctx,max_tokens", [(128,120,8192,20), (32768,9000,None,20), (None,8,8192,20), (0,8,8192,20), ("unknown",8,8192,20), (32768,8,8192,0), (32768,8,8192,-20), (32768,8,0,20), (32768,8,-20,20), (32768,8,8192,20)])
-def test_overflow_is_rejected_before_loading_model_weights(tmp_path, monkeypatch, model_capacity, input_size, num_ctx, max_tokens):
+def test_overflow_is_rejected_before_loading_model_weights(tmp_path, monkeypatch, offline_worker_environment, model_capacity, input_size, num_ctx, max_tokens):
     """Exercise JSON boundary with a local tokenizer stub; GPU is never touched."""
     import importlib
     import io

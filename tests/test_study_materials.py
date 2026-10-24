@@ -18,7 +18,7 @@ from app.study_materials import (
 
 
 @pytest.fixture(autouse=True)
-def isolated_study_sources(tmp_path, monkeypatch):
+def isolated_study_sources(tmp_path, monkeypatch, native_context_metadata):
     """No live corpus/network/model may be touched by this software test module."""
     import app.config as cfg
     import app.server as server

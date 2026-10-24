@@ -24,12 +24,15 @@ node --test (Get-ChildItem tests\*.test.cjs).FullName
 
 Python 3.12 on Windows and macOS is the CI dependency target. A local run on a different Python version is additional evidence, not a substitute for those CI jobs. Record skipped checks and their reasons. An environment check confirms routes and runtime availability, not answer quality.
 
+Mocked native answer tests opt in to temporary context metadata and explicit model-client fakes; CI does not need private weights. In-process worker tests restore their socket and offline-environment guards. Native curation requires POSIX locks and is skipped on Windows, where training commands are unsupported. Calendar timezone data is supplied by the pinned `tzdata` package on hosts without a system IANA database.
+
 Optional adapter checks use `ui/requirements.txt` and `tests/test_streamlit_flow.py`; this separate client does not replace the primary web UI.
 
 ## CI security workflows
 
-GitHub Actions runs three automated security workflows:
+GitHub Actions runs the following automated security workflows:
 
+- **Bandit** (`.github/workflows/codacy.yml`, historical filename): Scans every tracked Python file, including tests, with `bandit[sarif]==1.9.4`. Its official SARIF formatter preserves native LOW/note, MEDIUM/warning and HIGH/error levels; no findings or rules are filtered. Execution failures, incomplete analysis and parse errors fail the workflow. This replaces the legacy Codacy wrapper that classified LOW test assertions as error-level alerts. Findings still require review; a green workflow is not a clean security audit.
 - **Actionlint** (`.github/workflows/actionlint.yml`): Validates GitHub Actions workflow syntax and ShellCheck rules on pull requests to `main`, pushes to `main`, and manual dispatch. Run locally with `actionlint`.
 - **Dependency Review** (`.github/workflows/dependency-review.yml`): Fails the check when a pull request to `main` introduces dependencies with moderate or higher severity vulnerabilities across runtime, development, and unknown scopes. The repository dependency graph must be enabled for this check to run.
 - **Gitleaks** (`.github/workflows/gitleaks.yml`): Scans the repository git history on pull requests to `main`, pushes to `main`, and manual dispatch to detect committed secrets. Run locally with `gitleaks git --redact --no-banner`.

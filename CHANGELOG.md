@@ -6,6 +6,8 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Security
 
+- Report the full Python scan through pinned Bandit and its official SARIF formatter, retaining native severity and failing on incomplete analysis.
+
 - Parse DOCX and PPTX XML documents using `defusedxml` with forbidden DTD and entity expansion to prevent XML injection and external entity attacks; discard partial output when parsing fails.
 - Restrict `AutoTokenizer` in token auditing to local files with disabled remote code execution (`trust_remote_code=False`, `local_files_only=True`).
 - Reject malformed records, missing signatures, and invalid statuses during duplicate run ledger checks to prevent silent bypass of quality gates.
@@ -23,6 +25,8 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 - Add a public, synthetic 12-topic corpus with 96 review cases and a 14-course image/JSON timetable fixture for isolated debugging; these fixtures are not approved training data or an independent model-quality holdout.
 
 ### Changed
+
+- Install IANA timezone data for calendar recurrence on Windows and isolate mocked native tests from host model assets and worker network guards.
 
 - Bound native text prefill to 128 tokens per step to reduce transient memory, and report model load, prefill and generation diagnostics without dropping prompt tokens.
 - Reuse up to 128 validated query embeddings in process memory, keyed by model directory, freshly verified artifact content, token limit and query digest. Revalidate stored chunk provenance on every retrieval.

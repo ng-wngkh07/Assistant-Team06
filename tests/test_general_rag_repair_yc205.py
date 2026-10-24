@@ -70,10 +70,12 @@ def test_exact_counter_does_not_admit_source_that_escaped_template_overflows():
 
 def _configure_stub_context(tmp_path, monkeypatch):
     import app.dialogue as dialogue
+    import app.model_resolver as model_resolver
     # Production reads the trained model's context limit before generation.
     # Supply only that metadata; these tests must not depend on private weights.
     (tmp_path/'config.json').write_text('{"max_position_embeddings":8192}', encoding='utf-8')
-    monkeypatch.setattr(dialogue, 'MLX_MODEL_DIR', tmp_path)
+    monkeypatch.setattr(model_resolver.sys, 'platform', 'darwin')
+    monkeypatch.setattr(model_resolver, 'MLX_3B_DIR', tmp_path)
     monkeypatch.setattr(dialogue, 'MLX_CONTEXT_TOKENS', 8192)
 
 

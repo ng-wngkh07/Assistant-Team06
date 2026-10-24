@@ -92,6 +92,7 @@ def test_native_provenance_is_checked_for_each_returned_chunk(tmp_path, monkeypa
             text_hash = hashlib.sha256((text if filename=='approved.md' else 'OLD CONTENT').encode()).hexdigest()
             db.execute('INSERT INTO corpus_vector_provenance VALUES(?,?,?,?,?,?,?)',
                 (chunk_id, text_hash, BGE_NATIVE_IDENTITY, hashlib.sha256(vector).hexdigest(),1024,1,'fixture'))
+    monkeypatch.setattr(NativeEmbeddingClient, 'available', classmethod(lambda cls, *a, **kw: True))
     monkeypatch.setattr(NativeEmbeddingClient, 'get_embedding', lambda *a, **kw: [1.0]+[0.0]*1023)
     results=HybridSearcher(database).search_semantic('Entropy', embed_model='bge-m3-mlx-fp16')
     assert results and {r['filename'] for r in results} == {'approved.md'}
@@ -111,6 +112,7 @@ def test_new_native_index_records_every_vector_without_ollama(tmp_path, monkeypa
     sources=tmp_path/'sources'; sources.mkdir()
     (sources/'entropy.md').write_text('# Entropy\n\nEntropy Shannon measures uncertainty.\n')
     monkeypatch.setattr(NativeEmbeddingClient, 'available', classmethod(lambda cls,*a,**kw:True))
+    monkeypatch.setattr(NativeEmbeddingClient, 'get_identity', lambda self: BGE_NATIVE_IDENTITY)
     monkeypatch.setattr(NativeEmbeddingClient, 'get_batch_embeddings',lambda self,texts,**kw:[[1.0]+[0.0]*1023 for _ in texts])
     monkeypatch.setattr(NativeEmbeddingClient, 'get_embedding',lambda *a,**kw:[1.0]+[0.0]*1023)
     def forbidden(*a,**kw):
@@ -155,6 +157,7 @@ def test_hash_bound_but_invalid_native_vector_is_not_a_semantic_match(tmp_path, 
             db.execute('INSERT INTO corpus_vector_provenance VALUES(?,?,?,?,?,?,?)',
                 (chunk_id,hashlib.sha256(text.encode()).hexdigest(),BGE_NATIVE_IDENTITY,
                  hashlib.sha256(valid_vector).hexdigest(),1024,1,'fixture'))
+    monkeypatch.setattr(NativeEmbeddingClient,'available',classmethod(lambda cls,*a,**kw:True))
     monkeypatch.setattr(NativeEmbeddingClient,'get_embedding',lambda *a,**kw:[1.0]+[0.0]*1023)
     # Positive control prevents an always-empty search from passing this safety check.
     assert HybridSearcher(database).search_semantic('Entropy',embed_model='bge-m3-mlx-fp16')
@@ -272,6 +275,7 @@ def test_native_routing_is_independent_of_injected_client_class_name(tmp_path, m
                 (chunk_id,hashlib.sha256(text.encode()).hexdigest(),BGE_NATIVE_IDENTITY,
                  hashlib.sha256(vector).hexdigest(),1024,1,'fixture'))
     called=[]
+    monkeypatch.setattr(NativeEmbeddingClient,'available',classmethod(lambda cls,*a,**kw:True))
     monkeypatch.setattr(NativeEmbeddingClient,'get_embedding',lambda *a,**kw:called.append('native') or [1.0]+[0.0]*1023)
     class NativeQueries:
         def get_embedding(self,*a,**kw):

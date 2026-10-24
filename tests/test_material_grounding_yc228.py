@@ -97,7 +97,7 @@ def test_valid_model_items_preserve_content_and_report_provenance():
     assert result['source_validation'] == 'verbatim_quote'
 
 
-def test_local_model_uses_existing_mlx_client_even_if_ollama_chat_is_offline(monkeypatch):
+def test_local_model_uses_existing_mlx_client_even_if_ollama_chat_is_offline(monkeypatch, native_context_metadata):
     import app.trained_client as tc
     calls = []
     class Local:
