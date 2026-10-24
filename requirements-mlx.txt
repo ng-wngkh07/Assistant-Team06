@@ -5,3 +5,6 @@
 mlx>=0.32.2,<0.33; platform_system == "Darwin" and platform_machine == "arm64"
 mlx-lm>=0.31.3,<0.32; platform_system == "Darwin" and platform_machine == "arm64"
 transformers>=5.17,<6; platform_system == "Darwin" and platform_machine == "arm64"
+mlx-vlm>=0.7.6,<0.8; platform_system == "Darwin" and platform_machine == "arm64"
+mlx-audio>=0.5.2,<0.6; platform_system == "Darwin" and platform_machine == "arm64"
+mlx-embeddings>=0.1.0,<0.2; platform_system == "Darwin" and platform_machine == "arm64"

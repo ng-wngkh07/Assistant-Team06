@@ -159,22 +159,69 @@ def validate_page_exclusion_manifest(
         if not img_path_str or not isinstance(img_path_str, str):
             raise ValueError(f"Missing image_path for {key}")
 
+        normalized_str = img_path_str.replace("\\", "/")
+        segments = [s for s in normalized_str.split("/") if s]
+        if "." in segments or ".." in segments:
+            raise ValueError(f"Non-canonical path traversal or segment in image path: {img_path_str}")
+
         img_path = Path(img_path_str)
-        raw_img = (root / img_path) if not img_path.is_absolute() else img_path
-        p_img_cur = raw_img
-        while p_img_cur != root_resolved and p_img_cur != p_img_cur.parent:
+        is_relocated = False
+
+        if img_path.is_absolute():
+            is_current_root = False
+            try:
+                img_path.resolve().relative_to(root_resolved)
+                is_current_root = True
+            except (ValueError, RuntimeError):
+                is_current_root = False
+
+            if is_current_root:
+                candidate_img = img_path
+            else:
+                eval_indices = [
+                    i for i in range(len(segments) - 1)
+                    if segments[i] == "data" and segments[i + 1] == "evaluation"
+                ]
+                if not eval_indices:
+                    raise ValueError(f"Image path outside project root and not in data/evaluation: {img_path_str}")
+
+                eval_idx = eval_indices[-1]
+                if eval_idx == 0:
+                    raise ValueError(f"Image path missing root directory name before data/evaluation: {img_path_str}")
+
+                project_name = segments[eval_idx - 1]
+                if project_name not in (root.name, root_resolved.name):
+                    raise ValueError(f"Foreign project name in legacy image path: {project_name}")
+
+                rel_suffix_segments = segments[eval_idx + 2:]
+                if not rel_suffix_segments:
+                    raise ValueError(f"Missing image relative suffix after data/evaluation: {img_path_str}")
+
+                candidate_img = root / "data" / "evaluation" / Path(*rel_suffix_segments)
+                is_relocated = True
+        else:
+            candidate_img = root / img_path
+
+        p_img_cur = candidate_img
+        while p_img_cur != root and p_img_cur != root_resolved and p_img_cur != p_img_cur.parent:
             if p_img_cur.is_symlink():
                 raise ValueError(f"Image path or ancestor must not be a symlink: {p_img_cur}")
             p_img_cur = p_img_cur.parent
 
         try:
-            if img_path.is_absolute():
-                resolved_img = img_path.resolve()
+            resolved_img = candidate_img.resolve()
+            if is_relocated:
+                resolved_img.relative_to((root_resolved / "data" / "evaluation").resolve())
             else:
-                resolved_img = (root / img_path).resolve()
-            resolved_img.relative_to(root_resolved)
+                resolved_img.relative_to(root_resolved)
         except (ValueError, RuntimeError):
-            raise ValueError(f"Image path outside project root: {img_path_str}")
+            raise ValueError(f"Image path outside permitted directory: {img_path_str}")
+
+        p_res_cur = resolved_img
+        while p_res_cur != root and p_res_cur != root_resolved and p_res_cur != p_res_cur.parent:
+            if p_res_cur.is_symlink():
+                raise ValueError(f"Resolved image ancestor must not be a symlink: {p_res_cur}")
+            p_res_cur = p_res_cur.parent
 
         if not resolved_img.is_file():
             raise ValueError(f"Image file not found: {resolved_img}")

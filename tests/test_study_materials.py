@@ -18,7 +18,7 @@ from app.study_materials import (
 
 
 @pytest.fixture(autouse=True)
-def isolated_study_sources(tmp_path, monkeypatch):
+def isolated_study_sources(tmp_path, monkeypatch, native_context_metadata):
     """No live corpus/network/model may be touched by this software test module."""
     import app.config as cfg
     import app.server as server
@@ -27,13 +27,19 @@ def isolated_study_sources(tmp_path, monkeypatch):
     from app.document_lookup import DocumentLookup
     from app.ollama_client import OllamaClient
     from app.trained_client import TrainedModelClient
+    from app.native_embedding import NativeEmbeddingClient
+    monkeypatch.setattr(NativeEmbeddingClient, 'available', classmethod(lambda cls, *a, **kw: False))
     src = tmp_path / 'src'
     src.mkdir()
     (src / 'synthetic.txt').write_text('Entropy là độ bất định trung bình của một biến ngẫu nhiên rời rạc hữu hạn.', encoding='utf-8')
     db = tmp_path / 'synthetic.db'
     monkeypatch.setattr(cfg, 'DB_PATH', db)
     monkeypatch.setattr(cfg, 'SRC_DIR', src)
+    monkeypatch.setattr(cfg, 'DATA_DIR', tmp_path / 'data')
     monkeypatch.setattr(sm, 'DATA_DIR', tmp_path / 'data')
+    from app.gpu_lock import GPULockManager
+    monkeypatch.setattr(sm, 'gpu_coordinator', GPULockManager(
+        tmp_path / 'runtime/gpu.lock', tmp_path / 'runtime/gpu_state.json'))
     monkeypatch.setattr(OllamaClient, 'check_health', lambda self: False)
     monkeypatch.setattr(TrainedModelClient, 'available', classmethod(lambda cls: False))
     indexer = KnowledgeIndexer(db_path=db, src_dir=src)
@@ -41,6 +47,7 @@ def isolated_study_sources(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'document_lookup', DocumentLookup(db_path=db, src_dir=src))
     # materials_cache is a snapshot property; replace the actual session store.
     monkeypatch.setattr(study_material_manager, "_materials", {})
+    monkeypatch.setattr(study_material_manager, "_raw_files", {})
     # Attachment tests mock the Ollama boundary independently of the host's model.
     monkeypatch.setattr(server.agent, "ollama", OllamaClient())
     # API default is captured at import; tests explicitly select their mocked backend.
@@ -338,10 +345,13 @@ def test_attachment_preview_card_modal_structure_and_centered_chat_layout(client
     html = (root / "static/index.html").read_text(encoding="utf-8")
     js = (root / "static/app.js").read_text(encoding="utf-8")
 
-    # 1. Attachment preview tray inside chat-form & Sample 1 card styles
+    # Compact attachment banner retains reader access and removal controls.
     assert 'id="chat-attachment-preview-tray"' in html
     assert ".chat-attachment-card" in css
-    assert ".attachment-doc-sheet" in css
+    assert ".attachment-card-open" in css
+    assert ".attachment-doc-sheet" not in css
+    assert "buildDocSheetPreviewHtml" not in js
+    assert 'class="attachment-card-open"' in js
     assert ".attachment-card-remove" in css
     assert "upsertAttachmentPreviewCard" in js
     assert "removeAttachmentPreviewCard" in js
@@ -789,3 +799,372 @@ def test_unreadable_image_api_rejects_before_persisting_or_generating(client, mo
     })
     assert response.status_code == 422
     assert not study_material_manager.materials_cache
+
+
+def _persist_upload(client, filename, text):
+    return client.post('/api/materials/upload', json={
+        'filename': filename,
+        'file_base64': base64.b64encode(text.encode('utf-8')).decode('ascii'),
+        'persist_to_src': True,
+        'generate_study_set': False,
+    })
+
+
+def test_upload_with_existing_name_preserves_both_sources_and_document_scope(client):
+    import sqlite3
+    from app import config as cfg
+    original = 'Bản nguồn ban đầu: mã nhận diện là ALPHA-271. Đây là tài liệu học tập cần được giữ nguyên.'
+    incoming = 'Bản nguồn mới: mã nhận diện là BETA-392. Nội dung upload phải là một nguồn độc lập.'
+    first = _persist_upload(client, 'same-name.txt', original)
+    assert first.status_code == 200
+    first_mat = first.json()['material']
+    second = _persist_upload(client, 'same-name.txt', incoming)
+    assert second.status_code == 200
+    second_mat = second.json()['material']
+    assert (cfg.SRC_DIR / 'same-name.txt').read_text(encoding='utf-8') == original
+    assert second_mat['filename'] != first_mat['filename']
+    assert second_mat['doc_id'] != first_mat['doc_id']
+    assert (cfg.SRC_DIR / second_mat['filename']).read_text(encoding='utf-8') == incoming
+    assert second_mat['src_path'] == f"src/{second_mat['filename']}"
+    with sqlite3.connect(cfg.DB_PATH) as db:
+        old_text = ' '.join(r[0] for r in db.execute('SELECT text FROM chunks WHERE doc_id=?', (first_mat['doc_id'],)))
+        new_text = ' '.join(r[0] for r in db.execute('SELECT text FROM chunks WHERE doc_id=?', (second_mat['doc_id'],)))
+    assert 'ALPHA-271' in old_text and 'BETA-392' not in old_text
+    assert 'BETA-392' in new_text and 'ALPHA-271' not in new_text
+
+
+@pytest.mark.parametrize('failure_point', ['_prepare_chunk_rows', '_insert_chunk_rows'])
+def test_upload_index_failure_is_reported_and_does_not_publish_a_source(client, monkeypatch, failure_point):
+    import sqlite3
+    from app import config as cfg
+    from app.indexer import KnowledgeIndexer
+    with sqlite3.connect(cfg.DB_PATH) as db:
+        before = db.execute('SELECT id,filename,file_hash FROM documents ORDER BY id').fetchall()
+    def fail(*args, **kwargs):
+        raise RuntimeError('private-storage-diagnostic-marker')
+    monkeypatch.setattr(KnowledgeIndexer, failure_point, fail)
+    response = _persist_upload(client, 'failed-upload.txt',
+        'Tài liệu tổng hợp có đủ văn bản. Lỗi lưu chỉ mục phải được thông báo rõ ràng cho người dùng.')
+    assert response.status_code == 503
+    assert 'private-storage-diagnostic-marker' not in response.text
+    assert not (cfg.SRC_DIR / 'failed-upload.txt').exists()
+    assert study_material_manager.resolve_raw_file(filename='failed-upload.txt') is None
+    assert not study_material_manager.materials_cache
+    with sqlite3.connect(cfg.DB_PATH) as db:
+        assert db.execute('SELECT id,filename,file_hash FROM documents ORDER BY id').fetchall() == before
+
+
+def test_uploading_identical_file_twice_keeps_one_stable_source(client):
+    import sqlite3
+    from app import config as cfg
+    text = 'Nguồn học tập tổng hợp: mã nhận diện UNIQUE-619. Nội dung này phải tra cứu được sau upload.'
+    first = _persist_upload(client, 'repeat.txt', text).json()['material']
+    with sqlite3.connect(cfg.DB_PATH) as db:
+        before = db.execute('SELECT text FROM chunks WHERE doc_id=? ORDER BY chunk_index', (first['doc_id'],)).fetchall()
+    second = _persist_upload(client, 'repeat.txt', text).json()['material']
+    assert first['doc_id'] == second['doc_id']
+    assert first['filename'] == second['filename']
+    with sqlite3.connect(cfg.DB_PATH) as db:
+        assert db.execute('SELECT COUNT(*) FROM documents WHERE filename=?', (first['filename'],)).fetchone()[0] == 1
+        assert db.execute('SELECT text FROM chunks WHERE doc_id=? ORDER BY chunk_index', (first['doc_id'],)).fetchall() == before
+        assert db.execute('SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH ?', ('"UNIQUE-619"',)).fetchone()[0] >= 1
+
+
+def test_repeated_upload_does_not_replace_existing_reviewed_chunks(client):
+    import sqlite3
+    from app import config as cfg
+    text = 'Nguồn học tập tổng hợp: mã nhận diện RETAIN-852. Giữ nguyên các bản ghi đã được kiểm duyệt.'
+    first = _persist_upload(client, 'reviewed.txt', text).json()['material']
+    with sqlite3.connect(cfg.DB_PATH) as db:
+        db.execute('UPDATE chunks SET text=replace(text,?,?), embedding=? WHERE doc_id=?',
+                   ('Nguồn', 'NGUỒN', b'verified-vector-placeholder', first['doc_id']))
+        db.execute('UPDATE document_source_quality SET needs_review=1,quality_warnings=? WHERE doc_id=?',
+                   ('["HOLD: source uncertainty"]', first['doc_id']))
+        before = db.execute('SELECT id,text,embedding FROM chunks WHERE doc_id=? ORDER BY id', (first['doc_id'],)).fetchall()
+        quality_before = db.execute('SELECT * FROM document_source_quality WHERE doc_id=?', (first['doc_id'],)).fetchone()
+    second = _persist_upload(client, 'reviewed.txt', text)
+    assert second.status_code == 200
+    assert second.json()['material']['doc_id'] == first['doc_id']
+    with sqlite3.connect(cfg.DB_PATH) as db:
+        assert db.execute('SELECT id,text,embedding FROM chunks WHERE doc_id=? ORDER BY id', (first['doc_id'],)).fetchall() == before
+        assert db.execute('SELECT * FROM document_source_quality WHERE doc_id=?', (first['doc_id'],)).fetchone() == quality_before
+
+
+def test_concurrent_uploads_with_same_name_keep_each_source(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import sqlite3
+    from app import config as cfg
+    from app.pdf_extractor import PDFExtractionResult
+    def ingest(i):
+        text = f'Concurrent source marker TOKEN-{i}-913 with enough reference material for durable indexing.'
+        result = PDFExtractionResult('concurrent.txt', cfg.SRC_DIR / 'concurrent.txt')
+        result.total_pages = 1
+        result.total_chars = len(text)
+        result.extracted_pages = [{'page_num': 1, 'text': text}]
+        info = study_material_manager.ingest_to_src_and_index('concurrent.txt', text.encode(), result)
+        return result.filename, info['doc_id'], text
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(ingest, range(4)))
+    assert len({name for name, _, _ in results}) == 4
+    assert len({doc_id for _, doc_id, _ in results}) == 4
+    with sqlite3.connect(cfg.DB_PATH) as db:
+        for name, doc_id, text in results:
+            assert (cfg.SRC_DIR / name).read_text() == text
+            chunks = ' '.join(r[0] for r in db.execute('SELECT text FROM chunks WHERE doc_id=?', (doc_id,)))
+            assert text in chunks
+
+
+@pytest.mark.parametrize('busy_kind, expected_status', [('gpu', 503), ('dialogue', 409)])
+def test_upload_preserves_busy_status_during_embedding_admission(client, monkeypatch, busy_kind, expected_status):
+    import app.study_materials as legacy_materials
+    from types import SimpleNamespace
+    monkeypatch.setattr(legacy_materials, 'sys', SimpleNamespace(platform='win32'))
+    from app import config as cfg
+    from app.ollama_client import OllamaClient
+    from app.gpu_lock import GPUBusyError
+    from app.dialogue import DialogueBusyError
+    def busy(self):
+        raise (GPUBusyError if busy_kind == 'gpu' else DialogueBusyError)('Resource busy; retry later.')
+    monkeypatch.setattr(OllamaClient, 'check_health', busy)
+    response = _persist_upload(client, 'busy-source.txt', 'This source must not bypass resource admission while another model operation owns the resource.')
+    assert response.status_code == expected_status
+    assert response.headers['retry-after'] == '2'
+    assert not (cfg.SRC_DIR / 'busy-source.txt').exists()
+
+
+def test_upload_does_not_claim_vectors_ready_when_chunk_embedding_fails(client, monkeypatch):
+    import app.study_materials as legacy_materials
+    from types import SimpleNamespace
+    monkeypatch.setattr(legacy_materials, 'sys', SimpleNamespace(platform='win32'))
+    from app.ollama_client import OllamaClient
+    monkeypatch.setattr(OllamaClient, 'check_health', lambda self: True)
+    monkeypatch.setattr(OllamaClient, 'find_best_embed_model', lambda self, model: 'test-embed')
+    monkeypatch.setattr(OllamaClient, 'get_embedding', lambda self, text, **kw: [0.1] * 1024 if text == 'test' else None)
+    monkeypatch.setattr(OllamaClient, 'get_batch_embeddings', lambda self, texts, **kw: [None] * len(texts))
+    response = _persist_upload(client, 'keyword-only.txt', 'Keyword searchable content survives an unavailable vector response. Distinct marker SEARCH-823 must remain in the source.')
+    # Either retain honest keyword-only rows or fail closed before publishing.
+    assert response.status_code in (200, 503)
+    if response.status_code == 200:
+        material = response.json()['material']
+        assert material['chunks_indexed'] > 0
+        assert material.get('vectors_ready') is False
+        assert material.get('embedding_status') == 'offline_keyword_only'
+
+
+def test_upload_with_no_searchable_chunks_fails_before_publishing(client, monkeypatch):
+    from app import config as cfg
+    from app.indexer import KnowledgeIndexer
+    monkeypatch.setattr(KnowledgeIndexer, '_prepare_chunk_rows', lambda *args, **kwargs: [])
+    response = _persist_upload(client, 'no-searchable-chunks.txt', 'Readable source material must not be advertised as ready when no searchable chunk has been prepared.')
+    assert response.status_code == 503
+    assert not (cfg.SRC_DIR / 'no-searchable-chunks.txt').exists()
+    assert not study_material_manager.materials_cache
+
+
+def test_upload_acquires_model_resource_coordinator_before_embedding(client, monkeypatch):
+    import app.study_materials as legacy_materials
+    from types import SimpleNamespace
+    monkeypatch.setattr(legacy_materials, 'sys', SimpleNamespace(platform='win32'))
+    from contextlib import contextmanager
+    import app.study_materials as sm
+    from app.ollama_client import OllamaClient
+    from app.gpu_lock import GPUBusyError
+    calls = []
+    @contextmanager
+    def busy(*args, **kwargs):
+        raise GPUBusyError('Model resource is reserved.')
+        yield
+    monkeypatch.setattr(sm.gpu_coordinator, 'acquire_for_inference', busy)
+    monkeypatch.setattr(OllamaClient, 'check_health', lambda self: True)
+    monkeypatch.setattr(OllamaClient, 'find_best_embed_model', lambda self, model: 'test-embed')
+    def embedding(self, text, **kwargs):
+        calls.append(text)
+        return [0.1] * 1024
+    monkeypatch.setattr(OllamaClient, 'get_embedding', embedding)
+    monkeypatch.setattr(OllamaClient, 'get_batch_embeddings', lambda self, texts, **kw: [[0.1] * 1024 for _ in texts])
+    response = _persist_upload(client, 'resource-admission.txt', 'Native text upload must acquire the existing model resource coordinator before any embedding probe or batch inference.')
+    assert response.status_code == 503
+    assert not calls
+
+
+def test_failed_concurrent_repeat_cannot_delete_successful_upload(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import sqlite3
+    from app import config as cfg
+    from app.indexer import KnowledgeIndexer
+    from app.pdf_extractor import PDFExtractionResult
+    local = threading.local()
+    preparing_first = threading.Event()
+    second_finished = threading.Event()
+    original_prepare = KnowledgeIndexer._prepare_chunk_rows
+    text = 'Concurrent repeat SOURCE-613 must remain available when another upload attempt fails while this one succeeds.'
+    def prepare(self, *args, **kwargs):
+        if getattr(local, 'must_fail', False):
+            preparing_first.set()
+            second_finished.wait(timeout=0.75)
+            raise RuntimeError('simulated preparation failure')
+        return original_prepare(self, *args, **kwargs)
+    monkeypatch.setattr(KnowledgeIndexer, '_prepare_chunk_rows', prepare)
+    def ingest(must_fail):
+        local.must_fail = must_fail
+        result = PDFExtractionResult('concurrent-failure.txt', cfg.SRC_DIR / 'concurrent-failure.txt')
+        result.total_pages = 1
+        result.total_chars = len(text)
+        result.extracted_pages = [{'page_num': 1, 'text': text}]
+        try:
+            return StudyMaterialManager().ingest_to_src_and_index('concurrent-failure.txt', text.encode(), result)
+        except RuntimeError as exc:
+            if not must_fail:
+                raise
+            return exc
+        finally:
+            if not must_fail:
+                second_finished.set()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        failed = pool.submit(ingest, True)
+        assert preparing_first.wait(timeout=3)
+        succeeded = pool.submit(ingest, False)
+        first_result, second_result = failed.result(timeout=5), succeeded.result(timeout=5)
+    assert isinstance(first_result, RuntimeError)
+    assert (cfg.SRC_DIR / 'concurrent-failure.txt').read_text() == text
+    with sqlite3.connect(cfg.DB_PATH) as db:
+        assert db.execute('SELECT text FROM chunks WHERE doc_id=?', (second_result['doc_id'],)).fetchone()[0] == text
+
+
+@pytest.mark.parametrize('generate_study_set', [False, True])
+def test_successful_session_only_upload_keeps_original_download(client, generate_study_set):
+    from app import config as cfg
+    raw = b'Session-only source MEMORY-418 must retain its original download after successful extraction without durable indexing.'
+    response = client.post('/api/materials/upload', json={
+        'filename': 'session-only-source.txt',
+        'file_base64': base64.b64encode(raw).decode(),
+        'persist_to_src': False,
+        'generate_study_set': generate_study_set,
+    })
+    assert response.status_code == 200
+    assert not (cfg.SRC_DIR / 'session-only-source.txt').exists()
+    download = client.get('/api/materials/download', params={'material_id': response.json()['material']['id']})
+    assert download.status_code == 200
+    assert download.content == raw
+
+
+@pytest.mark.parametrize("correct,distractors", [
+    ("R>0", ["R<0", "R=0", "R≠0"]),
+    ("R>0", ["R<0", "R=0", "R>=0"]),
+    ("R>0", ["U>0", "I>0", "V>0"]),
+    ("P(B)>0", ["P(B)<0", "P(B)=0", "P(B)!=0"]),
+])
+def test_source_cloze_rejects_overlapping_zero_conditions(correct, distractors):
+    from app.study_materials import _zero_condition_distractors_are_disjoint
+    assert not _zero_condition_distractors_are_disjoint(correct, distractors)
+
+
+@pytest.mark.parametrize("correct,distractors", [
+    ("R>0", ["R<0", "R=0", "R<=0"]),
+    ("R=0", ["R<0", "R>0", "R!=0"]),
+    ("P(B)>0", ["P(B)<0", "P(B)=0", "P(B)<=0"]),
+    ("one bit", ["zero bits", "two bits", "three bits"]),
+])
+def test_source_cloze_keeps_nonoverlapping_zero_conditions_and_text(correct, distractors):
+    from app.study_materials import _zero_condition_distractors_are_disjoint
+    assert _zero_condition_distractors_are_disjoint(correct, distractors)
+
+
+
+def test_quiz_rejects_weaker_nonzero_option_next_to_positive_condition():
+    import json
+    from app.pdf_extractor import PDFExtractionResult
+    class Client:
+        last_done_reason = "stop"
+        def check_health(self): return True
+        def chat_complete(self, **kwargs):
+            return json.dumps({"questions": [{"format": "source_cloze", "answer": "R>0", "distractors": ["R<0", "R=0", "R≠0"], "evidence_id": "Q1"}], "flashcards": []})
+    text = "Định luật Ôm: I = U/R, với R>0. Điện trở được đo bằng ôm."
+    source = PDFExtractionResult(filename="synthetic.txt", filepath=Path("synthetic.txt"))
+    source.extracted_pages = [{"page_num": 1, "text": text}]
+    source.total_chars = len(text); source.total_pages = 1
+    result = StudyMaterialManager(Client()).generate_materials_from_pages(source, model="test-ollama", quiz_count=1)
+    assert result["generation"]["quiz"] == "extractive_fallback"
+
+
+
+@pytest.mark.parametrize("answer,distractors", [
+    ("one bit", ["zero entropy", "two outcomes", "non-negative"]),
+    ("bit", ["unit", "byte", "dimension"]),
+    ("bit", ["measurement", "byte", "quantity"]),
+])
+def test_information_unit_quiz_distractors_must_be_concrete_unit_values(answer, distractors):
+    from app.study_materials import _information_unit_distractors_match
+    assert not _information_unit_distractors_match(answer, distractors)
+
+
+def test_information_unit_quiz_allows_concrete_alternatives():
+    from app.study_materials import _information_unit_distractors_match
+    assert _information_unit_distractors_match("one bit", ["zero bits", "two bits", "three bits"])
+
+
+@pytest.mark.skipif(__import__('sys').platform != 'darwin', reason='Mac direct MLX upload integration')
+def test_uploaded_material_gets_native_vectors_without_any_daemon_probe(client, monkeypatch):
+    import sqlite3
+    import hashlib
+    from app.config import DB_PATH
+    from app.native_embedding import NativeEmbeddingClient, BGE_NATIVE_IDENTITY
+    from app.ollama_client import OllamaClient
+    legacy_calls, native_calls = [], []
+    def forbidden(*a, **kw):
+        legacy_calls.append((a, kw))
+        raise AssertionError('Native Mac material upload must never probe a model daemon')
+    def embed(self, texts, **kwargs):
+        native_calls.extend(texts)
+        return [[1.0] + [0.0]*1023 for _ in texts]
+    monkeypatch.setattr(OllamaClient, 'check_health', forbidden)
+    monkeypatch.setattr(OllamaClient, 'get_embedding', forbidden)
+    monkeypatch.setattr(OllamaClient, 'get_batch_embeddings', forbidden)
+    monkeypatch.setattr(NativeEmbeddingClient, 'available', classmethod(lambda cls, *a, **kw: True))
+    monkeypatch.setattr(NativeEmbeddingClient, 'get_batch_embeddings', embed)
+    monkeypatch.setattr(NativeEmbeddingClient, 'get_identity', lambda self: BGE_NATIVE_IDENTITY)
+    source = 'Entropy Shannon đo độ bất định của biến ngẫu nhiên rời rạc hữu hạn.'
+    response = client.post('/api/materials/upload', json={
+        'filename': 'native-entropy.txt',
+        'file_base64': base64.b64encode(source.encode()).decode(),
+    })
+    assert response.status_code == 200, response.text
+    assert legacy_calls == []
+    assert native_calls
+    with sqlite3.connect(DB_PATH) as db:
+        rows = db.execute('''SELECT c.text,c.embedding,p.text_sha256,p.vector_sha256,p.model_digest,p.dimensions,p.full_text
+            FROM chunks c JOIN documents d ON d.id=c.doc_id
+            LEFT JOIN corpus_vector_provenance p ON p.chunk_id=c.id WHERE d.filename=?''', ('native-entropy.txt',)).fetchall()
+    assert rows
+    for text, blob, text_sha, vector_sha, identity, dimensions, full_text in rows:
+        assert text_sha == hashlib.sha256(text.encode()).hexdigest()
+        assert vector_sha == hashlib.sha256(blob).hexdigest()
+        assert identity == BGE_NATIVE_IDENTITY and dimensions == 1024 and full_text == 1
+
+
+@pytest.mark.parametrize('busy_kind, expected_status', [('gpu', 503), ('dialogue', 409)])
+def test_native_upload_preserves_busy_admission_before_vector_inference(client, monkeypatch, busy_kind, expected_status):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from app import config as cfg, study_materials as sm
+    from app.native_embedding import NativeEmbeddingClient
+    from app.gpu_lock import GPUBusyError
+    from app.dialogue import DialogueBusyError
+    monkeypatch.setattr(sm, 'sys', SimpleNamespace(platform='darwin'))
+    monkeypatch.setattr(NativeEmbeddingClient, 'available', classmethod(lambda cls, *a, **kw: True))
+    calls = []
+    def embed(self, texts, **kwargs):
+        calls.append(texts)
+        raise AssertionError('Admission must reject before any model work')
+    monkeypatch.setattr(NativeEmbeddingClient, 'get_batch_embeddings', embed)
+    @contextmanager
+    def busy(*args, **kwargs):
+        raise (GPUBusyError if busy_kind == 'gpu' else DialogueBusyError)('Resource busy; retry later.')
+        yield
+    monkeypatch.setattr(sm.gpu_coordinator, 'acquire_for_inference', busy)
+    response = _persist_upload(client, 'native-busy-source.txt', 'Native upload must preserve resource admission and cannot bypass an active model operation.')
+    assert response.status_code == expected_status
+    assert response.headers['retry-after'] == '2'
+    assert not (cfg.SRC_DIR / 'native-busy-source.txt').exists()
+    assert calls == []

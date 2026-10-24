@@ -170,6 +170,13 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         const question = practiceSession.questions[questionIndex];
         practiceBody.replaceChildren();
+
+        const modeBadge = document.createElement("span");
+        modeBadge.className = "practice-mode-badge text-muted";
+        modeBadge.style.cssText = "display: inline-block; font-size: 0.78rem; margin-bottom: 6px; padding: 2px 8px; border-radius: 4px; background: rgba(59, 130, 246, 0.08); color: var(--primary, #2563eb);";
+        modeBadge.textContent = "🧠 Mức xử lý: Kiểm tra kỹ (đối chiếu 2 bước qua nguồn)";
+        practiceBody.appendChild(modeBadge);
+
         const count = document.createElement("p");
         count.className = "practice-progress text-muted";
         count.textContent = `Câu ${questionIndex + 1}/${practiceSession.questions.length}`;
@@ -719,13 +726,19 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    function cleanThoughts(str) {
+        if (!str || typeof str !== "string") return str;
+        return str.replace(/<\s*(?:think|analysis|reasoning)\b[^>]*>.*?<\s*\/\s*(?:think|analysis|reasoning)\s*>/gis, "")
+                  .replace(/^.*?<\s*\/\s*(?:think|analysis|reasoning)\s*>/gis, "").trim();
+    }
+
     function renderLearningExercise(item) {
         const card = document.createElement("article");
         card.className = "document-result learning-exercise-card";
 
         const qHeading = document.createElement("h3");
         qHeading.className = "exercise-question-title";
-        qHeading.textContent = item.question || "Bài tập";
+        qHeading.textContent = (cleanThoughts(item.question) || "").replace(/^\s*#{1,6}\s+/gm, "") || "Bài tập";
         card.appendChild(qHeading);
 
         if (item.source) {
@@ -765,18 +778,19 @@ document.addEventListener("DOMContentLoaded", () => {
         answerSection.className = "exercise-answer-section";
 
         if (item.answer) {
-            let bareAnswer = item.answer;
-            let detailedSolution = item.solution || null;
+            const cleanedAnswer = cleanThoughts(item.answer);
+            let bareAnswer = cleanedAnswer;
+            let detailedSolution = cleanThoughts(item.solution) || null;
 
-            const ansMatch = item.answer.match(/(?:^|\n)\s*(?:đáp án|kết quả|final answer)\s*:\s*([\s\S]+)$/i);
+            const ansMatch = cleanedAnswer.match(/(?:^|\n)\s*(?:đáp án|kết quả|final answer)\s*:\s*([\s\S]+)$/i);
             if (ansMatch) {
                 bareAnswer = ansMatch[1].trim();
-                const prefix = item.answer.slice(0, ansMatch.index).trim();
+                const prefix = cleanedAnswer.slice(0, ansMatch.index).trim();
                 if (prefix) {
                     detailedSolution = prefix;
                 }
-            } else if (item.answer.includes("\n") || item.answer.length > 80) {
-                detailedSolution = item.answer;
+            } else if (cleanedAnswer.includes("\n") || cleanedAnswer.length > 80) {
+                detailedSolution = cleanedAnswer;
             }
 
             const toggleContainer = document.createElement("div");

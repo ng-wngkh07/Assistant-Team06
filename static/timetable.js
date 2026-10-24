@@ -204,7 +204,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // -------------------------------------------------------------
     async function extractTimetableFromImage(filename, base64Data) {
         loadingBox.style.display = "block";
-        extractStatus.textContent = "Đang phân tích hình ảnh bằng mô hình thị giác Qwen2.5-VL 3B...";
+        extractStatus.textContent = "Đang phân tích hình ảnh bằng mô hình thị giác cục bộ...";
         draftCard.style.display = "none";
 
         try {
@@ -262,6 +262,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
         saveDraftStateLocally();
         confirmStatus.textContent = "";
+
+        if (checkReplaceExisting) {
+            const replaceParent = checkReplaceExisting.closest("label");
+            let hint = replaceParent ? replaceParent.querySelector(".replace-hint") : null;
+            if (confirmedEntriesCount > 0) {
+                if (!hint && replaceParent) {
+                    hint = document.createElement("span");
+                    hint.className = "replace-hint";
+                    hint.style.cssText = "display: block; font-size: 0.78rem; color: #b45309; margin-top: 4px;";
+                    replaceParent.appendChild(hint);
+                }
+                if (hint) {
+                    hint.textContent = `(Hiện đã lưu ${confirmedEntriesCount} môn. Đánh dấu để thay thế toàn bộ lịch cũ; bỏ chọn để ghép thêm)`;
+                }
+            } else if (hint) {
+                hint.textContent = "";
+            }
+        }
+
         draftCard.style.display = "block";
         draftCard.scrollIntoView({ behavior: "smooth", block: "start" });
     }
@@ -544,7 +563,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     body: JSON.stringify({
                         draft_id: currentDraftId,
                         entries: entries,
-                        replace_existing: checkReplaceExisting.checked
+                        replace_existing: checkReplaceExisting.checked,
+                        clear_existing: checkReplaceExisting.checked
                     })
                 });
 
@@ -801,6 +821,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (formExportIcs) {
         formExportIcs.addEventListener("submit", async (e) => {
             e.preventDefault();
+
+            if (currentDraftId && draftCard && draftCard.style.display !== "none" && draftTableBody.querySelectorAll("tr").length > 0) {
+                exportStatus.textContent = "⚠️ Bạn đang có bản nháp thời khóa biểu chưa xác nhận trên màn hình. Vui lòng nhấn 'Xác nhận & Lưu vào lịch học' trước khi tải tệp .ics để lịch xuất chứa đầy đủ các môn mới nhất.";
+                exportStatus.style.color = "#dc2626";
+                return;
+            }
 
             if (confirmedEntriesCount === 0) {
                 exportStatus.textContent = "⚠️ Thời khóa biểu hiện chưa có môn học nào để xuất. Vui lòng thêm môn học thủ công hoặc tải ảnh thời khóa biểu trước.";

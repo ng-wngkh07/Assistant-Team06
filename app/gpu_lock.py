@@ -18,6 +18,7 @@ from app import file_lock as fcntl
 import json
 import logging
 import os
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -33,6 +34,7 @@ RUNTIME_DIR = DATA_DIR / "runtime"
 LOCK_FILE = RUNTIME_DIR / "gpu.lock"
 INTENT_LOCK_FILE = RUNTIME_DIR / "gpu_intent.lock"
 STATE_FILE = RUNTIME_DIR / "gpu_state.json"
+NATIVE_LOCK_FILE = RUNTIME_DIR / "native_worker.lock"
 
 STATE_IDLE = "idle"
 STATE_WAITING = "waiting_for_training"
@@ -42,6 +44,10 @@ BUSY_MESSAGE = (
     "GPU hiện đang được sử dụng để huấn luyện mô hình (MLX LoRA). "
     "Lượt tra cứu và tạo embedding tạm thời không thể xử lý để tránh tràn bộ nhớ "
     "trên máy Mac 16GB. Vui lòng thử lại sau khi quá trình học hoàn tất."
+)
+NATIVE_BUSY_MESSAGE = (
+    "Mô hình cục bộ đang xử lý một tác vụ khác. "
+    "Vui lòng đợi tác vụ đó hoàn tất rồi thử lại để tránh quá tải bộ nhớ."
 )
 
 
@@ -132,13 +138,17 @@ class GPULockManager:
         lock_path: Path = LOCK_FILE,
         state_path: Path = STATE_FILE,
         intent_path: Optional[Path] = None,
+        native_lock_path: Optional[Path] = None,
     ):
         self.lock_path = lock_path
         self.state_path = state_path
         self.intent_path = intent_path or (lock_path.parent / (lock_path.stem + "_intent" + lock_path.suffix))
+        self.native_lock_path = native_lock_path or (lock_path.parent / "native_worker.lock")
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.intent_path.parent.mkdir(parents=True, exist_ok=True)
+        self.native_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self._local = threading.local()
 
     def get_status(self) -> Dict[str, Any]:
         """Return current GPU state, auto-healing stale state if all holder processes died.
@@ -436,56 +446,91 @@ class GPULockManager:
                     pass
 
     @contextmanager
-    def acquire_for_inference(self, timeout: float = 1.0) -> Generator[None, None, None]:
+    def acquire_for_inference(self, timeout: float = 30.0) -> Generator[Tuple[int, int], None, None]:
         """
-        Acquire shared GPU lock for Ollama inference/embedding.
+        Acquire shared GPU lock against training AND exclusive lock for native worker admission.
         Re-checks state immediately after acquiring LOCK_SH to close any race window.
+        Makes lock descriptors inheritable and yields (lock_fd, native_fd) for pass_fds in child subprocesses.
+        Supports thread-local re-entrancy so nested callers in the same thread do not self-deadlock.
         """
-        # Step 1: Pre-check state
         status = self.get_status()
         if status.get("busy"):
             raise GPUBusyError(status.get("message", BUSY_MESSAGE))
 
+        if not hasattr(self, "_local"):
+            self._local = threading.local()
+        if not hasattr(self._local, "inference_depth"):
+            self._local.inference_depth = 0
+            self._local.active_fds = None
+
+        if self._local.inference_depth > 0 and self._local.active_fds is not None:
+            self._local.inference_depth += 1
+            try:
+                yield self._local.active_fds
+            finally:
+                self._local.inference_depth -= 1
+            return
+
         _ensure_runtime_dir()
         lock_fd = None
+        native_fd = None
         try:
             lock_fd = os.open(str(self.lock_path), os.O_RDWR | os.O_CREAT, 0o666)
+            native_fd = os.open(str(self.native_lock_path), os.O_RDWR | os.O_CREAT, 0o666)
             start_time = time.time()
             acquired = False
 
             while time.time() - start_time < timeout:
+                st = self.get_status()
+                if st.get("busy"):
+                    raise GPUBusyError(st.get("message", BUSY_MESSAGE))
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
-                    acquired = True
-                    break
+                    try:
+                        fcntl.flock(native_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        acquired = True
+                        break
+                    except (BlockingIOError, OSError):
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
                 except (BlockingIOError, OSError):
-                    st = self.get_status()
-                    if st.get("busy"):
-                        raise GPUBusyError(st.get("message", BUSY_MESSAGE))
-                    time.sleep(0.05)
+                    pass
+                time.sleep(0.05)
 
             if not acquired:
-                raise GPUBusyError(BUSY_MESSAGE)
+                st = self.get_status()
+                if st.get("busy"):
+                    raise GPUBusyError(st.get("message", BUSY_MESSAGE))
+                raise GPUBusyError(NATIVE_BUSY_MESSAGE)
 
-            # Step 2: Critical race check AFTER acquiring LOCK_SH
             st_after = self.get_status()
             if st_after.get("busy"):
-                # Training declared waiting or training right as we grabbed lock; back off immediately
+                fcntl.flock(native_fd, fcntl.LOCK_UN)
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)
                 raise GPUBusyError(st_after.get("message", BUSY_MESSAGE))
 
-            yield
+            if not fcntl.WINDOWS:
+                os.set_inheritable(lock_fd, True)
+                os.set_inheritable(native_fd, True)
+
+            self._local.inference_depth = 1
+            self._local.active_fds = (lock_fd, native_fd)
+            yield (lock_fd, native_fd)
 
         finally:
-            if lock_fd is not None:
+            self._local.inference_depth = 0
+            self._local.active_fds = None
+            if native_fd is not None:
                 try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    os.close(native_fd)
                 except OSError:
                     pass
+            if lock_fd is not None:
                 try:
                     os.close(lock_fd)
                 except OSError:
                     pass
+
+    acquire_for_native_inference = acquire_for_inference
 
 
 # Singleton instance

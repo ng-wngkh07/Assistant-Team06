@@ -5,9 +5,9 @@ import hashlib
 import json
 from pathlib import Path
 
-import requests
 
-from app.config import OLLAMA_BASE_URL, DEFAULT_CHAT_MODEL
+from app.config import OLLAMA_BASE_URL, DEFAULT_CHAT_MODEL, TRAINED_MODEL_NAME
+from app.model_resolver import is_mlx_model
 from app.training_data import (
     basic_record_quality,
     format_context,
@@ -38,42 +38,40 @@ def check_record(record: dict, model: str = DEFAULT_CHAT_MODEL) -> dict:
         + "\n\nCÁC CÂU TRẢ LỜI:\n"
         + json.dumps(answers, ensure_ascii=False)
     )
-    if model in ("local", "qwen2.5-3b-4bit", DEFAULT_CHAT_MODEL):
+    import sys
+    if sys.platform == "darwin":
+        if not is_mlx_model(model):
+            raise RuntimeError(f"Mô hình {model} không được hỗ trợ trên macOS (chỉ hỗ trợ MLX)")
         from app.trained_client import TrainedModelClient
-        client = TrainedModelClient()
+        client = TrainedModelClient(model_name=model)
         if not client.available():
-            raise RuntimeError("Mô hình base 3B chưa sẵn sàng cho audit")
+            raise RuntimeError(f"Mô hình {model} chưa sẵn sàng cho audit")
         stream = client.chat_stream([{"role": "user", "content": prompt}], max_tokens=250)
         content_text = "".join(stream).strip()
-        import re
-        m = re.search(r"\{.*\}", content_text, re.DOTALL)
-        if not m:
-            raise ValueError(f"Không nhận được JSON hợp lệ từ audit model: {content_text}")
-        answer = json.loads(m.group(0))
+    elif is_mlx_model(model):
+        from app.trained_client import TrainedModelClient
+        client = TrainedModelClient(model_name=model)
+        if not client.available():
+            raise RuntimeError(f"Mô hình {model} chưa sẵn sàng cho audit")
+        stream = client.chat_stream([{"role": "user", "content": prompt}], max_tokens=250)
+        content_text = "".join(stream).strip()
     else:
-        response = requests.post(
-            f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat",
-            json={
-                "model": model,
-                "stream": False,
-                "format": {
-                    "type": "object",
-                    "properties": {
-                        "translation_ok": {"type": "boolean"},
-                        "cross_source_link_ok": {"type": "boolean"},
-                        "approved": {"type": "array", "items": {"type": "boolean"},
-                                     "minItems": len(answers), "maxItems": len(answers)},
-                    },
-                    "required": ["translation_ok", "cross_source_link_ok", "approved"],
-                },
-                "think": False,
-                "options": {"temperature": 0, "num_predict": 250},
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=180,
+        from app.ollama_client import OllamaClient
+        client = OllamaClient()
+        client._verify_model_locality(model)
+        resp = client.chat_sync(
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            temperature=0,
+            num_predict=250,
+            num_ctx=8192,
         )
-        response.raise_for_status()
-        answer = json.loads(response.json()["message"]["content"])
+        content_text = resp.get("message", {}).get("content", "")
+    import re
+    m = re.search(r"\{.*\}", content_text, re.DOTALL)
+    if not m:
+        raise ValueError(f"Không nhận được JSON hợp lệ từ audit model: {content_text}")
+    answer = json.loads(m.group(0))
     decisions = answer.get("decisions", [])
     if isinstance(answer.get("approved"), list):
         decisions = [{"supported": value} for value in answer["approved"]]
@@ -109,7 +107,7 @@ def audit(data_dir: Path, model: str = DEFAULT_CHAT_MODEL) -> dict:
             by_key[key] = entry
             approved = sum(x["supported"] for x in result["decisions"])
             print(f'[{number}/{len(manifest)}] {record["pair"]["filename"][:36]}: {approved}/{len(record["items"])} đạt', flush=True)
-        except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as error:
+        except (Exception, ValueError, KeyError, json.JSONDecodeError) as error:
             print(f'[{number}/{len(manifest)}] Chưa kiểm tra được {record["pair"]["filename"][:36]}: {error}', flush=True)
     approved_records = []
     rejected_basic_quality_records = 0

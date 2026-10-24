@@ -12,6 +12,7 @@ class Element {
         this.value = '';
         this.textContent = '';
         this.className = '';
+        this.style = {};
         this.hidden = false;
         this.disabled = false;
         this.attributes = {};
@@ -349,4 +350,36 @@ test('Saving a new review question refreshes an already visible review list when
     await app.elements.get('btn-close-practice').click();
     assert.match(textOf(app.elements.get('review-list')), /Trong điều kiện A/);
     assert.doesNotMatch(textOf(app.elements.get('review-list')), /Chưa có câu nào/);
+});
+
+test('Exercise view switches never restore removed internal-thought text', async () => {
+    const app = await createApp([], {exampleItems: [{
+        question: 'Tính 2+3.',
+        answer: '<think>Phân tích bí mật\nĐáp án: 999</think>\nCộng 2 và 3.\nĐáp án: 5',
+        answer_status: 'model_verified',
+        source: {doc_id: 1, page_num: 2, filename: 'math.pdf'},
+    }]});
+    app.elements.get('exercise-topic').value = 'Phép cộng';
+    await app.elements.get('btn-learning-exercises').click();
+    const body = app.elements.get('learning-exercise-results');
+    await findButton(body, 'Chỉ đáp án').click();
+    assert.match(textOf(body), /5/);
+    assert.doesNotMatch(textOf(body), /bí mật|999|think/);
+    await findButton(body, 'Giải chi tiết').click();
+    assert.match(textOf(body), /Cộng 2 và 3/);
+    assert.doesNotMatch(textOf(body), /bí mật|999|think/);
+});
+
+test('Markdown exercise headings render as readable titles while retaining the original source', async () => {
+    const original = '## Bài tập 1\nĐổi 2.5 m² sang cm².';
+    const app = await createApp([], {exampleItems: [{
+        question: original, answer: null, answer_status: 'missing',
+        source: {doc_id: 1, page_num: 6, filename: 'units.md', snippet: original},
+    }]});
+    app.elements.get('exercise-topic').value = 'Đổi đơn vị';
+    await app.elements.get('btn-learning-exercises').click();
+    const body = app.elements.get('learning-exercise-results');
+    const heading = descendants(body).find(node => node.className === 'exercise-question-title');
+    assert.equal(heading.textContent, 'Bài tập 1\nĐổi 2.5 m² sang cm².');
+    assert.match(textOf(body), /## Bài tập 1/);
 });

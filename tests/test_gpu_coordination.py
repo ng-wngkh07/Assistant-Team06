@@ -75,6 +75,17 @@ def test_concurrent_inference_readers_succeed(temp_gpu_lock):
     assert mgr.get_status()["busy"] is False
 
 
+def test_native_worker_contention_does_not_claim_training_is_running(temp_gpu_lock):
+    mgr, lock_file, state_file = temp_gpu_lock
+    contender = GPULockManager(lock_path=lock_file, state_path=state_file)
+    with mgr.acquire_for_inference():
+        with pytest.raises(GPUBusyError) as error:
+            with contender.acquire_for_inference(timeout=0.01):
+                pass
+    assert "huấn luyện" not in str(error.value).lower()
+    assert "tác vụ" in str(error.value).lower()
+
+
 def _worker_hold_training_lock(lock_file, state_file, hold_seconds, ready_event):
     mgr = GPULockManager(lock_path=Path(lock_file), state_path=Path(state_file))
     with mgr.acquire_for_training(timeout=5.0, extra_info={"worker": "proc1"}, evict_ollama=False):
@@ -475,3 +486,32 @@ def test_web_endpoints_during_gpu_training(tmp_path, monkeypatch):
     r_status_idle = client.get("/api/status")
     assert r_status_idle.status_code == 200
     assert r_status_idle.json()["gpu"]["busy"] is False
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX inherited descriptor lifetime')
+@pytest.mark.parametrize('lock_name', ['gpu.lock', 'native_worker.lock'])
+def test_inference_wrapper_exit_keeps_live_child_locks(tmp_path, lock_name):
+    """An orphaned worker must still exclude both training and another native load."""
+    import subprocess
+    from app import file_lock as fcntl
+    from app.gpu_lock import GPULockManager
+    manager = GPULockManager(lock_path=tmp_path/'gpu.lock',
+        state_path=tmp_path/'state.json', native_lock_path=tmp_path/'native_worker.lock')
+    child = None
+    try:
+        with manager.acquire_for_inference(timeout=1) as descriptors:
+            child = subprocess.Popen([sys.executable, '-c',
+                "import sys; print('ready',flush=True); sys.stdin.read()"],
+                pass_fds=tuple(descriptors), stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            assert child.stdout.readline().strip() == 'ready'
+        assert child.poll() is None
+        fd = os.open(str(tmp_path/lock_name), os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+    finally:
+        if child is not None:
+            child.communicate(input='', timeout=5)

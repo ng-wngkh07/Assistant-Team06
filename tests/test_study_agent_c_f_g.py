@@ -310,7 +310,8 @@ def test_chat_api_propagates_scope_and_persists_selected_mode(tmp_path, monkeypa
 def test_ui_exposes_processing_levels_and_real_recovery_controls():
     html = (ROOT / "static/index.html").read_text(encoding="utf-8")
     js = (ROOT / "static/app.js").read_text(encoding="utf-8")
-    assert all(f'value="{mode}"' in html for mode in ("auto", "standard", "careful"))
+    assert all(f'value="{mode}"' in html for mode in ("standard", "careful"))
+    assert 'value="auto"' not in html
     assert "processing_level: processingLevelSelect" in js
     assert "submitRecoveryQuery(query, \"document\", searchScope)" in js
     assert "submitRecoveryQuery(query, \"library\", searchScope)" in js

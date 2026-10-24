@@ -76,7 +76,7 @@ def test_trained_model_uses_approved_data_version(tmp_path, monkeypatch):
 
 def test_trained_model_chat_stream_respects_num_predict_and_truncation(monkeypatch):
     client = trained_client.TrainedModelClient()
-    monkeypatch.setattr(client, "available", lambda: True)
+    monkeypatch.setattr(client, "available", lambda *args, **kwargs: True)
 
     captured_requests = []
 
@@ -86,7 +86,7 @@ def test_trained_model_chat_stream_respects_num_predict_and_truncation(monkeypat
             self.stderr = ""
             self.returncode = returncode
 
-    def mock_subprocess_run(cmd, cwd=None, input=None, capture_output=True, text=True, timeout=None, check=False):
+    def mock_subprocess_run(cmd, cwd=None, input=None, capture_output=True, text=True, timeout=None, check=False, **kwargs):
         req = json.loads(input)
         captured_requests.append(req)
         return MockCompleted(json.dumps({"answer": "Phản hồi thử nghiệm", "is_truncated": req.get("max_tokens") < 1000}))

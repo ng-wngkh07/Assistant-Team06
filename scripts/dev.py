@@ -16,6 +16,8 @@ ENV_KEYS = {
     "DEFAULT_EMBED_MODEL", "OLLAMA_AUX_CHAT_MODEL", "MLX_CONTEXT_TOKENS", "HOST", "PORT",
     "HISTORY_DB_PATH", "TIMETABLE_DB_PATH", "TIMETABLE_IMAGES_DIR",
     "ANSWER_QUICK_MAX_TOKENS", "ANSWER_STEPS_MAX_TOKENS", "ANSWER_COMPARE_MAX_TOKENS",
+    "MLX_MODEL_DIR", "MLX_9B_MODEL_DIR", "MLX_3B_MODEL_DIR", "MLX_BGE_MODEL_DIR",
+    "BGE_MODEL_DIR", "TRAINED_MODEL_NAME", "TRAINING_MODEL_DIR",
 }
 
 
@@ -63,13 +65,29 @@ def check_environment() -> bool:
     print(f"Python: {sys.version.split()[0]} | platform: {sys.platform}")
     print(f"Sources: {SRC_DIR}\nLocal data: {DATA_DIR}")
     print(f"App routes: {len(app.routes)} | SQLite FTS5: OK | PDF: {fitz.VersionBind}")
-    mlx_models = {TRAINED_MODEL_NAME, "qwen2.5-3b-4bit", "tam-ly-mlx", "mlx-3b", "local"}
-    if DEFAULT_CHAT_MODEL in mlx_models:
-        if TrainedModelClient.available():
-            print(f"QA model present (MLX native: {DEFAULT_CHAT_MODEL}). Vision and embedding require their own model checks.")
-            return True
-        print(f"MLX QA model missing at local model directory ({DEFAULT_CHAT_MODEL}). Install it for real QA.")
-        return False
+    from app.model_resolver import is_mlx_model
+    if sys.platform == "darwin" or is_mlx_model(DEFAULT_CHAT_MODEL):
+        qa_ready = TrainedModelClient.available(DEFAULT_CHAT_MODEL)
+        if qa_ready:
+            print(f"QA model: OK (MLX native: {DEFAULT_CHAT_MODEL})")
+        else:
+            print(f"QA model: MISSING (MLX native: {DEFAULT_CHAT_MODEL})")
+
+        from app.native_vision import NativeVisionClient
+        vision_ready = NativeVisionClient.available()
+        if vision_ready:
+            print("Vision model: OK (MLX native: qwen3.5-9b-4bit)")
+        else:
+            print("Vision model: MISSING (MLX native: qwen3.5-9b-4bit)")
+
+        from app.native_embedding import NativeEmbeddingClient
+        embedding_ready = NativeEmbeddingClient.available()
+        if embedding_ready:
+            print("Embedding model: OK (MLX native: bge-m3)")
+        else:
+            print("Embedding model: MISSING (MLX native: bge-m3)")
+
+        return qa_ready and vision_ready and embedding_ready
 
     client = OllamaClient()
     if not client.check_health():
@@ -78,11 +96,25 @@ def check_environment() -> bool:
     names = {model.get("name") for model in client.list_models()}
     print(f"Ollama models: {', '.join(sorted(names))}")
     base_names = {n.split(":")[0] for n in names}
-    if DEFAULT_CHAT_MODEL not in names and DEFAULT_CHAT_MODEL not in base_names and f"{DEFAULT_CHAT_MODEL}:latest" not in names:
-        print(f"QA model missing: {DEFAULT_CHAT_MODEL}. Install it for real QA.")
-        return False
-    print("QA model present. Vision and embedding require their own model checks.")
-    return True
+    qa_ready = (DEFAULT_CHAT_MODEL in names or DEFAULT_CHAT_MODEL in base_names or f"{DEFAULT_CHAT_MODEL}:latest" in names)
+    if qa_ready:
+        print(f"QA model: OK ({DEFAULT_CHAT_MODEL})")
+    else:
+        print(f"QA model: MISSING ({DEFAULT_CHAT_MODEL})")
+
+    vision_ready = any("qwen2.5vl:3b" in m for m in names)
+    if vision_ready:
+        print("Vision model: OK (qwen2.5vl:3b)")
+    else:
+        print("Vision model: MISSING (qwen2.5vl:3b)")
+
+    embedding_ready = any("bge-m3" in m for m in names)
+    if embedding_ready:
+        print("Embedding model: OK (bge-m3)")
+    else:
+        print("Embedding model: MISSING (bge-m3)")
+
+    return qa_ready and vision_ready and embedding_ready
 
 
 def main() -> int:
@@ -105,7 +137,8 @@ def main() -> int:
         import uvicorn
         from app.config import SERVER_HOST, SERVER_PORT
         print(f"Open http://{SERVER_HOST}:{SERVER_PORT}")
-        uvicorn.run("app.server:app", host=SERVER_HOST, port=SERVER_PORT, reload=args.reload)
+        reload_options = {"reload_dirs": [str(ROOT / "app")]} if args.reload else {}
+        uvicorn.run("app.server:app", host=SERVER_HOST, port=SERVER_PORT, reload=args.reload, **reload_options)
     return 0
 
 

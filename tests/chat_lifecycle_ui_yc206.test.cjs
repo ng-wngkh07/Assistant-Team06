@@ -13,12 +13,17 @@ async function harness(options = {}) {
  const els = new Map(), events={}, created=[];
  const doc={getElementById(id){if(!els.has(id))els.set(id,new El());return els.get(id);},createElement(){const el=new El();created.push(el);return el;},addEventListener(name,fn){(events[name] ||= []).push(fn);},querySelectorAll(){return [];},querySelector(){return new El();},dispatchEvent(e){for(const fn of events[e.type]||[])fn(e);},body:new El()};
  doc.getElementById('reindex-spinner');doc.getElementById('btn-close-reindex');
- const store={getItem(){return null;},setItem(){},removeItem(){}};
- vm.runInNewContext(fs.readFileSync(process.env.UI_APP_JS || path.join(__dirname,'../static/app.js'),'utf8'),{document:doc,window:{addEventListener(){}},confirm:()=>true,fetch:(url)=>url === '/api/index' && options.index ? options.index() : url === '/api/chat/stream' ? (options.chat ? options.chat() : Promise.reject(new Error('Lỗi thử nghiệm'))) : Promise.resolve({ok:true,json:async()=>({sessions:[],items:[],models:[],knowledge_base:{}})}),localStorage:store,sessionStorage:store,setInterval(){},setTimeout(){},clearTimeout(){},Event:class {constructor(type){this.type=type;}preventDefault(){}},URLSearchParams,TextDecoder,console});
+ const html=fs.readFileSync(path.join(__dirname,'../static/index.html'),'utf8');
+ const select=html.match(/<select[^>]*id="processing-level"[^>]*>([\s\S]*?)<\/select>/)[1];
+ const defaultLevel=select.match(/<option[^>]*value="([^"]+)"[^>]*selected[^>]*>/)[1];
+ doc.getElementById('processing-level').value=defaultLevel;
+ const preferences=new Map(options.savedLevel ? [['qa_processing_level',options.savedLevel]] : []);
+ const store={getItem(key){return preferences.get(key) ?? null;},setItem(key,value){preferences.set(key,value);},removeItem(key){preferences.delete(key);}};
+ vm.runInNewContext(fs.readFileSync(process.env.UI_APP_JS || path.join(__dirname,'../static/app.js'),'utf8'),{document:doc,window:{addEventListener(){}},confirm:()=>true,fetch:(url)=>url === '/api/index' && options.index ? options.index() : url === '/api/chat/stream' ? (options.chat ? options.chat() : Promise.reject(new Error('Lỗi thử nghiệm'))) : Promise.resolve({ok:true,json:async()=>({sessions:[],items:[],models:[],knowledge_base:{}})}),localStorage:store,sessionStorage:store,setInterval(){},setTimeout(){},clearTimeout(){},Event:class {constructor(type){this.type=type;}preventDefault(){}},URLSearchParams,TextDecoder,TextEncoder,console});
  for(const fn of events.DOMContentLoaded)fn();
  await new Promise(resolve=>setImmediate(resolve));
  let submits=0;els.get('chat-form').addEventListener('submit',()=>submits++);
- return {els,created,input:els.get('user-input'),submit:()=>els.get('chat-form').listeners.submit[0]({preventDefault(){}}),newChat:()=>els.get('btn-new-chat-sidebar').listeners.click[0]({type:'click'}),get submits(){return submits;}};
+ return {els,created,preferences,input:els.get('user-input'),submit:()=>els.get('chat-form').listeners.submit[0]({preventDefault(){}}),newChat:()=>els.get('btn-new-chat-sidebar').listeners.click[0]({type:'click'}),get submits(){return submits;}};
 }
 
 test('New chat resets stale content, session and draft without a runtime exception', async () => {
@@ -72,4 +77,67 @@ test('Cited claim text is visible as text and never injected into HTML', async (
  h.input.value='Câu hỏi học tập?';await h.submit();
  assert.ok(h.created.some(el=>el.textContent===claim));
  assert.ok(!h.created.some(el=>String(el.innerHTML).includes('onerror=alert')));
+});
+
+test('Citation details show the verified passage beyond the opening source snippet', async () => {
+ const evidence='<b>Đoạn chứng minh đầy đủ sau phần mở đầu.</b>';
+ const citation={id:'S1',book_title:'Phiếu QA',filename:'source.md',doc_id:901,page_num:1,snippet:'Phần mở đầu bị cắt.',evidence_quotes:[evidence]};
+ const payload=[{type:'token',content:'Câu trả lời.'},{type:'done',response_kind:'answer',citations:[citation]}].map(e=>'data: '+JSON.stringify(e)+'\n\n').join('');
+ let delivered=false;
+ const h=await harness({chat:async()=>({ok:true,body:{getReader:()=>({read:async()=>delivered?{done:true}:(delivered=true,{done:false,value:new TextEncoder().encode(payload)})})}})});
+ h.input.value='Câu hỏi học tập?';await h.submit();
+ assert.ok(h.created.some(el=>el.className==='citation-snippet' && el.textContent===evidence));
+ assert.ok(!h.created.some(el=>el.className==='citation-snippet' && el.textContent===citation.snippet));
+ assert.ok(!h.created.some(el=>String(el.innerHTML).includes(evidence)));
+});
+
+
+test('QA starts Fast and migrates an old auto preference without losing explicit Careful', async () => {
+ const fresh=await harness(); assert.equal(fresh.els.get('processing-level').value,'standard');
+ const old=await harness({savedLevel:'auto'}); assert.equal(old.els.get('processing-level').value,'standard');
+ const careful=await harness({savedLevel:'careful'}); assert.equal(careful.els.get('processing-level').value,'careful');
+});
+
+test('Careful suggestion requires a click, preserves the next draft and never resubmits', async () => {
+ const payload='data: '+JSON.stringify({type:'done',response_kind:'answer',citations:[],resolved_processing_level:'standard',suggest_careful:true,careful_suggestion:'Câu hỏi có nhiều yêu cầu.'})+'\n\n';
+ let delivered=false,requests=0;
+ const h=await harness({chat:async()=>{requests++;return {ok:true,body:{getReader:()=>({read:async()=>delivered?{done:true}:(delivered=true,{done:false,value:new TextEncoder().encode(payload)})})}};}});
+ h.input.value='Bayes là gì, khi nào áp dụng và vì sao?';await h.submit();
+ assert.equal(requests,1);assert.equal(h.els.get('processing-level').value,'standard');
+ const button=h.created.find(el=>el.className==='btn-switch-careful');assert.ok(button);
+ h.input.value='Câu tiếp theo đang soạn';button.listeners.click[0]();
+ assert.equal(h.els.get('processing-level').value,'careful');
+ assert.equal(h.preferences.get('qa_processing_level'),'careful');
+ assert.equal(h.input.value,'Câu tiếp theo đang soạn');assert.equal(requests,1);assert.equal(button.disabled,true);
+});
+
+test('Context usage reports reserved output, warns on omitted history, and clears for a new chat', async () => {
+ const payload=[{type:'context',scope:'stored_history_window',history_turns_omitted:3},{type:'context',context_capacity:8192,input_estimate:6000,output_reserve:1200,budget_method:'exact_tokenizer',history_turns_omitted:2},{type:'done',response_kind:'answer',citations:[]}].map(e=>'data: '+JSON.stringify(e)+'\n\n').join('');
+ let delivered=false;
+ const h=await harness({chat:async()=>({ok:true,body:{getReader:()=>({read:async()=>delivered?{done:true}:(delivered=true,{done:false,value:new TextEncoder().encode(payload)})})}})});
+ h.input.value='Câu hỏi học tập?';await h.submit();
+ assert.match(h.els.get('context-usage').textContent,/7[,. ]?200.*8[,. ]?192/);
+ assert.match(h.els.get('context-usage').textContent,/5.*lượt|lượt.*5/);
+ assert.equal(h.els.get('btn-context-new-chat').hidden,false);
+ h.input.value='Nháp tiếp theo';h.input.listeners.input[0]();
+ assert.match(h.els.get('context-draft').textContent,/byte.*không phải token/i);
+ assert.equal(h.input.value,'Nháp tiếp theo');
+ h.els.get('btn-context-new-chat').listeners.click[0]();
+ assert.equal(h.input.value,'Nháp tiếp theo');
+ assert.equal(h.els.get('context-usage').hidden,true);
+ assert.equal(h.els.get('btn-context-new-chat').hidden,true);
+});
+
+
+test('Sending a draft clears its byte counter even when the response has no context event', async () => {
+ const payload=[{type:'token',content:'Trợ giúp có sẵn.'},{type:'done',response_kind:'answer',citations:[]}].map(e=>'data: '+JSON.stringify(e)+'\n\n').join('');
+ let delivered=false;
+ const h=await harness({chat:async()=>({ok:true,body:{getReader:()=>({read:async()=>delivered?{done:true}:(delivered=true,{done:false,value:new TextEncoder().encode(payload)})})}})});
+ h.input.value='help';h.input.dispatchEvent({type:'input'});
+ assert.equal(h.els.get('context-draft').hidden,false);
+ assert.match(h.els.get('context-draft').textContent,/4 byte/);
+ await h.submit();
+ assert.equal(h.input.value,'');
+ assert.equal(h.els.get('context-draft').hidden,true);
+ assert.equal(h.els.get('context-draft').textContent,'');
 });

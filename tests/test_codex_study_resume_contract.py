@@ -103,7 +103,7 @@ def test_missing_original_cannot_be_authorized_by_old_ocr_cache(tmp_path, monkey
     assert not td.is_chunk_allowed_in_training(doc, 1, "Only page one was reviewed")
 
 
-def test_mlx_inference_applies_requested_sampler_and_seed(monkeypatch, tmp_path, capsys):
+def test_mlx_inference_applies_requested_sampler_and_seed(monkeypatch, tmp_path, capsys, offline_worker_environment):
     request = {"model_path": str(tmp_path), "messages": [{"role": "user", "content": "Hello"}],
                "temperature": 0.17, "seed": 37, "max_tokens": 19}
     (tmp_path / "config.json").write_text(json.dumps({"max_position_embeddings": 32768}))
@@ -136,38 +136,42 @@ def test_mlx_inference_applies_requested_sampler_and_seed(monkeypatch, tmp_path,
     assert kwargs.get("temp", args[0] if args else None) == 0.17
 
 
-def test_default_query_normalization_uses_shared_base(monkeypatch):
+def test_explicit_legacy_query_normalization_uses_shared_base(monkeypatch):
     from app import query_normalizer as qn
     from app.trained_client import TrainedModelClient
     calls = []
-    monkeypatch.setattr(TrainedModelClient, "available", classmethod(lambda cls: True))
+    monkeypatch.setattr(TrainedModelClient, "available", classmethod(lambda cls, *a, **k: True))
     monkeypatch.setattr(TrainedModelClient, "chat_complete", lambda self, *a, **k:
                         calls.append((a, k)) or '{"normalized_query":"ánh xạ tuyến tính là gì?"}')
-    monkeypatch.setattr(qn.requests, "post", lambda *a, **k: pytest.fail("Default MLX query sent to Ollama"))
-    assert qn.normalize_query_with_model("anh xa tuyen tinh la gi?") == "ánh xạ tuyến tính là gì?"
+    import requests
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(requests.Session, "request", lambda *a, **k: pytest.fail("Explicit MLX query sent to Ollama"))
+    assert qn.normalize_query_with_model("anh xa tuyen tinh la gi?", model="qwen2.5-3b-4bit") == "ánh xạ tuyến tính là gì?"
     assert len(calls) == 1
 
 
-def test_default_training_teacher_uses_shared_base(monkeypatch):
+def test_explicit_legacy_training_teacher_uses_shared_base(monkeypatch):
     from app import training_data as td
     from app.trained_client import TrainedModelClient
     calls = []
     answer = "Nguồn thứ nhất trình bày điều kiện của vectơ độc lập [S1]. Nguồn thứ hai giải thích rằng kết luận cần dựa trên các điều kiện đã cho [S2]."
     response = json.dumps({"items": [{"question": "Hai nguồn này giải thích điều kiện như thế nào?", "answer": answer}]}, ensure_ascii=False)
-    monkeypatch.setattr(TrainedModelClient, "available", classmethod(lambda cls: True))
+    monkeypatch.setattr(TrainedModelClient, "available", classmethod(lambda cls, *a, **k: True))
     monkeypatch.setattr(TrainedModelClient, "chat_stream", lambda self, *a, **k: calls.append((a, k)) or iter([response]))
-    monkeypatch.setattr(td.requests, "post", lambda *a, **k: pytest.fail("Default teacher sent to a second text base"))
+    import requests
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(requests.Session, "request", lambda *a, **k: pytest.fail("Explicit MLX teacher sent to another model"))
     pair = {"filename": "sample.pdf", "book_title": "sample", "sources": [
         {"id": "S1", "book_title": "sample", "filename": "sample.pdf", "page_num": 1,
          "text": "Các vectơ độc lập phải thỏa mãn điều kiện rõ ràng từ nguồn thứ nhất."},
         {"id": "S2", "book_title": "sample", "filename": "sample.pdf", "page_num": 2,
          "text": "Kết luận phải được nêu theo các điều kiện cụ thể có trong nguồn thứ hai."}]}
-    result = td.ask_teacher(pair)
+    result = td.ask_teacher(pair, model="qwen2.5-3b-4bit")
     assert result["items"][0]["answer"] == answer
     assert len(calls) == 1
 
 
-def test_default_summary_uses_shared_base_and_records_truncation(tmp_path, monkeypatch):
+def test_explicit_legacy_summary_uses_shared_base_and_records_truncation(tmp_path, monkeypatch):
     from contextlib import nullcontext
     from app.history import HistoryStore
     from app.topic_summarizer import TopicSummarizer
@@ -177,20 +181,20 @@ def test_default_summary_uses_shared_base_and_records_truncation(tmp_path, monke
     sid = store.create_session()['id']
     store.add_turn(sid, 'Ánh xạ tuyến tính có điều kiện gì?', 'Bảo toàn phép cộng và nhân vô hướng.', [], 'local')
     summarizer = TopicSummarizer(store)
-    monkeypatch.setattr(TrainedModelClient, 'available', classmethod(lambda cls: True))
+    monkeypatch.setattr(TrainedModelClient, 'available', classmethod(lambda cls, *a, **k: True))
     def answer(self, *a, **k):
         self.last_done_reason = 'length'
         return json.dumps({'title':'Ánh xạ tuyến tính', 'summary':'Bảo toàn phép cộng và phép nhân vô hướng.'})
     monkeypatch.setattr(TrainedModelClient, 'chat_complete', answer)
-    monkeypatch.setattr(summarizer.ollama, 'check_health', lambda: pytest.fail('Default summary consulted Ollama'))
+    monkeypatch.setattr(summarizer.ollama, 'check_health', lambda: pytest.fail('Explicit MLX summary consulted Ollama'))
     monkeypatch.setattr(gpu_lock.gpu_coordinator, 'check_inference_allowed', lambda: (True,''))
     monkeypatch.setattr(gpu_lock.gpu_coordinator, 'acquire_for_inference', lambda **k: nullcontext())
-    result = summarizer.summarize_session_sync(sid)
+    result = summarizer.summarize_session_sync(sid, model="qwen2.5-3b-4bit")
     assert result['status'] != 'completed'
     assert store.get_session(sid)['summary_status'] == 'pending'
 
 
-def _bound_registry_fixture(tmp_path):
+def _bound_registry_fixture(tmp_path, monkeypatch, *, legacy_contract=True):
     """Structurally paired hypothetical fixture; never used as product acceptance."""
     from app import active_registry as ar
     ev = ROOT / "data/evaluation"
@@ -199,13 +203,36 @@ def _bound_registry_fixture(tmp_path):
     br_path = ev / "codex-study-base3b-raw-2026-10-03.json"
     bv_path = ev / "codex-study-base3b-content-review-2026-10-03.json"
     suite, br, bv = load(suite_path), load(br_path), load(bv_path)
+    if legacy_contract:
+        # Exercise the archived 3B dossier's own contract; current 9B defaults
+        # must not make every attack fail early for an unrelated identity mismatch.
+        from app import study_acceptance
+        monkeypatch.setattr(study_acceptance, 'TRAINING_MODEL_REPO', bv['base_repo'])
+        monkeypatch.setattr(study_acceptance, 'TRAINING_MODEL_REVISION', bv['base_revision'])
+    # Relocate a hypothetical copy into temporary files. Never require an old
+    # checkout path or real model weights for a registry unit control.
+    base = tmp_path / 'hypothetical-base'
+    base.mkdir()
+    for name in ('model.safetensors', 'config.json', 'tokenizer.json'):
+        (base / name).write_bytes(('hypothetical ' + name).encode())
+    base_hashes = {p.name: digest(p.read_bytes()) for p in base.iterdir()}
+    br['model_dir'] = str(base)
+    bv['base_files_sha256'] = base_hashes
+    br_path = tmp_path / 'baseline_raw.json'
+    br_path.write_text(json.dumps(br, ensure_ascii=False))
+    bv['raw_output_sha256'] = digest(br_path.read_bytes())
+    bv_path = tmp_path / 'baseline_review.json'
+    bv_path.write_text(json.dumps(bv, ensure_ascii=False))
+    from app import study_acceptance
+    monkeypatch.setattr(study_acceptance, 'BASE_RAW_HASH', digest(br_path.read_bytes()))
+    monkeypatch.setattr(study_acceptance, 'BASE_REVIEW_HASH', digest(bv_path.read_bytes()))
     protocol = load(ROOT / "data/training/v9_multidomain_grounded/evaluation_protocol.json")
     adapter = tmp_path / "hypothetical-adapter"; adapter.mkdir()
     (adapter / "adapters.safetensors").write_bytes(b"unit-fixture-weights")
     (adapter / "adapter_config.json").write_text('{}')
     ah = {p.name: digest(p.read_bytes()) for p in adapter.iterdir()}
     cr = copy.deepcopy(br)
-    cr.update(adapter=str(adapter), baseline_raw_sha256=digest(br_path.read_bytes()),
+    cr.update(model_dir=str(base), adapter=str(adapter), baseline_raw_sha256=digest(br_path.read_bytes()),
               base_files_sha256=bv["base_files_sha256"], adapter_files_sha256=ah)
     frozen = {c["id"]: c for c in suite["cases"]}
     for case in cr["cases"]: case["messages"] = frozen[case["id"]]["messages"]
@@ -240,11 +267,11 @@ def _bound_registry_fixture(tmp_path):
                                       "files_sha256": bv["base_files_sha256"]},
                    "adapter_identity": {"path": str(adapter), "files_sha256": ah}}
         return dossier
-    return ar, adapter, payloads, persist
+    return ar, adapter, base, payloads, persist
 
 
-def test_canonical_positive_control_agrees_with_independent_oracle(tmp_path):
-    ar, adapter, data, persist = _bound_registry_fixture(tmp_path)
+def test_canonical_positive_control_agrees_with_independent_oracle(tmp_path, monkeypatch):
+    ar, adapter, base, data, persist = _bound_registry_fixture(tmp_path, monkeypatch)
     dossier = persist()
     paths = {k: Path(v["path"]) for k,v in dossier["bindings"].items()}
     # Independent arithmetic and input checks live with this test. A temporary
@@ -271,12 +298,12 @@ def test_canonical_positive_control_agrees_with_independent_oracle(tmp_path):
     assert rates["retention"][0] - rates["retention"][1] == pytest.approx(-0.625)
     assert all(c["grade"] == "pass" for c in candidate["cases"].values())
     # This is a hypothetical registry contract control, never model acceptance.
-    assert ar._is_valid_evidence_payload(dossier, tmp_path, adapter, ROOT / "data/models/qwen2.5-3b-4bit")
+    assert ar._is_valid_evidence_payload(dossier, tmp_path, adapter, base)
 
 
 @pytest.mark.parametrize("attack", ["question", "decoding", "missing_status", "review_passage", "threshold", "decision"])
-def test_registry_rejects_canonical_files_with_changed_contract(tmp_path, attack):
-    ar, adapter, data, persist = _bound_registry_fixture(tmp_path)
+def test_registry_rejects_canonical_files_with_changed_contract(tmp_path, monkeypatch, attack):
+    ar, adapter, base, data, persist = _bound_registry_fixture(tmp_path, monkeypatch)
     cid = data["candidate_raw"]["cases"][0]["id"]
     if attack == "question": data["candidate_raw"]["cases"][0]["question"] = "A different prompt"
     if attack == "decoding": data["candidate_raw"]["decoding"]["max_tokens"] = 999
@@ -285,10 +312,18 @@ def test_registry_rejects_canonical_files_with_changed_contract(tmp_path, attack
     if attack == "threshold": data["protocol"]["acceptance"]["min_target_accuracy"] = 0.0
     if attack == "decision": data["decision"]["scores"]["target"]["candidate"]["pass_rate"] = 0.0
     dossier = persist()
-    assert not ar._is_valid_evidence_payload(dossier, tmp_path, adapter, ROOT / "data/models/qwen2.5-3b-4bit")
+    assert not ar._is_valid_evidence_payload(dossier, tmp_path, adapter, base)
 
 
-def test_registry_requires_evaluated_model_and_adapter_identities(tmp_path):
-    ar, adapter, data, persist = _bound_registry_fixture(tmp_path)
+def test_registry_requires_evaluated_model_and_adapter_identities(tmp_path, monkeypatch):
+    ar, adapter, base, data, persist = _bound_registry_fixture(tmp_path, monkeypatch)
     dossier = persist(); dossier.pop("model_identity"); dossier.pop("adapter_identity")
-    assert not ar._is_valid_evidence_payload(dossier, tmp_path, adapter, ROOT / "data/models/qwen2.5-3b-4bit")
+    assert not ar._is_valid_evidence_payload(dossier, tmp_path, adapter, base)
+
+
+def test_archived_3b_dossier_cannot_authorize_the_current_base(tmp_path, monkeypatch):
+    ar, adapter, base, _, persist = _bound_registry_fixture(tmp_path, monkeypatch, legacy_contract=False)
+    from app.config import TRAINING_MODEL_REPO
+    assert persist()['model_identity']['repo'] != TRAINING_MODEL_REPO
+    assert not ar._is_valid_evidence_payload(
+        persist(), tmp_path, adapter, base)

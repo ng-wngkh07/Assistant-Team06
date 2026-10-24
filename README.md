@@ -7,7 +7,8 @@ Study Agent helps learners ask questions about their own course materials and ch
 - Ask questions about an indexed document or an uploaded attachment. Keep follow-up questions within the same source and open the supporting passages.
 - Read PDFs and extracted documents in the document viewer, search their content and download the original file.
 - Generate quizzes and source-based flashcards. Check the cited passage before relying on a generated answer.
-- Find exercises, review uncertain answers and keep a local conversation history.
+- Find exercises, review uncertain answers and keep a local conversation history. Practice uses its fixed careful verification workflow.
+- Start QA in **Nhanh** (fast) and select **Kiểm tra kỹ** (careful) for an additional source audit. Complex questions can prompt a suggestion; the user controls the choice.
 - Extract a timetable from an image, correct the draft and confirm it before saving or exporting.
 
 Question answering is the core product. An answer should identify its evidence, preserve the source's conditions and say when the available material is insufficient. A valid citation alone does not prove that the answer is correct.
@@ -41,11 +42,15 @@ python3.12 -m venv .venv
 
 Open **http://127.0.0.1:8000**. The demo builds a separate library from public test fixtures. Document search works without a language model; answers, embeddings and image recognition require the configured local runtimes. See [macOS setup](README_MAC.md).
 
+## QA model
+
+The selected macOS QA architecture uses **Qwen3.5 9B 4-bit directly through MLX**, with an 8192-token operational context and local weights. Inference runs on the deployment machine. Future authorized fine-tuning must use the same local MLX runtime; hosted model APIs and cloud fallbacks are prohibited. See [model selection and migration](docs/model-selection.md) for the pinned artifact, historical comparison limits, setup and training gates. A llmfit “Perfect” hardware-fit label does not certify answer quality. Installation and inference checks do not authorize training or adapter activation.
+
 ## Use your own materials
 
 Copy `.env.example` to `.env` if you do not already have local settings. Configure source and data directories, prepare the required models, then start with `--profile local`. Synchronize the library in the web application; local startup does not automatically index your files. You can also attach a supported document directly in chat.
 
-Supported uploads include PDF, DOCX, PPTX, TXT, Markdown, PNG, JPEG and WebP, up to 20 MB. Image content requires usable OCR. Extracted DOCX sections are reading sections, not original printed page numbers.
+Supported uploads include PDF, DOCX, PPTX, TXT, Markdown, PNG, JPEG and WebP, up to 20 MB. Images can be attached and viewed without readable text; source-based QA and study generation require readable extracted content. Extracted DOCX sections are reading sections, not original printed page numbers.
 
 ## Documentation
 
@@ -54,12 +59,20 @@ Supported uploads include PDF, DOCX, PPTX, TXT, Markdown, PNG, JPEG and WebP, up
 | [Usage](docs/usage.md) | Sources, attachments, answer states and study tools |
 | [Architecture](docs/architecture.md) | Components, data flow and API boundaries |
 | [Configuration](docs/configuration.md) | Profiles, storage and local runtimes |
+| [Local performance](docs/local-performance.md) | Answer latency, safe caches and local measurement |
+| [Context management](docs/context-management.md) | Conversation budget, warnings and memory tradeoffs |
+| [Question complexity](docs/question-complexity.md) | Suggestion policy, verification risk and future labeling |
+| [Model migration](docs/model-selection.md) | Exact QA artifact, evidence, setup and rollback |
+| [Data preparation](docs/data-preparation.md) | Every-page inventory, source review, vector integrity and training gates |
+| [Timetable workflow](docs/timetable-workflow.md) | Recognition, user review, confirmation and calendar export |
 | [Deployment](docs/deployment.md) | Running, updating and checking the application |
 | [Testing](docs/testing.md) | Regression checks and real-model evaluation |
 | [Roadmap](docs/roadmap.md) | Priorities and acceptance criteria |
 | [Contributing](CONTRIBUTING.md) | Changes, review and pull requests |
 | [Changelog](CHANGELOG.md) | Product changes |
 | [Security](SECURITY.md) | Data handling and vulnerability reporting |
+
+The [extended public debugging samples](tests/fixtures/EXTENDED_CORPUS.md) add 12 synthetic subjects, 96 review cases and a 14-course timetable. They contain no personal documents or schedules.
 
 The API reference is available at `/docs` on a running instance.
 

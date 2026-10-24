@@ -1,4 +1,5 @@
 from app.bilingual import LocalTranslator
+from test_runtime_model_selection import legacy_windows
 import hashlib
 import json
 import sqlite3
@@ -16,7 +17,7 @@ from app.training_data import (
 )
 
 
-def test_teacher_reads_nested_items_and_translates_each_source(monkeypatch):
+def test_teacher_reads_nested_items_and_translates_each_source(monkeypatch, legacy_windows):
     english = "The mind and the body respond to trauma, and the nervous system changes with experience. " * 4
     vietnamese = "Tâm trí và cơ thể phản ứng với sang chấn, còn hệ thần kinh thay đổi theo trải nghiệm. " * 4
     item = {"question": "Hai đoạn cho phép suy luận điều gì về tâm trí và cơ thể?",
@@ -36,7 +37,7 @@ def test_teacher_reads_nested_items_and_translates_each_source(monkeypatch):
         models.append(kwargs["json"]["model"])
         return Response()
 
-    monkeypatch.setattr("app.training_data.requests.post", fake_post)
+    monkeypatch.setattr("requests.post", fake_post)
     pair = {"filename": "book.pdf", "title": "Book", "sources": [
         {"id": "S1", "page": 1, "text": english}, {"id": "S2", "page": 2, "text": english},
     ]}
@@ -118,7 +119,7 @@ def test_language_detection_and_bilingual_context():
     assert 'id="S2" book="Sách thử nghiệm" page="3"' in context
 
 
-def test_local_translation_is_cached(tmp_path, monkeypatch):
+def test_local_translation_is_cached(tmp_path, monkeypatch, legacy_windows):
     calls = []
 
     class Response:
@@ -132,7 +133,7 @@ def test_local_translation_is_cached(tmp_path, monkeypatch):
         calls.append(kwargs["json"])
         return Response()
 
-    monkeypatch.setattr("app.bilingual.requests.post", fake_post)
+    monkeypatch.setattr("requests.post", fake_post)
     translator = LocalTranslator(cache_path=tmp_path / "translations.db", model="qwen2.5:7b")
     chunk = {
         "safe_text": "The mind and body respond to trauma, and the response of the nervous system changes with experience and the environment."
@@ -144,7 +145,7 @@ def test_local_translation_is_cached(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_runtime_does_not_reuse_legacy_translation_cache(tmp_path, monkeypatch):
+def test_runtime_does_not_reuse_legacy_translation_cache(tmp_path, monkeypatch, legacy_windows):
     source = "The mind and body respond to trauma, and the nervous system changes with experience and the environment."
     translator = LocalTranslator(cache_path=tmp_path / "translations.db", model="qwen2.5:7b")
     legacy_key = hashlib.sha256((translator.model + "\0" + source).encode()).hexdigest()
@@ -163,13 +164,13 @@ def test_runtime_does_not_reuse_legacy_translation_cache(tmp_path, monkeypatch):
         calls.append(kwargs)
         return Response()
 
-    monkeypatch.setattr("app.bilingual.requests.post", post)
+    monkeypatch.setattr("requests.post", post)
     result = translator.translate([{"safe_text": source}])
     assert len(calls) == 1
     assert "môi trường" in result[0]
 
 
-def test_translation_batches_keep_results_when_one_batch_fails(tmp_path, monkeypatch):
+def test_translation_batches_keep_results_when_one_batch_fails(tmp_path, monkeypatch, legacy_windows):
     calls = []
 
     class Response:
@@ -188,7 +189,7 @@ def test_translation_batches_keep_results_when_one_batch_fails(tmp_path, monkeyp
             return Response('{"0":"Bản dịch thứ nhất về quá trình nhận thức và trải nghiệm. Tâm trí và cơ thể phản ứng với sang chấn, hệ thần kinh thay đổi theo trải nghiệm.","1":"Bản dịch thứ hai về quá trình nhận thức và trải nghiệm. Tâm trí và cơ thể phản ứng với sang chấn, hệ thần kinh thay đổi theo trải nghiệm."}')
         return Response("{truncated")
 
-    monkeypatch.setattr("app.bilingual.requests.post", fake_post)
+    monkeypatch.setattr("requests.post", fake_post)
     translator = LocalTranslator(cache_path=tmp_path / "translations.db", model="qwen2.5:7b")
     chunks = [{"safe_text": f"The mind and body respond to trauma and the nervous system changes with experience number {index}. " * 2} for index in range(3)]
     result = translator.translate(chunks)

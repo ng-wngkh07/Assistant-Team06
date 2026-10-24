@@ -4,9 +4,8 @@ import re
 import unicodedata
 import json
 
-import requests
 
-from app.config import DEFAULT_CHAT_MODEL, OLLAMA_BASE_URL
+from app.config import DEFAULT_CHAT_MODEL, OLLAMA_BASE_URL, TRAINED_MODEL_NAME
 
 
 _REPLACEMENTS = {
@@ -53,12 +52,19 @@ def normalize_query_with_model(query: str, model: str = DEFAULT_CHAT_MODEL) -> s
     )
     raw_content = None
     from app.trained_client import TrainedModelClient
-    use_mlx = model in (DEFAULT_CHAT_MODEL, "qwen2.5-3b-4bit", "local")
-    if use_mlx and not TrainedModelClient.available():
-        return base
+    from app.model_resolver import is_mlx_model
+    import sys
+    if sys.platform == "darwin":
+        if not is_mlx_model(model) or not TrainedModelClient.available(model):
+            return base
+        use_mlx = True
+    else:
+        use_mlx = is_mlx_model(model)
+        if use_mlx and not TrainedModelClient.available(model):
+            return base
     if use_mlx:
         try:
-            raw_content = TrainedModelClient().chat_complete(
+            raw_content = TrainedModelClient(model_name=model).chat_complete(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
                 max_tokens=160,
@@ -70,15 +76,18 @@ def normalize_query_with_model(query: str, model: str = DEFAULT_CHAT_MODEL) -> s
         return base
     if raw_content is None:
         try:
-            response = requests.post(
-                OLLAMA_BASE_URL.rstrip("/") + "/api/chat",
-                json={"model": model, "stream": False, "format": "json", "think": False,
-                      "options": {"temperature": 0, "num_predict": 160},
-                      "messages": [{"role": "user", "content": prompt}]}, timeout=30,
+            from app.ollama_client import OllamaClient
+            client = OllamaClient()
+            client._verify_model_locality(model)
+            resp = client.chat_sync(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                temperature=0,
+                num_predict=160,
+                num_ctx=8192,
             )
-            response.raise_for_status()
-            raw_content = response.json()["message"]["content"]
-        except (requests.RequestException, ValueError, KeyError, TypeError):
+            raw_content = resp.get("message", {}).get("content", "")
+        except Exception:
             return base
 
     try:

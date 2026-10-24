@@ -192,7 +192,7 @@ def test_translator_handles_gpu_busy_gracefully(tmp_path, monkeypatch):
     assert result == {}
 
 
-def test_vision_ocr_detects_length_truncation_and_keep_alive(monkeypatch):
+def test_vision_ocr_detects_length_truncation_and_keep_alive(monkeypatch, legacy_model_http):
     from app.vision_ocr import VisionOCRManager
     from pathlib import Path
     captured_payloads = []
@@ -206,7 +206,7 @@ def test_vision_ocr_detects_length_truncation_and_keep_alive(monkeypatch):
         captured_payloads.append(json)
         return FakeResponse()
 
-    monkeypatch.setattr("app.vision_ocr.requests.post", fake_post)
+    legacy_model_http(fake_post)
     mgr = VisionOCRManager()
     # Exercise truncation after image validation with a real, nonblank fixture.
     image_bytes = (Path(__file__).parent / "fixtures/timetables/demo.png").read_bytes()

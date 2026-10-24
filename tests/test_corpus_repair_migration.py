@@ -29,7 +29,7 @@ def fixture_db(tmp_path):
         db.execute("INSERT INTO chunks(id,doc_id,book_title,filename,page_num,chunk_index,text,embedding) VALUES(17,41,'Code','code.pdf',1,0,'class Sinh Vien { int ho Ten; };',?)",(b'old-vector',))
         db.execute('CREATE TABLE corpus_source_pages(filename TEXT,page_num INTEGER,source_sha256 TEXT,state TEXT,chunks_sha256 TEXT,review_path TEXT,review_sha256 TEXT,checked_at TEXT,PRIMARY KEY(filename,page_num))')
         db.execute("INSERT INTO corpus_source_pages VALUES('code.pdf',1,?,'text_verified','','','','')",(sha,))
-        db.execute('CREATE TABLE corpus_vector_provenance(chunk_id INTEGER PRIMARY KEY,text_sha256 TEXT,model_digest TEXT,vector_sha256 TEXT,dimensions INTEGER,full_text INTEGER,embedded_at TEXT)')
+        db.execute('CREATE TABLE IF NOT EXISTS corpus_vector_provenance(chunk_id INTEGER PRIMARY KEY,text_sha256 TEXT,model_digest TEXT,vector_sha256 TEXT,dimensions INTEGER,full_text INTEGER,embedded_at TEXT)')
         db.execute("INSERT INTO corpus_vector_provenance VALUES(17,'old-text','model','old-vector',1024,1,'')")
     return db_path, src, pdf
 

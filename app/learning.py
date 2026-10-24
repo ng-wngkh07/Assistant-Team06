@@ -224,7 +224,16 @@ class LearningService:
         answers = {}
         ans_counts = Counter()
 
-        for chunk in chunks:
+        # Markdown headings may occupy their own indexed section. Keep their
+        # number separately, then bind content to its actual body chunk/page.
+        pending_markdown = None
+        def markdown_blocks():
+            for chunk in chunks:
+                for block in re.split(r"(?m)(?=^#{1,6}\s)", chunk.get("text", "")):
+                    if block.strip():
+                        yield dict(chunk, text=block.strip())
+
+        for chunk in markdown_blocks():
             raw_text = chunk.get("text", "").replace("\xa0", " ")
             text = raw_text.strip()
             if not text:
@@ -245,6 +254,43 @@ class LearningService:
                 if self.document_lookup.pdf_path(filename)
                 else None
             )
+
+            numbered_heading = re.match(
+                r"(?i)^#{1,6}\s+(bài\s+tập|exercises?|problems?|đáp\s+án|lời\s+giải|answers?|solutions?)"
+                r"\s+(?:(?:bài|câu|exercise|problem)\s+)?(\d+(?:[.:]\d+)*)[.:]?[^\n]*(?:\n|$)", text,
+            )
+            if numbered_heading:
+                pending_markdown = {
+                    "kind": numbered_heading.group(1).casefold(),
+                    "id": numbered_heading.group(2),
+                    "heading": text.splitlines()[0],
+                    "source": {"doc_id": doc_id, "page_num": page_num,
+                               "chunk_id": chunk_id, "snippet": text.splitlines()[0]},
+                }
+                body = text[numbered_heading.end():].strip()
+            elif pending_markdown and not re.match(r"^#{1,6}\s", text):
+                body = text
+            else:
+                pending_markdown = None
+                body = ""
+
+            if pending_markdown:
+                if body:
+                    info = pending_markdown
+                    source = {
+                        "doc_id": doc_id, "page_num": page_num, "filename": filename,
+                        "title": title, "chunk_id": chunk_id, "pdf_url": pdf_url,
+                        "snippet": body, "heading_source": info["source"],
+                    }
+                    if info["kind"] in {"đáp án", "lời giải", "answer", "answers", "solution", "solutions"}:
+                        ans_counts[info["id"]] += 1
+                        answers.setdefault(info["id"], {"answer": body, "source": source})
+                    else:
+                        exercises.append({"id": info["id"],
+                                          "question": info["heading"] + "\n" + body,
+                                          "source": source})
+                    pending_markdown = None
+                continue
 
             parts = re.split(
                 r"(?im)(?:^|\n)\s*(?:#+\s*)?(bài\s+tập|exercises|practice\s+problems?|đáp\s+án|lời\s+giải|answers|solutions|answer\s+key|checkpoints?|lý\s+thuyết|theory)\b",
@@ -391,11 +437,17 @@ class LearningService:
             "Trả về JSON thuần (không dùng markdown block) theo định dạng: "
             '{"solution": "lời giải vắn tắt", "final_answer": "kết quả đáp án ngắn gọn"}'
         )
+        def _clean_think(t: str) -> str:
+            if not t:
+                return ""
+            s = re.sub(r"(?is)<\s*(?:think|analysis|reasoning)\b[^>]*>.*?<\s*/\s*(?:think|analysis|reasoning)\s*>", "", t)
+            return re.sub(r"(?is)^.*?<\s*/\s*(?:think|analysis|reasoning)\s*>", "", s).strip()
+
         try:
             solver_raw = self.practice_service._chat_complete(solver_prompt, model, 600)
             solver_data = self.practice_service._parse_json(solver_raw)
-            solution = str(solver_data.get("solution", "")).strip()
-            final_answer = str(solver_data.get("final_answer", "")).strip()
+            solution = _clean_think(str(solver_data.get("solution", "")))
+            final_answer = _clean_think(str(solver_data.get("final_answer", "")))
             if not solution and not final_answer:
                 return None, "unverified"
         except Exception:
@@ -434,7 +486,7 @@ class LearningService:
                     chosen_answer = f"{solution}\nĐáp án: {final_answer}"
                 else:
                     chosen_answer = final_answer or solution
-                return chosen_answer, "model_verified"
+                return _clean_think(chosen_answer), "model_verified"
         except Exception:
             pass
 
@@ -551,4 +603,7 @@ class LearningService:
             if len(all_items) >= limit:
                 break
 
-        return {"items": all_items[:limit]}
+        return {
+            "items": all_items[:limit],
+            "processing_level": "careful",
+        }

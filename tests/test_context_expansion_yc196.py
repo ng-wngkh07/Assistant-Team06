@@ -3,6 +3,11 @@ import json
 import pytest
 from app import dialogue
 
+@pytest.fixture(autouse=True)
+def isolated_model_resolver(tmp_path, monkeypatch):
+    from app import model_resolver
+    monkeypatch.setattr(model_resolver, 'MLX_3B_DIR', tmp_path)
+
 @pytest.mark.parametrize('requested,model_limit,expected', [(16384,32768,16384),(32768,32768,32768),(16384,8192,8192)])
 def test_verified_native_window_can_be_selected(tmp_path,monkeypatch,requested,model_limit,expected):
     (tmp_path/'config.json').write_text(json.dumps({'max_position_embeddings':model_limit}))

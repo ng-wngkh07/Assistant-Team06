@@ -1,0 +1,142 @@
+{
+  "synthetic": true,
+  "license": "CC0-1.0",
+  "description": "Authored OCR positions, not output from a real image or evidence of recognition quality.",
+  "lines": [
+    {
+      "text": "Tên MH",
+      "bounds": [
+        0.2,
+        0.875,
+        0.15,
+        0.025
+      ],
+      "confidence": 0.99
+    },
+    {
+      "text": "Lịch LT",
+      "bounds": [
+        0.59,
+        0.875,
+        0.12,
+        0.025
+      ],
+      "confidence": 0.99
+    },
+    {
+      "text": "Lịch TH",
+      "bounds": [
+        0.79,
+        0.875,
+        0.12,
+        0.025
+      ],
+      "confidence": 0.99
+    },
+    {
+      "text": "DEMO101",
+      "bounds": [
+        0.04,
+        0.745,
+        0.12,
+        0.025
+      ],
+      "confidence": 0.99
+    },
+    {
+      "text": "Logic",
+      "bounds": [
+        0.2,
+        0.745,
+        0.12,
+        0.025
+      ],
+      "confidence": 0.99
+    },
+    {
+      "text": "T2 08:00-09:30 (A101)",
+      "bounds": [
+        0.53,
+        0.745,
+        0.24,
+        0.025
+      ],
+      "confidence": 0.99
+    },
+    {
+      "text": "DEMO102",
+      "bounds": [
+        0.04,
+        0.545,
+        0.12,
+        0.025
+      ],
+      "confidence": 0.99
+    },
+    {
+      "text": "Xác suất và thống kê",
+      "bounds": [
+        0.2,
+        0.545,
+        0.32,
+        0.025
+      ],
+      "confidence": 0.99
+    },
+    {
+      "text": "T3 10:00-11:30 (B202)",
+      "bounds": [
+        0.53,
+        0.545,
+        0.24,
+        0.025
+      ],
+      "confidence": 0.99
+    },
+    {
+      "text": "DEMO103",
+      "bounds": [
+        0.04,
+        0.345,
+        0.12,
+        0.025
+      ],
+      "confidence": 0.99
+    },
+    {
+      "text": "Mạng máy tính",
+      "bounds": [
+        0.2,
+        0.345,
+        0.22,
+        0.025
+      ],
+      "confidence": 0.99
+    },
+    {
+      "text": "và truyền dữ liệu",
+      "bounds": [
+        0.2,
+        0.31,
+        0.28,
+        0.025
+      ],
+      "confidence": 0.99
+    },
+    {
+      "text": "T4 13:30-15:00 (C303)",
+      "bounds": [
+        0.53,
+        0.345,
+        0.24,
+        0.025
+      ],
+      "confidence": 0.99
+    }
+  ],
+  "expected_courses": [
+    "Logic",
+    "Xác suất và thống kê",
+    "Mạng máy tính và truyền dữ liệu"
+  ]
+}

@@ -13,6 +13,9 @@ def mock_client(tmp_path, monkeypatch):
     """Client fixture using an isolated temporary history database to ensure zero history contamination."""
     test_db = tmp_path / "test_history.db"
     monkeypatch.setattr(server, "history_store", HistoryStore(test_db))
+    # These legacy-runtime tests explicitly select local Ollama. The Mac default
+    # now uses MLX and must be tested independently of the daemon's availability.
+    monkeypatch.setattr(server, "DEFAULT_CHAT_MODEL", "qwen2.5:3b")
     return TestClient(app)
 
 
@@ -21,7 +24,7 @@ def test_health_all_healthy(mock_client, monkeypatch):
     monkeypatch.setattr(server.ollama, "check_health", lambda: True)
     monkeypatch.setattr(server.gpu_coordinator, "get_status", lambda: {"state": "idle", "busy": False, "pid": None, "message": "Sẵn sàng"})
 
-    monkeypatch.setattr(server.TrainedModelClient, "available", lambda: True)
+    monkeypatch.setattr(server.TrainedModelClient, "available", lambda *args, **kwargs: True)
     monkeypatch.setattr(server.ollama, "list_models", lambda: [{"name": server.DEFAULT_CHAT_MODEL}])
 
     resp = mock_client.get("/api/health")
@@ -138,3 +141,44 @@ print("PASS")
     result = subprocess.run([sys.executable, "-c", check_code], capture_output=True, text=True)
     assert result.returncode == 0
     assert "PASS" in result.stdout
+
+
+@pytest.mark.parametrize('available', [True, False])
+def test_native_mlx_health_needs_no_ollama_daemon(tmp_path, monkeypatch, available):
+    import sys
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(server, 'DEFAULT_CHAT_MODEL', 'qwen3.5-9b-4bit')
+    monkeypatch.setattr(server, 'history_store', HistoryStore(tmp_path/'native-history.db'))
+    monkeypatch.setattr(server.TrainedModelClient, 'available', lambda *args, **kwargs: available)
+    monkeypatch.setattr(server.gpu_coordinator, 'get_status', lambda: {'state':'idle','busy':False,'message':'Sẵn sàng'})
+    def unexpected_daemon():
+        raise AssertionError('Native Mac model readiness must not call the Ollama daemon')
+    monkeypatch.setattr(server.ollama, 'check_health', unexpected_daemon)
+    with TestClient(app) as client:
+        response=client.get('/api/health')
+    assert response.status_code == 200
+    data=response.json()
+    assert data['web_healthy'] is True
+    assert data['inference_ready'] is available
+    assert data['service_state'] == ('healthy' if available else 'degraded')
+@pytest.mark.parametrize("launcher", ["run", "scripts.dev"])
+@pytest.mark.parametrize("reload_enabled", [True, False])
+def test_development_reload_does_not_scan_private_data_and_model_directories(monkeypatch, launcher, reload_enabled):
+    import importlib
+    from pathlib import Path
+    from types import SimpleNamespace
+    import uvicorn
+    module = importlib.import_module(launcher)
+    calls = []
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: calls.append(kwargs))
+    if launcher == "run":
+        module.cmd_serve(SimpleNamespace(host="127.0.0.1", port=8123, reload=reload_enabled))
+    else:
+        monkeypatch.setattr(module, "configure", lambda profile: None)
+        monkeypatch.setattr(module.sys, "argv", ["dev.py", "serve", "--profile", "local", *(["--reload"] if reload_enabled else [])])
+        assert module.main() == 0
+    assert calls[0]["reload"] is reload_enabled
+    if reload_enabled:
+        assert calls[0]["reload_dirs"] == [str(Path(__file__).resolve().parents[1] / "app")]
+    else:
+        assert "reload_dirs" not in calls[0]
