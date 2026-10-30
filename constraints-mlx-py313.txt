@@ -2,7 +2,7 @@
 # Fresh isolated installation and pip check verified; model/training not run.
 annotated-doc==0.0.5
 anyio==4.15.1
-certifi==2026.7.22
+certifi==2026.10.18
 click==8.5.0
 filelock==4.0.5
 fsspec==2026.9.0
