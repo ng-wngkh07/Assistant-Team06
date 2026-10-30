@@ -6,6 +6,6 @@ pydantic>=2,<3
 uvicorn>=0.28,<1
 requests>=2.31,<3
 numpy>=1.26,<3
-pillow>=10,<13
+pillow>=13.0.0,<14
 defusedxml>=0.7.1,<1
 tzdata>=2026.5,<2027
