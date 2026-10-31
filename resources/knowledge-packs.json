@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "packs": {
+    "native": {
+      "path": "resources/demo-1-native.zip",
+      "sha256": "c1bdee521e80365ea3eb47b694a6940b9cd0475a788eb7294ead0c8074ffdc19"
+    },
+    "ollama": {
+      "path": "resources/demo-1-ollama.zip",
+      "sha256": "c91091f3e07842f49ef1feae131ebab1846582c920f01c1624d126bc6b7cc9b2"
+    }
+  }
+}
