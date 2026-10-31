@@ -2,7 +2,8 @@
 
 Ensures that only semantically reviewed and accepted adapters can be activated,
 preventing legacy ready.json from automatically promoting adapters.
-Defaults to the shared unadapted Qwen2.5-3B-Instruct-4bit base model.
+The current product uses the unadapted Qwen3.5 9B base. Historical adapter
+records remain auditable and are never automatically applied to that base.
 """
 
 import json

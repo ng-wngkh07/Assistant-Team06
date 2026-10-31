@@ -16,6 +16,7 @@ import unicodedata
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from app.sample_ledger import SampleLedger
+from app.config import MLX_MODEL_DIR
 
 PARENT_DATA = 'b094b041159f2604db6058401159fcdf20c9f51b45b22a999f4d33e8ba2b34a5'
 PARENT_MANIFEST = '84f4fa58462c1160c9dfea7b158d04e7bf43048380e592c8f4d69511bb304b71'
@@ -44,12 +45,15 @@ def write_new(path, data):
 def exact_tokens(messages):
     program = '''import json,sys
 from transformers import AutoTokenizer
+from pathlib import Path
 v=json.load(sys.stdin)
-t=AutoTokenizer.from_pretrained(v['model'],local_files_only=True)
+from app.model_resolver import validate_native_model_config
+validate_native_model_config(Path(v['model']))
+t=AutoTokenizer.from_pretrained(v['model'],local_files_only=True,trust_remote_code=False)
 print(json.dumps([len(t.encode(t.apply_chat_template(m,tokenize=False,add_generation_prompt=False),add_special_tokens=False)) for m in v['messages']]))
 '''
     p = subprocess.run([str(ROOT/'.train-venv/bin/python'), '-c', program],
-        input=json.dumps({'model':str(ROOT/'data/models/qwen2.5-3b-4bit'), 'messages':messages}),
+        input=json.dumps({'model':str(MLX_MODEL_DIR), 'messages':messages}),
         text=True, capture_output=True, timeout=120, check=True)
     lengths = json.loads(p.stdout)
     if len(lengths) != len(messages) or any(type(n) is not int or n<1 for n in lengths):

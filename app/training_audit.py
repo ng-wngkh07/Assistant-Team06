@@ -127,7 +127,7 @@ def audit(data_dir: Path, model: str = DEFAULT_CHAT_MODEL) -> dict:
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in approved_records),
         encoding="utf-8",
     )
-    summary = write_training_files(approved_records, data_dir, previous_summary.get("teacher_model", "qwen2.5:7b"))
+    summary = write_training_files(approved_records, data_dir, previous_summary.get("teacher_model", "unknown"))
     summary["approved_analysis_examples"] = sum(len(record["items"]) for record in approved_records)
     summary["rejected_basic_quality_records"] = rejected_basic_quality_records
     reviewed_records = sum(

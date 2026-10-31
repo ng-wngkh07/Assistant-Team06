@@ -849,7 +849,10 @@ from pathlib import Path
 from transformers import AutoTokenizer
 from mlx_lm.tuner.datasets import ChatDataset
 
-model_dir = Path('{ROOT_DIR}/data/models/qwen2.5-3b-4bit')
+from app.config import MLX_MODEL_DIR
+from app.model_resolver import validate_native_model_config
+model_dir = MLX_MODEL_DIR
+validate_native_model_config(model_dir)
 tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True)
 
 train_path = Path('{OUTPUT_DIR}/train.jsonl')

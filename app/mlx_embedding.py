@@ -88,29 +88,31 @@ def determine_identity(model_path: Path) -> str:
 
 
 def main():
-    request = json.load(sys.stdin)
+    streaming = "--stream" in sys.argv[1:]
+    request = json.loads(sys.stdin.readline()) if streaming else json.load(sys.stdin)
     model_path = Path(request["model_path"])
-    texts = request.get("texts", [])
-    max_length = int(request.get("max_length", 512))
-
-    if not model_path.exists():
+    max_length = int(request.get("max_length", 2048))
+    if not 1 <= max_length <= 8192:
+        raise ValueError("Embedding max_length must be in [1, 8192]")
+    if not model_path.is_dir():
         raise FileNotFoundError(f"Thư mục mô hình embedding không tồn tại: {model_path}")
-
-    model, tokenizer = load(
-        str(model_path),
-        tokenizer_config={"local_files_only": True, "trust_remote_code": False},
-    )
-
     model_identity = determine_identity(model_path)
+    model, tokenizer = load(
+        str(model_path), tokenizer_config={"local_files_only": True, "trust_remote_code": False},
+    )
+    if streaming:
+        print(json.dumps({"ready": True, "model_identity": model_identity}), flush=True)
+        for line in sys.stdin:
+            batch = json.loads(line)
+            result = embed_texts(model, tokenizer, batch["texts"], max_length, model_identity)
+            print(json.dumps(result), flush=True)
+    else:
+        print(json.dumps(embed_texts(model, tokenizer, request.get("texts", []), max_length, model_identity)))
 
+
+def embed_texts(model, tokenizer, texts, max_length, model_identity):
     if not texts:
-        print(json.dumps({
-            "vectors": [],
-            "dimensions": 1024,
-            "pooling": "CLS, float32 L2 normalization",
-            "model_identity": model_identity,
-        }))
-        return
+        return {"vectors": [], "dimensions": 1024, "model_identity": model_identity}
 
     # Lossless source chunk coverage: reject over-limit instead of false full_text
     for idx, text in enumerate(texts):
@@ -128,13 +130,13 @@ def main():
     mx.eval(vecs)
 
     vectors = vecs.tolist()
-    print(json.dumps({
+    return {
         "vectors": vectors,
         "count": len(vectors),
         "dimensions": len(vectors[0]) if vectors else 1024,
         "pooling": "CLS, float32 L2 normalization",
         "model_identity": model_identity,
-    }))
+    }
 
 
 if __name__ == "__main__":

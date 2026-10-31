@@ -92,6 +92,41 @@ def test_subtopic_generation_retrieves_theory_without_requiring_exact_book_title
     assert all(passage['doc_id']==1 for passage in captured['passages'])
 
 
+def test_hard_generation_prioritizes_applicable_rules_over_definition_tables(service):
+    learning, db = service
+    definition = ('Trí nhớ làm việc: khái niệm, định nghĩa, tính chất, cơ chế. '
+                  '| Định nghĩa | Cơ chế |\n|---|---|\n'
+                  '| Trí nhớ làm việc | Giữ thông tin tạm thời |')
+    rules = ('Trí nhớ làm việc giữ thông tin tạm thời. '
+             'Nếu hai tác vụ cùng cần một nguồn xử lý thì chúng có thể cản trở nhau. '
+             'Chỉ được kết luận có giao thoa khi hai tác vụ cùng cần nguồn xử lý ấy; '
+             'không được coi sự chậm lại là bằng chứng chắc chắn của quên.')
+    with sqlite3.connect(db) as conn:
+        conn.execute('UPDATE chunks SET text=? WHERE id=1', (definition,))
+        conn.execute('INSERT INTO chunks(id,doc_id,book_title,filename,page_num,chunk_index,text) '
+                     'VALUES(5,1,?,?,?,?,?)', ('Trí nhớ','memory.pdf',5,0,rules))
+    captured = {}
+    learning.practice_service.generate_from_passages = lambda **kw: captured.update(kw) or {}
+    learning.generate(topic='Trí nhớ', count=5, difficulty='hard', model='test-model')
+    assert captured['passages'][0]['page_num'] == 5
+    assert captured['enforce_difficulty'] is True
+
+
+def test_repeated_course_header_does_not_hide_distinct_source_rules(service):
+    learning, db = service
+    header = 'Trí nhớ làm việc. Ghi chú môn học, phần lý thuyết. ' * 4
+    first = header + 'Nếu thông tin không được ôn lại thì dấu vết có thể suy yếu.'
+    second = header + 'Khi hai tác vụ cùng cần nguồn xử lý thì giao thoa có thể xuất hiện.'
+    with sqlite3.connect(db) as conn:
+        conn.execute('UPDATE chunks SET text=? WHERE id=1', (first,))
+        conn.execute('INSERT INTO chunks(id,doc_id,book_title,filename,page_num,chunk_index,text) '
+                     'VALUES(5,1,?,?,?,?,?)', ('Trí nhớ','memory.pdf',5,0,second))
+    captured = {}
+    learning.practice_service.generate_from_passages = lambda **kw: captured.update(kw) or {}
+    learning.generate(topic='Trí nhớ', count=2, difficulty='medium', model='test-model')
+    assert {p['page_num'] for p in captured['passages']} == {1,5}
+
+
 def test_duplicate_source_answer_keys_are_ambiguous_not_first_key_wins(service):
     learning,db=service
     with sqlite3.connect(db) as conn:
@@ -218,3 +253,21 @@ def test_late_unicode_pdf_theory_is_used_for_generation_and_solver(service):
     theory=learning._get_relevant_theory_chunks(1,'Trí nhớ',max_chunks=4)
     assert any(p['page_num']==215 for p in theory)
     assert not any(p['text'].startswith('Giới thiệu') for p in theory)
+
+
+@pytest.mark.parametrize('advice', [
+    'Trí nhớ – ghi chú môn học\n14. Lượt 1 lấy điểm chắc: trả lời câu lý thuyết trước.\n'
+    '15. Nếu kẹt quá 5 phút, chuyển sang câu khác.\n16. Chừa ít nhất 10 phút để kiểm tra bài.\n'
+    '17. Phải ghi rõ số câu; không được bỏ ý nhỏ.',
+    'Trí nhớ – course notes\nExam strategy\nAllocate ten minutes to checking answers. '
+    'If stuck, skip to the next question. You must include question numbers.'
+])
+def test_exam_time_advice_is_not_curriculum_evidence_for_topic_questions(service, advice):
+    learning, db = service
+    with sqlite3.connect(db) as conn:
+        conn.execute('INSERT INTO chunks(id,doc_id,book_title,filename,page_num,chunk_index,text) '
+                     'VALUES(5,1,?,?,?,?,?)', ('Trí nhớ','memory.pdf',5,0,advice))
+    captured = {}
+    learning.practice_service.generate_from_passages = lambda **kw: captured.update(kw) or {}
+    learning.generate(topic='Trí nhớ', count=3, difficulty='hard', model='test-model')
+    assert [p['page_num'] for p in captured['passages']] == [1]

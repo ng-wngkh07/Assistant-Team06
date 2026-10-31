@@ -176,10 +176,22 @@ document.addEventListener("DOMContentLoaded", () => {
         modeBadge.style.cssText = "display: inline-block; font-size: 0.78rem; margin-bottom: 6px; padding: 2px 8px; border-radius: 4px; background: rgba(59, 130, 246, 0.08); color: var(--primary, #2563eb);";
         modeBadge.textContent = "🧠 Mức xử lý: Kiểm tra kỹ (đối chiếu 2 bước qua nguồn)";
         practiceBody.appendChild(modeBadge);
+        if (practiceSession.warning) {
+            const warning = document.createElement("p");
+            warning.className = "practice-error";
+            warning.setAttribute("role", "status");
+            warning.textContent = practiceSession.warning;
+            practiceBody.appendChild(warning);
+        }
 
         const count = document.createElement("p");
         count.className = "practice-progress text-muted";
-        count.textContent = `Câu ${questionIndex + 1}/${practiceSession.questions.length}`;
+        const diffText = practiceSession.difficulty === "easy" ? "Dễ" : practiceSession.difficulty === "hard" ? "Khó" : "Trung bình";
+        if (practiceSession.requested_count && practiceSession.requested_count > practiceSession.questions.length) {
+            count.textContent = `Câu ${questionIndex + 1}/${practiceSession.questions.length} (yêu cầu: ${practiceSession.requested_count} câu · độ khó: ${diffText})`;
+        } else {
+            count.textContent = `Câu ${questionIndex + 1}/${practiceSession.questions.length} · độ khó: ${diffText}`;
+        }
         const prompt = document.createElement("h3");
         prompt.className = "practice-question";
         prompt.textContent = question.question;
@@ -364,7 +376,12 @@ document.addEventListener("DOMContentLoaded", () => {
         const heading = document.createElement("h3");
         heading.textContent = "Hoàn thành lượt luyện tập";
         const summary = document.createElement("p");
-        summary.textContent = `Bạn trả lời đúng ${correct}/${total} câu.`;
+        const diffText = practiceSession?.difficulty === "easy" ? "Dễ" : practiceSession?.difficulty === "hard" ? "Khó" : "Trung bình";
+        if (practiceSession?.requested_count && practiceSession.requested_count > total) {
+            summary.textContent = `Bạn trả lời đúng ${correct}/${total} câu (đã tạo ${total}/${practiceSession.requested_count} câu đạt kiểm định · độ khó: ${diffText}).`;
+        } else {
+            summary.textContent = `Bạn trả lời đúng ${correct}/${total} câu · độ khó: ${diffText}.`;
+        }
         const review = makeButton("Mở tab Ôn tập", "btn btn-outline", () => {
             practiceDialog.close();
             openReview();
@@ -615,8 +632,11 @@ document.addEventListener("DOMContentLoaded", () => {
             if (learningGenerateStatus) learningGenerateStatus.textContent = "Vui lòng nhập hoặc chọn chủ đề câu hỏi.";
             return;
         }
-        const rawCount = parseInt(learningCount?.value, 10);
-        const count = Number.isInteger(rawCount) && rawCount >= 1 && rawCount <= 3 ? rawCount : 1;
+        const count = Number(learningCount?.value);
+        if (!Number.isInteger(count) || count < 1 || count > 10) {
+            if (learningGenerateStatus) learningGenerateStatus.textContent = "Số câu phải là số nguyên từ 1 đến 10.";
+            return;
+        }
         const difficulty = ["easy", "medium", "hard"].includes(learningDifficulty?.value) ? learningDifficulty.value : "medium";
         if (requestPending) return;
         requestPending = true;
@@ -625,7 +645,7 @@ document.addEventListener("DOMContentLoaded", () => {
         practiceSubtitle.textContent = `Chủ đề: ${topic} · ${difficulty === "easy" ? "Dễ" : difficulty === "hard" ? "Khó" : "Trung bình"}`;
         practiceSession = null;
         quizResults = [];
-        showMessage(`Đang tạo ${count} câu hỏi từ tài liệu về «${topic}»…`);
+        showMessage(`Đang tạo ${count} câu hỏi từ tài liệu về «${topic}»… Câu hỏi được tạo và kiểm tra theo từng nhóm; quá trình này có thể mất vài phút.`);
         try {
             const body = {
                 topic,
@@ -637,8 +657,10 @@ document.addEventListener("DOMContentLoaded", () => {
             practiceSession = await postJson("/api/learning/generate", body);
             if (practiceSession) practiceSession.topic = topic;
             questionIndex = 0;
+            if (learningGenerateStatus) learningGenerateStatus.textContent = practiceSession.warning || `Đã tạo ${practiceSession.count}/${count} câu · ${difficulty === "easy" ? "Dễ" : difficulty === "hard" ? "Khó" : "Trung bình"}.`;
             renderQuestion();
         } catch (error) {
+            if (learningGenerateStatus) learningGenerateStatus.textContent = error.message;
             showMessage(error.message, true);
         } finally {
             requestPending = false;

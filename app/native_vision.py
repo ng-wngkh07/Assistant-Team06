@@ -12,7 +12,7 @@ from PIL import Image, ImageOps
 
 from app.config import BASE_DIR
 from app.gpu_lock import gpu_coordinator
-from app.model_resolver import MLX_9B_DIR, resolve_mlx_model_dir
+from app.model_resolver import MLX_9B_DIR, resolve_mlx_model_dir, validate_native_model_config
 
 MAX_INFERENCE_EDGE = 1024
 
@@ -30,6 +30,7 @@ class NativeVisionClient:
         The prefix denotes a content fingerprint, never an inferred Hub revision.
         """
         from app.trained_client import TrainedModelClient
+        validate_native_model_config(self.model_dir)
         if not TrainedModelClient._verify_weights(self.model_dir):
             raise RuntimeError("Incomplete local vision artifact")
         files = set(self.model_dir.glob("*.safetensors"))
@@ -50,7 +51,13 @@ class NativeVisionClient:
 
     @classmethod
     def available(cls, model_dir: Optional[Path] = None) -> bool:
+        if sys.platform != "darwin":
+            return False
         md = Path(model_dir or MLX_9B_DIR)
+        try:
+            validate_native_model_config(md)
+        except ValueError:
+            return False
         if not (md / "processor_config.json").is_file() or not (md / "preprocessor_config.json").is_file():
             return False
         if sys.platform == "darwin":

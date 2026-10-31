@@ -131,7 +131,8 @@ def build(source: Path, destination: Path) -> dict:
     (destination / "approved_manifest.jsonl").write_text(
         "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in kept), encoding="utf-8"
     )
-    summary = write_training_files(kept, destination, "qwen2.5:7b")
+    teachers = sorted({str(record.get("teacher_model", "unknown")) for record in kept})
+    summary = write_training_files(kept, destination, ", ".join(teachers) or "unknown")
     summary.update({
         "upstream_audit_complete": True,
         "upstream_approved_records": len(records),

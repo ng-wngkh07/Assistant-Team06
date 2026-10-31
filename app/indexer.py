@@ -172,6 +172,9 @@ class KnowledgeIndexer:
                 return 0
         else:
             resolved_model = self.ollama.find_best_embed_model(embed_model) or embed_model
+            vector_identity = self.ollama.embedding_identity(resolved_model)
+            if not vector_identity:
+                raise RuntimeError("Không xác minh được digest mô hình embedding cục bộ; không ghi vector không rõ nguồn gốc.")
             test_emb = self.ollama.get_embedding("test", model=resolved_model)
             if test_emb is None:
                 logger.info(f"Mô hình embedding '{resolved_model}' chưa khả dụng trong Ollama để bổ sung embedding.")
@@ -202,11 +205,17 @@ class KnowledgeIndexer:
             for start in range(0, total_missing, batch_size):
                 batch = missing_chunks[start:start + batch_size]
                 if use_native and native_client:
-                    vectors = native_client.get_batch_embeddings([row["text"] for row in batch])
+                    vectors = native_client.get_batch_embeddings([row["text"] for row in batch], max_length=2048)
+                    if native_client.get_identity() != resolved_model:
+                        raise RuntimeError("Embedding artifact changed during backfill")
                 else:
                     vectors = self.ollama.get_batch_embeddings(
                         [row["text"] for row in batch], model=resolved_model
                     )
+                    if self.ollama.embedding_identity(resolved_model) != vector_identity:
+                        raise RuntimeError("Embedding artifact changed during backfill")
+                if len(vectors) != len(batch):
+                    raise RuntimeError("Embedding returned an incomplete batch")
                 for row, vec in zip(batch, vectors):
                     if vec:
                         vec_blob = pack_vector(vec)
@@ -220,7 +229,7 @@ class KnowledgeIndexer:
                             INSERT OR REPLACE INTO corpus_vector_provenance
                             (chunk_id, text_sha256, model_digest, vector_sha256, dimensions, full_text, embedded_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (row["id"], text_sha, resolved_model, vec_sha, len(vec), 1, now_iso))
+                        """, (row["id"], text_sha, resolved_model if use_native else vector_identity, vec_sha, len(vec), 1, now_iso))
                         count += 1
                 conn.commit()
                 if progress_callback:
@@ -639,11 +648,36 @@ class KnowledgeIndexer:
         use_native = False
         native_client = None
         native_embed_models = {"bge-m3-mlx-fp16", "bge-m3-mlx", "native-bge", "bge-m3"}
-        is_native_target = (embed_model in native_embed_models) or (embed_model is None and sys.platform == "darwin")
-        if sys.platform == "darwin" and can_embed and is_native_target:
+
+        installed_digest = None
+        try:
+            with self.get_connection() as conn:
+                row = conn.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
+                if row:
+                    installed_digest = row[0]
+        except Exception:
+            pass
+
+        if installed_digest and installed_digest.startswith("ollama-sha256:"):
+            use_native = False
+        elif installed_digest and installed_digest.startswith("bge-m3-mlx-fp16@"):
+            if sys.platform != "darwin":
+                raise RuntimeError("Cannot index native BGE pack without native MLX on macOS")
+            use_native = True
+        elif os.getenv("EMBED_BACKEND") == "ollama":
+            use_native = False
+        elif os.getenv("EMBED_BACKEND") in ("native", "mlx"):
+            if sys.platform != "darwin":
+                raise RuntimeError("Native embedding requires macOS")
+            use_native = True
+        elif sys.platform == "darwin" and (embed_model in native_embed_models or embed_model is None or "mlx" in str(embed_model)):
+            use_native = True
+        else:
+            use_native = False
+
+        if sys.platform == "darwin" and can_embed and use_native:
             from app.native_embedding import NativeEmbeddingClient, BGE_NATIVE_IDENTITY
             if NativeEmbeddingClient.available():
-                use_native = True
                 native_client = NativeEmbeddingClient()
             else:
                 raise RuntimeError("Mô hình MLX embedding chưa sẵn sàng trên Mac; không được hạ cấp sang HTTP.")
@@ -656,11 +690,15 @@ class KnowledgeIndexer:
             batch = chunks[start:start + 32]
             if can_embed and embed_model:
                 if use_native and native_client:
-                    vectors = native_client.get_batch_embeddings([c["text"] for c in batch])
+                    vectors = native_client.get_batch_embeddings([c["text"] for c in batch], max_length=2048)
                     model_digest = getattr(native_client, "get_identity", lambda: BGE_NATIVE_IDENTITY)()
                 else:
+                    model_digest = self.ollama.embedding_identity(embed_model)
+                    if not model_digest:
+                        raise RuntimeError("Không xác minh được digest mô hình embedding cục bộ.")
                     vectors = self.ollama.get_batch_embeddings([c["text"] for c in batch], model=embed_model)
-                    model_digest = embed_model
+                    if self.ollama.embedding_identity(embed_model) != model_digest:
+                        raise RuntimeError("Mô hình embedding đã thay đổi trong khi lập chỉ mục.")
             else:
                 vectors = [None] * len(batch)
                 model_digest = None

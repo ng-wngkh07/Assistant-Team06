@@ -4,7 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from app.config import DB_PATH
+from app.config import DB_PATH, DEFAULT_CHAT_MODEL
 from app.training_data import prepare
 
 
@@ -32,7 +32,7 @@ def prepare_additions(previous: Path, output: Path, pairs_per_book: int = 2) -> 
         "duplicate_files_excluded": duplicates,
         "source_hashes": {name: digest for name, digest in docs},
     }, ensure_ascii=False, indent=2), encoding="utf-8")
-    return prepare(DB_PATH, output, pairs_per_book=pairs_per_book, model="qwen3:4b", only_files=selected)
+    return prepare(DB_PATH, output, pairs_per_book=pairs_per_book, model=DEFAULT_CHAT_MODEL, only_files=selected)
 
 
 if __name__ == "__main__":

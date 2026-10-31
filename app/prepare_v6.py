@@ -139,12 +139,17 @@ def prepare(output):
     return {"records":len(records),"new_source_records":len(definitions),"synthetic":len(synthetic)}
 
 
-def audit(output):
+def audit(output, primary=None, secondary=None):
+    from app.model_resolver import reject_retired_model
+    if not primary or not secondary or primary == secondary:
+        raise ValueError("Cần hai mô hình kiểm định đã hiệu chuẩn cho quy trình hiện hành; không tái dùng mô hình cũ.")
+    reject_retired_model(primary)
+    reject_retired_model(secondary)
     records=read_records(output/"manifest.jsonl")
     plan=json.loads((output/"plan.json").read_text())
     previous=ROOT/"data/training/v5"
     decisions=[]
-    for name,model in [("primary","qwen3:4b"),("secondary","qwen2.5:7b")]:
+    for name,model in [("primary",primary),("secondary",secondary)]:
         path=output/f"audit_{name}.jsonl"
         reviewed={e["key"]:e for e in read_records(path)}
         inherited={e["key"]:e for e in read_records(previous/f"audit_{name}.jsonl")}
@@ -163,7 +168,7 @@ def audit(output):
     # Independent calibration is rerun, not inherited from a prior process.
     positive=next(r for r in records if r["pair"].get("cross_book") and r.get("teacher_model")=="human-reviewed")
     negative=json.loads(json.dumps(positive));negative["items"]=[{"question":"Hai đoạn có chứng minh trí nhớ hoàn hảo không?","answer":"Mọi người đều có trí nhớ hoàn hảo và không bao giờ quên. [S1] [S2]"}]
-    controls=[{"model":model,"positive":check_record(positive,model),"negative":check_record(negative,model)} for model in ("qwen3:4b","qwen2.5:7b")]
+    controls=[{"model":model,"positive":check_record(positive,model),"negative":check_record(negative,model)} for model in (primary,secondary)]
     calibrated=all(c["positive"]["translation_ok"] and c["positive"]["cross_source_link_ok"] and any(d["supported"] for d in c["positive"]["decisions"]) and not any(d["supported"] for d in c["negative"]["decisions"]) for c in controls)
     write_json(output/"calibration.json",{"calibrated":calibrated,"controls":controls})
     approved=[]

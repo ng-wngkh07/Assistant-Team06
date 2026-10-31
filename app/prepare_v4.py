@@ -7,6 +7,8 @@ from pathlib import Path
 
 import requests
 
+from app.config import DEFAULT_CHAT_MODEL
+from app.model_resolver import reject_retired_model
 from app.bilingual_terms import translation_is_plausible
 from app.training_audit import check_record
 from app.training_data import basic_record_quality, write_training_files
@@ -142,8 +144,12 @@ def prepare(output_dir: Path = TRAINING / "v4_candidate") -> dict:
     return {"records": len(records), "rejected": len(rejected), "output": str(output_dir)}
 
 
-def audit(output_dir: Path = TRAINING / "v4_candidate", model: str = "qwen3:4b",
-          second_model: str = "qwen2.5:7b") -> dict:
+def audit(output_dir: Path = TRAINING / "v4_candidate", model: str = DEFAULT_CHAT_MODEL,
+          second_model: str | None = None) -> dict:
+    if not second_model or second_model == model:
+        raise ValueError("Chưa cấu hình mô hình kiểm định độc lập cho quy trình này; không tái dùng kiểm định mô hình cũ.")
+    reject_retired_model(model)
+    reject_retired_model(second_model)
     records = _read(output_dir / "manifest.jsonl")
     audit_path = output_dir / "audit.jsonl"
     reviewed = {entry["key"]: entry for entry in _read(audit_path)} if audit_path.exists() else {}
@@ -237,7 +243,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=["prepare", "audit"])
     parser.add_argument("--output", type=Path, default=TRAINING / "v4_candidate")
-    parser.add_argument("--model", default="qwen3:4b")
+    parser.add_argument("--model", default=DEFAULT_CHAT_MODEL)
     args = parser.parse_args()
     print(json.dumps(prepare(args.output) if args.action == "prepare" else audit(args.output, args.model), ensure_ascii=False))
 

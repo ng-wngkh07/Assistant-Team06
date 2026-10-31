@@ -1,5 +1,6 @@
 """Read-only document lookup, independent of chat and conversation history."""
 
+import logging
 import sqlite3
 import sys
 from contextlib import closing
@@ -13,6 +14,9 @@ from app.gpu_lock import gpu_coordinator, GPUBusyError
 from app.indexer import unpack_vector
 from app.ollama_client import OllamaClient
 from app.searcher import HybridSearcher
+
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentLookup:
@@ -44,6 +48,9 @@ class DocumentLookup:
         self._src_dir = val
 
     def connect(self):
+        if not self.db_path.exists():
+            from app.indexer import KnowledgeIndexer
+            KnowledgeIndexer(self.db_path, self.src_dir)
         db = sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True)
         db.row_factory = sqlite3.Row
         return db
@@ -78,42 +85,41 @@ class DocumentLookup:
     def documents(self):
         with closing(self.connect()) as db:
             rows = db.execute(
-                "SELECT id, filename, clean_title, total_pages FROM documents "
-                "WHERE status IN ('indexed','ocr_partial_reviewed') ORDER BY clean_title, id"
+                "SELECT d.id, d.filename, d.clean_title, d.total_pages, COUNT(c.id) AS chunk_count "
+                "FROM documents d "
+                "LEFT JOIN chunks c ON c.doc_id = d.id "
+                "WHERE d.status IN ('indexed','ocr_partial_reviewed') "
+                "GROUP BY d.id "
+                "ORDER BY d.clean_title, d.id"
             ).fetchall()
         return [dict(r) for r in rows if self.supported_path(r["filename"])]
 
     def document(self, doc_id: int):
         with closing(self.connect()) as db:
             row = db.execute(
-                "SELECT id, filename, clean_title, total_pages FROM documents "
-                "WHERE id=? AND status IN ('indexed','ocr_partial_reviewed')", (doc_id,)
+                "SELECT d.id, d.filename, d.clean_title, d.total_pages, COUNT(c.id) AS chunk_count "
+                "FROM documents d "
+                "LEFT JOIN chunks c ON c.doc_id = d.id "
+                "WHERE d.id=? AND d.status IN ('indexed','ocr_partial_reviewed') "
+                "GROUP BY d.id", (doc_id,)
             ).fetchone()
         if not row or not self.supported_path(row["filename"]):
             return None
         return dict(row)
 
     def document_by_filename(self, filename: str) -> Optional[dict]:
+        """Resolve an attachment by its exact stored relative filename.
+
+        Display titles, basenames and partial names are search terms, not source
+        identities. Never silently attach another folder or document edition.
+        """
         with closing(self.connect()) as db:
             row = db.execute(
-                "SELECT id, filename, clean_title, total_pages FROM documents "
-                "WHERE (filename=? OR clean_title=?) AND status IN ('indexed','ocr_partial_reviewed')",
-                (filename, filename)
+                "SELECT d.id, d.filename, d.clean_title, d.total_pages, COUNT(c.id) AS chunk_count "
+                "FROM documents d LEFT JOIN chunks c ON c.doc_id=d.id "
+                "WHERE d.filename=? AND d.status IN ('indexed','ocr_partial_reviewed') "
+                "GROUP BY d.id", (filename,)
             ).fetchone()
-            if not row:
-                base_name = Path(filename).name
-                row = db.execute(
-                    "SELECT id, filename, clean_title, total_pages FROM documents "
-                    "WHERE (filename=? OR clean_title=?) AND status IN ('indexed','ocr_partial_reviewed')",
-                    (base_name, base_name)
-                ).fetchone()
-            if not row:
-                stem = Path(filename).stem
-                row = db.execute(
-                    "SELECT id, filename, clean_title, total_pages FROM documents "
-                    "WHERE (filename LIKE ? OR clean_title LIKE ?) AND status IN ('indexed','ocr_partial_reviewed')",
-                    (f"%{stem}%", f"%{stem}%")
-                ).fetchone()
         if not row or not self.supported_path(row["filename"]):
             return None
         return dict(row)
@@ -144,34 +150,50 @@ class DocumentLookup:
         notice = ""
         if method == "hybrid":
             try:
+                installed_digest = None
+                try:
+                    with closing(self.connect()) as db:
+                        row = db.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
+                        if row:
+                            installed_digest = row[0]
+                except Exception:
+                    pass
+
                 use_native = False
-                native_embed_models = {"bge-m3-mlx-fp16", "bge-m3-mlx", "native-bge", "bge-m3"}
-                if sys.platform == "darwin":
-                    from app.native_embedding import NativeEmbeddingClient
-                    if NativeEmbeddingClient.available():
-                        use_native = True
-                    else:
-                        vec = None
-                elif DEFAULT_EMBED_MODEL in native_embed_models:
-                    from app.native_embedding import NativeEmbeddingClient
-                    if NativeEmbeddingClient.available():
-                        use_native = True
-                    else:
-                        vec = None
+                if installed_digest and installed_digest.startswith("ollama-sha256:"):
+                    use_native = False
+                elif installed_digest and installed_digest.startswith("bge-m3-mlx-fp16@"):
+                    if sys.platform != "darwin":
+                        raise ValueError("Installed native BGE knowledge pack requires macOS")
+                    use_native = True
+                elif os.getenv("EMBED_BACKEND") == "ollama":
+                    use_native = False
+                elif os.getenv("EMBED_BACKEND") in ("native", "mlx"):
+                    if sys.platform != "darwin":
+                        raise ValueError("Native embedding requires macOS")
+                    use_native = True
+                elif sys.platform == "darwin":
+                    use_native = True
                 else:
                     use_native = False
 
-                from app.native_embedding import BGE_NATIVE_IDENTITY
-                expected_identity = BGE_NATIVE_IDENTITY
-
                 if use_native:
-                    from app.native_embedding import NativeEmbeddingClient
-                    vec = NativeEmbeddingClient().get_embedding(query)
-                elif sys.platform == "darwin":
-                    vec = None
+                    from app.native_embedding import BGE_NATIVE_IDENTITY, NativeEmbeddingClient
+                    native = NativeEmbeddingClient()
+                    if not native.available():
+                        raise ValueError("Configured native embedding basis is unavailable")
+                    expected_identity = BGE_NATIVE_IDENTITY
+                    vec = native.get_embedding(query, expected_identity=expected_identity)
                 else:
+                    if DEFAULT_EMBED_MODEL in {"bge-m3-mlx-fp16", "bge-m3-mlx", "native-bge"} and sys.platform != "darwin":
+                        raise ValueError("Native embedding is unavailable on this platform")
+                    expected_identity = self.ollama.embedding_identity(DEFAULT_EMBED_MODEL)
+                    if not expected_identity:
+                        raise ValueError("Embedding artifact identity is unknown")
                     with gpu_coordinator.acquire_for_inference():
                         vec = self.ollama.get_embedding(query, model=DEFAULT_EMBED_MODEL)
+                    if self.ollama.embedding_identity(DEFAULT_EMBED_MODEL) != expected_identity:
+                        raise ValueError("Embedding artifact changed during query")
 
                 if vec is None:
                     notice = "Tìm ngữ nghĩa chưa khả dụng; đang hiển thị kết quả từ khóa."
@@ -183,36 +205,28 @@ class DocumentLookup:
                     q /= norm
                     import hashlib
                     with closing(self.connect()) as db:
-                        if use_native:
-                            sql = f"""
-                                SELECT c.id AS chunk_id, c.doc_id, c.book_title, c.filename, c.page_num,
-                                       c.chunk_index, c.text, c.embedding,
-                                       p.text_sha256, p.model_digest, p.vector_sha256, p.dimensions, p.full_text
-                                FROM chunks c
-                                INNER JOIN corpus_vector_provenance p ON p.chunk_id = c.id
-                                WHERE c.doc_id IN ({scope}) AND c.embedding IS NOT NULL
-                                  AND p.model_digest = ? AND p.full_text = 1 AND p.dimensions = ?
-                            """
-                            rows = db.execute(sql, [*ids, expected_identity, len(q)]).fetchall()
-                        else:
-                            rows = db.execute(
-                                f"SELECT id AS chunk_id, doc_id, book_title, filename, page_num, "
-                                f"chunk_index, text, embedding FROM chunks "
-                                f"WHERE doc_id IN ({scope}) AND embedding IS NOT NULL", ids
-                            ).fetchall()
+                        sql = f"""
+                            SELECT c.id AS chunk_id, c.doc_id, c.book_title, c.filename, c.page_num,
+                                   c.chunk_index, c.text, c.embedding,
+                                   p.text_sha256, p.model_digest, p.vector_sha256, p.dimensions, p.full_text
+                            FROM chunks c JOIN corpus_vector_provenance p ON p.chunk_id=c.id
+                            WHERE c.doc_id IN ({scope}) AND c.embedding IS NOT NULL
+                              AND p.model_digest=? AND p.full_text=1 AND p.dimensions=?
+                        """
+                        rows = db.execute(sql, [*ids, expected_identity, len(q)]).fetchall()
+
                     for row in rows:
                         blob = row["embedding"]
                         if not blob:
                             continue
-                        if use_native:
-                            actual_t = hashlib.sha256(row["text"].encode("utf-8")).hexdigest()
-                            actual_v = hashlib.sha256(blob).hexdigest()
-                            if actual_t != row["text_sha256"] or actual_v != row["vector_sha256"]:
-                                continue
+                        actual_t = hashlib.sha256(row["text"].encode("utf-8")).hexdigest()
+                        actual_v = hashlib.sha256(blob).hexdigest()
+                        if actual_t != row["text_sha256"] or actual_v != row["vector_sha256"]:
+                            continue
                         v = unpack_vector(blob)
                         vn = np.linalg.norm(v)
                         if v.shape == q.shape and vn > 0 and np.isfinite(v).all():
-                            if use_native and abs(vn - 1.0) > 1e-3:
+                            if abs(vn - 1.0) > 1e-3:
                                 continue
                             score = float(np.dot(q, v / vn))
                             if score >= 0.15:
@@ -222,7 +236,10 @@ class DocumentLookup:
                     semantic = [item for _, item in semantic[:limit * 3]]
                     if not semantic:
                         notice = "Chưa có đoạn ngữ nghĩa phù hợp; đang hiển thị kết quả từ khóa."
-            except (GPUBusyError, ValueError, OSError):
+            except Exception as exc:
+                # This entire branch is optional dense retrieval. The lexical
+                # result above remains useful when its provider or index fails.
+                logger.warning("Library semantic retrieval unavailable: %s", type(exc).__name__)
                 notice = "Tìm ngữ nghĩa tạm thời chưa khả dụng; đang hiển thị kết quả từ khóa."
 
         ranked, scores = {}, {}

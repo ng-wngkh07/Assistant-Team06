@@ -7,9 +7,9 @@ from app.history import HistoryStore
 def test_server_summary_uses_configured_mlx_backend(tmp_path, monkeypatch):
     store = HistoryStore(tmp_path / "history.db")
     sid = store.create_session()["id"]
-    store.add_turn(sid, "Trí nhớ làm việc là gì?", "Giữ và xử lý thông tin trong thời gian ngắn.", [], "qwen2.5-3b-4bit")
+    store.add_turn(sid, "Trí nhớ làm việc là gì?", "Giữ và xử lý thông tin trong thời gian ngắn.", [], "qwen3.5-9b-4bit")
     monkeypatch.setattr(server.summarizer, "history_store", store)
-    monkeypatch.setattr(server, "DEFAULT_CHAT_MODEL", "qwen2.5-3b-4bit")
+    monkeypatch.setattr(server, "DEFAULT_CHAT_MODEL", "qwen3.5-9b-4bit")
     monkeypatch.setattr(server.TrainedModelClient, "available", staticmethod(lambda: True))
     calls = []
     def mlx(self, **kwargs):

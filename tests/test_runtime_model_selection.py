@@ -166,8 +166,8 @@ def test_selected_default_teacher_uses_named_model_without_training(monkeypatch,
     assert calls[0]['options']['num_ctx'] == 8192
 
 
-@pytest.mark.parametrize('alias', ['tam-ly-mlx', 'mlx-3b'])
-def test_existing_mlx_default_alias_stays_on_mlx_translation(tmp_path, monkeypatch, alias):
+@pytest.mark.parametrize('alias', ['qwen3.5-9b-4bit', 'mlx-9b'])
+def test_current_mlx_alias_stays_on_mlx_translation(tmp_path, monkeypatch, alias):
     source = 'The mind and body respond to trauma, and the nervous system changes with experience. ' * 4
     translated = 'Tâm trí và cơ thể phản ứng với sang chấn, còn hệ thần kinh thay đổi theo trải nghiệm. ' * 4
     monkeypatch.setattr(bilingual, 'DEFAULT_CHAT_MODEL', alias)

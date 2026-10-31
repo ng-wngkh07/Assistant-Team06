@@ -16,7 +16,7 @@ import tempfile
 import unicodedata
 from pathlib import Path
 from PIL import Image, ImageOps, ImageDraw
-from app.config import BASE_DIR, OLLAMA_BASE_URL
+from app.config import BASE_DIR, OLLAMA_BASE_URL, OLLAMA_AUX_CHAT_MODEL
 from app.gpu_lock import gpu_coordinator, GPUBusyError
 
 VERSION = 'registered-table-literal-v4-registration-hold'
@@ -40,9 +40,9 @@ def cache_is_current(record):
             try:
                 from app.ollama_client import OllamaClient
                 client = OllamaClient()
-                client._verify_model_locality("qwen2.5vl:3b")
+                client._verify_model_locality(OLLAMA_AUX_CHAT_MODEL)
                 tags = client.list_models()
-                current=next(m['digest'] for m in tags if m.get('name')=='qwen2.5vl:3b')
+                current=next(m['digest'] for m in tags if m.get('name')==OLLAMA_AUX_CHAT_MODEL)
                 if current!=room_vision.get('model_digest'): return False
                 digest=hashlib.sha256((digest+':'+current).encode()).hexdigest()
             except (ValueError,KeyError,StopIteration,RuntimeError): return False
@@ -302,9 +302,9 @@ def read_room_codes(image, room_lines):
 
         from app.ollama_client import OllamaClient
         client = OllamaClient()
-        client._verify_model_locality('qwen2.5vl:3b')
+        client._verify_model_locality(OLLAMA_AUX_CHAT_MODEL)
         tags = client.list_models()
-        digest = next(m['digest'] for m in tags if m.get('name') == 'qwen2.5vl:3b')
+        digest = next(m['digest'] for m in tags if m.get('name') == OLLAMA_AUX_CHAT_MODEL)
         schema = {
             'type': 'object',
             'properties': {'rooms': {'type': 'array', 'minItems': count, 'maxItems': count, 'items': {'type': ['string', 'null']}}},
@@ -312,7 +312,7 @@ def read_room_codes(image, room_lines):
             'additionalProperties': False,
         }
         payload = {
-            'model': 'qwen2.5vl:3b',
+            'model': OLLAMA_AUX_CHAT_MODEL,
             'prompt': prompt,
             'images': [base64.b64encode(buf.getvalue()).decode()],
             'format': schema,

@@ -25,7 +25,7 @@ class Response:
 def local_client(monkeypatch, inference_response):
     """Intercept the real per-client session; no network or proxy is used."""
     client = OllamaClient()
-    client._available_models = ['qwen3:4b', 'qwen3.5:9b']
+    client._available_models = ['fixture-chat:latest', 'qwen3.5:9b']
     class LocalMetadata(Response):
         def json(self):
             return {'details':{'format':'gguf','family':'qwen'}, 'model_info':{},
@@ -41,7 +41,7 @@ def local_client(monkeypatch, inference_response):
 def test_explicit_thinking_and_seed_reach_each_chat_api(monkeypatch, method):
     sent = []
     client = local_client(monkeypatch, lambda **kw: sent.append(kw['json']) or Response())
-    result = getattr(client, method)([], model="qwen3:4b", think=True, seed=42)
+    result = getattr(client, method)([], model="fixture-chat:latest", think=True, seed=42)
     if method == "chat_stream":
         result = "".join(result)
     assert sent[0]["think"] is True
@@ -55,6 +55,15 @@ def test_default_stays_non_thinking_without_invented_seed(monkeypatch):
     assert "".join(client.chat_stream([], model="qwen3.5:9b")) == "42"
     assert sent[0]["think"] is False
     assert "seed" not in sent[0]["options"]
+
+
+@pytest.mark.parametrize('method', ['chat_complete', 'chat_sync'])
+def test_requested_json_schema_reaches_ollama(monkeypatch, method):
+    sent = []
+    client = local_client(monkeypatch, lambda **kw: sent.append(kw['json']) or Response())
+    schema = {'type': 'object', 'properties': {'answer': {'type': 'string'}}, 'required': ['answer']}
+    getattr(client, method)([], model='fixture-chat:latest', response_schema=schema)
+    assert sent[0]['format'] == schema
 
 
 def test_stream_records_runtime_usage_and_resets_between_requests(monkeypatch):

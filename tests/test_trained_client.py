@@ -1,77 +1,41 @@
-import hashlib
 import json
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import app.trained_client as trained_client
 
 
-def test_available_model_rejects_modified_source_manifest(tmp_path, monkeypatch):
-    model, adapter = tmp_path/"model", tmp_path/"adapter"
-    model.mkdir(); adapter.mkdir()
-    (model/"config.json").write_text("{}")
-    (adapter/"adapters.safetensors").write_bytes(b"fixture")
-    training = tmp_path/"data"/"training"/"v5"
-    training.mkdir(parents=True)
-    (training/"train.jsonl").write_bytes(b"train\n")
-    (training/"valid.jsonl").write_bytes(b"valid\n")
-    manifest = training/"approved_manifest.jsonl"
-    manifest.write_bytes(b"approved sources\n")
-    data_hash = hashlib.sha256(b"train\nvalid\n").hexdigest()
-    (training/"approval.json").write_text(json.dumps({"dataset_sha256": data_hash, "approved_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest()}))
-    (adapter/"ready.json").write_text(json.dumps({"dataset_sha256": data_hash, "data_version": "v5"}))
-    monkeypatch.setattr(trained_client, "BASE_DIR", tmp_path)
-    monkeypatch.setattr(trained_client, "MLX_MODEL_DIR", model)
-    monkeypatch.setattr(trained_client, "MLX_ADAPTER_DIR", adapter)
-    assert trained_client.TrainedModelClient._verify_legacy_adapter(adapter)
-    manifest.write_bytes(b"tampered sources\n")
-    assert not trained_client.TrainedModelClient._verify_legacy_adapter(adapter)
+def test_current_base_never_loads_registry_adapter(tmp_path, monkeypatch):
+    from app.active_registry import active_registry
+    adapter=tmp_path/'retired-adapter'; adapter.mkdir()
+    (adapter/'adapters.safetensors').write_bytes(b'old-weights')
+    (adapter/'ready.json').write_text('{"approved":true}')
+    monkeypatch.setattr(active_registry,'get_active_adapter_dir',lambda:adapter)
+    monkeypatch.setattr(trained_client.TrainedModelClient,'available',lambda *a:True)
+    monkeypatch.setattr(trained_client,'get_model_context_capacity',lambda *a:8192)
+    monkeypatch.setattr(trained_client.gpu_coordinator,'acquire_for_inference',lambda:nullcontext())
+    requests=[]
+    def run(*args,**kwargs):
+        requests.append(json.loads(kwargs['input']))
+        return SimpleNamespace(returncode=0,stderr='',stdout=json.dumps({'answer':'fixture','done_reason':'stop'}))
+    monkeypatch.setattr(trained_client.subprocess,'run',run)
+    assert trained_client.TrainedModelClient().chat_complete([{'role':'user','content':'test'}])=='fixture'
+    assert requests[0]['adapter_path'] is None
 
 
-def test_trained_model_only_available_for_approved_dataset(tmp_path, monkeypatch):
-    model = tmp_path / "model"
-    adapter = tmp_path / "adapter"
-    training = tmp_path / "data" / "training" / "v1"
-    for directory in (model, adapter, training):
-        directory.mkdir(parents=True)
-    (model / "config.json").write_text("{}")
-    (adapter / "adapters.safetensors").write_bytes(b"adapter")
-    train = training / "train.jsonl"
-    valid = training / "valid.jsonl"
-    train.write_text("example one\n")
-    valid.write_text("example two\n")
-    digest = hashlib.sha256(train.read_bytes() + valid.read_bytes()).hexdigest()
-    (training / "approval.json").write_text(json.dumps({"dataset_sha256": digest}))
-    (adapter / "ready.json").write_text(json.dumps({"dataset_sha256": digest}))
-    monkeypatch.setattr(trained_client, "BASE_DIR", tmp_path)
-    monkeypatch.setattr(trained_client, "MLX_MODEL_DIR", model)
-    monkeypatch.setattr(trained_client, "MLX_ADAPTER_DIR", adapter)
-
-    assert trained_client.TrainedModelClient._verify_legacy_adapter(adapter)
-    train.write_text("modified\n")
-    assert not trained_client.TrainedModelClient._verify_legacy_adapter(adapter)
-
-
-def test_trained_model_uses_approved_data_version(tmp_path, monkeypatch):
-    model = tmp_path / "model"
-    adapter = tmp_path / "adapter"
-    training = tmp_path / "data" / "training" / "v2"
-    for directory in (model, adapter, training):
-        directory.mkdir(parents=True)
-    (model / "config.json").write_text("{}")
-    (adapter / "adapters.safetensors").write_bytes(b"adapter")
-    train = training / "train.jsonl"
-    valid = training / "valid.jsonl"
-    train.write_text("train\n")
-    valid.write_text("valid\n")
-    digest = hashlib.sha256(train.read_bytes() + valid.read_bytes()).hexdigest()
-    (training / "approval.json").write_text(json.dumps({"dataset_sha256": digest}))
-    ready = adapter / "ready.json"
-    ready.write_text(json.dumps({"dataset_sha256": digest, "data_version": "v2"}))
-    monkeypatch.setattr(trained_client, "BASE_DIR", tmp_path)
-    monkeypatch.setattr(trained_client, "MLX_MODEL_DIR", model)
-    monkeypatch.setattr(trained_client, "MLX_ADAPTER_DIR", adapter)
-    assert trained_client.TrainedModelClient._verify_legacy_adapter(adapter)
-    ready.write_text(json.dumps({"dataset_sha256": digest, "data_version": "../v2"}))
-    assert not trained_client.TrainedModelClient._verify_legacy_adapter(adapter)
+def test_schema_reaches_native_worker_and_missing_finish_is_not_success(monkeypatch):
+    monkeypatch.setattr(trained_client.TrainedModelClient, 'available', lambda *a: True)
+    monkeypatch.setattr(trained_client.gpu_coordinator, 'acquire_for_inference', lambda: nullcontext())
+    requests = []
+    def run(*args, **kwargs):
+        requests.append(json.loads(kwargs['input']))
+        return SimpleNamespace(returncode=0, stderr='', stdout=json.dumps({'answer': '{}', 'is_truncated': False}))
+    monkeypatch.setattr(trained_client.subprocess, 'run', run)
+    schema = {'type': 'object', 'additionalProperties': False}
+    client = trained_client.TrainedModelClient()
+    assert client.chat_complete([], response_schema=schema) == '{}'
+    assert requests[0]['response_schema'] == schema
+    assert client.last_done_reason is None
 
 
 def test_trained_model_chat_stream_respects_num_predict_and_truncation(monkeypatch):
@@ -89,7 +53,9 @@ def test_trained_model_chat_stream_respects_num_predict_and_truncation(monkeypat
     def mock_subprocess_run(cmd, cwd=None, input=None, capture_output=True, text=True, timeout=None, check=False, **kwargs):
         req = json.loads(input)
         captured_requests.append(req)
-        return MockCompleted(json.dumps({"answer": "Phản hồi thử nghiệm", "is_truncated": req.get("max_tokens") < 1000}))
+        truncated = req.get("max_tokens") < 1000
+        return MockCompleted(json.dumps({"answer": "Phản hồi thử nghiệm", "is_truncated": truncated,
+                                         "done_reason": "length" if truncated else "stop"}))
 
     import subprocess
     monkeypatch.setattr(subprocess, "run", mock_subprocess_run)

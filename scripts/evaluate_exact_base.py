@@ -23,14 +23,14 @@ from app.gpu_lock import gpu_coordinator
 from app.memory_preflight import get_hardware_memory_profile, inspect_base_model
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-MODEL_DIR = ROOT_DIR / "data/models/qwen2.5-3b-4bit"
-HOLDOUT_INPUTS_PATH = ROOT_DIR / "data/evaluation/training-yc188-20261010/data04/feature-holdout-inputs.json"
-OUTPUT_EVIDENCE_PATH = ROOT_DIR / "data/evaluation/training-yc188-20261010/execution05/exact-base-evidence.json"
+MODEL_DIR = None  # Explicit artifact and current review required; no legacy default.
+HOLDOUT_INPUTS_PATH = ROOT_DIR / "data/runtime/current-model-evaluation/holdout-inputs.json"
+OUTPUT_EVIDENCE_PATH = ROOT_DIR / "data/runtime/current-model-evaluation/evidence.json"
 
-BASE_IDENTITY_PATH = ROOT_DIR / "data/evaluation/training-yc188-20261010/base-identity-readback.json"
-APPROVAL_PATH = ROOT_DIR / "data/evaluation/training-yc188-20261010/execution05/evaluation-approval.json"
+BASE_IDENTITY_PATH = ROOT_DIR / "data/runtime/current-model-evaluation/base-identity.json"
+APPROVAL_PATH = ROOT_DIR / "data/runtime/current-model-evaluation/approval.json"
 
-MODEL_PINNED_REVISION = "4f83f8f146fdf28b512a06562b671d7af4fab457"
+MODEL_PINNED_REVISION = None  # Read from the reviewed identity, never relabel historical evidence.
 
 
 def compute_model_file_hashes(model_dir: Path | str) -> Dict[str, str]:
@@ -104,7 +104,10 @@ def run_exact_base_evaluation(
     approval_path: Path | str | None = None,
     output_path: Path | str | None = None,
 ):
-    model_dir_p = Path(model_dir) if model_dir is not None else Path(MODEL_DIR)
+    selected = model_dir if model_dir is not None else MODEL_DIR
+    if selected is None:
+        raise ValueError("An explicit current model artifact and reviewed identity are required")
+    model_dir_p = Path(selected)
     identity_path_p = Path(identity_path) if identity_path is not None else Path(BASE_IDENTITY_PATH)
     suite_path_p = Path(suite_path) if suite_path is not None else Path(HOLDOUT_INPUTS_PATH)
     approval_path_p = Path(approval_path) if approval_path is not None else Path(APPROVAL_PATH)
@@ -113,12 +116,14 @@ def run_exact_base_evaluation(
     # STRICT FAIL-CLOSED SAFETY GUARD: Block execution if not authorized
     if os.environ.get("CODEX_EXACT_BASE_EXECUTION_AUTHORIZED") != "1":
         raise RuntimeError(
-            "EXECUTION BLOCKED: scripts/evaluate_exact_base.py cannot be executed in training-yc188-execution05 without authorization."
+            "EXECUTION BLOCKED: scripts/evaluate_exact_base.py requires explicit authorization and current artifact/content approval."
         )
 
     # Identity and independent review gates must pass BEFORE hardware/resource use
     base_identity = validate_base_identity(model_dir_p, identity_path_p)
     validate_evaluation_approval(suite_path_p, approval_path_p)
+    from app.model_resolver import validate_native_model_config
+    validate_native_model_config(model_dir_p)
 
     print("=== STARTING EXACT BASE EVALUATION ON FROZEN HOLDOUTS ===")
 
@@ -286,8 +291,8 @@ def run_exact_base_evaluation(
             "created_at": datetime.now(timezone.utc).isoformat(),
             "model": {
                 "path": str(model_dir_p),
-                "architecture": "Qwen2.5-3B-Instruct-4bit",
-                "pinned_revision": MODEL_PINNED_REVISION,
+                "architecture": json.loads((model_dir_p / "config.json").read_text())["model_type"],
+                "pinned_revision": base_identity.get("revision"),
                 "runtime": "mlx-lm",
                 "mlx_lm_version": getattr(mlx_lm, "__version__", "0.31.3"),
                 "file_hashes": actual_file_hashes,

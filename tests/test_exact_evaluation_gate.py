@@ -18,7 +18,7 @@ def base_bundle(tmp_path):
     for name in ('model.safetensors', 'config.json', 'tokenizer.json'):
         (model/name).write_bytes(b'original '+name.encode())
     identity = tmp_path/'identity.json'
-    identity.write_text(json.dumps({'repo': 'mlx-community/Qwen2.5-3B-Instruct-4bit',
+    identity.write_text(json.dumps({'repo': 'mlx-community/Qwen3.5-9B-4bit',
                                    'revision': 'a'*40,
                                    'files_sha256': {p.name: sha(p) for p in model.iterdir()}}))
     return model, identity
@@ -78,7 +78,7 @@ def test_empty_directory_is_not_a_pinned_model(tmp_path):
     model = tmp_path/'empty-model'
     model.mkdir()
     identity = tmp_path/'identity.json'
-    identity.write_text(json.dumps({'repo': 'mlx-community/Qwen2.5-3B-Instruct-4bit',
+    identity.write_text(json.dumps({'repo': 'mlx-community/Qwen3.5-9B-4bit',
                                    'revision': 'a'*40, 'files_sha256': {}}))
     with pytest.raises(ValueError):
         evaluator.validate_base_identity(model, identity)
@@ -88,6 +88,7 @@ def test_empty_directory_is_not_a_pinned_model(tmp_path):
 def test_execution_reaches_identity_and_content_gates_before_resource_use(monkeypatch, gate):
     """An environment switch alone must not authorize an unreviewed inference run."""
     monkeypatch.setenv('CODEX_EXACT_BASE_EXECUTION_AUTHORIZED', '1')
+    monkeypatch.setattr(evaluator, 'MODEL_DIR', Path('explicit-historical-fixture'))
     monkeypatch.setattr(evaluator, 'validate_evaluation_approval', lambda *a, **kw: {})
     monkeypatch.setattr(evaluator, 'validate_base_identity', lambda *a, **kw: {})
 

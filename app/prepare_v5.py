@@ -11,7 +11,8 @@ from pathlib import Path
 
 import requests
 
-from app.config import BASE_DIR, DB_PATH, OLLAMA_BASE_URL
+from app.config import BASE_DIR, DB_PATH, OLLAMA_BASE_URL, DEFAULT_CHAT_MODEL
+from app.model_resolver import reject_retired_model
 from app.merge_training import _source_is_current
 from app.text_cleaner import sanitize_for_prompt_context
 from app.training_audit import check_record
@@ -148,7 +149,7 @@ def plan(previous, destination, db_path=DB_PATH, pairs_per_book=4, new_pairs=72)
     return settings
 
 
-def prepare(destination, teacher="qwen2.5:7b", teacher_fn=None):
+def prepare(destination, teacher=DEFAULT_CHAT_MODEL, teacher_fn=None):
     settings = json.loads((destination/"plan.json").read_text())
     records = read_records(destination/"manifest.jsonl")
     seen = {source_signature(r["pair"]) for r in records}
@@ -164,7 +165,7 @@ def prepare(destination, teacher="qwen2.5:7b", teacher_fn=None):
                 except (requests.RequestException, ValueError, KeyError):
                     if attempt:
                         raise
-            record = {"key": "v5:"+signature, "pair": pair, "teacher_model": teacher, "translation_model": teacher if teacher_fn else "qwen2.5:7b", "reasoning_focus": FOCI[(index-1)%len(FOCI)], **generated}
+            record = {"key": "v5:"+signature, "pair": pair, "teacher_model": teacher, "translation_model": teacher, "reasoning_focus": FOCI[(index-1)%len(FOCI)], **generated}
             if not basic_record_quality(record):
                 raise ValueError("Nguồn/bản dịch không đạt bộ lọc")
             with (destination/"manifest.jsonl").open("a", encoding="utf-8") as file:
@@ -179,9 +180,11 @@ def prepare(destination, teacher="qwen2.5:7b", teacher_fn=None):
     return {"records": len(read_records(destination/"manifest.jsonl")), "planned_new_pairs": len(settings["pairs"])}
 
 
-def audit(destination, primary="qwen3:4b", secondary="qwen2.5:7b"):
-    if primary == secondary:
+def audit(destination, primary=DEFAULT_CHAT_MODEL, secondary=None):
+    if not secondary or primary == secondary:
         raise ValueError("Cần hai mô hình kiểm tra khác nhau")
+    reject_retired_model(primary)
+    reject_retired_model(secondary)
     (destination/"approval.json").unlink(missing_ok=True)
     records = read_records(destination/"manifest.jsonl")
     decisions = []
@@ -228,7 +231,7 @@ def audit(destination, primary="qwen3:4b", secondary="qwen2.5:7b"):
                 approved.append({**record, "items": items})
     settings = json.loads((destination/"plan.json").read_text())
     (destination/"approved_manifest.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False)+"\n" for r in approved), encoding="utf-8")
-    summary = write_training_files(approved, destination, "qwen2.5:7b", plain_answer=True, augment_prompts=True, held_out_override=set(settings["held_out_books"]))
+    summary = write_training_files(approved, destination, primary, plain_answer=True, augment_prompts=True, held_out_override=set(settings["held_out_books"]))
     training_books = {s.get("filename", r["pair"]["filename"]) for r in approved for s in r["pair"]["sources"]} - set(settings["held_out_books"])
     complete = all(all(digest(r) in d for r in records) for d in decisions)
     summary.update({"audit_complete": complete, "verifier_calibrated": calibrated, "approved_records": len(approved), "manifest_records": len(records), "verifier_models": [primary, secondary], "train_books": sorted(training_books), "previous_dataset_sha256": settings["previous_dataset_sha256"], "approved_manifest_sha256": hashlib.sha256((destination/"approved_manifest.jsonl").read_bytes()).hexdigest(), "source_verified_against_index": True})

@@ -16,10 +16,15 @@ def replay(tmp_path, monkeypatch):
     model.mkdir()
     for name in ('model.safetensors', 'config.json', 'tokenizer.json'):
         (model/name).write_bytes(b'pinned synthetic bundle '+name.encode())
+    (model/'config.json').write_text(json.dumps({'model_type':'qwen3_5',
+        'architectures':['Qwen3_5ForConditionalGeneration'],
+        'text_config':{'model_type':'qwen3_5_text','hidden_size':4096,
+                       'num_hidden_layers':32,'num_attention_heads':16},
+        'quantization':{'bits':4,'group_size':64,'mode':'affine'}}))
     hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in model.iterdir()}
     identity = tmp_path/'identity.json'
-    identity.write_text(json.dumps({'repo': 'mlx-community/Qwen2.5-3B-Instruct-4bit',
-                                   'revision': evaluator.MODEL_PINNED_REVISION,
+    identity.write_text(json.dumps({'repo': 'synthetic/current-9b-fixture',
+                                   'revision': 'a'*40,
                                    'files_sha256': hashes}))
     suite = tmp_path/'suite.json'
     approval = tmp_path/'approval.json'

@@ -17,7 +17,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
-from app.config import BASE_DIR
+from app.config import BASE_DIR, DEFAULT_CHAT_MODEL
+from app.model_resolver import reject_retired_model
 from app.gpu_lock import GPULockManager, gpu_coordinator
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ class ContinuousPipelineOrchestrator:
                 "current_step": 0,
                 "total_steps": 0,
                 "dataset_version": None,
-                "model_name": "qwen2.5-3b-4bit",
+                "model_name": DEFAULT_CHAT_MODEL,
                 "pid": None,
                 "pgid": None,
                 "start_time": None,
@@ -278,12 +279,13 @@ class ContinuousPipelineOrchestrator:
         dataset_version: str,
         command: List[str],
         total_steps: int,
-        model_name: str = "qwen2.5-3b-4bit",
+        model_name: str = DEFAULT_CHAT_MODEL,
         cwd: Optional[Path] = None,
         env: Optional[Dict[str, str]] = None,
         mock_proc: Optional[subprocess.Popen] = None
     ) -> Dict[str, Any]:
         """Start a new continuous training round under exclusive lock."""
+        reject_retired_model(model_name)
         with self._acquire_lock():
             state = self._read_state()
             pid = state.get("pid")
@@ -563,7 +565,7 @@ def main():
     start_p = subparsers.add_parser("start", help="Start continuous training")
     start_p.add_argument("--data-version", type=str, default="v6")
     start_p.add_argument("--steps", type=int, default=80)
-    start_p.add_argument("--model", type=str, default="qwen2.5-3b-4bit")
+    start_p.add_argument("--model", type=str, default=DEFAULT_CHAT_MODEL)
 
     args = parser.parse_args()
     orch = ContinuousPipelineOrchestrator()

@@ -383,3 +383,23 @@ test('Markdown exercise headings render as readable titles while retaining the o
     assert.equal(heading.textContent, 'Bài tập 1\nĐổi 2.5 m² sang cm².');
     assert.match(textOf(body), /## Bài tập 1/);
 });
+
+test('Five hard questions are sent without silently resetting count or difficulty', async () => {
+    const app = await createApp();
+    app.elements.get('learning-topic').value = 'Lập trình hướng đối tượng';
+    app.elements.get('learning-count').value = '5';
+    app.elements.get('learning-difficulty').value = 'hard';
+    await app.elements.get('btn-learning-generate').click();
+    assert.equal(app.learningRequests[0].body.count, 5);
+    assert.equal(app.learningRequests[0].body.difficulty, 'hard');
+});
+
+test('Invalid question counts are explained without submitting a different count', async () => {
+    const app = await createApp();
+    app.elements.get('learning-topic').value = 'Trí nhớ';
+    app.elements.get('learning-count').value = '2.5';
+    app.elements.get('learning-difficulty').value = 'easy';
+    await app.elements.get('btn-learning-generate').click();
+    assert.equal(app.learningRequests.length, 0);
+    assert.match(app.elements.get('learning-generate-status').textContent, /số nguyên/);
+});

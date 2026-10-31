@@ -12,7 +12,7 @@
             try { localStorage.setItem("theme", "dark"); } catch (e) {}
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=compact-chat-20261023">
+    <link rel="stylesheet" href="/static/style.css?v=source-pages-20261028">
     <link rel="stylesheet" href="/static/theme.css?v=3-contrast-fix">
     <style>
         /* Ambient gradient glowing orbs */
@@ -726,11 +726,25 @@
                             <button id="btn-open-ocr-review" class="tool-tile">📝 Thẩm định OCR cục bộ</button>
                             <button id="btn-open-timetable" class="tool-tile">📅 Thời khóa biểu từ ảnh</button>
                         </div>
+                        <div class="storage-info-box" id="storage-info-box" style="margin-top: 10px; padding: 10px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem;">
+                            <div style="font-weight: 600; margin-bottom: 4px; color: var(--text-primary); display: flex; align-items: center; justify-content: space-between;">
+                                <span>📁 Thư viện tài liệu cá nhân:</span>
+                                <button type="button" id="btn-copy-storage-path" class="btn btn-sm btn-outline" style="padding: 2px 8px; font-size: 0.75rem;" title="Sao chép đường dẫn">📋 Chép</button>
+                            </div>
+                            <div style="margin-bottom: 6px;">
+                                <code id="storage-sources-path" style="display: block; word-break: break-all; padding: 4px 6px; background: var(--bg-card); border-radius: 4px; font-size: 0.76rem; color: #38bdf8;">Đang tải đường dẫn...</code>
+                            </div>
+                            <div style="color: var(--text-muted); font-size: 0.74rem; line-height: 1.35;">
+                                🔒 Tài liệu tải lên được lưu trữ trên máy tính này, được bảo toàn sau khi khởi động lại, không tự động xuất bản hay dùng để huấn luyện mô hình. <em>(Tải tệp qua giao diện để tự động trích xuất và lập chỉ mục).</em>
+                            </div>
+                        </div>
                     </div>
                 </details>
 
-                <div class="sidebar-status-box" style="display: none;">
+                <div class="sidebar-status-box">
                     <small id="ollama-status" class="status-indicator"></small>
+                    <button id="btn-model-check" type="button" class="btn-secondary">Kiểm tra mô hình</button>
+                    <small id="model-check-result" role="status" aria-live="polite"></small>
                 </div>
 
                 <!-- Disclaimer -->
@@ -768,7 +782,7 @@
                         <div class="tool-panel-header">
                             <div>
                                 <h2>Tạo câu hỏi theo chủ đề</h2>
-                                <p class="text-muted">Câu hỏi do AI tạo từ tài liệu trong thư viện hoặc tệp tải lên; từng câu có trang và trích dẫn để đối chiếu.</p>
+                                <p class="text-muted">Chủ đề được biên soạn theo khái niệm và chỉ hiện khi có tài liệu phù hợp. Câu hỏi được tạo theo tiêu chí cố định, có trang nguồn để đối chiếu.</p>
                                 <p class="practice-mode-notice text-muted" style="margin-top: 4px; font-size: 0.82rem;">🧠 <strong>Mức xử lý cố định: Kiểm tra kỹ</strong> (đối chiếu 2 bước qua nguồn trích dẫn, độc lập với chế độ hỏi đáp bên ngoài).</p>
                             </div>
                         </div>
@@ -780,8 +794,8 @@
                                     <datalist id="learning-topic-list"></datalist>
                                 </div>
                                 <div class="form-group flex-1">
-                                    <label for="learning-count">Số câu (1–3)</label>
-                                    <input id="learning-count" type="number" class="form-input" min="1" max="3" value="1" required>
+                                    <label for="learning-count">Số câu (1–10)</label>
+                                    <input id="learning-count" type="number" class="form-input" min="1" max="10" value="1" required>
                                 </div>
                                 <div class="form-group flex-1">
                                     <label for="learning-difficulty">Độ khó</label>
@@ -795,7 +809,7 @@
                                     <button type="button" id="btn-learning-generate" class="btn btn-primary">Tạo câu hỏi</button>
                                 </div>
                             </div>
-                            <p id="learning-generate-status" class="tool-status text-muted" role="status" aria-live="polite">Chọn hoặc nhập chủ đề để bắt đầu luyện tập (tối đa 3 câu để giảm thời gian phản hồi).</p>
+                            <p id="learning-generate-status" class="tool-status text-muted" role="status" aria-live="polite">Chọn hoặc nhập chủ đề để bắt đầu luyện tập (tối đa 10 câu, được tạo và kiểm tra theo từng nhóm).</p>
                         </div>
 
                         <!-- Tích hợp phần Tạo Flashcard & Bài tập Trắc nghiệm từ tài liệu tải lên -->
@@ -819,6 +833,25 @@
 
                             <div id="study-tool-active-doc" style="padding: 10px 14px; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 8px; font-size: 0.88rem; color: #38bdf8; margin-bottom: 12px;">
                                 <strong>Tài liệu đang chọn:</strong> <span id="study-tool-active-filename">Chưa chọn tài liệu nào. Vui lòng bấm "Tải tệp mới lên" để thêm tài liệu ôn luyện.</span>
+                            </div>
+
+                            <div class="study-controls-row" style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px;">
+                                <div class="form-group" style="flex: 1; min-width: 140px; margin: 0;">
+                                    <label for="study-quiz-count" style="font-size: 0.82rem; margin-bottom: 4px; display: block;">Số câu trắc nghiệm (1–10)</label>
+                                    <input id="study-quiz-count" type="number" class="form-input" min="1" max="10" value="3" required style="width: 100%;">
+                                </div>
+                                <div class="form-group" style="flex: 1; min-width: 140px; margin: 0;">
+                                    <label for="study-flashcard-count" style="font-size: 0.82rem; margin-bottom: 4px; display: block;">Số flashcard (1–15)</label>
+                                    <input id="study-flashcard-count" type="number" class="form-input" min="1" max="15" value="5" required style="width: 100%;">
+                                </div>
+                                <div class="form-group" style="flex: 1; min-width: 140px; margin: 0;">
+                                    <label for="study-difficulty" style="font-size: 0.82rem; margin-bottom: 4px; display: block;">Độ khó</label>
+                                    <select id="study-difficulty" class="form-select" style="width: 100%;">
+                                        <option value="easy">Dễ</option>
+                                        <option value="medium" selected>Trung bình</option>
+                                        <option value="hard">Khó</option>
+                                    </select>
+                                </div>
                             </div>
 
                             <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
@@ -1416,8 +1449,27 @@
             </div>
             <div class="modal-body">
                 <p class="modal-desc">Chọn tài liệu từ thư viện hệ thống để tự động tạo bộ câu hỏi trắc nghiệm và flashcard tương tác.</p>
-                <div class="search-box-row" style="margin-bottom: 14px;">
-                    <input type="text" id="library-search-input" class="form-input" placeholder="🔍 Tìm kiếm tài liệu theo tên sách, tác giả..." style="width: 100%;">
+                <div class="search-box-row" style="margin-bottom: 12px; display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                    <div style="flex: 2; min-width: 180px;">
+                        <label for="library-search-input" style="font-size: 0.82rem; margin-bottom: 4px; display: block;">Tìm kiếm tài liệu</label>
+                        <input type="text" id="library-search-input" class="form-input" placeholder="🔍 Tìm kiếm tài liệu theo tên sách, tác giả..." style="width: 100%;">
+                    </div>
+                    <div style="flex: 1; min-width: 110px;">
+                        <label for="lib-picker-quiz-count" style="font-size: 0.82rem; margin-bottom: 4px; display: block;">Số câu (1–10)</label>
+                        <input id="lib-picker-quiz-count" type="number" class="form-input" min="1" max="10" value="3" style="width: 100%;">
+                    </div>
+                    <div style="flex: 1; min-width: 110px;">
+                        <label for="lib-picker-flashcard-count" style="font-size: 0.82rem; margin-bottom: 4px; display: block;">Số thẻ (1–15)</label>
+                        <input id="lib-picker-flashcard-count" type="number" class="form-input" min="1" max="15" value="5" style="width: 100%;">
+                    </div>
+                    <div style="flex: 1; min-width: 110px;">
+                        <label for="lib-picker-difficulty" style="font-size: 0.82rem; margin-bottom: 4px; display: block;">Độ khó</label>
+                        <select id="lib-picker-difficulty" class="form-select" style="width: 100%;">
+                            <option value="easy">Dễ</option>
+                            <option value="medium" selected>Trung bình</option>
+                            <option value="hard">Khó</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="table-responsive" style="max-height: 380px; overflow-y: auto;">
                     <table class="kb-table" id="library-picker-table">
@@ -1445,6 +1497,7 @@
                 <div class="study-material-title-group">
                     <h2 id="study-material-title">📖 Bộ Ôn Luyện: Tài liệu</h2>
                     <span id="study-material-subtitle" class="study-material-meta">5 câu trắc nghiệm · 8 flashcards · Trích xuất từ tài liệu</span>
+                    <div id="study-material-warning-banner" class="study-material-warning" style="display: none; margin-top: 6px; padding: 6px 12px; background: rgba(234, 179, 8, 0.15); border: 1px solid rgba(234, 179, 8, 0.4); border-radius: 6px; font-size: 0.85rem; color: #facc15;"></div>
                 </div>
                 <div class="study-material-header-actions">
                     <button type="button" class="btn-close-modal" id="btn-close-study-material" aria-label="Đóng">&times;</button>
@@ -1617,7 +1670,7 @@
                         <h2 id="doc-content-modal-title" class="canvas-doc-title">Nội dung tài liệu</h2>
                         <div class="canvas-doc-meta-row">
                             <span id="doc-content-modal-meta" class="canvas-doc-meta">Đang tải thông tin...</span>
-                            <span id="doc-content-src-badge" class="canvas-src-badge">📂 src/</span>
+                            <span id="doc-content-src-badge" class="canvas-src-badge">📂 Thư viện cá nhân</span>
                         </div>
                     </div>
                 </div>
@@ -1625,7 +1678,7 @@
                 <div class="canvas-bar-center">
                     <div class="canvas-search-box">
                         <span class="canvas-search-icon">🔍</span>
-                        <input type="text" id="doc-content-search-input" class="canvas-search-input" placeholder="Tìm kiếm từ khóa trong tài liệu...">
+                        <input type="text" id="doc-content-search-input" class="canvas-search-input" placeholder="Tìm trong văn bản trích xuất hoặc số trang...">
                         <span id="canvas-search-count" class="canvas-search-count" hidden>0 kết quả</span>
                     </div>
                 </div>
@@ -1692,10 +1745,10 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=compact-chat-20261023b"></script>
+    <script src="/static/app.js?v=source-pages-20261028"></script>
     <script src="/static/document-lookup.js?v=qa-final-20261018"></script>
     <script src="/static/timetable.js?v=yc195-02"></script>
     <script src="/static/layout.js?v=yc195-02"></script>
-    <script src="/static/practice.js?v=yc206-ui02"></script>
+    <script src="/static/practice.js?v=app-audit-20261025"></script>
 </body>
 </html>

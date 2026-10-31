@@ -70,7 +70,8 @@ def merge(previous: Path, additions: Path, destination: Path, db_path: Path = DB
     (destination / "approved_manifest.jsonl").write_text(
         "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records), encoding="utf-8"
     )
-    summary = write_training_files(records, destination, "qwen2.5:7b")
+    teachers = sorted({str(record.get("teacher_model", "unknown")) for record in records})
+    summary = write_training_files(records, destination, ", ".join(teachers) or "unknown")
     summary.update({
         "previous_records": len(old_records), "addition_records": len(new_records),
         "merged_records": len(records), "previous_dataset_sha256": old_digest,

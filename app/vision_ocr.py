@@ -3,7 +3,7 @@
 Provides explicit backend configuration, GPU lock coordination,
 granular caching by source hash + options + model digest, human review/verification workflow,
 strict training dataset gating blocking unverified OCR transcripts,
-and integrates qwen2.5vl:3b from local Ollama as auxiliary VLM OCR.
+and uses the configured local Qwen3.5 9B model for auxiliary vision OCR.
 """
 
 import os
@@ -22,7 +22,7 @@ from typing import Dict, Any, List, Optional, Tuple
 import requests
 
 
-from app.config import DATA_DIR, SRC_DIR, OLLAMA_BASE_URL
+from app.config import DATA_DIR, SRC_DIR, OLLAMA_BASE_URL, OLLAMA_AUX_CHAT_MODEL
 from app.gpu_lock import gpu_coordinator, GPUBusyError
 from app.text_cleaner import normalize_vietnamese_text
 
@@ -47,7 +47,7 @@ PRINT_ONLY_DISCLAIMER = (
 )
 
 
-def get_ollama_model_digest(model_name: str = "qwen2.5vl:3b") -> Optional[str]:
+def get_ollama_model_digest(model_name: str = OLLAMA_AUX_CHAT_MODEL) -> Optional[str]:
     """Retrieve official model digest from local Ollama /api/tags endpoint."""
     if sys.platform == "darwin":
         return None
@@ -82,7 +82,7 @@ class VisionOCRManager:
     def __init__(
         self,
         backend: str = BACKEND_OLLAMA_VISION,
-        vision_model: str = "qwen2.5vl:3b",
+        vision_model: str = OLLAMA_AUX_CHAT_MODEL,
         max_pages: int = 30,
         max_image_mb: float = 10.0,
         timeout_seconds: int = 120,
@@ -152,7 +152,7 @@ class VisionOCRManager:
                 from app.ollama_client import OllamaClient
                 client = OllamaClient()
                 models = [m.get("name", "") for m in client.list_models()]
-                return any("qwen2.5vl:3b" in m for m in models)
+                return OLLAMA_AUX_CHAT_MODEL in models
             except Exception:
                 pass
             return False
@@ -305,7 +305,7 @@ class VisionOCRManager:
         return entry
 
     def _ocr_ollama_vlm(self, image_bytes: bytes) -> str:
-        """Call local Ollama VLM (qwen2.5vl:3b) to transcribe text/code faithfully."""
+        """Call the current local vision model; preserve uncertainty and source text."""
         from PIL import Image
         with Image.open(io.BytesIO(image_bytes)) as image:
             # Exact uniform pixels cannot contain visible text. Do not allow a
@@ -576,7 +576,7 @@ class VisionOCRManager:
 
         has_tesseract = cls.ocr_available(BACKEND_TESSERACT)
         has_vlm = cls.ocr_available(BACKEND_OLLAMA_VISION)
-        vlm_digest = get_ollama_model_digest("qwen2.5vl:3b")
+        vlm_digest = get_ollama_model_digest(OLLAMA_AUX_CHAT_MODEL)
 
         tesseract_text = ""
         vlm_text = ""
@@ -592,7 +592,7 @@ class VisionOCRManager:
 
         if has_vlm:
             try:
-                mgr = cls(backend=BACKEND_OLLAMA_VISION, vision_model="qwen2.5vl:3b")
+                mgr = cls(backend=BACKEND_OLLAMA_VISION, vision_model=OLLAMA_AUX_CHAT_MODEL)
                 vlm_text = mgr._ocr_ollama_vlm(img_bytes).strip()
             except Exception as e:
                 vlm_err = str(e)
@@ -601,23 +601,13 @@ class VisionOCRManager:
             "smoke_passed": bool(tesseract_text or vlm_text),
             "tesseract_installed": has_tesseract,
             "vlm_installed": has_vlm,
-            "vlm_model": "qwen2.5vl:3b",
+            "vlm_model": OLLAMA_AUX_CHAT_MODEL,
             "vlm_digest": vlm_digest,
             "tesseract_sample": tesseract_text,
             "vlm_sample": vlm_text,
             "tesseract_error": tesseract_err,
             "vlm_error": vlm_err,
-            "handwriting_status": "REAL_VLM_AVAILABLE_HOLD_OUT_EVALUATED",
-            "handwriting_real_finding": {
-                "source": "src/sắp xếp.pdf",
-                "page": 1,
-                "tesseract_score": "0/12 critical facts",
-                "vlm_score": "9/12 critical facts",
-                "structural_fidelity_verdict": "REJECTED_AS_FAITHFUL_TRANSCRIPTION",
-                "hallucination_detail": "qwen2.5vl:3b tự đổi vòng for thành while, đổi điều kiện và thứ tự hoán đổi.",
-                "usable_for_training_without_human_edit": False,
-                "gold_holdout_status": "FROZEN_HOLD_OUT_NOT_IN_TRAIN_OR_PROMPT",
-            },
+            "handwriting_status": "NOT_EVALUATED_FOR_CURRENT_MODEL",
         }
 
 

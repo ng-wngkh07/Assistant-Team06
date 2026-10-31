@@ -41,11 +41,11 @@ def test_teacher_reads_nested_items_and_translates_each_source(monkeypatch, lega
     pair = {"filename": "book.pdf", "title": "Book", "sources": [
         {"id": "S1", "page": 1, "text": english}, {"id": "S2", "page": 2, "text": english},
     ]}
-    result = ask_teacher(pair, model="qwen3:4b", translation_model="qwen2.5:7b")
+    result = ask_teacher(pair, model="fixture-teacher:latest", translation_model="fixture-translator:latest")
     assert result["items"] == [item]
     assert result["translations"]["S1"] == vietnamese.strip()
     assert basic_record_quality({"pair": pair, **result})
-    assert models == ["qwen3:4b", "qwen2.5:7b", "qwen2.5:7b"]
+    assert models == ["fixture-teacher:latest", "fixture-translator:latest", "fixture-translator:latest"]
 
 
 def test_partial_english_translation_is_rejected():
@@ -134,7 +134,7 @@ def test_local_translation_is_cached(tmp_path, monkeypatch, legacy_windows):
         return Response()
 
     monkeypatch.setattr("requests.post", fake_post)
-    translator = LocalTranslator(cache_path=tmp_path / "translations.db", model="qwen2.5:7b")
+    translator = LocalTranslator(cache_path=tmp_path / "translations.db", model="fixture-translator:latest")
     chunk = {
         "safe_text": "The mind and body respond to trauma, and the response of the nervous system changes with experience and the environment."
     }
@@ -147,7 +147,7 @@ def test_local_translation_is_cached(tmp_path, monkeypatch, legacy_windows):
 
 def test_runtime_does_not_reuse_legacy_translation_cache(tmp_path, monkeypatch, legacy_windows):
     source = "The mind and body respond to trauma, and the nervous system changes with experience and the environment."
-    translator = LocalTranslator(cache_path=tmp_path / "translations.db", model="qwen2.5:7b")
+    translator = LocalTranslator(cache_path=tmp_path / "translations.db", model="fixture-translator:latest")
     legacy_key = hashlib.sha256((translator.model + "\0" + source).encode()).hexdigest()
     with sqlite3.connect(translator.cache_path) as conn:
         conn.execute("INSERT INTO translations VALUES (?, ?)", (legacy_key, "Bản dịch cũ thiếu ý nhưng có đủ chiều dài để vượt qua bộ lọc ngôn ngữ."))
@@ -190,7 +190,7 @@ def test_translation_batches_keep_results_when_one_batch_fails(tmp_path, monkeyp
         return Response("{truncated")
 
     monkeypatch.setattr("requests.post", fake_post)
-    translator = LocalTranslator(cache_path=tmp_path / "translations.db", model="qwen2.5:7b")
+    translator = LocalTranslator(cache_path=tmp_path / "translations.db", model="fixture-translator:latest")
     chunks = [{"safe_text": f"The mind and body respond to trauma and the nervous system changes with experience number {index}. " * 2} for index in range(3)]
     result = translator.translate(chunks)
     assert set(result) == {0, 1}

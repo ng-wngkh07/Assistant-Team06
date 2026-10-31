@@ -47,6 +47,8 @@ class OllamaClient:
         """Inspect model metadata via /api/show to ensure it is not a remote or cloud model."""
         if not model_name:
             return
+        from app.model_resolver import reject_retired_model
+        reject_retired_model(model_name)
         if not hasattr(self, "_verified_local_models"):
             self._verified_local_models = set()
         if model_name in self._verified_local_models:
@@ -115,13 +117,33 @@ class OllamaClient:
                     families = [str(f).lower() for f in (details.get("families", []) or [])]
                     if ":cloud" in name or name.endswith(":cloud") or family in ("cloud", "remote") or any(f in ("cloud", "remote") for f in families):
                         continue
+                    from app.model_resolver import reject_retired_model
+                    try:
+                        reject_retired_model(name)
+                    except ValueError:
+                        continue
                     filtered.append(m)
                 self._available_models = [m.get("name") for m in filtered]
                 return filtered
             return []
+
         except Exception as e:
             logger.warning(f"Không thể lấy danh sách mô hình từ Ollama: {e}")
             return []
+
+    def embedding_identity(self, model: str) -> Optional[str]:
+        """Bind vectors to actual local artifact bytes, not a mutable model tag."""
+        self._verify_model_locality(model)
+        import re
+        canonical = model if ":" in model else model + ":latest"
+        for item in self.list_models():
+            name = item.get("name", "")
+            if (name if ":" in name else name + ":latest") != canonical:
+                continue
+            digest = str(item.get("digest", "")).removeprefix("sha256:")
+            if re.fullmatch(r"[a-fA-F0-9]{64}", digest):
+                return "ollama-sha256:" + digest.lower()
+        return None
 
     def unload_resident_models(self, timeout: float = 8.0) -> List[str]:
         """Evict any models currently loaded in Ollama VRAM/RAM to prevent GPU memory pressure.
@@ -212,7 +234,9 @@ class OllamaClient:
         return self._available_models or []
 
     def find_best_chat_model(self, preferred: Optional[str] = None) -> str:
-        """Find best available chat model locally."""
+        """Keep the configured selection; missing models never change the product."""
+        from app.model_resolver import reject_retired_model
+        reject_retired_model(preferred or DEFAULT_CHAT_MODEL)
         avail = self.get_available_model_names()
         if preferred:
             if preferred in avail:
@@ -220,13 +244,6 @@ class OllamaClient:
             if ":" not in preferred and f"{preferred}:latest" in avail:
                 return f"{preferred}:latest"
             return preferred
-        # Look for common models
-        for cand in ["qwen2.5:7b", "qwen2.5:3b", "qwen3:4b", "llama3.2:3b", "mistral", "gemma2"]:
-            for m in avail:
-                if cand in m:
-                    return m
-        if avail:
-            return avail[0]
         return DEFAULT_CHAT_MODEL
 
     def find_best_embed_model(self, preferred: Optional[str] = None) -> Optional[str]:
@@ -252,11 +269,21 @@ class OllamaClient:
         if not text.strip() or model in self._unavailable_models:
             return None
 
+        def _norm_l2(v):
+            if not v or len(v) != 1024:
+                return v
+            import numpy as np
+            arr = np.array(v, dtype=np.float32)
+            if not np.all(np.isfinite(arr)):
+                return v
+            norm = float(np.linalg.norm(arr))
+            return (arr / norm).tolist() if norm > 0 else v
+
         # Try newer /api/embed endpoint first
         try:
             res = self.session.post(
                 f"{self.base_url}/api/embed",
-                json={"model": model, "input": text},
+                json={"model": model, "input": text, "truncate": False},
                 timeout=30,
                 allow_redirects=False,
             )
@@ -264,7 +291,7 @@ class OllamaClient:
                 data = res.json()
                 embeddings = data.get("embeddings", [])
                 if embeddings and len(embeddings) > 0:
-                    return embeddings[0]
+                    return _norm_l2(embeddings[0])
             elif res.status_code == 404:
                 self._unavailable_models.add(model)
                 return None
@@ -281,7 +308,8 @@ class OllamaClient:
             )
             if res.status_code == 200:
                 data = res.json()
-                return data.get("embedding")
+                raw_emb = data.get("embedding")
+                return _norm_l2(raw_emb) if raw_emb else None
             elif res.status_code == 404:
                 self._unavailable_models.add(model)
                 return None
@@ -310,7 +338,19 @@ class OllamaClient:
             response.raise_for_status()
             vectors = response.json().get("embeddings", [])
             if len(vectors) == len(texts):
-                return vectors
+                import numpy as np
+                normalized = []
+                for v in vectors:
+                    if v and len(v) == 1024:
+                        arr = np.array(v, dtype=np.float32)
+                        norm = float(np.linalg.norm(arr))
+                        if norm > 0 and np.all(np.isfinite(arr)):
+                            normalized.append((arr / norm).tolist())
+                        else:
+                            normalized.append(v)
+                    else:
+                        normalized.append(v)
+                return normalized
             logger.warning("Ollama returned %s vectors for %s texts", len(vectors), len(texts))
         except requests.RequestException as exc:
             logger.warning("Batch embedding failed: %s", exc)
@@ -346,15 +386,18 @@ class OllamaClient:
         }
         if kwargs.get("seed") is not None:
             payload["options"]["seed"] = kwargs["seed"]
+        if kwargs.get("response_schema") is not None:
+            payload["format"] = kwargs["response_schema"]
         if system_prompt:
             payload["messages"] = [{"role": "system", "content": system_prompt}] + messages
 
         try:
+            req_timeout = kwargs.get("timeout", 120)
             res = self.session.post(
                 f"{self.base_url}/api/chat",
                 json=payload,
                 stream=True,
-                timeout=120,
+                timeout=req_timeout,
                 allow_redirects=False,
             )
             if res.status_code != 200:
@@ -434,14 +477,17 @@ class OllamaClient:
         }
         if kwargs.get("seed") is not None:
             payload["options"]["seed"] = kwargs["seed"]
+        if kwargs.get("response_schema") is not None:
+            payload["format"] = kwargs["response_schema"]
         if system_prompt:
             payload["messages"] = [{"role": "system", "content": system_prompt}] + messages
 
         try:
+            req_timeout = kwargs.get("timeout", 120)
             res = self.session.post(
                 f"{self.base_url}/api/chat",
                 json=payload,
-                timeout=120,
+                timeout=req_timeout,
                 allow_redirects=False,
             )
             if res.status_code == 200:

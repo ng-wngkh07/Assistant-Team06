@@ -58,16 +58,16 @@ def test_combined_source_id_is_normalized():
     assert "[S1" not in result["answer"]
 
 
-def test_trained_model_route_uses_adapter_client(monkeypatch):
-    # This route test uses a stub adapter; its production context gate has its own tests.
+def test_selected_model_route_uses_native_base_client(monkeypatch):
+    # This route test uses a stub base; asset identity has separate boundary tests.
     monkeypatch.setattr("app.rag_agent.context_capacity", lambda model: 8192)
     from app.trained_client import TrainedModelClient
 
     def fake_chat(self, **kwargs):
         self.last_done_reason = "stop"
-        yield "Hệ thống 1 xử lý nhanh [S1]."
+        yield '{"claims":[{"text":"Hệ thống 1 xử lý nhanh.","source_ids":["S1"],"evidence_lines":[1,1]}]}'
 
     monkeypatch.setattr(TrainedModelClient, "chat_stream", fake_chat)
     agent = PsychologyAgent(searcher=StubSearcher(), ollama=StubOllama("Không dùng"), translator=StubTranslator())
-    result = agent.process_query_sync("Hệ thống 1 là gì?", model="tam-ly-mlx", embed_model=None)
+    result = agent.process_query_sync("Hệ thống 1 là gì?", model="qwen3.5-9b-4bit", embed_model=None)
     assert result["answer"] == "Hệ thống 1 xử lý nhanh."

@@ -18,13 +18,10 @@ def _deny_network(*args, **kwargs):
 socket.socket.connect = _deny_network
 socket.create_connection = _deny_network
 
-try:
-    from mlx_lm import stream_generate, load, generate
-except ImportError:
-    from mlx_lm import load, generate
-    stream_generate = None
-from mlx_lm.sample_utils import make_sampler
 import mlx.core as mx
+
+from mlx_lm import stream_generate, load
+from mlx_lm.sample_utils import make_logits_processors, make_sampler
 
 
 def main():
@@ -41,6 +38,8 @@ def main():
         raise ValueError(f"Không tìm thấy cấu hình mô hình tại {config_path}")
     try:
         cfg = json.loads(config_path.read_text(encoding="utf-8"))
+        from app.model_resolver import validate_native_model_config
+        validate_native_model_config(model_path)
         text_cfg = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else {}
         raw_cap = (
             text_cfg.get("max_position_embeddings")
@@ -56,14 +55,8 @@ def main():
     except (OSError, ValueError, TypeError) as exc:
         raise ValueError("Cấu hình mô hình không hợp lệ hoặc thiếu giới hạn ngữ cảnh") from exc
 
-    # Incompatible adapter rejection: 3B adapters cannot attach to 9B
-    is_9b = (
-        cfg.get("model_type") == "qwen3_5"
-        or text_cfg.get("model_type") == "qwen3_5_text"
-        or "9b" in model_path.name.lower()
-    )
-    if is_9b and adapter_path is not None:
-        raise ValueError(f"Không thể gắn adapter LoRA 3B vào mô hình nền tảng 9B ({model_path.name})")
+    if adapter_path is not None:
+        raise ValueError("Chưa có adapter được nghiệm thu cho Qwen3.5 9B; không nạp adapter thử nghiệm hoặc mô hình cũ.")
 
     try:
         max_tokens = int(request.get("max_tokens", 700))
@@ -121,32 +114,45 @@ def main():
     # Small prefill batches reduce transient Metal memory on the 16GB Mac.
     # All prompt tokens remain present; this does not rotate or truncate context.
     gen_kwargs = {"max_tokens": max_tokens, "prefill_step_size": 128}
-    if temperature is not None:
-        gen_kwargs["sampler"] = make_sampler(temp=float(temperature))
+    # Qwen3.5's non-thinking profile uses presence penalty 1.5 for ordinary QA.
+    # For grammar-constrained structured schema generation, disable presence penalty
+    # (zero) so recurring JSON keys and booleans are not penalized.
+    response_schema = request.get("response_schema")
+    if response_schema is not None:
+        if not isinstance(response_schema, dict):
+            raise ValueError("response_schema phải là JSON object.")
+        presence_penalty = 0.0
+    else:
+        presence_penalty = 1.5
+
+    gen_kwargs["sampler"] = make_sampler(
+        temp=float(temperature) if temperature is not None else 0.7,
+        top_p=0.8,
+        top_k=20,
+    )
+    gen_kwargs["logits_processors"] = make_logits_processors(
+        presence_penalty=presence_penalty, presence_context_size=2048,
+    )
+    if response_schema is not None:
+        from mlx_vlm.structured import build_json_schema_logits_processor
+        gen_kwargs["logits_processors"].append(
+            build_json_schema_logits_processor(tokenizer, response_schema)
+        )
 
     generation_started = time.perf_counter()
     first_token_seconds = None
     last_chunk = None
-    if stream_generate is not None:
-        parts = []
-        last_chunk = None
-        for chunk in stream_generate(model, active_tok, prompt=prompt, **gen_kwargs):
-            if first_token_seconds is None:
-                first_token_seconds = time.perf_counter() - generation_started
-            parts.append(chunk.text)
-            last_chunk = chunk
-        answer = "".join(parts)
-
-        if last_chunk is not None:
-            done_reason = getattr(last_chunk, "finish_reason", "stop") or "stop"
-            output_tokens = getattr(last_chunk, "generation_tokens", len(active_tok.encode(answer)))
-        else:
-            done_reason = "stop"
-            output_tokens = len(active_tok.encode(answer))
-    else:
-        answer = generate(model, active_tok, prompt=prompt, **gen_kwargs)
-        done_reason = "stop"
-        output_tokens = len(active_tok.encode(answer))
+    parts = []
+    for chunk in stream_generate(model, active_tok, prompt=prompt, **gen_kwargs):
+        if first_token_seconds is None:
+            first_token_seconds = time.perf_counter() - generation_started
+        parts.append(chunk.text)
+        last_chunk = chunk
+    answer = "".join(parts)
+    done_reason = getattr(last_chunk, "finish_reason", None)
+    if done_reason not in {"stop", "length"}:
+        done_reason = None
+    output_tokens = getattr(last_chunk, "generation_tokens", len(active_tok.encode(answer)))
 
     generation_seconds = time.perf_counter() - generation_started
 
@@ -165,6 +171,7 @@ def main():
         "base_model": str(base_identity),
         "adapter_loaded": has_adapter,
         "adapter_path": str(adapter_path) if has_adapter else None,
+        "generation_profile": {"presence_penalty": presence_penalty, "presence_context_size": 2048},
         "timings": {
             "load_seconds": load_seconds,
             "first_token_seconds": first_token_seconds,
