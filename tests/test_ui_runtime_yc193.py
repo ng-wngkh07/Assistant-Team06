@@ -1,9 +1,12 @@
 """Regression for the server-wired summary endpoint, without GPU/model calls."""
+import sys
+import pytest
 from fastapi.testclient import TestClient
 from app import server
 from app.history import HistoryStore
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 def test_server_summary_uses_configured_mlx_backend(tmp_path, monkeypatch):
     store = HistoryStore(tmp_path / "history.db")
     sid = store.create_session()["id"]

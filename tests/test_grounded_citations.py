@@ -1,3 +1,5 @@
+import sys
+import pytest
 from app.rag_agent import PsychologyAgent, weak_keyword_evidence, repetitive_answer
 
 
@@ -58,6 +60,7 @@ def test_combined_source_id_is_normalized():
     assert "[S1" not in result["answer"]
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 def test_selected_model_route_uses_native_base_client(monkeypatch):
     # This route test uses a stub base; asset identity has separate boundary tests.
     monkeypatch.setattr("app.rag_agent.context_capacity", lambda model: 8192)

@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -308,6 +309,7 @@ def test_example_extraction_returns_empty_when_source_has_no_exercises(tmp_path)
     assert service.list_example_exercises(1, 4, 4) == []
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 def test_practice_routes_mlx_model_to_trained_client(monkeypatch):
     class MockTrainedClient:
         def __init__(self):

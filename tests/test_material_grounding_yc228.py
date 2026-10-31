@@ -1,6 +1,7 @@
 """Acceptance boundaries for uploaded study materials; all sources are synthetic."""
 import io
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -107,6 +108,7 @@ def test_valid_model_items_preserve_content_and_report_provenance():
     assert result['source_validation'] == 'verbatim_quote'
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 def test_local_model_uses_existing_mlx_client_even_if_ollama_chat_is_offline(monkeypatch, native_context_metadata):
     import app.trained_client as tc
     calls = []

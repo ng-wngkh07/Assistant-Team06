@@ -1,4 +1,5 @@
 import json
+import sys
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
@@ -216,6 +217,7 @@ def test_native_mlx_artifacts_present_but_metal_denied_reports_degraded_and_clea
     assert 'GPU Metal' in check_data['message']
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 def test_model_check_rejects_incomplete_inference_length(tmp_path, monkeypatch):
     """When inference output is truncated with last_done_reason='length', check_local_model must reject it."""
     class IncompleteClient:
@@ -240,6 +242,7 @@ def test_model_check_rejects_incomplete_inference_length(tmp_path, monkeypatch):
     assert any(k in data['message'] for k in ('chưa trọn vẹn', 'gián đoạn', 'Khởi chạy'))
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 def test_model_check_rejects_empty_and_error_responses(tmp_path, monkeypatch):
     """When model returns empty response or an error prefix, check_local_model must fail."""
     class ErrorClient:
@@ -263,6 +266,7 @@ def test_model_check_rejects_empty_and_error_responses(tmp_path, monkeypatch):
     assert data['code'] == 'inference_failed'
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 def test_model_check_succeeds_with_stop_and_sanitized_answer(tmp_path, monkeypatch):
     """When model returns done_reason='stop' and valid answer (even with think tags), check_local_model verifies it."""
     class ValidClient:

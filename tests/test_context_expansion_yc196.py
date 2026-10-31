@@ -1,5 +1,6 @@
 """Deployment window stays within verified model capacity; no weight edit."""
 import json
+import sys
 import pytest
 from app import dialogue
 
@@ -8,6 +9,7 @@ def isolated_model_resolver(tmp_path, monkeypatch):
     from app import model_resolver
     monkeypatch.setattr(model_resolver, 'MLX_9B_DIR', tmp_path)
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 @pytest.mark.parametrize('requested,model_limit,expected', [(16384,32768,16384),(32768,32768,32768),(16384,8192,8192)])
 def test_verified_native_window_can_be_selected(tmp_path,monkeypatch,requested,model_limit,expected):
     (tmp_path/'config.json').write_text(json.dumps({'max_position_embeddings':model_limit}))
@@ -15,6 +17,7 @@ def test_verified_native_window_can_be_selected(tmp_path,monkeypatch,requested,m
     monkeypatch.setattr(dialogue,'MLX_CONTEXT_TOKENS',requested,raising=False)
     assert dialogue.context_capacity(dialogue.TRAINED_MODEL_NAME)==expected
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 def test_unknown_model_capacity_fails_closed(tmp_path,monkeypatch):
     (tmp_path/'config.json').write_text('{}')
     monkeypatch.setattr(dialogue,'MLX_MODEL_DIR',tmp_path)

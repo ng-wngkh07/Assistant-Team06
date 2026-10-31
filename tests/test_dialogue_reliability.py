@@ -1,4 +1,5 @@
 import json
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
@@ -194,6 +195,7 @@ def test_long_summary_includes_middle_and_discloses_sample(tmp_path, monkeypatch
     assert result['sampled_turns'] == 6 and result['total_turns'] == 11
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 def test_trained_capacity_fails_closed_without_verified_config(tmp_path, monkeypatch):
     from app import dialogue
     from app import model_resolver

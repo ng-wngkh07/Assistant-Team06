@@ -1,9 +1,12 @@
 """Unlabelled old vectors must never be compared with native MLX query vectors."""
 import sqlite3
 import hashlib
+import sys
 import pytest
 from app.indexer import KnowledgeIndexer, pack_vector
 from app.searcher import HybridSearcher
+
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 
 
 @pytest.mark.parametrize('entrypoint', ['semantic', 'selected_page'])
