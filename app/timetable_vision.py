@@ -1,4 +1,4 @@
-"""Vision Language Model (VLM) extraction for student timetables using local qwen2.5vl:3b.
+"""Vision Language Model extraction for student timetables using local Qwen3.5 9B.
 
 Coordinates GPU execution, protects against prompt injection from image contents,
 enforces strict schema output, caches by image hash + model digest, and creates editable drafts.
@@ -17,13 +17,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image, ImageOps
 import requests
 
-from app.config import OLLAMA_BASE_URL
+from app.config import OLLAMA_BASE_URL, OLLAMA_AUX_CHAT_MODEL
 from app.gpu_lock import GPUBusyError, gpu_coordinator
 from app import timetable_store
 
 logger = logging.getLogger(__name__)
 
-VLM_MODEL_NAME = "qwen2.5vl:3b"
+VLM_MODEL_NAME = OLLAMA_AUX_CHAT_MODEL
 PROMPT_VERSION = "v5-timetable-literal-weekdays"
 MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 15 MB
 MAX_PIXELS = 40_000_000  # Decompression safety (e.g. 8000x5000)
@@ -95,7 +95,7 @@ class VLMOutputInvalidError(Exception):
 
 
 def get_vlm_digest() -> str:
-    """Bind recognition to local artifact bytes on Mac; verify legacy model metadata elsewhere."""
+    """Bind recognition to local artifact bytes on Mac or local Ollama digest."""
     if sys.platform == "darwin":
         from app.native_vision import NativeVisionClient
         if NativeVisionClient.available():
@@ -108,7 +108,7 @@ def get_vlm_digest() -> str:
         for m in client.list_models():
             name = m.get("name", "")
             model = m.get("model", "")
-            if VLM_MODEL_NAME in (name, model) or name.startswith(VLM_MODEL_NAME):
+            if VLM_MODEL_NAME in (name, model):
                 digest = m.get("digest")
                 if digest:
                     return digest

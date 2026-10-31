@@ -13,11 +13,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _worker(tmp_path, monkeypatch, *, nested=True, input_count=40, max_tokens=50, context=100, finish_reason="stop", generation_tokens=7):
+def _worker(tmp_path, monkeypatch, *, nested=True, input_count=40, max_tokens=50, context=100, finish_reason="stop", generation_tokens=7, response_schema=None):
     model = tmp_path / 'base'
     model.mkdir()
     config = {'max_position_embeddings': 262144}
-    (model / 'config.json').write_text(json.dumps({'text_config': config} if nested else config))
+    base = {
+        'model_type': 'qwen3_5', 'architectures': ['Qwen3_5ForConditionalGeneration'],
+        'text_config': {'model_type':'qwen3_5_text','hidden_size':4096,
+                        'num_hidden_layers':32,'num_attention_heads':16},
+        'quantization': {'bits':4,'group_size':64,'mode':'affine'},
+    }
+    (base['text_config'] if nested else base).update(config)
+    (model / 'config.json').write_text(json.dumps(base))
     calls = {'loads': [], 'templates': [], 'generation': []}
 
     class Tokenizer:
@@ -51,6 +58,7 @@ def _worker(tmp_path, monkeypatch, *, nested=True, input_count=40, max_tokens=50
 
     lm = types.ModuleType('mlx_lm'); lm.load = load; lm.generate = generate; lm.stream_generate = stream_generate
     sampling = types.ModuleType('mlx_lm.sample_utils'); sampling.make_sampler = lambda **kw: kw
+    sampling.make_logits_processors = lambda **kw: [kw]
     core = types.ModuleType('mlx.core'); core.random = types.SimpleNamespace(seed=lambda value: None)
     mlx = types.ModuleType('mlx'); mlx.core = core
     transformers = types.ModuleType('transformers'); transformers.AutoTokenizer = AutoTokenizer
@@ -65,9 +73,29 @@ def _worker(tmp_path, monkeypatch, *, nested=True, input_count=40, max_tokens=50
     spec = importlib.util.spec_from_file_location('_native_contract_worker', ROOT / 'app/mlx_infer.py')
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     request = {'model_path': str(model), 'adapter_path': None, 'messages': [{'role': 'user', 'content': 'Entropy là gì?'}], 'max_tokens': max_tokens, 'num_ctx': context, 'temperature': 0.0}
+    if response_schema is not None:
+        request['response_schema'] = response_schema
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(request)))
     output = io.StringIO(); monkeypatch.setattr(sys, 'stdout', output)
     return module, calls, output
+
+
+def test_structured_native_request_installs_schema_constraint_before_generation(tmp_path, monkeypatch):
+    schema = {'type': 'object', 'properties': {'checks': {'type': 'array'}}, 'required': ['checks']}
+    module, calls, output = _worker(tmp_path, monkeypatch, response_schema=schema)
+    observed = []
+    constraint = object()
+    monkeypatch.setitem(sys.modules, 'mlx_vlm.structured', types.SimpleNamespace(
+        build_json_schema_logits_processor=lambda tokenizer, value: observed.append(value) or constraint))
+    module.main()
+    assert observed == [schema]
+    processors = calls['generation'][0]['logits_processors']
+    assert processors[-1] is constraint
+    for p in processors:
+        if isinstance(p, dict):
+            assert p.get('presence_penalty', 0.0) == 0.0
+    payload = json.loads(output.getvalue())
+    assert payload['generation_profile']['presence_penalty'] == 0.0
 
 
 def test_nested_qwen35_capacity_is_read_before_local_generation(tmp_path, monkeypatch):
@@ -89,6 +117,17 @@ def test_native_prompt_disables_hidden_thinking_in_the_actual_template(tmp_path,
     assert calls['generation'][0]['prompt'] == 'formatted local prompt'
 
 
+def test_native_qa_keeps_deterministic_sampling_and_uses_anti_loop_profile(tmp_path, monkeypatch):
+    module, calls, output = _worker(tmp_path, monkeypatch)
+    module.main()
+    generation = calls['generation'][0]
+    assert generation['sampler']['temp'] == 0.0
+    assert generation['logits_processors'][0] == {
+        'presence_penalty': 1.5, 'presence_context_size': 2048,
+    }
+    assert json.loads(output.getvalue())['done_reason'] == 'stop'
+
+
 def test_over_budget_request_never_loads_weights(tmp_path, monkeypatch):
     module, calls, output = _worker(tmp_path, monkeypatch, input_count=60)
     with pytest.raises(ValueError, match='110|token'):
@@ -105,7 +144,6 @@ def test_missing_selected_tokenizer_never_uses_legacy_3b(tmp_path, monkeypatch):
     monkeypatch.setattr(token_counter, 'BASE_DIR', tmp_path)
     monkeypatch.setattr(token_counter, 'MLX_MODEL_DIR', tmp_path / 'missing-selected-base')
     monkeypatch.setattr(model_resolver, 'MLX_9B_DIR', tmp_path / 'missing-selected-base')
-    monkeypatch.setattr(model_resolver, 'MLX_3B_DIR', legacy)
     assert token_counter._find_model_dir('qwen3.5-9b-4bit') is None
 
 
@@ -149,7 +187,7 @@ def test_mac_default_names_native_9b_without_an_environment_override(tmp_path):
     assert Path(directory).name == 'qwen3.5-9b-4bit'
 
 
-@pytest.mark.parametrize('reason,count', [('stop', 7), ('length', 50)])
+@pytest.mark.parametrize('reason,count', [('stop', 7), ('length', 50), (None, 7)])
 def test_worker_reports_actual_generation_finish_and_usage(tmp_path, monkeypatch, reason, count):
     # Returned text re-encodes to 3 tokens; it cannot establish actual stop or usage.
     module, calls, output = _worker(tmp_path, monkeypatch, finish_reason=reason, generation_tokens=count)
@@ -259,13 +297,14 @@ def test_native_vision_readiness_requires_its_local_runtime(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize('changed_file', ['model.safetensors', 'tokenizer.json', 'preprocessor_config.json', 'chat_template.jinja'])
-def test_native_calendar_cache_identity_changes_with_actual_artifact_bytes(tmp_path, monkeypatch, changed_file):
+def test_native_calendar_cache_identity_changes_with_actual_artifact_bytes(tmp_path, monkeypatch, changed_file, current_native_config):
     from app import native_vision, model_resolver, timetable_vision
     monkeypatch.setattr(native_vision.sys, 'platform', 'darwin')
     monkeypatch.setattr(native_vision, 'MLX_9B_DIR', tmp_path)
     monkeypatch.setattr(model_resolver, 'MLX_9B_DIR', tmp_path)
     for name in ('config.json', 'tokenizer.json', 'processor_config.json', 'preprocessor_config.json', 'model.safetensors', 'chat_template.jinja'):
         (tmp_path / name).write_text('asset-v1')
+    (tmp_path/'config.json').write_text(json.dumps(current_native_config))
     monkeypatch.setattr(native_vision.NativeVisionClient, 'available', classmethod(lambda cls, *a, **kw: True))
     first = timetable_vision.get_vlm_digest()
     path = tmp_path / changed_file

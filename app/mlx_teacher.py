@@ -1,13 +1,12 @@
-"""Generate expanded supervision with one resident MLX model, then exit."""
+"""Generate candidate supervision with the selected local model; not training approval."""
 
 import argparse
 import json
 import re
 from pathlib import Path
 
-from mlx_lm import generate, load
-
-from app.config import MLX_MODEL_DIR
+from app.trained_client import TrainedModelClient
+from app.config import DEFAULT_CHAT_MODEL
 from app.bilingual_terms import translation_guidance, translation_is_plausible
 from app.prepare_v5 import prepare
 from app.training_data import detect_language, format_context, pair_language, SOURCE_RE
@@ -15,13 +14,13 @@ from app.training_data import detect_language, format_context, pair_language, SO
 
 class MLXTeacher:
     def __init__(self):
-        self.model, self.tokenizer = load(str(MLX_MODEL_DIR))
+        self.client = TrainedModelClient(DEFAULT_CHAT_MODEL)
 
     def answer(self, system, user, max_tokens=900):
-        prompt = self.tokenizer.apply_chat_template(
-            [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            tokenize=False, add_generation_prompt=True)
-        return generate(self.model, self.tokenizer, prompt=prompt, max_tokens=max_tokens).strip()
+        return self.client.chat_complete(
+            messages=[{"role": "user", "content": user}],
+            system_prompt=system, max_tokens=max_tokens,
+        ).strip()
 
     def translate(self, text):
         for attempt in range(2):
@@ -64,7 +63,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    print(json.dumps(prepare(args.output, teacher="mlx-qwen2.5-3b-base", teacher_fn=MLXTeacher()), ensure_ascii=False), flush=True)
+    print(json.dumps(prepare(args.output, teacher=DEFAULT_CHAT_MODEL, teacher_fn=MLXTeacher()), ensure_ascii=False), flush=True)
 
 
 if __name__ == "__main__":

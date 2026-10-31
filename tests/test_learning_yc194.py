@@ -72,7 +72,7 @@ def test_exercises_return_question_and_separate_answer_page(api):
 
 
 @pytest.mark.parametrize("payload", [
-    {"topic": ""}, {"topic": "x" * 241}, {"topic": "Toán", "count": 4},
+    {"topic": ""}, {"topic": "x" * 241}, {"topic": "Toán", "count": 11},
     {"topic": "Toán", "difficulty": "impossible"}, {"topic": "Toán", "purpose": "upload"},
     {"topic": "Toán", "weak_topics": ["x"] * 21},
 ])

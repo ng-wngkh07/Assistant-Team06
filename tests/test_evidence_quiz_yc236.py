@@ -66,12 +66,28 @@ def test_relocated_evidence_symlink_fails_closed(tmp_path):
     with pytest.raises(ValueError): validate_page_exclusion_manifest(root, entry)
 
 
+def reviewer_response(kw):
+    prompt = kw['messages'][0]['content']
+    item = json.JSONDecoder().raw_decode(prompt.split('Dữ liệu cần kiểm định:\n',1)[1])[0][0]
+    ans = item.get('proposed_answer', 'A')
+    return json.dumps({'checks':[{'index':1,
+        'input_audit': 'Đề bài cung cấp đầy đủ dữ kiện cần thiết từ trích đoạn.',
+        'independent_solution': 'Suy luận độc lập trực tiếp từ nguồn văn bản.',
+        'choice_comparison': f'Lựa chọn {ans} khớp chính xác với kết quả tự giải.',
+        'explanation_audit': 'Giải thích hoàn toàn chính xác theo dữ liệu nguồn.',
+        'supported':True,'explanation_supported':True,
+        'unique_answer':True,'qualifiers_preserved':True,'difficulty_matches':True,
+        'verified_answer':ans}]})
+
+
 class Responses:
     last_done_reason = 'stop'
     def __init__(self, questions): self.questions = questions; self.calls = []
     def check_health(self): return True
     def chat_complete(self, **kw):
         self.calls.append(kw)
+        if 'Kiểm định độc lập từng câu' in kw['messages'][0]['content']:
+            return reviewer_response(kw)
         if 'flashcards' in kw['messages'][0]['content']:
             return '{"flashcards": []}'
         return json.dumps({'questions': self.questions})
@@ -83,7 +99,7 @@ def generate(answer, distractors, text):
     source.total_chars = len(text); source.total_pages = 1
     client = Responses([{'format': 'source_cloze', 'answer': answer,
                          'distractors': distractors, 'evidence_id': 'Q1'}])
-    result = StudyMaterialManager(client).generate_materials_from_pages(source, model='test-remote', quiz_count=1)
+    result = StudyMaterialManager(client).generate_materials_from_pages(source, model='test-remote', quiz_count=1, difficulty='easy')
     return result, client
 
 
@@ -91,7 +107,7 @@ def generate(answer, distractors, text):
 def test_generic_categories_do_not_pass_as_unit_distractors(distractors):
     text = 'Entropy measures uncertainty in a random variable. Its entropy is one bit. A certain outcome has zero entropy.'
     result, client = generate('bit', distractors, text)
-    assert result['generation']['quiz'] == 'extractive_fallback'
+    assert result['generation']['quiz'] == 'unavailable'
     assert len(client.calls) <= 3  # at most one bounded quiz repair plus flashcards
 
 
@@ -114,7 +130,7 @@ def test_concrete_alternatives_keep_full_source_context():
 ])
 def test_math_condition_choices_keep_the_same_quantity(answer, distractors, text):
     result, client = generate(answer, distractors, text)
-    assert result['generation']['quiz'] == 'extractive_fallback'
+    assert result['generation']['quiz'] == 'unavailable'
     assert len(client.calls) <= 3
 
 
@@ -124,10 +140,11 @@ class ShortSpanRepairClient:
  def check_health(self):return True
  def chat_complete(self,**kw):
   self.calls.append(kw)
+  if 'Kiểm định độc lập từng câu' in kw['messages'][0]['content']:return reviewer_response(kw)
   if 'flashcards' in kw['messages'][0]['content']:return '{"flashcards":[]}'
   q={'format':'source_cloze','evidence_id':'Q1','answer':'R','distractors':['U','I','V']} if len(self.calls)==1 else {'format':'source_cloze','evidence_id':'Q1','answer':'R>0','distractors':['R<0','R=0','R<=0']}
   return json.dumps({'questions':[q]})
 # Use three distractors false under R>0; R>=0 would also be true.
 def test_short_repeated_math_variable_gets_one_repair():
  c=ShortSpanRepairClient();src=PDFExtractionResult(filename='s.txt',filepath=Path('s.txt'));text='Định luật Ôm là I = U/R, với R>0. Điện trở được đo bằng ôm.';src.extracted_pages=[{'page_num':1,'text':text}];src.total_chars=len(text);src.total_pages=1
- r=StudyMaterialManager(c).generate_materials_from_pages(src,model='test-remote',quiz_count=1);assert r['generation']['quiz']=='model';assert len(c.calls)==3
+ r=StudyMaterialManager(c).generate_materials_from_pages(src,model='test-remote',quiz_count=1,difficulty='easy');assert r['generation']['quiz']=='model';assert len(c.calls)==4

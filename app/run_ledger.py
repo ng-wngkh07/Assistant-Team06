@@ -93,7 +93,7 @@ def compute_code_fingerprint() -> Dict[str, str]:
     files_to_hash = [
         "app/fine_tune.py",
         "app/corrective_training.py",
-        "app/preflight_7b.py",
+        "app/model_resolver.py",
         "app/memory_preflight.py",
         "app/token_auditor.py",
         "app/run_ledger.py",

@@ -94,8 +94,8 @@ def test_ui_no_longer_requires_model_or_topk_controls():
 def test_chat_model_resolution_never_substitutes_a_different_model(monkeypatch):
     from app.ollama_client import OllamaClient
     client = OllamaClient()
-    monkeypatch.setattr(client, 'get_available_model_names', lambda: ['qwen2.5:7b', 'qwen2.5:3b-custom'])
-    assert client.find_best_chat_model('qwen2.5:3b') == 'qwen2.5:3b'
+    monkeypatch.setattr(client, 'get_available_model_names', lambda: ['other-local:latest', 'qwen3.5:9b-custom'])
+    assert client.find_best_chat_model('qwen3.5:9b') == 'qwen3.5:9b'
 
 
 def test_embedding_resolution_does_not_fall_back_to_a_different_vector_space(monkeypatch):
@@ -108,9 +108,9 @@ def test_embedding_resolution_does_not_fall_back_to_a_different_vector_space(mon
 def test_exact_default_tag_aliases_are_allowed(monkeypatch):
     from app.ollama_client import OllamaClient
     client = OllamaClient()
-    monkeypatch.setattr(client, 'get_available_model_names', lambda: ['bge-m3:latest', 'qwen2.5:3b'])
+    monkeypatch.setattr(client, 'get_available_model_names', lambda: ['bge-m3:latest', 'qwen3.5:9b'])
     assert client.find_best_embed_model('bge-m3') == 'bge-m3:latest'
-    assert client.find_best_chat_model('qwen2.5:3b') == 'qwen2.5:3b'
+    assert client.find_best_chat_model('qwen3.5:9b') == 'qwen3.5:9b'
 
 
 @pytest.mark.parametrize('endpoint', ['/api/chat', '/api/chat/stream'])

@@ -21,22 +21,6 @@ from app.gpu_lock import gpu_coordinator
 
 logger = logging.getLogger(__name__)
 
-# Architecture definition for Qwen2.5-3B
-ARCH_3B = {
-    "hidden_size": 2048,
-    "num_hidden_layers": 36,
-    "vocab_size": 151936,
-    "intermediate_size": 11008,
-}
-
-# Safety thresholds
-SYSTEM_OS_RAM_RESERVE_GB = 4.0
-MIN_AVAILABLE_RAM_GB = 3.5
-MAX_SEQ_LENGTH_LIMIT = 1024
-MAX_LORA_LAYERS_LIMIT = 4
-MAX_LORA_RANK_LIMIT = 16
-
-
 def parse_swapusage(output: str) -> Dict[str, float]:
     """Parse sysctl vm.swapusage output into MB values.
     
@@ -165,21 +149,13 @@ def inspect_base_model(model_dir: Path) -> Dict[str, Any]:
     if not config_path.exists():
         raise FileNotFoundError(f"config.json không tìm thấy trong {model_dir}")
 
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    hidden_size = config.get("hidden_size", 0)
-    num_layers = config.get("num_hidden_layers", 0)
-    model_type_cfg = config.get("model_type", "")
-    architectures = config.get("architectures", [])
-    quant_bits = config.get("quantization", {}).get("bits", None)
-
-    is_3b = (
-        hidden_size == ARCH_3B["hidden_size"]
-        and num_layers == ARCH_3B["num_hidden_layers"]
-        and model_type_cfg == "qwen2"
-        and "Qwen2ForCausalLM" in architectures
-        and quant_bits == 4
-    )
-    model_type = "3B_4bit" if is_3b else f"unknown_{hidden_size}_{num_layers}"
+    from app.model_resolver import validate_native_model_config
+    config = validate_native_model_config(model_dir)
+    text = config['text_config']
+    hidden_size = text['hidden_size']
+    num_layers = text['num_hidden_layers']
+    architectures = config['architectures']
+    quant_bits = (config.get('quantization') or config.get('quantization_config'))['bits']
 
     # Weights layout check: single model.safetensors or multi-shard index
     weights_path = model_dir / "model.safetensors"
@@ -213,14 +189,15 @@ def inspect_base_model(model_dir: Path) -> Dict[str, Any]:
 
     return {
         "model_dir": str(model_dir),
-        "model_type": model_type,
-        "is_supported_3b": is_3b,
+        "model_type": "Qwen3.5-9B-4bit",
+        "is_supported_native": True,
         "hidden_size": hidden_size,
         "num_hidden_layers": num_layers,
         "architectures": architectures,
         "quantization_bits": quant_bits,
         "has_weights": has_weights,
         "weights_bytes": weight_bytes,
+        "total_weight_mb": weight_bytes / (1024 ** 2),
         "has_tokenizer": has_tokenizer,
     }
 
@@ -229,9 +206,6 @@ def audit_dataset_tokens(dataset_dir: Path, max_seq_length: int = 1024, model_di
     """Exact token audit across training examples using base model chat template and tokenizer."""
     from app.token_auditor import audit_dataset_exact
     return audit_dataset_exact(dataset_dir=dataset_dir, model_dir=model_dir, max_seq_length=max_seq_length)
-
-
-ESTIMATED_TRAINING_PEAK_RAM_GB = 3.50
 
 
 def preflight_check_memory_training(
@@ -243,93 +217,16 @@ def preflight_check_memory_training(
     lora_rank: int = 8,
     grad_checkpoint: bool = True,
 ) -> Dict[str, Any]:
-    """Strict gating check for memory-aware MLX training on 16GB Apple Silicon."""
-    import math
-    model_dir = model_dir or MLX_MODEL_DIR
-    violations = []
+    """Retired execution boundary; diagnostics cannot authorize current-model training.
 
-    # 1. Parameter validation: must be positive integers, not NaN or <= 0
-    for name, val in [
-        ("batch_size", batch_size),
-        ("max_seq_length", max_seq_length),
-        ("num_layers", num_layers),
-        ("lora_rank", lora_rank),
-    ]:
-        if not isinstance(val, int) or val <= 0 or (isinstance(val, float) and math.isnan(val)):
-            violations.append(f"Tham số '{name}' = {val} không hợp lệ (phải là số nguyên dương).")
-
-    if batch_size != 1:
-        violations.append(f"batch_size = {batch_size} (Bắt buộc batch_size = 1 trên máy 16GB).")
-    if not grad_checkpoint:
-        violations.append("gradient checkpointing phải được kích hoạt để tránh tràn bộ nhớ.")
-    if isinstance(max_seq_length, int) and max_seq_length > MAX_SEQ_LENGTH_LIMIT:
-        violations.append(f"max_seq_length = {max_seq_length} vượt quá trần an toàn {MAX_SEQ_LENGTH_LIMIT}.")
-    if isinstance(num_layers, int) and num_layers > MAX_LORA_LAYERS_LIMIT:
-        violations.append(f"num_layers = {num_layers} vượt quá giới hạn an toàn {MAX_LORA_LAYERS_LIMIT}.")
-    if isinstance(lora_rank, int) and lora_rank > MAX_LORA_RANK_LIMIT:
-        violations.append(f"lora_rank = {lora_rank} vượt quá giới hạn an toàn {MAX_LORA_RANK_LIMIT}.")
-
-    # 2. Hardware memory profile & Fail-closed evaluation
-    hw = get_hardware_memory_profile()
-    if not hw.get("eligible"):
-        return {
-            "eligible_for_training": False,
-            "violations": [hw.get("measurement_error", "Không thể đo thông số bộ nhớ.")],
-            "profile": hw,
-        }
-
-    total_gb = hw.get("total_gb", 0)
-    avail_gb = hw.get("available_gb")
-
-    if total_gb < 15.0:
-        violations.append(f"Tổng dung lượng RAM vật lý {total_gb} GiB < 16 GiB chuẩn.")
-
-    # Strictly fail closed if available RAM is missing, NaN, or non-positive
-    if avail_gb is None or (isinstance(avail_gb, float) and math.isnan(avail_gb)) or avail_gb <= 0:
-        violations.append("RAM khả dụng không thể xác định (None/NaN/<=0). Fail-closed theo nguyên tắc an toàn bộ nhớ.")
-    else:
-        # Binding explanation: peak estimate vs OS reserve
-        if avail_gb < ESTIMATED_TRAINING_PEAK_RAM_GB:
-            violations.append(
-                f"RAM khả dụng đo được ({avail_gb:.2f} GiB) < ước tính đỉnh tiêu thụ huấn luyện ({ESTIMATED_TRAINING_PEAK_RAM_GB:.2f} GiB). "
-                f"Chạy huấn luyện sẽ xâm lấn vào mức dự trữ an toàn {SYSTEM_OS_RAM_RESERVE_GB:.2f} GiB của hệ điều hành và các ứng dụng."
-            )
-
-    # 3. Model inspection
-    try:
-        model_info = inspect_base_model(model_dir)
-        if not model_info.get("is_supported_3b"):
-            violations.append(f"Mô hình tại {model_dir} không khớp kiến trúc Qwen2.5 3B 4-bit (phát hiện: {model_info.get('model_type')}).")
-        if not model_info.get("has_weights"):
-            violations.append(f"Thiếu hoặc sai cấu trúc safetensors weights tại {model_dir}.")
-        if not model_info.get("has_tokenizer"):
-            violations.append(f"Thiếu tokenizer files hợp lệ tại {model_dir}.")
-    except Exception as e:
-        violations.append(f"Lỗi kiểm tra mô hình: {e}")
-
-    # 4. Exact Dataset token audit
-    token_audit = None
-    if dataset_dir and dataset_dir.exists():
-        try:
-            token_audit = audit_dataset_tokens(dataset_dir, max_seq_length, model_dir)
-            if token_audit.get("has_violations"):
-                violations.append(
-                    f"Tập dữ liệu có {token_audit['violations_count']} vi phạm chuẩn hóa token hoặc cấu trúc (tối đa {max_seq_length} tokens)."
-                )
-        except Exception as e:
-            violations.append(f"Lỗi kiểm tra độ dài token của dữ liệu: {e}")
-
-    # 5. Disk space check
-    if hw.get("disk_free_gb", 0) < 2.0:
-        violations.append(f"Dung lượng đĩa khả dụng {hw.get('disk_free_gb')} GiB < 2.0 GiB tối thiểu.")
-
-    is_eligible = len(violations) == 0
+    A new protocol needs measured Qwen3.5 memory, reviewed data and explicit
+    owner authorization. No estimate from another architecture is reused.
+    """
     return {
-        "eligible_for_training": is_eligible,
-        "violations": violations,
-        "hardware_profile": hw,
-        "model_info": model_info if "model_info" in locals() else None,
-        "token_audit": token_audit,
+        "eligible_for_training": False,
+        "violations": ["Chưa có giao thức huấn luyện Qwen3.5 9B được kiểm chứng và phê duyệt."],
+        "estimated_peak_memory_gb": None,
+        "is_empirical_measurement": False,
     }
 
 

@@ -372,3 +372,35 @@ if __name__ == "__main__":
         }
         print(json.dumps(err_res, ensure_ascii=False))
         sys.exit(1)
+
+
+def audit_context_truncation(
+    dataset_path: Path,
+    max_seq_length: int = 1024,
+    model_dir: Optional[Path] = None
+) -> Dict[str, Any]:
+    """Audit dataset jsonl files for prompt + target token lengths using exact tokenizer.
+
+    Fails closed if records are malformed JSON/schema, if valid.jsonl is missing,
+    or if target tokens are truncated beyond threshold.
+    """
+    res = audit_dataset_exact(dataset_path, model_dir, max_seq_length)
+
+    train_file = dataset_path / "train.jsonl"
+    valid_file = dataset_path / "valid.jsonl"
+    files_ok = train_file.exists() and valid_file.exists()
+
+    violations = res.get("violations", [])
+    train_malformed = sum(
+        1 for v in violations
+        if v.get("file") == "train.jsonl" and v.get("code") in ("MALFORMED_JSON", "INVALID_TYPE", "EMPTY_MESSAGES", "INVALID_MESSAGE_ITEM", "EMPTY_LINE", "UNSUPPORTED_SCHEMA")
+    )
+    valid_malformed = sum(
+        1 for v in violations
+        if v.get("file") == "valid.jsonl" and v.get("code") in ("MALFORMED_JSON", "INVALID_TYPE", "EMPTY_MESSAGES", "INVALID_MESSAGE_ITEM", "EMPTY_LINE", "UNSUPPORTED_SCHEMA")
+    )
+
+    res["acceptable"] = bool(files_ok and (not res.get("has_violations", False)) and res.get("status") == "SUCCESS")
+    res["train"] = {"malformed_samples": train_malformed, "total_samples": res.get("valid_samples", 0)}
+    res["valid"] = {"malformed_samples": valid_malformed, "total_samples": res.get("valid_samples", 0)}
+    return res

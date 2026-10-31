@@ -1,4 +1,5 @@
 import json
+import sys
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
@@ -13,9 +14,9 @@ def mock_client(tmp_path, monkeypatch):
     """Client fixture using an isolated temporary history database to ensure zero history contamination."""
     test_db = tmp_path / "test_history.db"
     monkeypatch.setattr(server, "history_store", HistoryStore(test_db))
-    # These legacy-runtime tests explicitly select local Ollama. The Mac default
-    # now uses MLX and must be tested independently of the daemon's availability.
-    monkeypatch.setattr(server, "DEFAULT_CHAT_MODEL", "qwen2.5:3b")
+    # Exercise the current Windows/Ollama contract separately from native Mac.
+    monkeypatch.setattr(server.sys, 'platform', 'win32')
+    monkeypatch.setattr(server, "DEFAULT_CHAT_MODEL", "qwen3.5:9b")
     return TestClient(app)
 
 
@@ -36,7 +37,7 @@ def test_health_all_healthy(mock_client, monkeypatch):
     assert data["web_healthy"] is True
     assert data["ollama_connected"] is True
     assert data["inference_ready"] is True
-    assert "bình thường" in data["service_message"]
+    assert "sẵn sàng" in data["service_message"]
     assert data["gpu"]["busy"] is False
 
 
@@ -150,6 +151,7 @@ def test_native_mlx_health_needs_no_ollama_daemon(tmp_path, monkeypatch, availab
     monkeypatch.setattr(server, 'DEFAULT_CHAT_MODEL', 'qwen3.5-9b-4bit')
     monkeypatch.setattr(server, 'history_store', HistoryStore(tmp_path/'native-history.db'))
     monkeypatch.setattr(server.TrainedModelClient, 'available', lambda *args, **kwargs: available)
+    monkeypatch.setattr(server, 'probe_mlx_runtime', lambda: {'ready': True})
     monkeypatch.setattr(server.gpu_coordinator, 'get_status', lambda: {'state':'idle','busy':False,'message':'Sẵn sàng'})
     def unexpected_daemon():
         raise AssertionError('Native Mac model readiness must not call the Ollama daemon')
@@ -182,3 +184,130 @@ def test_development_reload_does_not_scan_private_data_and_model_directories(mon
         assert calls[0]["reload_dirs"] == [str(Path(__file__).resolve().parents[1] / "app")]
     else:
         assert "reload_dirs" not in calls[0]
+
+
+def test_native_mlx_artifacts_present_but_metal_denied_reports_degraded_and_clear_cause(tmp_path, monkeypatch):
+    import sys
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(server, 'DEFAULT_CHAT_MODEL', 'qwen3.5-9b-4bit')
+    monkeypatch.setattr(server, 'history_store', HistoryStore(tmp_path/'native-history.db'))
+    monkeypatch.setattr(server.TrainedModelClient, 'available', lambda *args, **kwargs: True)
+    monkeypatch.setattr(server, 'probe_mlx_runtime', lambda **kwargs: {
+        'ready': False,
+        'code': 'metal_unavailable',
+        'message': 'Máy chủ không truy cập được GPU Metal của máy. Dừng máy chủ cũ và mở Start Study Agent.command từ Finder hoặc chạy từ Terminal. Sau đó bấm Kiểm tra mô hình.',
+        'probe_kind': 'runtime_import',
+    })
+    monkeypatch.setattr(server.gpu_coordinator, 'get_status', lambda: {'state':'idle','busy':False,'message':'Sẵn sàng'})
+    with TestClient(app) as client:
+        response = client.get('/api/health')
+        check_response = client.post('/api/model/check')
+    assert response.status_code == 200
+    data = response.json()
+    assert data['web_healthy'] is True
+    assert data['mlx_available'] is True
+    assert data['inference_ready'] is False
+    assert data['service_state'] == 'degraded'
+    assert 'GPU Metal' in data['service_message']
+    assert data['runtime']['code'] == 'metal_unavailable'
+
+    check_data = check_response.json()
+    assert check_data['ready'] is False
+    assert check_data['code'] == 'metal_unavailable'
+    assert 'GPU Metal' in check_data['message']
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
+def test_model_check_rejects_incomplete_inference_length(tmp_path, monkeypatch):
+    """When inference output is truncated with last_done_reason='length', check_local_model must reject it."""
+    class IncompleteClient:
+        def __init__(self, *args, **kwargs):
+            self.last_done_reason = "length"
+
+        def chat_complete(self, *args, **kwargs):
+            return "OK but unfinished"
+
+    monkeypatch.setattr(server, 'history_store', HistoryStore(tmp_path / 'incomplete-hist.db'))
+    monkeypatch.setattr(server, 'DEFAULT_CHAT_MODEL', 'qwen3.5-9b-4bit')
+    monkeypatch.setattr(server, 'probe_mlx_runtime', lambda **kwargs: {'ready': True, 'code': 'ready', 'message': 'OK'})
+    monkeypatch.setattr(server, 'TrainedModelClient', IncompleteClient)
+    monkeypatch.setattr(server.gpu_coordinator, 'get_status', lambda: {'state': 'idle', 'busy': False, 'message': 'Sẵn sàng'})
+
+    with TestClient(app) as client:
+        resp = client.post('/api/model/check')
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['ready'] is False
+    assert data['code'] == 'inference_failed'
+    assert any(k in data['message'] for k in ('chưa trọn vẹn', 'gián đoạn', 'Khởi chạy'))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
+def test_model_check_rejects_empty_and_error_responses(tmp_path, monkeypatch):
+    """When model returns empty response or an error prefix, check_local_model must fail."""
+    class ErrorClient:
+        def __init__(self, *args, **kwargs):
+            self.last_done_reason = "stop"
+
+        def chat_complete(self, *args, **kwargs):
+            return "❌ Model runtime error"
+
+    monkeypatch.setattr(server, 'history_store', HistoryStore(tmp_path / 'err-hist.db'))
+    monkeypatch.setattr(server, 'DEFAULT_CHAT_MODEL', 'qwen3.5-9b-4bit')
+    monkeypatch.setattr(server, 'probe_mlx_runtime', lambda **kwargs: {'ready': True, 'code': 'ready', 'message': 'OK'})
+    monkeypatch.setattr(server, 'TrainedModelClient', ErrorClient)
+    monkeypatch.setattr(server.gpu_coordinator, 'get_status', lambda: {'state': 'idle', 'busy': False, 'message': 'Sẵn sàng'})
+
+    with TestClient(app) as client:
+        resp = client.post('/api/model/check')
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['ready'] is False
+    assert data['code'] == 'inference_failed'
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
+def test_model_check_succeeds_with_stop_and_sanitized_answer(tmp_path, monkeypatch):
+    """When model returns done_reason='stop' and valid answer (even with think tags), check_local_model verifies it."""
+    class ValidClient:
+        def __init__(self, *args, **kwargs):
+            self.last_done_reason = "stop"
+
+        def chat_complete(self, *args, **kwargs):
+            return "<think>internal thoughts</think>\nOK"
+
+    monkeypatch.setattr(server, 'history_store', HistoryStore(tmp_path / 'valid-hist.db'))
+    monkeypatch.setattr(server, 'DEFAULT_CHAT_MODEL', 'qwen3.5-9b-4bit')
+    monkeypatch.setattr(server, 'probe_mlx_runtime', lambda **kwargs: {'ready': True, 'code': 'ready', 'message': 'OK'})
+    monkeypatch.setattr(server, 'TrainedModelClient', ValidClient)
+    monkeypatch.setattr(server.gpu_coordinator, 'get_status', lambda: {'state': 'idle', 'busy': False, 'message': 'Sẵn sàng'})
+
+    with TestClient(app) as client:
+        resp = client.post('/api/model/check')
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['ready'] is True
+    assert data['code'] == 'inference_verified'
+
+
+def test_model_check_ollama_transport_length_rejection(tmp_path, monkeypatch):
+    """When Ollama transport receives done_reason='length', check_local_model must reject it."""
+    class MockOllama:
+        def __init__(self):
+            self.last_done_reason = "length"
+
+        def chat_complete(self, *args, **kwargs):
+            return "Incomplete ollama output"
+
+    monkeypatch.setattr(server, 'history_store', HistoryStore(tmp_path / 'ollama-len-hist.db'))
+    monkeypatch.setattr(server.sys, 'platform', 'win32')
+    monkeypatch.setattr(server, 'DEFAULT_CHAT_MODEL', 'qwen3.5:9b')
+    monkeypatch.setattr(server, 'ollama', MockOllama())
+    monkeypatch.setattr(server.gpu_coordinator, 'get_status', lambda: {'state': 'idle', 'busy': False, 'message': 'Sẵn sàng'})
+
+    with TestClient(app) as client:
+        resp = client.post('/api/model/check')
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data['ready'] is False
+    assert data['code'] == 'inference_failed'

@@ -8,7 +8,6 @@ from collections import Counter
 from datetime import datetime, timezone
 import hashlib
 import json
-import math
 from pathlib import Path
 import sqlite3
 import sys
@@ -122,7 +121,11 @@ def repair(source_db, shadow_db, src, review_root, report_path, extra_reviews=No
                         if needs_review:
                             state = 'native_pending_review'
                         elif text.strip():
-                            state = 'text_verified' if old_binding and old_binding['state'] == 'text_verified' else 'native_text_extracted'
+                            current_chunks = [c['text'] for c in TextChunker.chunk_page(document['clean_title'], name, number, text)]
+                            # Old acceptance binds the old passage. A new extractor is
+                            # not a human reviewer and cannot approve replacement text.
+                            state = ('text_verified' if old_binding and old_binding['state'] == 'text_verified'
+                                     and current_chunks == old else 'native_text_extracted')
                         else:
                             state = 'blank_verified' if old_binding and old_binding['state'] == 'blank_verified' else 'visual_content_pending'
                     new = old if text is None else [c['text'] for c in TextChunker.chunk_page(document['clean_title'], name, number, text)]
@@ -157,8 +160,8 @@ def repair(source_db, shadow_db, src, review_root, report_path, extra_reviews=No
                     warning_counts.update(str(w).split(':')[0] for w in warnings)
                 result.filename = name
                 index._save_quality_record(db, document['id'], result)
-                db.execute('UPDATE documents SET extracted_pages_count=(SELECT count(DISTINCT page_num) FROM chunks WHERE doc_id=?),pipeline_version=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',
-                           (document['id'],PIPELINE_VERSION,document['id']))
+                db.execute('UPDATE documents SET extracted_pages_count=(SELECT count(DISTINCT page_num) FROM chunks WHERE doc_id=?),pipeline_version=?,filepath=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',
+                           (document['id'],PIPELINE_VERSION,str(source),document['id']))
             counts['changed_pages'] += changed
             report['documents'].append(dict(filename=name,changed_pages=changed,total_pages=document['total_pages']))
             report.update(counts=dict(counts),warning_counts=dict(warning_counts),updated_at=now())
@@ -178,65 +181,15 @@ def repair(source_db, shadow_db, src, review_root, report_path, extra_reviews=No
     return report
 
 
-def embed(shadow_db, report_path, batch_size=16):
-    from app.indexer import KnowledgeIndexer, pack_vector
-    from app.gpu_lock import gpu_coordinator
-    from app.dialogue import dialogue_gate
-    index = KnowledgeIndexer(db_path=Path(shadow_db))
-    model = next(m for m in index.ollama.list_models() if m['name'] in ('bge-m3', 'bge-m3:latest'))
-    with connect(shadow_db) as db:
-        pending = list(db.execute('SELECT id,text FROM chunks WHERE embedding IS NULL ORDER BY id'))
-    done = 0
-    with dialogue_gate.acquire(), gpu_coordinator.acquire_for_inference():
-        for start in range(0,len(pending),batch_size):
-            batch = pending[start:start+batch_size]
-            texts = {digest(r['text'].encode()):r['text'] for r in batch}
-            cached = {}
-            with connect(shadow_db) as db:
-                for key in texts:
-                    row = db.execute('SELECT embedding,vector_sha256 FROM corpus_embedding_cache WHERE text_sha256=? AND model_digest=?', (key,model['digest'])).fetchone()
-                    if row and len(row['embedding']) == 4096 and digest(row['embedding']) == row['vector_sha256']:
-                        cached[key] = row['embedding']
-            new = [(key,value) for key,value in texts.items() if key not in cached]
-            vectors = index.ollama.get_batch_embeddings([value for _,value in new], model=model['name']) if new else []
-            if len(vectors) != len(new):
-                raise RuntimeError('Incomplete embedding response')
-            with connect(shadow_db) as db:
-                for (key,_),vector in zip(new,vectors):
-                    if len(vector) != 1024 or not all(math.isfinite(x) for x in vector) or not any(vector):
-                        raise RuntimeError('Invalid embedding')
-                    blob = pack_vector(vector)
-                    cached[key] = blob
-                    db.execute('INSERT OR REPLACE INTO corpus_embedding_cache VALUES(?,?,?,?)',(key,model['digest'],blob,digest(blob)))
-                for row in batch:
-                    key = digest(row['text'].encode()); blob = cached[key]
-                    updated = db.execute('UPDATE chunks SET embedding=? WHERE id=? AND text=?',(blob,row['id'],row['text']))
-                    if updated.rowcount != 1:
-                        raise RuntimeError('Source changed during embedding')
-                    db.execute('INSERT OR REPLACE INTO corpus_vector_provenance VALUES(?,?,?,?,?,?,?)',(row['id'],key,model['digest'],digest(blob),1024,1,now()))
-                    done += 1
-            Path(report_path).write_text(json.dumps(dict(status='EMBEDDING',done=done,total=len(pending),model=model['name'],model_digest=model['digest'],updated_at=now()),indent=2))
-            print(f'Embedding {done}/{len(pending)}',flush=True)
-    record = dict(status='EMBEDDED_NOT_PUBLISHED',done=done,total=len(pending),model=model['name'],model_digest=model['digest'],updated_at=now())
-    Path(report_path).write_text(json.dumps(record,indent=2))
-    return record
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase',choices=['text','embed'])
-    parser.add_argument('--source-db',type=Path)
-    parser.add_argument('--shadow-db',type=Path,required=True)
-    parser.add_argument('--src',type=Path,default=ROOT/'src')
-    parser.add_argument('--review-root',type=Path,default=ROOT)
-    parser.add_argument('--extra-reviews',type=Path)
-    parser.add_argument('--report',type=Path,required=True)
-    parser.add_argument('--batch-size',type=int,default=16)
+    parser.add_argument('phase', choices=['text'])
+    parser.add_argument('--source-db', type=Path, required=True)
+    parser.add_argument('--shadow-db', type=Path, required=True)
+    parser.add_argument('--src', type=Path, default=ROOT / 'src')
+    parser.add_argument('--review-root', type=Path, default=ROOT)
+    parser.add_argument('--extra-reviews', type=Path)
+    parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
-    args.report.parent.mkdir(parents=True,exist_ok=True)
-    if args.phase == 'text':
-        if not args.source_db:
-            parser.error('--source-db is required for text phase')
-        repair(args.source_db,args.shadow_db,args.src,args.review_root,args.report,args.extra_reviews)
-    else:
-        embed(args.shadow_db,args.report,args.batch_size)
+    args.report.parent.mkdir(parents=True, exist_ok=True)
+    repair(args.source_db, args.shadow_db, args.src, args.review_root, args.report, args.extra_reviews)

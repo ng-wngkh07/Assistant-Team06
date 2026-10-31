@@ -13,7 +13,18 @@ Study Agent helps learners ask questions about their own course materials and ch
 
 Question answering is the core product. An answer should identify its evidence, preserve the source's conditions and say when the available material is insufficient. A valid citation alone does not prove that the answer is correct.
 
+For a prepared local library, follow [knowledge pack installation](docs/knowledge-packs.md#user-installation-and-no-index-workflow). An application bundle includes the matching pack and its configuration; recipients do not prepare an index or edit pack settings. Install the platform's dependencies and local models once. The pack supplies approved originals, source passages and compatible vectors. Private training data and the publisher's working database are not needed. The public sample covers twelve subjects; it is a demonstration library, not a complete course collection.
+
 ## Quick start
+
+### Choose a starting library
+
+For generated answers, quizzes, flashcards and timetable recognition, use the [macOS](README_MAC.md#start-with-a-prepared-library) or [Windows](README_WINDOWS.md#prepared-libraries-and-platform-limits) full-model instructions with a matching prepared pack. Model and pack downloads are one-time setup steps. Follow the first-use checks in the platform guide before relying on generated content.
+
+On a fresh clone, the **search-only demo** runs immediately with **no model downloads required**:
+- SQLite FTS5 keyword search, document viewing, and extractive reading work out of the box using public synthetic fixtures in `tests/fixtures/documents`.
+- Full generative QA, semantic embeddings, and timetable vision require platform-specific local model runtimes described below.
+- **Privacy-safe per-user local indexing**: All document parsing, index storage (`data/`), conversation history, and model execution remain strictly local to your machine. There is no requirement or mechanism to publish private indexes, vectors, or documents to Git.
 
 ### Windows
 
@@ -26,7 +37,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_windows.ps1 -DemoOnl
 powershell -NoProfile -ExecutionPolicy Bypass -File .\start_windows.ps1 -Profile demo
 ```
 
-See [Windows setup](README_WINDOWS.md) for installation without Git and local models.
+For the search-only demo, Ollama is optional. For full local QA on Windows, see [Windows setup](README_WINDOWS.md). MLX is Apple-only and not supported on Windows.
 
 ### macOS
 
@@ -40,15 +51,19 @@ python3.12 -m venv .venv
 .venv/bin/python scripts/dev.py serve --profile demo
 ```
 
-Open **http://127.0.0.1:8000**. The demo builds a separate library from public test fixtures. Document search works without a language model; answers, embeddings and image recognition require the configured local runtimes. See [macOS setup](README_MAC.md).
+Open **http://127.0.0.1:8000**. The demo builds an isolated library from public test fixtures. Keyword search and document viewing work immediately without downloading models. Full QA on Apple Silicon uses the native MLX runtime. See [macOS setup](README_MAC.md).
 
-## QA model
+## QA model and platform contracts
 
-The selected macOS QA architecture uses **Qwen3.5 9B 4-bit directly through MLX**, with an 8192-token operational context and local weights. Inference runs on the deployment machine. Future authorized fine-tuning must use the same local MLX runtime; hosted model APIs and cloud fallbacks are prohibited. See [model selection and migration](docs/model-selection.md) for the pinned artifact, historical comparison limits, setup and training gates. A llmfit “Perfect” hardware-fit label does not certify answer quality. Installation and inference checks do not authorize training or adapter activation.
+- **macOS (Apple Silicon)**: Uses **Qwen3.5 9B 4-bit directly through MLX** (native Python 3.13 runtime in `.train-venv/`) with an 8192-token operational budget, plus native BGE-M3 fp16 for dense embeddings. Cloud fallbacks and hosted APIs are prohibited.
+- **Windows**: Uses **local Ollama** (`qwen3.5:9b`, `bge-m3`). The Apple-only MLX runtime is explicitly marked `NOT_RUN` / platform unsupported on Windows. Launcher scripts check and propagate endpoint readiness before reporting QA ready.
+- **Failure diagnostics**: If local weights or runtimes are missing, the application displays actionable diagnostics and continues serving model-free search; it never silently downloads unapproved models or fabricates unverified fallback text as model output.
 
 ## Use your own materials
 
-Copy `.env.example` to `.env` if you do not already have local settings. Configure source and data directories, prepare the required models, then start with `--profile local`. Synchronize the library in the web application; local startup does not automatically index your files. You can also attach a supported document directly in chat.
+In an application bundle, the launcher creates a writable personal library at `data/user-library/src/` and seeds its index from the publisher's precomputed data. Upload additional documents through the application; it saves the originals and processes the new files locally. The library area shows the actual source directory. Restarting preserves the originals, working index, history and timetable. These additions are private and do not enter the publisher's pack or automatically become approved training data.
+
+For a source checkout without a bundled pack, copy `.env.example` to `.env` if you do not already have local settings. Configure source and data directories, prepare the required models, then start with `--profile local`. Files copied directly into a source directory require synchronization in the application; startup does not watch for filesystem changes.
 
 Supported uploads include PDF, DOCX, PPTX, TXT, Markdown, PNG, JPEG and WebP, up to 20 MB. Images can be attached and viewed without readable text; source-based QA and study generation require readable extracted content. Extracted DOCX sections are reading sections, not original printed page numbers.
 
@@ -63,7 +78,9 @@ Supported uploads include PDF, DOCX, PPTX, TXT, Markdown, PNG, JPEG and WebP, up
 | [Context management](docs/context-management.md) | Conversation budget, warnings and memory tradeoffs |
 | [Question complexity](docs/question-complexity.md) | Suggestion policy, verification risk and future labeling |
 | [Model migration](docs/model-selection.md) | Exact QA artifact, evidence, setup and rollback |
+| [RAG and future training](docs/rag-and-training.md) | Hybrid retrieval, top-K, chunking, local distribution and teacher supervision |
 | [Data preparation](docs/data-preparation.md) | Every-page inventory, source review, vector integrity and training gates |
+| [Document distribution](docs/data-distribution.md) | Publication rights, privacy, full-library coverage and safe knowledge-pack delivery |
 | [Timetable workflow](docs/timetable-workflow.md) | Recognition, user review, confirmation and calendar export |
 | [Deployment](docs/deployment.md) | Running, updating and checking the application |
 | [Testing](docs/testing.md) | Regression checks and real-model evaluation |

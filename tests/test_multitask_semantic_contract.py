@@ -39,9 +39,15 @@ def context(passage):
 
 def test_wrong_proposed_letter_does_not_make_other_checks_false():
     passage = 'Khi cây rỗng, hàm thêm nút gọi createNode(v) và trả về ngay.'
-    check = {'supported': False, 'explanation_supported': True,
-             'unique_answer': True, 'qualifiers_preserved': True,
-             'verified_answer': 'B'}
+    check = {
+        'input_audit': 'Đề bài nêu rõ trạng thái cây rỗng và hỏi tên hàm được gọi.',
+        'independent_solution': 'Theo nguồn, khi cây rỗng hàm gọi createNode(v).',
+        'choice_comparison': 'Kết quả createNode(v) khớp với B; đáp án đề xuất C sai.',
+        'explanation_audit': 'Giải thích đúng theo nguồn khi nêu createNode(v).',
+        'supported': False, 'explanation_supported': True,
+        'unique_answer': True, 'qualifiers_preserved': True,
+        'verified_answer': 'B',
+    }
     question = {'question': 'Khi cây rỗng, hàm thêm nút gọi hàm nào?',
                 'choices': {'A': 'deleteNode(v)', 'B': 'createNode(v)',
                             'C': 'sort(v)', 'D': 'findNode(v)'},
@@ -119,7 +125,7 @@ def test_practice_generation_uses_actual_runtime_prompt(monkeypatch):
     service = PracticeService(None, None)
     captured = []
     monkeypatch.setattr(service, '_chat_complete',
-                        lambda prompt, *_: captured.append(prompt) or '{"questions":[]}')
+                        lambda prompt, *_, **kwargs: captured.append(prompt) or '{"questions":[]}')
     passage = 'Lực là đại lượng vector, cả độ lớn và hướng đều quan trọng.'
     ctx = context(passage)
     service._generate_text([{'chunk_id': ctx.chunk_id, 'page_num': ctx.page_num,
@@ -175,18 +181,151 @@ def test_verifier_uses_actual_runtime_passage_per_question(monkeypatch):
     service = PracticeService(None, None)
     captured = []
     monkeypatch.setattr(service, '_chat_complete',
-                        lambda prompt, *_: captured.append(prompt) or '{"checks":[]}')
+                        lambda prompt, *_, **kwargs: captured.append(prompt) or '{"checks":[]}')
     passage = 'Khi cây rỗng, hàm thêm nút gọi createNode(v) và trả về ngay.'
     ctx = context(passage)
     choices = {'A': 'findNode(v)', 'B': 'createNode(v)', 'C': 'sort(v)', 'D': 'deleteNode(v)'}
     question = {'question': 'Khi cây rỗng, hàm thêm nút gọi hàm nào?',
                 'choices': choices, 'answer': 'C',
                 'explanation': 'Nguồn ghi createNode(v).', 'evidence_quote': passage,
-                'verifier_check': {'supported': False, 'explanation_supported': True,
-                                   'unique_answer': True, 'qualifiers_preserved': True,
-                                   'verified_answer': 'B'}}
+                'verifier_check': {
+                    'input_audit': 'Đề bài nêu rõ trạng thái cây rỗng và hỏi tên hàm được gọi.',
+                    'independent_solution': 'Theo nguồn, khi cây rỗng hàm gọi createNode(v).',
+                    'choice_comparison': 'Khớp với B; đề xuất C sai.',
+                    'explanation_audit': 'Giải thích đúng theo nguồn.',
+                    'supported': False, 'explanation_supported': True,
+                    'unique_answer': True, 'qualifiers_preserved': True,
+                    'verified_answer': 'B',
+                }}
     actual_question = {**question, 'choices': [{'label': k, 'text': v} for k, v in choices.items()],
                        'source': {'chunk_id': ctx.chunk_id, 'snippet': passage}}
     service._verify_questions([actual_question], {ctx.chunk_id: {'safe_text': passage}}, 'test')
     messages, _ = build_practice_verify_invalid(ctx, 'EXTRA_QUERY_NOT_IN_RUNTIME', question)
     assert messages[1]['content'] == captured[0]
+
+
+def test_verifier_supported_uses_actual_runtime_prompt_parity(monkeypatch):
+    PracticeService = runtime_practice_service()
+    service = PracticeService(None, None)
+    captured = []
+    monkeypatch.setattr(service, '_chat_complete',
+                        lambda prompt, *_, **kwargs: captured.append(prompt) or '{"checks":[]}')
+    passage = 'Khi thêm phần tử vào danh sách liên kết đơn, cập nhật con trỏ next của nút mới.'
+    ctx = context(passage)
+    choices = {'A': 'Cập nhật next', 'B': 'Xóa nút đầu', 'C': 'Đảo ngược danh sách', 'D': 'Không làm gì'}
+    question = {
+        'question': 'Thao tác nào được thực hiện khi thêm phần tử vào danh sách liên kết đơn?',
+        'choices': choices,
+        'answer': 'A',
+        'explanation': 'Nguồn nêu rõ cập nhật con trỏ next của nút mới.',
+        'evidence_quote': passage,
+        'verifier_check': {
+            'input_audit': 'Đề bài hỏi thao tác khi thêm phần tử vào danh sách liên kết đơn.',
+            'independent_solution': 'Theo nguồn, thao tác là cập nhật con trỏ next của nút mới.',
+            'choice_comparison': 'Khớp duy nhất với A (Cập nhật next); B, C, D sai.',
+            'explanation_audit': 'Giải thích chuẩn xác theo nguồn.',
+            'supported': True,
+            'explanation_supported': True,
+            'unique_answer': True,
+            'qualifiers_preserved': True,
+            'verified_answer': 'A',
+        },
+    }
+    actual_question = {
+        **question,
+        'choices': [{'label': k, 'text': v} for k, v in choices.items()],
+        'source': {'chunk_id': ctx.chunk_id, 'snippet': passage},
+    }
+    # Test parity with default difficulty (None)
+    service._verify_questions([actual_question], {ctx.chunk_id: {'safe_text': passage}}, 'test')
+    messages, target = build_practice_verify_supported(ctx, 'EXTRA_QUERY_NOT_IN_RUNTIME', question)
+    assert messages[1]['content'] == captured[0]
+    parsed_target = json.loads(target)
+    assert parsed_target['checks'][0] == {'index': 1, **question['verifier_check']}
+
+    # Test parity with explicit difficulty
+    captured.clear()
+    service._verify_questions([actual_question], {ctx.chunk_id: {'safe_text': passage}}, 'test', difficulty='medium')
+    messages_diff, _ = build_practice_verify_supported(ctx, 'EXTRA_QUERY', question, difficulty='medium')
+    assert messages_diff[1]['content'] == captured[0]
+    assert 'Độ khó bắt buộc: medium' in messages_diff[1]['content']
+
+
+def test_verifier_long_source_parity_preserves_decisive_trailing_condition(monkeypatch):
+    PracticeService = runtime_practice_service()
+    service = PracticeService(None, None)
+    captured = []
+    monkeypatch.setattr(service, '_chat_complete',
+                        lambda prompt, *_, **kwargs: captured.append(prompt) or '{"checks":[]}')
+
+    prefix = 'Quy trình xử lý cấu trúc dữ liệu cơ bản: ' + ('bước duyệt kiểm tra tính hợp lệ; ' * 45)
+    trailing_rule = 'ĐIỀU_KIỆN_QUYẾT_ĐỊNH_CUỐI_NGUỒN: Nếu khóa lớn hơn 1000 và mảng dài chẵn, trả về chỉ số mid+2.'
+    long_passage = prefix + trailing_rule
+
+    assert len(long_passage) > 1400, f'Expected passage > 1400 chars, got {len(long_passage)}'
+    assert trailing_rule not in long_passage[:1400], 'Decisive trailing condition must lie past 1400 chars'
+    assert trailing_rule in long_passage
+
+    ctx = context(long_passage)
+    choices = {'A': 'mid+2', 'B': 'mid+1', 'C': 'mid', 'D': 'mid-1'}
+
+    # 1. Positive preparation parity (supported) with long source
+    supported_q = {
+        'question': 'Khi khóa lớn hơn 1000 và mảng có độ dài chẵn, thuật toán trả về chỉ số nào?',
+        'choices': choices,
+        'answer': 'A',
+        'explanation': 'Theo điều kiện quyết định ở cuối nguồn, trả về chỉ số mid+2.',
+        'evidence_quote': trailing_rule,
+        'verifier_check': {
+            'input_audit': 'Đề bài cung cấp đầy đủ điều kiện khóa > 1000 và mảng dài chẵn.',
+            'independent_solution': 'Theo điều kiện quyết định cuối nguồn, trả về mid+2.',
+            'choice_comparison': 'Khớp duy nhất với A (mid+2); B, C, D sai.',
+            'explanation_audit': 'Giải thích chuẩn xác theo nguồn.',
+            'supported': True,
+            'explanation_supported': True,
+            'unique_answer': True,
+            'qualifiers_preserved': True,
+            'verified_answer': 'A',
+        },
+    }
+    actual_supported = {
+        **supported_q,
+        'choices': [{'label': k, 'text': v} for k, v in choices.items()],
+        'source': {'chunk_id': ctx.chunk_id, 'snippet': trailing_rule},
+    }
+    service._verify_questions([actual_supported], {ctx.chunk_id: {'safe_text': long_passage}}, 'test')
+    msgs_supp, _ = build_practice_verify_supported(ctx, 'EXTRA_QUERY_NOT_IN_RUNTIME', supported_q)
+    assert msgs_supp[1]['content'] == captured[0]
+    assert trailing_rule in msgs_supp[1]['content']
+    assert trailing_rule in captured[0]
+
+    # 2. Negative preparation parity (invalid) with long source
+    captured.clear()
+    invalid_q = {
+        'question': 'Khi khóa lớn hơn 1000 và mảng có độ dài chẵn, thuật toán trả về chỉ số nào?',
+        'choices': choices,
+        'answer': 'B',
+        'explanation': 'Đoạn nguồn yêu cầu mid+2 nhưng đề xuất chọn mid+1.',
+        'evidence_quote': trailing_rule,
+        'verifier_check': {
+            'input_audit': 'Đề bài cung cấp đầy đủ điều kiện khóa > 1000 và mảng dài chẵn.',
+            'independent_solution': 'Theo điều kiện quyết định cuối nguồn, trả về mid+2.',
+            'choice_comparison': 'Quy tắc trả về mid+2 (A), đề xuất chọn mid+1 (B) là sai.',
+            'explanation_audit': 'Giải thích chỉ rõ sự sai lệch.',
+            'supported': False,
+            'explanation_supported': True,
+            'unique_answer': True,
+            'qualifiers_preserved': True,
+            'verified_answer': 'A',
+        },
+    }
+    actual_invalid = {
+        **invalid_q,
+        'choices': [{'label': k, 'text': v} for k, v in choices.items()],
+        'source': {'chunk_id': ctx.chunk_id, 'snippet': trailing_rule},
+    }
+    service._verify_questions([actual_invalid], {ctx.chunk_id: {'safe_text': long_passage}}, 'test')
+    msgs_inv, _ = build_practice_verify_invalid(ctx, 'EXTRA_QUERY_NOT_IN_RUNTIME', invalid_q)
+    assert msgs_inv[1]['content'] == captured[0]
+    assert trailing_rule in msgs_inv[1]['content']
+    assert trailing_rule in captured[0]

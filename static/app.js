@@ -422,6 +422,20 @@ document.addEventListener("DOMContentLoaded", () => {
         if (e.target === kbModal) kbModal.classList.remove("active");
     });
 
+    const btnCopyStoragePath = document.getElementById("btn-copy-storage-path");
+    if (btnCopyStoragePath) {
+        btnCopyStoragePath.addEventListener("click", async () => {
+            const pathEl = document.getElementById("storage-sources-path");
+            if (pathEl && pathEl.textContent && pathEl.textContent !== "Đang tải đường dẫn...") {
+                try {
+                    await navigator.clipboard.writeText(pathEl.textContent);
+                    btnCopyStoragePath.textContent = "✅ Đã chép";
+                    setTimeout(() => { btnCopyStoragePath.textContent = "📋 Chép"; }, 2000);
+                } catch (_) {}
+            }
+        });
+    }
+
     btnCloseReindex.addEventListener("click", () => {
         if (!btnCloseReindex.disabled) reindexModal.classList.remove("active");
     });
@@ -1510,6 +1524,23 @@ document.addEventListener("DOMContentLoaded", () => {
         return msgDiv;
     }
 
+    document.getElementById("btn-model-check")?.addEventListener("click", async () => {
+        const button = document.getElementById("btn-model-check");
+        const status = document.getElementById("model-check-result");
+        button.disabled = true;
+        status.textContent = "Đang khởi tạo và chạy thử mô hình cục bộ…";
+        try {
+            const response = await fetch("/api/model/check", {method: "POST"});
+            const data = await response.json();
+            status.textContent = response.ok ? data.message : (data.detail || "Không kiểm tra được mô hình.");
+            await fetchKnowledgeBaseStatus();
+        } catch (_) {
+            status.textContent = "Không kết nối được máy chủ. Mở Start Study Agent.command (Mac) hoặc Start Study Agent.bat (Windows).";
+        } finally {
+            button.disabled = false;
+        }
+    });
+
     async function fetchKnowledgeBaseStatus() {
         try {
             const res = await fetch("/api/status");
@@ -1543,7 +1574,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
                 if (ollamaStatus) {
                     if (data.inference_ready) {
-                        ollamaStatus.textContent = modelReadyLabel || "🟢 Mô hình hỏi đáp sẵn sàng";
+                        ollamaStatus.textContent = "🟢 Môi trường mô hình sẵn sàng · Bấm Kiểm tra mô hình để chạy thử";
                         ollamaStatus.className = "status-indicator connected";
                     } else {
                         ollamaStatus.textContent = `🔴 ${data.service_message || "Mô hình hỏi đáp chưa sẵn sàng"}`;
@@ -1560,6 +1591,14 @@ document.addEventListener("DOMContentLoaded", () => {
             embeddingCoverage = kb.total_chunks ? (kb.embedded_chunks || 0) / kb.total_chunks : 0;
 
             window.kbData = kb.documents || [];
+
+            if (data.storage && data.storage.sources_dir) {
+                const storagePathEl = document.getElementById("storage-sources-path");
+                if (storagePathEl) {
+                    storagePathEl.textContent = data.storage.sources_dir;
+                    storagePathEl.title = data.storage.sources_dir;
+                }
+            }
         } catch (e) {
             console.error("Status fetch error:", e);
             if (ollamaStatus) {
@@ -1583,8 +1622,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     modelReadyLabel = usesMlx
                         ? (adapted ? "🟢 Mô hình đã kiểm định sẵn sàng" : "🟢 Mô hình gốc sẵn sàng")
                         : `🟢 Mô hình ${name} sẵn sàng`;
-                    ollamaStatus.textContent = modelReadyLabel;
-                    ollamaStatus.className = "status-indicator connected";
+                    ollamaStatus.textContent = "🟡 Đã tìm thấy tệp mô hình · Đang kiểm tra môi trường chạy";
+                    ollamaStatus.className = "status-indicator";
                 } else {
                     ollamaStatus.textContent = "🟡 Mô hình văn bản chưa sẵn sàng";
                     ollamaStatus.className = "status-indicator";
@@ -1924,6 +1963,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnCloseStudyMaterial = document.getElementById("btn-close-study-material");
     const studyMaterialTitle = document.getElementById("study-material-title");
     const studyMaterialSubtitle = document.getElementById("study-material-subtitle");
+    const studyMaterialWarningBanner = document.getElementById("study-material-warning-banner");
 
     const studyLoadingModal = document.getElementById("study-loading-modal");
     const studyLoadingTitle = document.getElementById("study-loading-title");
@@ -2298,13 +2338,27 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function renderDocumentContentPages(entry, filterQuery = "") {
         if (!docContentPagesList) return;
-        const pages = (entry && Array.isArray(entry.pages))
+        let pages = (entry && Array.isArray(entry.pages))
             ? entry.pages
             : (entry && Array.isArray(entry.extracted_pages))
             ? entry.extracted_pages
             : [];
         const q = (filterQuery || "").toLowerCase().trim();
         const isPdf = Boolean(entry && entry.filename && entry.filename.toLowerCase().endsWith(".pdf"));
+        const documentId = Number(entry?.doc_id);
+        const showOriginalPages = isPdf && Number.isSafeInteger(documentId) && documentId > 0;
+
+        // Text extraction may omit diagrams, formulas, or entire pages. For a
+        // library PDF, the physical pages are the primary reading surface.
+        if (showOriginalPages) {
+            const totalPages = Number(entry.total_pages);
+            if (Number.isSafeInteger(totalPages) && totalPages > 0 && totalPages <= 100000) {
+                const textByPage = new Map(pages.map(p => [Number(p.page_num), p]));
+                pages = Array.from({ length: totalPages }, (_, index) =>
+                    textByPage.get(index + 1) || { page_num: index + 1, text: "" }
+                );
+            }
+        }
 
         const filteredPages = q
             ? pages.filter(p => String(p.text || "").toLowerCase().includes(q) || `trang ${p.page_num}`.includes(q))
@@ -2316,7 +2370,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 let count = 0;
                 pages.forEach(p => {
                     const matches = (String(p.text || "").toLowerCase().match(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
-                    count += matches;
+                    count += matches + (`trang ${p.page_num}`.includes(q) ? 1 : 0);
                 });
                 canvasSearchCount.textContent = `${count} kết quả`;
             } else {
@@ -2336,7 +2390,20 @@ document.addEventListener("DOMContentLoaded", () => {
         let fullHtml = "";
         filteredPages.forEach((p, idx) => {
             const pageText = String(p.text || "").trim();
-            if (pageText) {
+            const pageNumber = Number(p.page_num);
+            if (showOriginalPages && Number.isSafeInteger(pageNumber) && pageNumber > 0) {
+                const originalUrl = `/api/documents/${documentId}/pdf#page=${pageNumber}`;
+                const imageUrl = `/api/documents/${documentId}/pages/${pageNumber}/image`;
+                fullHtml += `<section class="canvas-original-page" data-page="${pageNumber}">
+                    <div class="canvas-original-page-heading"><span>Trang ${pageNumber}</span>
+                    <a href="${originalUrl}" target="_blank" rel="noopener noreferrer">Mở trang gốc</a></div>
+                    <img class="canvas-original-page-image" src="${imageUrl}" alt="Trang gốc ${pageNumber}" loading="lazy" decoding="async">
+                    ${pageText ? `<details class="canvas-extracted-text"${q && pageText.toLowerCase().includes(q) ? " open" : ""}>
+                        <summary>Văn bản trích xuất (có thể thiếu công thức hoặc hình ảnh)</summary>
+                        ${formatCanvasBlock(pageText, pageNumber, idx === 0, q, false)}
+                    </details>` : ""}
+                </section>`;
+            } else if (pageText) {
                 fullHtml += formatCanvasBlock(pageText, p.page_num || (idx + 1), idx === 0, q, isPdf);
             }
         });
@@ -2556,7 +2623,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
 
             if (studyToolStatus) {
-                studyToolStatus.textContent = `⏳ Đang đọc và nạp tệp "${file.name}" vào nguồn học tập (src/)...`;
+                studyToolStatus.textContent = `⏳ Đang đọc và nạp tệp "${file.name}" vào thư viện cá nhân...`;
             }
 
             const res = await fetch("/api/materials/upload", {
@@ -2624,9 +2691,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (chunksCount === 0) {
                     studyToolStatus.textContent = `⚠️ Đã nạp "${canonicalFilename}" nhưng chưa có đoạn trích xuất khả dụng trong chỉ mục.`;
                 } else if (isKeywordOnly) {
-                    studyToolStatus.textContent = `✅ Đã nạp thành công "${canonicalFilename}" (${pagesCount} trang, chế độ tra cứu từ khóa) vào nguồn học tập (src/). Sẵn sàng hỏi đáp và ôn luyện.`;
+                    studyToolStatus.textContent = `✅ Đã nạp thành công "${canonicalFilename}" (${pagesCount} trang, chế độ tra cứu từ khóa) vào thư viện cá nhân. Sẵn sàng hỏi đáp và ôn luyện.`;
                 } else {
-                    studyToolStatus.textContent = `✅ Đã nạp thành công "${canonicalFilename}" (${pagesCount} trang, ${chunksCount} đoạn) vào nguồn học tập (src/). Sẵn sàng hỏi đáp và ôn luyện.`;
+                    studyToolStatus.textContent = `✅ Đã nạp thành công "${canonicalFilename}" (${pagesCount} trang, ${chunksCount} đoạn) vào thư viện cá nhân. Sẵn sàng hỏi đáp và ôn luyện.`;
                 }
             }
         } catch (err) {
@@ -2799,7 +2866,7 @@ document.addEventListener("DOMContentLoaded", () => {
             fetchKnowledgeBaseStatus();
             syncGenerateButtonState();
             if (chatStatus) {
-                chatStatus.textContent = `✅ Đã thêm "${filename}" vào khung chat và nguồn học tập (src/). Nhấn vào thẻ tệp để xem nội dung hoặc vào tab "⚡ Trắc nghiệm & Flashcard" để ôn luyện.`;
+                chatStatus.textContent = `✅ Đã chọn "${filename}" từ thư viện cho cuộc trò chuyện. Nhấn vào thẻ tệp để xem nội dung hoặc tạo Trắc nghiệm & Flashcard để ôn luyện.`;
             }
             if (studyToolStatus) {
                 studyToolStatus.textContent = `✅ Đã chọn tài liệu "${filename}" từ thư viện. Nhấn "⚡ Tạo Trắc nghiệm & Flashcard" để bắt đầu ôn luyện.`;
@@ -2811,7 +2878,82 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    async function generateFromLibraryDocument(filename) {
+    async function generateFromLibraryDocument(filename, options = {}) {
+        if (typeof options !== "object" || options === null) {
+            options = {};
+        }
+        // 1. Resolve quiz count
+        let rawQuiz = options.quiz_count !== undefined ? options.quiz_count : null;
+        if (rawQuiz === null) {
+            const isLibPickerActive = libraryPickerModal && (libraryPickerModal.classList.contains("active") || libraryPickerModal.style.display === "flex" || libraryPickerModal.style.display === "block");
+            const libQuizInput = document.getElementById("lib-picker-quiz-count");
+            const studyQuizInput = document.getElementById("study-quiz-count");
+            const learnCountInput = document.getElementById("learning-count");
+            if (isLibPickerActive && libQuizInput && libQuizInput.value.trim()) {
+                rawQuiz = libQuizInput.value.trim();
+            } else if (studyQuizInput && studyQuizInput.value.trim()) {
+                rawQuiz = studyQuizInput.value.trim();
+            } else if (learnCountInput && learnCountInput.value.trim()) {
+                rawQuiz = learnCountInput.value.trim();
+            } else {
+                rawQuiz = "3";
+            }
+        }
+        const quizStr = String(rawQuiz).trim();
+        const quizNum = Number(quizStr);
+        if (!/^\d+$/.test(quizStr) || !Number.isInteger(quizNum) || quizNum < 1 || quizNum > 10) {
+            const msg = `Số câu trắc nghiệm phải là số nguyên từ 1 đến 10 (nhận được: "${quizStr}"). Vui lòng kiểm tra lại.`;
+            if (studyToolStatus) studyToolStatus.textContent = `❌ ${msg}`;
+            alert(msg);
+            return;
+        }
+        const quizCount = quizNum;
+
+        // 2. Resolve flashcard count (1-15, default 5, separate from quiz count)
+        let rawFlash = options.flashcard_count !== undefined ? options.flashcard_count : null;
+        if (rawFlash === null) {
+            const isLibPickerActive = libraryPickerModal && (libraryPickerModal.classList.contains("active") || libraryPickerModal.style.display === "flex" || libraryPickerModal.style.display === "block");
+            const libFlashInput = document.getElementById("lib-picker-flashcard-count");
+            const studyFlashInput = document.getElementById("study-flashcard-count");
+            if (isLibPickerActive && libFlashInput && libFlashInput.value.trim()) {
+                rawFlash = libFlashInput.value.trim();
+            } else if (studyFlashInput && studyFlashInput.value.trim()) {
+                rawFlash = studyFlashInput.value.trim();
+            } else {
+                rawFlash = "5";
+            }
+        }
+        const flashStr = String(rawFlash).trim();
+        const flashNum = Number(flashStr);
+        if (!/^\d+$/.test(flashStr) || !Number.isInteger(flashNum) || flashNum < 1 || flashNum > 15) {
+            const msg = `Số thẻ flashcard phải là số nguyên từ 1 đến 15 (nhận được: "${flashStr}"). Vui lòng kiểm tra lại.`;
+            if (studyToolStatus) studyToolStatus.textContent = `❌ ${msg}`;
+            alert(msg);
+            return;
+        }
+        const flashcardCount = flashNum;
+
+        // 3. Resolve difficulty
+        let difficulty = options.difficulty;
+        if (!difficulty) {
+            const isLibPickerActive = libraryPickerModal && (libraryPickerModal.classList.contains("active") || libraryPickerModal.style.display === "flex" || libraryPickerModal.style.display === "block");
+            const libDiffSelect = document.getElementById("lib-picker-difficulty");
+            const studyDiffSelect = document.getElementById("study-difficulty");
+            const learnDiffSelect = document.getElementById("learning-difficulty");
+            if (isLibPickerActive && libDiffSelect && libDiffSelect.value) {
+                difficulty = libDiffSelect.value;
+            } else if (studyDiffSelect && studyDiffSelect.value) {
+                difficulty = studyDiffSelect.value;
+            } else if (learnDiffSelect && learnDiffSelect.value) {
+                difficulty = learnDiffSelect.value;
+            } else {
+                difficulty = "medium";
+            }
+        }
+        if (!["easy", "medium", "hard"].includes(difficulty)) {
+            difficulty = "medium";
+        }
+
         if (libraryPickerModal) {
             libraryPickerModal.style.display = "none";
             libraryPickerModal.classList.remove("active");
@@ -2830,14 +2972,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
         showStudyLoading(
             `Đang xử lý "${filename}"...`,
-            "AI đang tổng hợp nội dung tài liệu và tạo bộ câu hỏi trắc nghiệm & flashcard..."
+            `AI đang tổng hợp nội dung và tạo ${quizCount} câu trắc nghiệm (độ khó: ${difficulty}) & ${flashcardCount} flashcards...`
         );
 
         try {
             const res = await fetch("/api/materials/generate-from-library", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ filename })
+                body: JSON.stringify({
+                    filename,
+                    quiz_count: quizCount,
+                    flashcard_count: flashcardCount,
+                    difficulty: difficulty,
+                    page_from: options.page_from || 1,
+                    page_to: options.page_to || null,
+                })
             });
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || "Không thể tạo từ tài liệu thư viện");
@@ -2857,7 +3006,13 @@ document.addEventListener("DOMContentLoaded", () => {
             if (studyToolStatus) {
                 const isFallback = (data.material.generation && (data.material.generation.quiz === "extractive_fallback" || data.material.generation.flashcards === "extractive_fallback")) || Boolean(data.material.fallback_warning);
                 const provNotice = isFallback ? " [Nguồn: Trích xuất trực tiếp (fallback)]" : " [Nguồn: Mô hình AI]";
-                studyToolStatus.textContent = `✅ Đã tạo thành công ${(data.material.quiz || []).length} câu trắc nghiệm và ${(data.material.flashcards || []).length} flashcards cho "${filename}".${provNotice}`;
+                const actualCount = (data.material.quiz || []).length;
+                const reqCount = data.material.requested_quiz_count || data.material.requested_count || quizCount;
+                if (data.material.warning || actualCount < reqCount) {
+                    studyToolStatus.textContent = `⚠️ Đã tạo ${actualCount}/${reqCount} câu trắc nghiệm (độ khó ${data.material.difficulty || difficulty}) và ${(data.material.flashcards || []).length} flashcards cho "${filename}". ${data.material.warning || "Một số câu chưa đạt kiểm định đã bị loại."}`;
+                } else {
+                    studyToolStatus.textContent = `✅ Đã tạo thành công ${actualCount} câu trắc nghiệm (độ khó: ${data.material.difficulty || difficulty}) và ${(data.material.flashcards || []).length} flashcards cho "${filename}".${provNotice}`;
+                }
             }
         } catch (err) {
             hideStudyLoading();
@@ -2874,6 +3029,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
             console.error("Library generate error:", err);
+            if (studyToolStatus) {
+                studyToolStatus.textContent = `❌ Lỗi tạo bài học: ${err.message || err}`;
+            }
             alert(`Lỗi tạo bài học: ${err.message || err}`);
         }
     }
@@ -2895,12 +3053,35 @@ document.addEventListener("DOMContentLoaded", () => {
             studyMaterialTitle.textContent = `📖 Bộ Ôn Luyện: ${material.filename}`;
         }
         const quizCount = (material.quiz || []).length;
+        const requestedQuizCount = material.requested_quiz_count || material.requested_count || quizCount;
         const isFallback = (material.generation && (material.generation.quiz === "extractive_fallback" || material.generation.flashcards === "extractive_fallback")) || Boolean(material.fallback_warning);
         const provLabel = isFallback
             ? "Trích xuất trực tiếp (fallback)"
             : (material.model ? `Mô hình AI: ${material.model}` : "Mô hình AI");
+
+        let subtitleText = "";
+        if (requestedQuizCount && quizCount < requestedQuizCount) {
+            subtitleText = `${quizCount}/${requestedQuizCount} câu trắc nghiệm (độ khó: ${material.difficulty || "mặc định"}) · ${totalCards} flashcards · ${material.total_pages || 1} trang · Nguồn: ${provLabel} · Chưa xác minh đáp án đúng (không xác minh ngữ nghĩa)`;
+        } else {
+            subtitleText = `${quizCount} câu trắc nghiệm · ${totalCards} flashcards · ${material.total_pages || 1} trang · Nguồn: ${provLabel} · Chưa xác minh đáp án đúng (không xác minh ngữ nghĩa)`;
+        }
         if (studyMaterialSubtitle) {
-            studyMaterialSubtitle.textContent = `${quizCount} câu trắc nghiệm · ${totalCards} flashcards · ${material.total_pages || 1} trang · Nguồn: ${provLabel} · Chưa xác minh đáp án đúng (không xác minh ngữ nghĩa)`;
+            studyMaterialSubtitle.textContent = subtitleText;
+        }
+
+        const warnBanner = (typeof studyMaterialWarningBanner !== "undefined" && studyMaterialWarningBanner) || (typeof document !== "undefined" && typeof document.getElementById === "function" ? document.getElementById("study-material-warning-banner") : null);
+        const warningMsg = material.completeness_warning || material.warning || (
+            requestedQuizCount && quizCount < requestedQuizCount
+                ? `⚠️ Chỉ có ${quizCount}/${requestedQuizCount} câu đạt kiểm định nguồn và độ khó ${material.difficulty || "đã chọn"}. Hệ thống không tự ý thêm câu không đạt chuẩn.`
+                : null
+        );
+        if (warnBanner) {
+            if (warningMsg) {
+                warnBanner.textContent = warningMsg;
+                warnBanner.style.display = "block";
+            } else {
+                warnBanner.style.display = "none";
+            }
         }
         if (quizBadgeCount) quizBadgeCount.textContent = String(quizCount);
         if (cardBadgeCount) cardBadgeCount.textContent = String(totalCards);

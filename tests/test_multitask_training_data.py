@@ -84,7 +84,8 @@ def test_build_practice_generate_schema(sample_context):
     assert len(parsed["questions"]) == 1
     q = parsed["questions"][0]
     assert q["answer"] == "A"
-    assert q["source_chunk_id"] == sample_context.chunk_id
+    assert q["source_chunk_id"] == 1
+    assert '<passage id="1"' in messages[1]['content']
     assert q["evidence_quote"] in sample_context.passage
 
 
@@ -94,7 +95,17 @@ def test_build_practice_verify_supported_schema(sample_context):
         "question": "Tính chất của ánh xạ tuyến tính?",
         "choices": {"A": "Bảo toàn cộng vector", "B": "Sai 1", "C": "Sai 2", "D": "Sai 3"},
         "answer": "A",
-        "verifier_check": {"supported": True, "explanation_supported": True, "unique_answer": True, "qualifiers_preserved": True, "verified_answer": "A"},
+        "verifier_check": {
+            "input_audit": "Đề bài nêu rõ câu hỏi về ánh xạ tuyến tính, đầy đủ dữ kiện.",
+            "independent_solution": "Theo định nghĩa ánh xạ tuyến tính, f(u+v)=f(u)+f(v) bảo toàn phép cộng vector.",
+            "choice_comparison": "Kết quả bảo toàn cộng vector khớp duy nhất với A; B, C, D sai.",
+            "explanation_audit": "Giải thích chuẩn xác theo nguồn, không có khẳng định ngoài nguồn.",
+            "supported": True,
+            "explanation_supported": True,
+            "unique_answer": True,
+            "qualifiers_preserved": True,
+            "verified_answer": "A",
+        },
         "explanation": "Căn cứ theo nguồn",
         "evidence_quote": "bảo toàn phép cộng vector",
     }
@@ -104,6 +115,10 @@ def test_build_practice_verify_supported_schema(sample_context):
     assert "checks" in parsed
     c = parsed["checks"][0]
     assert c["index"] == 1
+    assert c["input_audit"] == "Đề bài nêu rõ câu hỏi về ánh xạ tuyến tính, đầy đủ dữ kiện."
+    assert c["independent_solution"] == "Theo định nghĩa ánh xạ tuyến tính, f(u+v)=f(u)+f(v) bảo toàn phép cộng vector."
+    assert c["choice_comparison"] == "Kết quả bảo toàn cộng vector khớp duy nhất với A; B, C, D sai."
+    assert c["explanation_audit"] == "Giải thích chuẩn xác theo nguồn, không có khẳng định ngoài nguồn."
     assert c["supported"] is True
     assert c["unique_answer"] is True
     assert c["verified_answer"] == "A"
@@ -115,7 +130,17 @@ def test_build_practice_verify_invalid_schema(sample_context):
         "question": "Tính chất khẳng định sai?",
         "choices": {"A": "Sai hoàn toàn", "B": "Sai 1", "C": "Sai 2", "D": "Sai 3"},
         "answer": "A",
-        "verifier_check": {"supported": False, "explanation_supported": False, "unique_answer": False, "qualifiers_preserved": True, "verified_answer": ""},
+        "verifier_check": {
+            "input_audit": "Đề bài nêu rõ câu hỏi nhưng các lựa chọn đều khẳng định sai lệch.",
+            "independent_solution": "Theo nguồn, ánh xạ tuyến tính bảo toàn phép cộng; không có khẳng định sai hoàn toàn.",
+            "choice_comparison": "Không có lựa chọn nào đúng theo nguồn.",
+            "explanation_audit": "Giải thích không có căn cứ trong nguồn.",
+            "supported": False,
+            "explanation_supported": False,
+            "unique_answer": False,
+            "qualifiers_preserved": True,
+            "verified_answer": "",
+        },
         "explanation": "Không có căn cứ",
         "evidence_quote": "bảo toàn phép cộng vector",
     }
@@ -124,6 +149,10 @@ def test_build_practice_verify_invalid_schema(sample_context):
     parsed = json.loads(ref)
     assert "checks" in parsed
     c = parsed["checks"][0]
+    assert c["input_audit"] == "Đề bài nêu rõ câu hỏi nhưng các lựa chọn đều khẳng định sai lệch."
+    assert c["independent_solution"] == "Theo nguồn, ánh xạ tuyến tính bảo toàn phép cộng; không có khẳng định sai hoàn toàn."
+    assert c["choice_comparison"] == "Không có lựa chọn nào đúng theo nguồn."
+    assert c["explanation_audit"] == "Giải thích không có căn cứ trong nguồn."
     assert c["supported"] is False
     assert c["unique_answer"] is False
     assert c["verified_answer"] == ""

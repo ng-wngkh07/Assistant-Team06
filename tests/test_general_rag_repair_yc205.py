@@ -75,7 +75,7 @@ def _configure_stub_context(tmp_path, monkeypatch):
     # Supply only that metadata; these tests must not depend on private weights.
     (tmp_path/'config.json').write_text('{"max_position_embeddings":8192}', encoding='utf-8')
     monkeypatch.setattr(model_resolver.sys, 'platform', 'darwin')
-    monkeypatch.setattr(model_resolver, 'MLX_3B_DIR', tmp_path)
+    monkeypatch.setattr(model_resolver, 'MLX_9B_DIR', tmp_path)
     monkeypatch.setattr(dialogue, 'MLX_CONTEXT_TOKENS', 8192)
 
 
@@ -85,11 +85,11 @@ def test_citation_repair_is_skipped_if_its_final_prompt_exceeds_capacity(monkeyp
     # repair instruction (the primary MLX prompt also uses JSON). The model must never
     # receive the overflowing prompt.
     def count(messages):
-        return 8000 if any('Trả lời user_query chỉ bằng <context>' in m['content'] for m in messages) else 400
+        return 8000 if any('exactly two integer evidence_lines endpoints' in m['content'] for m in messages) else 400
     monkeypatch.setattr(rag,'get_exact_token_counter',lambda:count)
     _configure_stub_context(tmp_path, monkeypatch)
     model=RecordingModel('Câu trả lời chưa có trích dẫn.')
-    result=PsychologyAgent(searcher=RecordingSearcher([make_chunk('Đạo hàm mô tả tốc độ biến thiên tức thời.')]),ollama=model,translator=NoTranslation()).process_query_sync('đạo hàm là gì',model='qwen2.5-3b-4bit',embed_model=None,isolate_context=True,processing_level='standard')
+    result=PsychologyAgent(searcher=RecordingSearcher([make_chunk('Đạo hàm mô tả tốc độ biến thiên tức thời.')]),ollama=model,translator=NoTranslation()).process_query_sync('đạo hàm là gì',model='qwen3.5-9b-4bit',embed_model=None,isolate_context=True,processing_level='standard')
     assert len(model.calls)==1
     assert result['generation_calls']==1
     assert result['failure_reason']=='citation_missing'
@@ -106,11 +106,11 @@ def test_invalid_citation_without_valid_id_has_specific_failure():
 def test_invalid_citation_remains_specific_when_repair_cannot_fit(monkeypatch, tmp_path):
     import app.rag_agent as rag
     def count(messages):
-        return 8000 if any('Trả lời user_query chỉ bằng <context>' in m['content'] for m in messages) else 400
+        return 8000 if any('exactly two integer evidence_lines endpoints' in m['content'] for m in messages) else 400
     monkeypatch.setattr(rag,'get_exact_token_counter',lambda:count)
     _configure_stub_context(tmp_path, monkeypatch)
     model=RecordingModel('Câu trả lời ghi mã không có trong nguồn [S99].')
-    result=PsychologyAgent(searcher=RecordingSearcher([make_chunk('Đạo hàm mô tả tốc độ biến thiên tức thời.')]),ollama=model,translator=NoTranslation()).process_query_sync('đạo hàm là gì',model='qwen2.5-3b-4bit',embed_model=None,isolate_context=True,processing_level='standard')
+    result=PsychologyAgent(searcher=RecordingSearcher([make_chunk('Đạo hàm mô tả tốc độ biến thiên tức thời.')]),ollama=model,translator=NoTranslation()).process_query_sync('đạo hàm là gì',model='qwen3.5-9b-4bit',embed_model=None,isolate_context=True,processing_level='standard')
     assert len(model.calls)==1
     assert result['failure_reason']=='citation_invalid'
 

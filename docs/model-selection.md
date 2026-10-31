@@ -41,11 +41,13 @@ These development cases were used during diagnosis and prompt changes. They are 
 
 ## Inference and training boundaries
 
-Use the [macOS setup guide](../README_MAC.md) to prepare the isolated runtime and local weights. Keep old 3B weights and registry evidence for rollback. A legacy 3B alias must retain its own identity, and its adapter must never be loaded onto 9B. Missing 9B files must not silently select another model or provider.
+Use the [macOS setup guide](../README_MAC.md) to prepare the isolated runtime and local weights. Retired weights and incompatible adapters do not belong in the active application tree or automatic discovery paths. The resolver rejects retired aliases before provider selection. Preserve only necessary recovery/source-review evidence outside active discovery; an obsolete model is not an accepted rollback target. Missing 9B files must produce an actionable error rather than silently selecting another model or provider. The current 9B base has no accepted active adapter.
 
 QA defaults to **Fast**. Complex questions can receive a suggestion to choose **Careful**, with no automatic resubmission or loss of the typed question. Careful adds application-level source checking; the model's hidden thinking remains disabled. Practice and exercise answers use their fixed verification workflow, with separate source-provided, model-verified and unverified outcomes. A second model pass is not independent human approval.
 
 Changing the QA base does not authorize replacing the source database or mixing embedding spaces. Embeddings and image recognition need their own local runtime/artifact validation; their readiness must be reported separately from text QA. A local OCR draft still requires review before calendar confirmation and export.
+
+Embedding candidates must be compared in isolation using the current fixed chunker, the same source snapshot and precommitted source labels. Record full-corpus tokenizer coverage, retrieval recall/ranking, actual document throughput, query latency and memory with each model's documented pooling and query instructions. Reject silent truncation. Faster query inference alone cannot justify losing source coverage or ranking quality. Validate a complete new vector stage against exact model/text/blob identities before atomic activation; never relabel or mix old vectors.
 
 ## Future fine-tuning
 
@@ -58,8 +60,22 @@ Question-complexity examples in [the public fixtures](../tests/fixtures/EXTENDED
 
 ## Release and rollback
 
-Record the deployed Git commit, exact QA and embedding artifact identities, runtime versions and whether an accepted adapter is active. Complete the real-model and source/content checks before publishing a migration. Keep runtime reports local; the public change should describe scope, measured limitations and reproducible public tests.
+Record the deployed Git commit, exact QA and embedding artifact identities, runtime versions and whether an accepted adapter is active. Complete the real-model and source/content checks before publishing a migration. Verification must include the final application path, actual serving URL, process/file identity, browser flows and a fresh-clone installation of the intended distribution. Rerun affected acceptance after changing its code, model, data or configuration. Keep runtime reports local; the public change should describe scope, measured limitations and reproducible public tests.
 
 If a regression requires rollback, preserve the failing reports and private data first. Revert the migration code/configuration as one reviewed change to a previously accepted deployment, then rerun model readiness, a source-grounded answer, practice verification and timetable confirmation/export. Select the intended local MLX artifact explicitly and verify the reported backend after restart; keeping an old directory is not proof that it is an accepted rollback target. Do not activate a legacy adapter, reinterpret vector identities or replace a corpus database as an incidental rollback step.
 
 QA and embedding migrations are separate operations. A deployment using the old corpus may use explicit text search until native vector coverage is separately accepted. Missing or incompatible weights must remain visible instead of causing an automatic provider or model change.
+
+## Measured embedding comparison
+
+A bounded isolated comparison on Apple M1 with 16 GB retained the pinned native BGE-M3. The frozen selection rule required complete unchanged-chunk coverage and at least the baseline paraphrase Recall@6 and MRR, together with a material speed or memory benefit. Inputs used the current 1200-character/200-overlap boundaries: 668 chunks including distractors and duplicates, 12 development queries and 12 source-labeled paraphrases fixed before inference. Tokenizer coverage was checked separately across the pre-refresh snapshot of 52,711 chunks. After correcting obsolete extracted text, coverage must be measured again on every final chunk before vector activation. This is dense ranking evidence, not final hybrid retrieval or answer accuracy.
+
+| Candidate and protocol | Warm query median | Chunks/s, batch 4 | Peak Metal allocation | Chunks over token cap | Paraphrase Recall@6 / MRR |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| BGE-M3 fp16, CLS + L2, cap 2048 | 68.7 ms | 5.44 | 2.44 GiB | 0 | 1.000 / 0.944 |
+| multilingual E5-small fp32, mean + L2, query/passage prefixes, cap 512 | 5.2 ms | 28.16 | 1.39 GiB | 417 | 0.917 / 0.883 |
+| Qwen3-Embedding 0.6B bf16, last valid token + L2, instructed queries, cap 2048 | 44.9 ms | 4.67 | 1.79 GiB | 0 | 1.000 / 0.875 |
+
+Warm query timing excludes model loading, artifact validation, database search and answer generation. Metal allocation is not total machine RAM. E5 skipped over-limit evaluation chunks rather than truncating. Qwen remains a candidate for wider evaluation; a twelve-query ranking difference does not prove universal inferiority. BGE met the comparison gate. The full rebuild must bind vectors to the corrected text and exact artifact, with complete token coverage checked again. Private queries, passages and raw reports are excluded from Git.
+
+Primary model protocols: [BGE-M3](https://huggingface.co/BAAI/bge-m3), [multilingual E5-small](https://huggingface.co/intfloat/multilingual-e5-small), [Qwen3 Embedding](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B). See [retrieval and training](rag-and-training.md) for chunking, top-K, privacy and teacher-assisted learning boundaries.

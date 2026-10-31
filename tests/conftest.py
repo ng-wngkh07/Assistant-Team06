@@ -37,7 +37,6 @@ def native_context_metadata(tmp_path, monkeypatch):
     model.mkdir()
     (model / 'config.json').write_text('{"max_position_embeddings":8192}', encoding='utf-8')
     monkeypatch.setattr(model_resolver, 'MLX_9B_DIR', model)
-    monkeypatch.setattr(model_resolver, 'MLX_3B_DIR', model)
     return model
 
 
@@ -75,3 +74,15 @@ def legacy_model_http(monkeypatch):
             return callback(url, **kwargs)
         monkeypatch.setattr(requests.Session, 'post', post)
     return install
+
+
+@pytest.fixture
+def current_native_config():
+    """Synthetic architecture metadata; it does not provide executable weights."""
+    return {
+        'model_type': 'qwen3_5', 'architectures': ['Qwen3_5ForConditionalGeneration'],
+        'text_config': {'model_type':'qwen3_5_text','hidden_size':4096,
+                        'num_hidden_layers':32,'num_attention_heads':16,
+                        'max_position_embeddings':262144},
+        'quantization': {'bits':4,'group_size':64,'mode':'affine'},
+    }

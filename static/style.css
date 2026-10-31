@@ -3771,6 +3771,43 @@ body.sidebar-collapsed #btn-open-sidebar { display: inline-flex; }
     flex-direction: column;
 }
 
+.canvas-original-page {
+    margin-bottom: 32px;
+}
+
+.canvas-original-page-heading {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: #475569;
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+.canvas-original-page-heading a {
+    color: #1d4ed8;
+    font-weight: 600;
+}
+
+.canvas-original-page-image {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid #e2e8f0;
+}
+
+.canvas-extracted-text {
+    margin-top: 10px;
+    color: #475569;
+    font-size: 13px;
+}
+
+.canvas-extracted-text summary {
+    cursor: pointer;
+    margin-bottom: 12px;
+}
+
 /* Document Typography Elements (Matching Image 3) */
 .canvas-h1 {
     font-size: 23px;

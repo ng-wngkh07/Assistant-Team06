@@ -43,7 +43,23 @@ Dense retrieval additionally needs the pinned local BGE-M3 artifact:
 
 Its weights occupy about 1.14 GB. The native dense representation uses 1024-dimensional CLS pooling with L2 normalization. An old database with unlabelled or differently generated vectors cannot establish compatibility; retain it and use explicit text search until a separately authorized reindex. Do not relabel old vectors as native MLX vectors. Image inference uses the same local Qwen weights through MLX-VLM, with separate image bounds and readiness checks.
 
-The main QA worker loads local weights directly. Ollama is not the Mac QA installation target. See [model selection](docs/model-selection.md) for the distinction between this MLX artifact, the screenshot's distilled model and historical Ollama measurements. Keep the old 3B files and adapter evidence; they cannot be reused as a 9B adapter.
+The main QA worker loads local weights directly. Ollama is not the Mac QA installation target. See [model selection](docs/model-selection.md) for the pinned artifact, context budget and compatibility requirements. Retired weights and incompatible adapters must remain outside the active application tree. The current 9B base has no accepted active adapter; missing model files produce an explicit setup error.
+
+## Start with a prepared library
+
+For the ready-to-use product, obtain the publisher's reviewed application bundle with its native macOS knowledge pack, then follow [knowledge pack installation](docs/knowledge-packs.md#user-installation-and-no-index-workflow). After installing the dependencies and two model artifacts above, start `Start Study Agent.command`. The bundled descriptor selects the prepared library without manual path settings, document extraction, embedding generation or training. Subsequent launches reuse the personal library under `data/user-library/`; its `src/` directory retains originals and new uploads. Model downloads and dependency installation are one-time setup steps.
+
+A pack contains readable originals and source text as well as vectors. Distribute only approved public materials. The application does not require the publisher's private documents or training dataset. A native pack has not been verified for Windows; no public pack release is claimed here.
+
+## First-use verification
+
+1. Open the launcher from the extracted bundle containing its `resources/` directory and installed model prerequisites.
+2. In the browser, use **Kiểm tra mô hình**, then ask a question covered by the installed library. Open its cited passage and original document.
+3. Open study tools, select a broad topic, question count and difficulty. Check the returned count and any partial-result notice, then answer a question and inspect its explanation.
+4. Generate a document study set, inspect the source, flip a flashcard and check the quiz answer. Follow [Using Study Agent](docs/usage.md) for uploads, history and calendar confirmation/export.
+5. Stop the server with Ctrl+C and launch it again. The prepared library and local history should persist without a new embedding build.
+
+A prepared pack supplies its own original documents. Additional personal uploads are optional and require local extraction/indexing; they do not retrain the language model. Keep the terminal visible if startup fails and use the troubleshooting table below.
 
 ## Local documents and verification
 
@@ -84,7 +100,7 @@ Tesseract is optional and requires its binary and language data. OCR availabilit
 | Imports fail | Use `.venv/bin/python`, install the selected requirements and run `pip check`. |
 | Port 8000 is occupied | Stop your own server or choose another `PORT`; do not stop unrelated services. |
 | Model unavailable | Check the native runtime, local weight shards/tokenizer, environment overrides and `check --profile local --require-model`. |
-| Library is empty | Use demo or add permitted sources and synchronize the local library. |
+| Library is empty | Install the publisher's compatible knowledge pack, or use the search-only demo. For your own additional sources, synchronize explicitly. |
 | New code does not appear | Check the serving process, restart it if needed and refresh browser assets. |
 
 For verification commands, see [Testing](docs/testing.md).

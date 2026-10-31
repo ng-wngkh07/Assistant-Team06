@@ -1,5 +1,5 @@
 """Continuous Knowledge Curation & Auditing Pipeline (Dataset v7+).
-Uses real local teacher (Qwen2.5 7B) and calibrated local judge (Qwen2.5 7B) via Ollama,
+Uses the configured current local teacher and calibrated local judge,
 coordinated through GPU lock. Tracks pending, accepted, rejected, and cached hashes.
 Includes judge calibration (positive, numeric error, terminology error, unsupported claims,
 string-false parsing, ungrounded extrapolations, and factual word-substitutions).
@@ -30,7 +30,7 @@ from app.config import BASE_DIR, DB_PATH, OLLAMA_BASE_URL
 from app.text_cleaner import sanitize_for_prompt_context
 from app.training_data import basic_record_quality, detect_language, is_substantive_excerpt
 from app.synthetic_curriculum import build_synthetic_curriculum
-from app.preflight_7b import audit_context_truncation
+from app.token_auditor import audit_context_truncation
 from app.gpu_lock import gpu_coordinator
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,8 @@ def compute_digest(obj: Any) -> str:
     return hashlib.sha256(json.dumps(obj, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
-DEFAULT_CURATION_MODEL = "qwen3.5-9b-4bit" if sys.platform == "darwin" else "qwen2.5:7b"
+from app.config import DEFAULT_CHAT_MODEL
+DEFAULT_CURATION_MODEL = DEFAULT_CHAT_MODEL
 
 def get_ollama_model_digest(model_name: str, default: Optional[str] = None) -> str:
     """Fetch exact model sha256 digest from Ollama tags endpoint.

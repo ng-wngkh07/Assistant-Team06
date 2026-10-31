@@ -17,6 +17,8 @@
 !/pytest.ini
 !/run.py
 !/start_app.command
+!/Start Study Agent.command
+!/Start Study Agent.bat
 !/README_WINDOWS.md
 !/CHANGELOG.md
 !/SECURITY.md
@@ -33,6 +35,7 @@
 !/ui/
 !/scripts/
 !/tests/
+!/resources/
 !/eval/
 !/docs/
 !/corpus/

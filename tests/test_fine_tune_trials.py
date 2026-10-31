@@ -1,7 +1,6 @@
 import hashlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import app.fine_tune as fine_tune
@@ -21,60 +20,23 @@ def test_new_dataset_version_requires_matching_approval(tmp_path):
         fine_tune.train(data_dir)
 
 
-def test_training_trial_preserves_active_adapter(tmp_path, monkeypatch):
-    data_dir = tmp_path / "data" / "training" / "v1"
-    data_dir.mkdir(parents=True)
-    train_path = data_dir / "train.jsonl"
-    valid_path = data_dir / "valid.jsonl"
-    train_path.write_text("{}\n" * 20)
-    valid_path.write_text("{}\n" * 2)
-    digest = hashlib.sha256(train_path.read_bytes() + valid_path.read_bytes()).hexdigest()
-    (data_dir / "approval.json").write_text(json.dumps({"dataset_sha256": digest}))
-
-    model_dir = tmp_path / "model"
-    model_dir.mkdir()
-    (model_dir / "config.json").write_text(json.dumps({"hidden_size": 3584, "num_hidden_layers": 28}))
-    training_python = tmp_path / ".train-venv" / "bin" / "python"
-    training_python.parent.mkdir(parents=True)
-    training_python.write_text("")
-    active = tmp_path / "active"
-    active.mkdir()
-    (active / "ready.json").write_text("previous adapter")
-    monkeypatch.setattr(fine_tune, "BASE_DIR", tmp_path)
-    monkeypatch.setattr(fine_tune, "TRAINING_MODEL_DIR", model_dir)
-    monkeypatch.setattr(fine_tune, "validate_corrective_trial", lambda *args: {"test_contract": True})
-    monkeypatch.setattr("app.preflight_7b.preflight_check_7b_training", lambda **kwargs: {
-        "eligible_for_training": True, "violations": []})
-
-    def fake_popen(command, **_kwargs):
-        adapter = Path(command[command.index("--adapter-path") + 1])
-        (adapter / "adapters.safetensors").write_bytes(b"trial")
-        assert command[command.index("--learning-rate") + 1] == "5e-05"
-        assert command[command.index("--max-seq-length") + 1] == "1024"
-        return SimpleNamespace(pid=99999, wait=lambda: 0, terminate=lambda: None, kill=lambda: None)
-
-    test_coordinator = fine_tune.GPULockManager(
-        lock_path=tmp_path / "data" / "runtime" / "gpu.lock",
-        state_path=tmp_path / "data" / "runtime" / "gpu_state.json",
-        intent_path=tmp_path / "data" / "runtime" / "gpu_intent.lock",
-    )
-    monkeypatch.setattr(fine_tune.subprocess, "Popen", fake_popen)
-    from app.ollama_client import OllamaClient
-    monkeypatch.setattr(OllamaClient, "unload_resident_models", lambda self, timeout=10.0: [])
-    fine_tune.train(
-        data_dir,
-        iterations=40,
-        adapter_dir=Path("trial"),
-        learning_rate=0.00005,
-        coordinator=test_coordinator,
-        evict_ollama=False,
-    )
-    assert (active / "ready.json").read_text() == "previous adapter"
-    assert json.loads((tmp_path / "trial" / "ready.json").read_text())["dataset_sha256"] == digest
-    with pytest.raises(ValueError, match="đã chứa adapter"):
-        fine_tune.train(data_dir, iterations=40, adapter_dir=active,
-                       coordinator=test_coordinator, evict_ollama=False)
-    assert (active / "ready.json").read_text() == "previous adapter"
+def test_retired_training_protocol_never_spawns_or_modifies_active_adapter(tmp_path, monkeypatch):
+    import subprocess
+    data_dir = tmp_path/'training'; data_dir.mkdir()
+    (data_dir/'train.jsonl').write_text('{}\n'*20)
+    (data_dir/'valid.jsonl').write_text('{}\n'*2)
+    digest=hashlib.sha256((data_dir/'train.jsonl').read_bytes()+(data_dir/'valid.jsonl').read_bytes()).hexdigest()
+    (data_dir/'approval.json').write_text(json.dumps({'dataset_sha256':digest}))
+    active=tmp_path/'active';active.mkdir()
+    (active/'ready.json').write_text('previous adapter')
+    monkeypatch.setattr(fine_tune,'BASE_DIR',tmp_path)
+    def forbidden(*a,**kw):
+        pytest.fail('Retired training must never start a model process')
+    monkeypatch.setattr(subprocess,'Popen',forbidden)
+    with pytest.raises(RuntimeError,match='9B'):
+        fine_tune.train(data_dir,adapter_dir=tmp_path/'trial',evict_ollama=False)
+    assert (active/'ready.json').read_text()=='previous adapter'
+    assert not (tmp_path/'trial').exists()
 
 
 def test_training_rejects_cross_book_data_entirely_removed_by_holdout(tmp_path):

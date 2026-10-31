@@ -85,7 +85,7 @@ def test_structured_feature_labels_obey_runtime_schema(candidate):
             q = target['questions'][0]
             assert set(q['choices']) == {'A', 'B', 'C', 'D'}
             assert len(set(q['choices'].values())) == 4
-            assert q['answer'] in q['choices'] and q['source_chunk_id'] == row['chunk_id']
+            assert q['answer'] in q['choices'] and q['source_chunk_id'] == 1
             assert len(q['evidence_quote']) >= 20 and q['evidence_quote'] in row['passage']
         elif task.startswith('practice_verify_'):
             assert set(target) == {'checks'} and len(target['checks']) == 1

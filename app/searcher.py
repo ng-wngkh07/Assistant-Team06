@@ -1,11 +1,12 @@
 import json
 import logging
+import os
 import re
 import sqlite3
 import struct
 import sys
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -134,6 +135,13 @@ def extract_query_concepts(query: str) -> List[str]:
         r"cơ\s+sở\s+lý\s+thuyết(?:\s+(?:về|của))?|tổng\s+quan(?:\s+(?:về|của))?)\s+"
     )
     q_clean = re.sub(lead_pat, "", q, flags=re.I).strip()
+    # Enumeration requests describe answer shape, not the subject's name.
+    q_clean = re.sub(
+        r"^(?:(?:hãy|nêu|trình bày)\s+)*(?:\d+|hai|ba|bốn|năm|sáu)\s+"
+        r"(?:tính\s+chất|đặc\s+điểm|nguyên\s+tắc|thành\s+phần)"
+        r"(?:\s+(?:cơ\s+bản|cốt\s+lõi|chính|quan\s+trọng))?\s+của\s+",
+        "", q_clean, flags=re.I,
+    )
 
     trail_pat = (
         r"\s+(?:cho\s+biết|hãy\s+cho\s+biết|xác\s+định)\s+.*$|"
@@ -148,6 +156,11 @@ def extract_query_concepts(query: str) -> List[str]:
     if q_clean and len(q_clean) >= 2 and not q_clean.lower().startswith("so sánh"):
         if q_clean not in concepts:
             concepts.append(q_clean)
+
+    if re.search(r"lập trình hướng đối tượng|\boop\b", q_clean, re.I):
+        for alias in ("lập trình hướng đối tượng", "OOP"):
+            if alias not in concepts:
+                concepts.append(alias)
 
     for v_num, v_den, ord_val, coef in extract_differential_operands(query):
         if ord_val == 2:
@@ -322,8 +335,8 @@ def check_local_definition_and_catalog(text: str, concepts: List[str]) -> tuple[
 
 
 class HybridSearcher:
-    def __init__(self, db_path: Optional[Path] = None):
-        self._db_path = db_path
+    def __init__(self, db_path: Optional[Union[Path, str]] = None):
+        self._db_path = Path(db_path) if db_path is not None else None
         self.ollama = OllamaClient()
 
     @property
@@ -334,10 +347,13 @@ class HybridSearcher:
         return CONFIG_DB_PATH
 
     @db_path.setter
-    def db_path(self, val: Path):
-        self._db_path = val
+    def db_path(self, val: Optional[Union[Path, str]]):
+        self._db_path = Path(val) if val is not None else None
 
     def get_connection(self) -> sqlite3.Connection:
+        if not self.db_path.exists():
+            from app.indexer import KnowledgeIndexer
+            KnowledgeIndexer(self.db_path)
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         return conn
@@ -393,24 +409,60 @@ class HybridSearcher:
             return
 
         use_native = False
-        native_embed_models = {"bge-m3-mlx-fp16", "bge-m3-mlx", "native-bge", "bge-m3"}
-        if sys.platform == "darwin":
-            from app.native_embedding import NativeEmbeddingClient
-            if not NativeEmbeddingClient.available():
-                return
-            use_native = True
-        elif embed_model in native_embed_models or (embed_model is not None and "mlx" in embed_model):
-            from app.native_embedding import NativeEmbeddingClient
-            if not NativeEmbeddingClient.available():
-                return
-            use_native = True
+        native_embed_models = {"bge-m3-mlx-fp16", "bge-m3-mlx", "native-bge"}
+        if sys.platform != "darwin" and (embed_model in native_embed_models or "mlx" in (embed_model or "")):
+            return
 
-        from app.native_embedding import BGE_NATIVE_IDENTITY
-        expected_identity = BGE_NATIVE_IDENTITY
+        installed_digest = None
+        with self.get_connection() as conn:
+            try:
+                row = conn.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
+                if row:
+                    installed_digest = row[0]
+            except sqlite3.Error:
+                pass
+
+        if installed_digest and installed_digest.startswith("ollama-sha256:"):
+            use_native = False
+        elif installed_digest and installed_digest.startswith("bge-m3-mlx-fp16@"):
+            if sys.platform != "darwin":
+                logger.warning("Installed native BGE knowledge pack requires macOS; dense retrieval disabled")
+                return
+            use_native = True
+        elif os.getenv("EMBED_BACKEND") == "ollama":
+            use_native = False
+        elif os.getenv("EMBED_BACKEND") in ("native", "mlx"):
+            if sys.platform != "darwin":
+                logger.warning("Native embedding requires macOS; dense retrieval disabled")
+                return
+            use_native = True
+        elif sys.platform == "darwin" and (embed_model is None or embed_model in native_embed_models or "mlx" in str(embed_model)):
+            use_native = True
+        else:
+            use_native = False
 
         if use_native:
             from app.native_embedding import NativeEmbeddingClient
-            query_vec = NativeEmbeddingClient().get_embedding(query, expected_identity=expected_identity)
+            if not NativeEmbeddingClient.available():
+                return
+
+        from app.native_embedding import BGE_NATIVE_IDENTITY
+        try:
+            expected_identity = BGE_NATIVE_IDENTITY if use_native else getattr(
+                self.ollama, "embedding_identity", lambda model: None)(embed_model)
+        except Exception as exc:
+            logger.warning("Embedding identity unavailable; dense retrieval disabled: %s", type(exc).__name__)
+            return
+        if not expected_identity:
+            return
+
+        if use_native:
+            from app.native_embedding import NativeEmbeddingClient
+            try:
+                query_vec = NativeEmbeddingClient().get_embedding(query, expected_identity=expected_identity)
+            except Exception as exc:
+                logger.warning("Selected-page embedding unavailable: %s", type(exc).__name__)
+                return
         else:
             embed_client = getattr(self, "ollama", None)
             if embed_client is None or not hasattr(embed_client, "get_embedding"):
@@ -424,6 +476,15 @@ class HybridSearcher:
 
         if query_vec is None:
             return
+
+        if not use_native:
+            try:
+                post_identity = getattr(self.ollama, "embedding_identity", lambda model: None)(embed_model)
+            except Exception as exc:
+                logger.warning("Post-query embedding identity check failed: %s", type(exc).__name__)
+                return
+            if post_identity != expected_identity:
+                return
         try:
             q_arr = np.array(query_vec, dtype=np.float32)
         except Exception:
@@ -450,21 +511,14 @@ class HybridSearcher:
         try:
             with self.get_connection() as conn:
                 placeholders = ",".join("?" for _ in chunk_ids)
-                if use_native:
-                    sql = f"""
-                        SELECT c.id, c.doc_id, c.filename, c.page_num, c.chunk_index, c.text, c.embedding,
-                               p.text_sha256, p.model_digest, p.vector_sha256, p.dimensions, p.full_text
-                        FROM chunks c
-                        INNER JOIN corpus_vector_provenance p ON p.chunk_id = c.id
-                        WHERE c.id IN ({placeholders}) AND c.doc_id = ? AND c.page_num = ?
-                          AND c.embedding IS NOT NULL AND p.model_digest = ? AND p.full_text = 1 AND p.dimensions = ?
-                    """
-                    cursor = conn.execute(sql, (*chunk_ids, doc_id, page_num, expected_identity, len(q_arr)))
-                else:
-                    cursor = conn.execute(
-                        f"SELECT id, doc_id, filename, page_num, chunk_index, text, embedding FROM chunks WHERE id IN ({placeholders}) AND doc_id = ? AND page_num = ? AND embedding IS NOT NULL",
-                        (*chunk_ids, doc_id, page_num)
-                    )
+                sql = f"""
+                    SELECT c.id, c.doc_id, c.filename, c.page_num, c.chunk_index, c.text, c.embedding,
+                           p.text_sha256, p.model_digest, p.vector_sha256, p.dimensions, p.full_text
+                    FROM chunks c JOIN corpus_vector_provenance p ON p.chunk_id = c.id
+                    WHERE c.id IN ({placeholders}) AND c.doc_id = ? AND c.page_num = ?
+                      AND c.embedding IS NOT NULL AND p.model_digest = ? AND p.full_text = 1 AND p.dimensions = ?
+                """
+                cursor = conn.execute(sql, (*chunk_ids, doc_id, page_num, expected_identity, len(q_arr)))
                 for row in cursor.fetchall():
                     cid = row["id"] if isinstance(row, sqlite3.Row) else row[0]
                     id_to_row[cid] = row
@@ -488,13 +542,12 @@ class HybridSearcher:
             ):
                 continue
 
-            if use_native:
-                actual_text_sha = hashlib.sha256(r_text.encode("utf-8")).hexdigest()
-                actual_vec_sha = hashlib.sha256(blob).hexdigest()
-                p_text_sha = row["text_sha256"] if isinstance(row, sqlite3.Row) else row[7]
-                p_vec_sha = row["vector_sha256"] if isinstance(row, sqlite3.Row) else row[9]
-                if actual_text_sha != p_text_sha or actual_vec_sha != p_vec_sha:
-                    continue
+            actual_text_sha = hashlib.sha256(r_text.encode("utf-8")).hexdigest()
+            actual_vec_sha = hashlib.sha256(blob).hexdigest()
+            p_text_sha = row["text_sha256"] if isinstance(row, sqlite3.Row) else row[7]
+            p_vec_sha = row["vector_sha256"] if isinstance(row, sqlite3.Row) else row[9]
+            if actual_text_sha != p_text_sha or actual_vec_sha != p_vec_sha:
+                continue
 
             try:
                 doc_vec = unpack_vector(blob)
@@ -1066,47 +1119,86 @@ class HybridSearcher:
     ) -> List[Dict[str, Any]]:
         """Perform semantic vector search using cosine similarity over embeddings."""
         use_native = False
-        native_embed_models = {"bge-m3-mlx-fp16", "bge-m3-mlx", "native-bge", "bge-m3"}
-        if sys.platform == "darwin":
-            from app.native_embedding import NativeEmbeddingClient
-            if not NativeEmbeddingClient.available():
-                return []
-            use_native = True
-        elif embed_model in native_embed_models or (embed_model is not None and "mlx" in embed_model):
-            from app.native_embedding import NativeEmbeddingClient
-            if not NativeEmbeddingClient.available():
-                return []
-            use_native = True
+        native_embed_models = {"bge-m3-mlx-fp16", "bge-m3-mlx", "native-bge"}
+        if sys.platform != "darwin" and (embed_model in native_embed_models or "mlx" in (embed_model or "")):
+            return []
 
-        from app.native_embedding import BGE_NATIVE_IDENTITY
-        expected_identity = BGE_NATIVE_IDENTITY
-
+        installed_digest = None
         with self.get_connection() as conn:
-            if use_native:
-                is_compatible = False
-                try:
-                    p_row = conn.execute("""
-                        SELECT 1 FROM corpus_vector_provenance
-                        WHERE model_digest = ? AND full_text = 1 AND dimensions = 1024
-                        LIMIT 1
-                    """, (expected_identity,)).fetchone()
-                    if p_row:
-                        is_compatible = True
-                except Exception:
-                    is_compatible = False
-                if not is_compatible:
-                    logger.info("Chỉ mục CSDL hiện tại chưa có vector native provenance phù hợp; chuyển sang FTS thuần túy.")
-                    return []
+            try:
+                row = conn.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
+                if row:
+                    installed_digest = row[0]
+            except sqlite3.Error:
+                pass
+
+        if installed_digest and installed_digest.startswith("ollama-sha256:"):
+            use_native = False
+        elif installed_digest and installed_digest.startswith("bge-m3-mlx-fp16@"):
+            if sys.platform != "darwin":
+                logger.warning("Installed native BGE knowledge pack requires macOS; dense retrieval disabled")
+                return []
+            use_native = True
+        elif os.getenv("EMBED_BACKEND") == "ollama":
+            use_native = False
+        elif os.getenv("EMBED_BACKEND") in ("native", "mlx"):
+            if sys.platform != "darwin":
+                logger.warning("Native embedding requires macOS; dense retrieval disabled")
+                return []
+            use_native = True
+        elif sys.platform == "darwin" and (embed_model is None or embed_model in native_embed_models or "mlx" in str(embed_model)):
+            use_native = True
+        else:
+            use_native = False
 
         if use_native:
             from app.native_embedding import NativeEmbeddingClient
-            query_vec = NativeEmbeddingClient().get_embedding(query, expected_identity=expected_identity)
-        else:
-            from app.gpu_lock import gpu_coordinator
-            with gpu_coordinator.acquire_for_inference():
-                query_vec = self.ollama.get_embedding(query, model=embed_model)
+            if not NativeEmbeddingClient.available():
+                return []
+
+        from app.native_embedding import BGE_NATIVE_IDENTITY
+        try:
+            expected_identity = BGE_NATIVE_IDENTITY if use_native else getattr(
+                self.ollama, "embedding_identity", lambda model: None)(embed_model)
+        except Exception as exc:
+            logger.warning("Embedding identity unavailable; dense retrieval disabled: %s", type(exc).__name__)
+            return []
+        if not expected_identity:
+            return []
+
+        with self.get_connection() as conn:
+            try:
+                compatible = conn.execute("""
+                    SELECT 1 FROM chunks c JOIN corpus_vector_provenance p ON p.chunk_id=c.id
+                    WHERE c.embedding IS NOT NULL AND p.model_digest=? AND p.full_text=1 LIMIT 1
+                """, (expected_identity,)).fetchone()
+            except sqlite3.Error:
+                compatible = None
+            if not compatible:
+                return []
+
+        try:
+            if use_native:
+                from app.native_embedding import NativeEmbeddingClient
+                query_vec = NativeEmbeddingClient().get_embedding(query, expected_identity=expected_identity)
+            else:
+                from app.gpu_lock import gpu_coordinator
+                with gpu_coordinator.acquire_for_inference():
+                    query_vec = self.ollama.get_embedding(query, model=embed_model)
+        except Exception as exc:
+            logger.warning("Query embedding unavailable; using keyword retrieval: %s", type(exc).__name__)
+            return []
         if query_vec is None:
             return []
+
+        if not use_native:
+            try:
+                post_identity = getattr(self.ollama, "embedding_identity", lambda model: None)(embed_model)
+            except Exception as exc:
+                logger.warning("Post-query embedding identity check failed: %s", type(exc).__name__)
+                return []
+            if post_identity != expected_identity:
+                return []
 
         q_arr = np.array(query_vec, dtype=np.float32)
         q_norm = np.linalg.norm(q_arr)
@@ -1117,27 +1209,17 @@ class HybridSearcher:
         import hashlib
         results = []
         with self.get_connection() as conn:
-            if use_native:
-                sql = """
-                    SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num, c.chunk_index, c.text, c.embedding,
-                           p.text_sha256, p.model_digest, p.vector_sha256, p.dimensions, p.full_text
-                    FROM chunks c
-                    INNER JOIN corpus_vector_provenance p ON p.chunk_id = c.id
-                    WHERE c.embedding IS NOT NULL
-                      AND p.model_digest = ?
-                      AND p.full_text = 1
-                      AND p.dimensions = ?
-                """
-                params = [expected_identity, len(q_arr)]
-                if document_id is not None:
-                    sql += " AND c.doc_id = ?"
-                    params.append(document_id)
-                cursor = conn.execute(sql, params)
-            else:
-                if document_id is None:
-                    cursor = conn.execute("SELECT id, doc_id, book_title, filename, page_num, chunk_index, text, embedding FROM chunks WHERE embedding IS NOT NULL")
-                else:
-                    cursor = conn.execute("SELECT id, doc_id, book_title, filename, page_num, chunk_index, text, embedding FROM chunks WHERE embedding IS NOT NULL AND doc_id = ?", (document_id,))
+            sql = """
+                SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num, c.chunk_index, c.text, c.embedding,
+                       p.text_sha256, p.model_digest, p.vector_sha256, p.dimensions, p.full_text
+                FROM chunks c JOIN corpus_vector_provenance p ON p.chunk_id = c.id
+                WHERE c.embedding IS NOT NULL AND p.model_digest = ? AND p.full_text = 1 AND p.dimensions = ?
+            """
+            params = [expected_identity, len(q_arr)]
+            if document_id is not None:
+                sql += " AND c.doc_id = ?"
+                params.append(document_id)
+            cursor = conn.execute(sql, params)
             rows = cursor.fetchall()
             
             scored_rows = []
@@ -1146,19 +1228,18 @@ class HybridSearcher:
                 if not blob:
                     continue
 
-                if use_native:
-                    if r["model_digest"] != expected_identity:
-                        continue
-                    if r["dimensions"] != len(q_arr):
-                        continue
-                    if r["full_text"] != 1:
-                        continue
-                    actual_text_sha = hashlib.sha256(r["text"].encode("utf-8")).hexdigest()
-                    if r["text_sha256"] != actual_text_sha:
-                        continue
-                    actual_vec_sha = hashlib.sha256(blob).hexdigest()
-                    if r["vector_sha256"] != actual_vec_sha:
-                        continue
+                if r["model_digest"] != expected_identity:
+                    continue
+                if r["dimensions"] != len(q_arr):
+                    continue
+                if r["full_text"] != 1:
+                    continue
+                actual_text_sha = hashlib.sha256(r["text"].encode("utf-8")).hexdigest()
+                if r["text_sha256"] != actual_text_sha:
+                    continue
+                actual_vec_sha = hashlib.sha256(blob).hexdigest()
+                if r["vector_sha256"] != actual_vec_sha:
+                    continue
 
                 doc_vec = unpack_vector(blob)
                 if doc_vec.shape != q_arr.shape:
@@ -1174,7 +1255,12 @@ class HybridSearcher:
                 scored_rows.append((sim, r))
 
             scored_rows.sort(key=lambda x: x[0], reverse=True)
-            for rank_idx, (sim, r) in enumerate(scored_rows[:limit]):
+            min_sim = 0.50 if use_native else 0.45
+            for rank_idx, (sim, r) in enumerate(scored_rows):
+                if sim < min_sim:
+                    break
+                if len(results) >= limit:
+                    break
                 results.append({
                     "chunk_id": r["id"],
                     "doc_id": r["doc_id"],
@@ -1211,28 +1297,6 @@ class HybridSearcher:
         semantic_results = []
         if embed_model:
             semantic_results = self.search_semantic(query_clean, embed_model=embed_model, limit=top_k * 3, document_id=document_id)
-
-        # Merge using Reciprocal Rank Fusion (RRF)
-        # RRF_score(d) = sum( weight / (k + rank) )
-        chunk_map = {}
-        rrf_scores = {}
-
-        for item in fts_results:
-            cid = item["chunk_id"]
-            chunk_map[cid] = item
-            rank = item["fts_rank"]
-            score = FTS_WEIGHT * (1.0 / (RRF_K + rank))
-            rrf_scores[cid] = rrf_scores.get(cid, 0.0) + score
-
-        for item in semantic_results:
-            cid = item["chunk_id"]
-            if cid not in chunk_map:
-                chunk_map[cid] = item
-            else:
-                chunk_map[cid]["semantic_score"] = item["semantic_score"]
-            rank = item["semantic_rank"]
-            score = SEMANTIC_WEIGHT * (1.0 / (RRF_K + rank))
-            rrf_scores[cid] = rrf_scores.get(cid, 0.0) + score
 
         query_concepts = extract_query_concepts(query_clean)
         query_diff_operands = extract_differential_operands(query_clean)
@@ -1299,6 +1363,33 @@ class HybridSearcher:
                 score += 0.1
             return score
 
+        # Merge using Reciprocal Rank Fusion (RRF)
+        # RRF_score(d) = sum( weight / (k + rank) )
+        chunk_map = {}
+        rrf_scores = {}
+
+        for item in fts_results:
+            cid = item["chunk_id"]
+            chunk_map[cid] = item
+            rank = item["fts_rank"]
+            score = FTS_WEIGHT * (1.0 / (RRF_K + rank))
+            rrf_scores[cid] = rrf_scores.get(cid, 0.0) + score
+
+        for item in semantic_results:
+            cid = item["chunk_id"]
+            if cid not in chunk_map:
+                # Semantic-only candidate under partial native indexing: require genuine relevance
+                sem_score = item.get("semantic_score", 0.0)
+                content_rel = _content_relevance(item["text"])
+                if sem_score < 0.52 or content_rel < 0:
+                    continue
+                chunk_map[cid] = item
+            else:
+                chunk_map[cid]["semantic_score"] = item["semantic_score"]
+            rank = item["semantic_rank"]
+            score = SEMANTIC_WEIGHT * (1.0 / (RRF_K + rank))
+            rrf_scores[cid] = rrf_scores.get(cid, 0.0) + score
+
         # If only FTS was available, use FTS results with content relevance
         if not semantic_results and fts_results:
             combined = sorted(fts_results, key=lambda x: (x.get("fts_score", 0.0) + _content_relevance(x["text"]) * 10.0), reverse=True)
@@ -1325,12 +1416,33 @@ class HybridSearcher:
             unique.append(item)
         combined = unique
 
+        # For a requested attribute, prefer passages that actually describe
+        # that attribute. A subject repeated in a page header is insufficient.
+        # Apply only when an explicit matching passage exists; synonyms-only
+        # retrieval keeps the normal lexical/semantic path.
+        attribute_groups = (
+            (r'tính\s+chất|properties', r'tính\s+chất|properties'),
+            (r'đặc\s+điểm|characteristics', r'đặc\s+điểm|characteristics'),
+            (r'thành\s+phần|components', r'thành\s+phần|components'),
+            (r'nguyên\s+tắc|principles', r'nguyên\s+tắc|principles'),
+        )
+        for query_pattern, source_pattern in attribute_groups:
+            if re.search(query_pattern,query_clean,re.I):
+                explicit = [item for item in combined if re.search(source_pattern,item['text'],re.I)
+                            and not is_heading_or_toc_chunk(item['text'])]
+                if explicit:
+                    combined = explicit
+                break
+
         # For broad queries, allow more chunks per book (up to 4) so multi-chapter concepts are retained
         book_limit = max_per_book if max_per_book is not None else (4 if is_broad else 2)
 
         diverse = []
         per_book = {}
         for item in combined:
+            rel = _content_relevance(item["text"])
+            if rel < -0.4:
+                continue
             filename = item["filename"]
             if per_book.get(filename, 0) >= book_limit:
                 continue
@@ -1338,11 +1450,23 @@ class HybridSearcher:
             per_book[filename] = per_book.get(filename, 0) + 1
             if len(diverse) >= top_k:
                 break
-        for item in combined:
-            if len(diverse) >= top_k:
-                break
-            if item not in diverse:
+
+        # If top_k not reached, fill with remaining relevant candidates from matching books
+        # but NEVER force unrelated filler or negative-relevance items just to reach top_k.
+        if len(diverse) < top_k:
+            for item in combined:
+                if item in diverse:
+                    continue
+                rel = _content_relevance(item["text"])
+                if rel < -0.2:
+                    continue
+                has_fts = item.get("fts_score") is not None and item.get("fts_score", 0.0) > 0.0
+                has_sem = item.get("semantic_score") is not None and item.get("semantic_score", 0.0) >= 0.52
+                if not (has_fts or has_sem):
+                    continue
                 diverse.append(item)
+                if len(diverse) >= top_k:
+                    break
 
         final_results = []
         seen_passages = set()

@@ -48,13 +48,31 @@ The security regression suite uses synthetic Office files, tokenizer stubs and t
 - **Run ledger**: Duplicate checks block unreadable JSON and invalid required guard fields, even when remediation is supplied. Valid runs stopped before manifest binding may retain a null signature with a `pending_preflight` dataset. Running or successful runs require a signature. Repair invalid records from retained evidence before retrying; the check does not delete history.
 - **Acceptance gates**: Dataset preparation, candidate rejudging, source review and diagnostic tools raise explicit exceptions so their checks remain active under `python -O`. Optimization tests execute only isolated guard statements, without running dataset-producing scripts.
 - **Physical source pages**: Page validation raises `ValueError` when an existing source cannot be parsed or its physical page count cannot be determined. Form validation without a source file retains its existing behavior.
+- **Physical page review release gate**: `app/knowledge_pack.py` and `scripts/build_distribution.py` enforce complete source-bound per-physical-page review coverage (`--page-reviews`) for every declared document during export. The exporter reconciles expected production chunk projections against database passages, rejects out-of-range physical page membership and orphaned database chunks, validates blank page declarations (0 chunks, canonical empty digest), and exports portable review coverage metadata in `manifest.json`. Installer and application distribution builder enforce contiguous canonical 0-based chunk indexing (`0..N-1`), verify passage digests over the installed database sequence (`ORDER BY chunk_index, id`), and reject packs missing portable review coverage, containing incomplete reviews, or presenting mismatched passage digests.
 - **Historical C++ review tool**: `scripts/release_string_reviews.py` now reads `string-transcripts.json` and `string-rows.json` from the ignored directory `data/evaluation/corpus-review-20261005/all-remaining-20261005`. Place reviewed inputs there explicitly; there is no shared `/tmp` fallback. This manual tool compiles and executes source from its inputs, so it requires operator-trusted files and is excluded from automated runtime validation.
 
 ## Public debugging corpus
 
 The [extended fixture guide](../tests/fixtures/EXTENDED_CORPUS.md) describes 12 synthetic topics, 96 review cases and a 14-course timetable PNG/JSON pair. Portable tests index these sources in temporary databases and check timetable draft/confirmation/export behavior. The case manifest contains content rubrics and simple/complex labels; it is not a precomputed model benchmark or approved training set. Image extraction quality and actual model answers require separate live evaluation and source review.
 
+## Launchers and service startup
+
+Platform launch scripts provide single-action startup for development and manual verification:
+
+- **Windows (`Start Study Agent.bat`)**: Checks for `.venv\Scripts\python.exe`, then runs `scripts/dev.py serve --profile local --start-model-service --require-model --open-browser`. The Python launcher reads the configuration first, starts an installed local Ollama daemon if needed, and waits up to 15 seconds at the configured loopback endpoint before verifying the pack and model. It does not download models. If startup fails, the batch wrapper pauses to preserve error output.
+- **macOS (`Start Study Agent.command`)**: Checks for `.venv/bin/python` and launches `scripts/dev.py serve --profile local --require-model --open-browser`. It requires that any conflicting process holding port 8000 be stopped prior to launch; it will not arbitrarily terminate foreign processes.
+
 ## Real-model acceptance
+
+### Live application gate
+
+Confirm newly reported release defects through the actual application and its real configured source/data paths. A failure in an isolated harness is a diagnostic lead until the affected application flow reproduces it. Record the exact source, physical page, request and visible result without publishing private data. After completing source review and repairs, freeze the code, configuration and release artifacts for one consolidated final functional acceptance run. Record each required flow as passed, failed or unrun. A failed run requires repair and renewed verification of affected flows; it cannot be relabeled successful to preserve a one-run count.
+
+After automated checks, restart the actual project server when needed and verify its process, working directory and revision/file hashes. Open the served application in a real browser and exercise the changed controls through completion: model readiness, QA, source links, quiz count and difficulty, answers, feedback and visible failure/retry states. Inspect the browser result and the server response/logs together. Record screenshots and request/result evidence in ignored local storage; keep private passages out of Git. Verify generated content separately against the source. API-only requests, mocked inference and isolated fixtures supplement this gate but do not replace it. Record unavailable platforms and unrun flows as pending, not passed.
+
+Before declaring push or demo readiness, record the actual checkout/install path, browser URL, serving process and final source hashes. Exercise fresh-clone startup when clone usability is part of the change. Relevant changes after a successful run require repeating the affected user flows. Do not substitute an old deployment, isolated mock or direct API response for the final served UI.
+
+The health endpoint distinguishes installed artifacts from executable runtime capability. Its import probe does not load weights or certify content. Use **Kiểm tra mô hình** in the web UI for a real inference smoke check, then test an actual question with source review.
 
 For changes to retrieval, prompts, evidence validation or generated study content:
 

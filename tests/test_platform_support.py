@@ -117,41 +117,57 @@ def test_nested_shared_inference_locks_succeed(tmp_path):
 
 
 def test_ollama_base_summary_does_not_require_mlx(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.topic_summarizer.DEFAULT_CHAT_MODEL", "qwen2.5:3b")
+    monkeypatch.setattr("app.topic_summarizer.is_mlx_model", lambda model: False)
     from app.history import HistoryStore
     from app.topic_summarizer import TopicSummarizer
     from app.trained_client import TrainedModelClient
     store = HistoryStore(tmp_path / "history.db")
     sid = store.create_session()["id"]
-    store.add_turn(sid, "Trí nhớ làm việc", "Trí nhớ giữ thông tin ngắn hạn.", [], "qwen2.5:3b")
+    store.add_turn(sid, "Trí nhớ làm việc", "Trí nhớ giữ thông tin ngắn hạn.", [], "qwen3.5:9b")
     summarizer = TopicSummarizer(history_store=store)
     monkeypatch.setattr(TrainedModelClient, "available", lambda: False)
     monkeypatch.setattr(summarizer.ollama, "check_health", lambda: True)
     monkeypatch.setattr(summarizer.ollama, "chat_complete", lambda **kw:
         '{"title":"Trí nhớ làm việc","summary":"Hỏi về trí nhớ ngắn hạn."}')
     monkeypatch.setattr(summarizer.ollama, "last_done_reason", "stop")
-    result = summarizer.summarize_session_sync(sid, model="qwen2.5:3b")
+    result = summarizer.summarize_session_sync(sid, model="qwen3.5:9b")
     assert result["status"] == "completed"
 
 
 def test_ollama_health_is_ready_without_mlx_only_when_model_present(monkeypatch):
     from fastapi.testclient import TestClient
     from app import server
-    monkeypatch.setattr(server, "DEFAULT_CHAT_MODEL", "qwen2.5:3b")
+    monkeypatch.setattr(server, "DEFAULT_CHAT_MODEL", "qwen3.5:9b")
+    monkeypatch.setattr(server, "_requires_mlx_model", lambda: False)
+    monkeypatch.setattr(server, "_configured_index_coverage", lambda: {'status':'keyword_only'})
     monkeypatch.setattr(server.TrainedModelClient, "available", lambda: False)
     monkeypatch.setattr(server.ollama, "check_health", lambda: True)
-    monkeypatch.setattr(server.ollama, "list_models", lambda: [{"name":"qwen2.5:3b"}])
+    monkeypatch.setattr(server.ollama, "list_models", lambda: [{"name":"qwen3.5:9b"}])
     client = TestClient(server.app)
     assert client.get("/api/health").json()["inference_ready"] is True
     assert client.get("/api/status").json()["inference_ready"] is True
     models = client.get("/api/models").json()
-    assert models["default_model"] == "qwen2.5:3b"
+    assert models["default_model"] == "qwen3.5:9b"
     assert models["default_model_backend"] == "ollama"
     assert models["default_model_available"] is True
     monkeypatch.setattr(server.ollama, "list_models", lambda: [])
     assert client.get("/api/health").json()["inference_ready"] is False
     assert client.get("/api/status").json()["inference_ready"] is False
     assert client.get("/api/models").json()["default_model_available"] is False
+
+
+def test_stale_retired_default_cannot_appear_ready_even_when_installed(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import server
+    monkeypatch.setattr(server, 'DEFAULT_CHAT_MODEL', 'qwen2.5:3b')
+    monkeypatch.setattr(server.TrainedModelClient, 'available', lambda: False)
+    monkeypatch.setattr(server, '_configured_index_coverage', lambda: {'status':'keyword_only'})
+    monkeypatch.setattr(server.ollama, 'check_health', lambda: True)
+    monkeypatch.setattr(server.ollama, 'list_models', lambda: [{'name':'qwen2.5:3b'}])
+    client = TestClient(server.app)
+    assert client.get('/api/health').json()['inference_ready'] is False
+    assert client.get('/api/status').json()['inference_ready'] is False
+    assert client.get('/api/models').json()['default_model_available'] is False
 
 
 def test_windows_flock_accepts_file_objects(tmp_path, monkeypatch):

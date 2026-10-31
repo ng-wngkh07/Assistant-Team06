@@ -10,7 +10,7 @@ function ui() {
   const context = {Date, console, document: {createElement: element},
     currentStudyMaterial: null, currentQuizIndex: 0, quizUserAnswers: {}, currentCardIndex: 0,
     isCardFlipped: false, cardMastery: {}, cardOrder: [], messagesContainer: element()};
-  for (const id of ['studyMaterialTitle','studyMaterialSubtitle','quizBadgeCount','cardBadgeCount',
+  for (const id of ['studyMaterialTitle','studyMaterialSubtitle','studyMaterialWarningBanner','quizBadgeCount','cardBadgeCount',
     'sourceDocName','sourcePageCount','sourceDocType','sourceProcessedAt','sourceTextPreview','studyMaterialModal']) context[id]=element();
   vm.createContext(context);
   const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');

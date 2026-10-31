@@ -8,9 +8,9 @@
   ],
   "ollama_base_url": "http://127.0.0.1:11434",
   "models": [
-    {"role": "qa", "name": "qwen2.5:3b"},
+    {"role": "qa", "name": "qwen3.5:9b"},
     {"role": "embedding", "name": "bge-m3"},
-    {"role": "vision", "name": "qwen2.5vl:3b"}
+    {"role": "vision", "name": "qwen3.5:9b"}
   ],
   "sources": ["https://learn.microsoft.com/en-us/windows/package-manager/winget/install", "https://docs.ollama.com/windows"]
 }

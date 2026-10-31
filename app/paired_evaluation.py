@@ -529,11 +529,7 @@ def evaluate_paired_dossier(
             "total_cases": len(protocol.get("cases", [])) if protocol else None,
             "full_coverage_verified": has_full_coverage,
         } if protocol else None,
-        "model_identity": model_identity or {
-            "repo": "mlx-community/Qwen2.5-3B-Instruct-4bit",
-            "revision": "4f83f8f146fdf28b512a06562b671d7af4fab457",
-            "path": str(MLX_MODEL_DIR),
-        },
+        "model_identity": model_identity,
         "decoding_parameters": decoding_parameters or (
             protocol.get("decoding") if protocol else {
                 "temperature": 0.0,

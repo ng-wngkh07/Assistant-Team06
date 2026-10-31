@@ -6,13 +6,16 @@ import json
 import re
 from pathlib import Path
 
-import requests
-
-from app.config import OLLAMA_BASE_URL
+from app.config import DEFAULT_CHAT_MODEL
+from app.ollama_client import OllamaClient
+from app.model_resolver import is_mlx_model, reject_retired_model
+from app.trained_client import TrainedModelClient
 from app.evaluation_metrics import citation_metrics, plain_answer_metrics
 
 
-def evaluate(data_dir: Path, indices: list[int], output: Path, model: str = "qwen2.5:7b") -> dict:
+def evaluate(data_dir: Path, indices: list[int], output: Path, model: str = DEFAULT_CHAT_MODEL) -> dict:
+    reject_retired_model(model)
+    client = TrainedModelClient(model) if is_mlx_model(model) else OllamaClient()
     approval = json.loads((data_dir / "approval.json").read_text(encoding="utf-8"))
     digest = hashlib.sha256((data_dir / "train.jsonl").read_bytes() + (data_dir / "valid.jsonl").read_bytes()).hexdigest()
     if digest != approval["dataset_sha256"]:
@@ -31,15 +34,10 @@ def evaluate(data_dir: Path, indices: list[int], output: Path, model: str = "qwe
         source_ids = set(re.findall(r'<document id="(S\d+)"', messages[1]["content"]))
         if not source_ids:
             raise ValueError(f"Ca {index} không có đoạn nguồn")
-        response = requests.post(
-            OLLAMA_BASE_URL.rstrip("/") + "/api/chat",
-            json={"model": model, "stream": False, "think": False,
-                  "options": {"temperature": 0, "num_predict": 500, "repeat_penalty": 1.12},
-                  "messages": messages[:2]},
-            timeout=240,
-        )
-        response.raise_for_status()
-        answer = response.json()["message"]["content"].strip()
+        answer = client.chat_complete(messages=messages[:2], model=model,
+                                      temperature=0, max_tokens=500, timeout=240).strip()
+        if getattr(client, "last_done_reason", None) != "stop":
+            raise ValueError("Incomplete model response cannot be accepted as evaluation evidence")
         results.append({"valid_index": index, "dataset_sha256": digest,
                         "question": messages[1]["content"].split("Câu hỏi:")[-1].strip(),
                         "reference": messages[2]["content"], "answer": answer,
@@ -58,7 +56,7 @@ def main():
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--case-indices", type=int, nargs="+", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--model", default="qwen2.5:7b")
+    parser.add_argument("--model", default=DEFAULT_CHAT_MODEL)
     args = parser.parse_args()
     print(json.dumps(evaluate(args.data, args.case_indices, args.output, args.model), ensure_ascii=False))
 

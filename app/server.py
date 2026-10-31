@@ -15,8 +15,8 @@ from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, Fil
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.config import (
-    BASE_DIR, DATA_DIR, DEFAULT_CHAT_MODEL, DEFAULT_EMBED_MODEL, TRAINED_MODEL_NAME,
-    DEFAULT_TOP_K, SERVER_HOST, SERVER_PORT
+    BASE_DIR, DATA_DIR, SRC_DIR, DEFAULT_CHAT_MODEL, DEFAULT_EMBED_MODEL, TRAINED_MODEL_NAME,
+    DEFAULT_TOP_K, SERVER_HOST, SERVER_PORT, OLLAMA_AUX_CHAT_MODEL
 )
 from app.indexer import KnowledgeIndexer
 from app.searcher import HybridSearcher
@@ -25,6 +25,7 @@ from app.ollama_client import OllamaClient
 from app.trained_client import TrainedModelClient
 from app.history import HistoryStore
 
+from app.runtime_health import probe_mlx_runtime, runtime_failure_message
 from app.topic_summarizer import TopicSummarizer
 from app.gpu_lock import gpu_coordinator, GPUBusyError
 from app.document_lookup import DocumentLookup
@@ -234,7 +235,7 @@ async def generate_practice(req: PracticeGenerateRequest):
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
         logger.exception("Không tạo được bộ câu hỏi luyện tập")
-        raise HTTPException(status_code=502, detail="Không tạo được câu hỏi lúc này. Hãy thử lại sau.") from exc
+        raise HTTPException(status_code=502, detail=runtime_failure_message(exc)) from exc
 
 
 @app.get("/api/practice/examples")
@@ -271,7 +272,7 @@ async def answer_practice(req: PracticeAnswerRequest):
 
 class LearningGenerateRequest(BaseModel):
     topic: str
-    count: int = Field(default=3, ge=1, le=3)
+    count: int = Field(default=3, ge=1, le=10, strict=True)
     difficulty: Literal["easy", "medium", "hard"] = "medium"
     purpose: Literal["practice", "review"] = "practice"
     weak_topics: Optional[list[str]] = None
@@ -334,7 +335,7 @@ async def generate_learning(req: LearningGenerateRequest):
         raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
         logger.exception("Không tạo được bộ câu hỏi theo chủ đề")
-        raise HTTPException(status_code=502, detail="Không tạo được câu hỏi lúc này. Hãy thử lại sau.") from exc
+        raise HTTPException(status_code=502, detail=runtime_failure_message(exc)) from exc
 
 
 @app.post("/api/learning/exercises")
@@ -594,8 +595,9 @@ def requested_source_scope(req):
     source_doc_id = req.source_document_id
     if source_doc_id is None and getattr(req, "attachment_filename", None):
         found = document_lookup.document_by_filename(req.attachment_filename)
-        if found:
-            source_doc_id = found["id"]
+        if not found:
+            raise HTTPException(status_code=404, detail='Không tìm thấy tài liệu đính kèm đã chọn. Hãy chọn lại từ thư viện.')
+        source_doc_id = found["id"]
     if source_doc_id is None and getattr(req, "session_id", None):
         sess = history_store.get_session(req.session_id)
         if sess and sess.get("turns"):
@@ -611,6 +613,8 @@ def requested_source_scope(req):
     doc = document_lookup.document(source_doc_id)
     if not doc or (req.source_page_num is not None and req.source_page_num > doc['total_pages']):
         raise HTTPException(status_code=404, detail='Không tìm thấy tài liệu hoặc trang nguồn đã chọn.')
+    if getattr(req, "attachment_filename", None) and req.attachment_filename != doc.get("filename"):
+        raise HTTPException(status_code=400, detail='Tệp đính kèm và tài liệu nguồn không khớp. Hãy chọn lại tài liệu.')
     if not getattr(req, "attachment_filename", None) and doc.get("filename"):
         req.attachment_filename = doc["filename"]
     page = (source_doc_id, req.source_page_num) if req.source_page_num is not None else None
@@ -1085,51 +1089,141 @@ def _requires_mlx_model():
 
 
 def _inference_model_available(mlx_available, models):
+    from app.model_resolver import reject_retired_model
+    try:
+        reject_retired_model(DEFAULT_CHAT_MODEL)
+    except ValueError:
+        return False
     if _requires_mlx_model():
         return mlx_available
     return any(model.get("name") in {DEFAULT_CHAT_MODEL, DEFAULT_CHAT_MODEL + ":latest"}
                for model in models)
 
 
+def _configured_index_coverage():
+    """Check actual embedding bytes off the event loop, independently of QA."""
+    import sqlite3
+    from app.config import DB_PATH, DEFAULT_EMBED_MODEL
+    from app.vector_integrity import index_coverage
+    with sqlite3.connect(DB_PATH.resolve().as_uri() + '?mode=ro', uri=True) as db:
+        actual_identity = None
+        try:
+            installed_digest = None
+            try:
+                row = db.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
+                if row:
+                    installed_digest = row[0]
+            except sqlite3.Error:
+                pass
+
+            if installed_digest and installed_digest.startswith("ollama-sha256:"):
+                actual_identity = ollama.embedding_identity(DEFAULT_EMBED_MODEL)
+                expected_identity = actual_identity
+            elif installed_digest and installed_digest.startswith("bge-m3-mlx-fp16@"):
+                if sys.platform != 'darwin':
+                    actual_identity = None
+                    expected_identity = None
+                else:
+                    from app.native_embedding import BGE_NATIVE_IDENTITY, NativeEmbeddingClient
+                    actual_identity = NativeEmbeddingClient().get_identity()
+                    expected_identity = actual_identity if actual_identity == BGE_NATIVE_IDENTITY else None
+            elif os.getenv("EMBED_BACKEND") == "ollama" or sys.platform != 'darwin':
+                actual_identity = ollama.embedding_identity(DEFAULT_EMBED_MODEL)
+                expected_identity = actual_identity
+            else:
+                from app.native_embedding import BGE_NATIVE_IDENTITY, NativeEmbeddingClient
+                actual_identity = NativeEmbeddingClient().get_identity()
+                expected_identity = actual_identity if actual_identity == BGE_NATIVE_IDENTITY else None
+        except Exception as exc:
+            logger.debug('Embedding identity unavailable during coverage check: %s', type(exc).__name__)
+            expected_identity = None
+        result = index_coverage(db, expected_identity)
+        result['configured_model_identity'] = actual_identity
+        return result
+
+
 @app.get("/api/health")
 async def health_check():
     requires_mlx = _requires_mlx_model()
-    ollama_ok = False if requires_mlx else ollama.check_health()
+    installed_digest = None
+    try:
+        from app.config import DB_PATH
+        if DB_PATH.exists():
+            import sqlite3
+            with sqlite3.connect(DB_PATH.resolve().as_uri() + '?mode=ro', uri=True) as db:
+                row = db.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
+                if row:
+                    installed_digest = row[0]
+    except Exception:
+        pass
+
+    embed_uses_ollama = (
+        os.getenv("EMBED_BACKEND") == "ollama"
+        or (installed_digest and installed_digest.startswith("ollama-sha256:"))
+        or (sys.platform != "darwin" and os.getenv("EMBED_BACKEND") not in ("native", "mlx"))
+    )
+
+    ollama_needed = (not requires_mlx) or embed_uses_ollama or (sys.platform != "darwin")
+    ollama_ok = ollama.check_health() if ollama_needed else False
     gpu_status = gpu_coordinator.get_status()
     gpu_busy = bool(gpu_status.get("busy", False))
     mlx_available = TrainedModelClient.available()
-    models = [] if (requires_mlx or gpu_busy or not ollama_ok) else ollama.list_models()
-    model_ready = _inference_model_available(mlx_available, models)
+    models = [] if (gpu_busy or not ollama_ok) else ollama.list_models()
+    runtime = await run_in_threadpool(probe_mlx_runtime) if requires_mlx and sys.platform == "darwin" else None
+    model_ready = _inference_model_available(mlx_available, models) and (runtime is None or runtime["ready"])
 
-    if sys.platform == "darwin":
+    names = {m.get("name") for m in models} if models else set()
+
+    # QA readiness
+    qa_ready = bool(model_ready and not gpu_busy)
+
+    # Vision readiness
+    if requires_mlx and sys.platform == "darwin":
         from app.native_vision import NativeVisionClient
-        from app.native_embedding import NativeEmbeddingClient
-        qa_ready = bool(mlx_available and not gpu_busy)
-        vision_ready = bool(NativeVisionClient.available() and not gpu_busy)
-        embedding_ready = bool(NativeEmbeddingClient.available() and not gpu_busy)
+        vision_ready = bool(NativeVisionClient.available() and not gpu_busy and (runtime is None or runtime["ready"]))
     else:
-        names = {m.get("name") for m in models} if models else set()
-        qa_ready = bool(model_ready and not gpu_busy)
-        vision_ready = bool(any("qwen2.5vl:3b" in m for m in names) and not gpu_busy)
-        embedding_ready = bool(any("bge-m3" in m for m in names) and not gpu_busy)
+        vision_ready = bool(OLLAMA_AUX_CHAT_MODEL in names and not gpu_busy)
+
+    # Embedding readiness
+    if embed_uses_ollama:
+        embedding_ready = bool(ollama_ok and any("bge-m3" in m for m in names) and not gpu_busy)
+    elif sys.platform == "darwin":
+        from app.native_embedding import NativeEmbeddingClient
+        embedding_ready = bool(NativeEmbeddingClient.available() and not gpu_busy and (runtime is None or runtime["ready"]))
+    else:
+        embedding_ready = False
 
     if gpu_busy:
         service_state = "degraded"
         service_message = f"GPU đang bận huấn luyện (PID {gpu_status.get('pid')}) - Suy luận tạm thời bị chặn, web hoạt động bình thường"
         inference_ready = False
-    elif not _requires_mlx_model() and not ollama_ok:
+    elif not requires_mlx and not ollama_ok:
         service_state = "degraded"
         service_message = "Ollama mất kết nối"
         inference_ready = False
     elif not model_ready:
         service_state = "degraded"
-        service_message = (f"Mô hình MLX {DEFAULT_CHAT_MODEL} chưa khả dụng" if _requires_mlx_model()
+        service_message = (runtime["message"] if runtime and not runtime["ready"] else f"Mô hình MLX {DEFAULT_CHAT_MODEL} chưa khả dụng" if requires_mlx
                            else f"Mô hình Ollama {DEFAULT_CHAT_MODEL} chưa khả dụng")
         inference_ready = False
     else:
         service_state = "healthy"
-        service_message = "Tất cả dịch vụ hoạt động bình thường"
+        service_message = "Môi trường mô hình sẵn sàng. Dùng Kiểm tra mô hình để chạy thử suy luận."
         inference_ready = True
+
+    index_coverage = {
+        "total_chunks": 0,
+        "compatible_native_chunks": 0,
+        "coverage_ratio": 0.0,
+        "status": "keyword_only",
+        "degraded_fallback": True,
+    }
+    try:
+        from app.config import DB_PATH
+        if DB_PATH.exists():
+            index_coverage = await run_in_threadpool(_configured_index_coverage)
+    except Exception as exc:
+        logger.debug("Failed to calculate index coverage: %s", exc)
 
     return {
         "status": "ok",
@@ -1142,6 +1236,7 @@ async def health_check():
         "ollama_url": ollama.base_url,
         "mlx_available": mlx_available,
         "inference_ready": inference_ready,
+        "runtime": runtime,
         "qa_ready": qa_ready,
         "vision_ready": vision_ready,
         "embedding_ready": embedding_ready,
@@ -1150,8 +1245,47 @@ async def health_check():
             "vision": vision_ready,
             "embedding": embedding_ready,
         },
+        "index_coverage": index_coverage,
         "gpu": gpu_status
     }
+
+@app.post("/api/model/check")
+async def check_local_model():
+    """User-operated warm-up of the configured local model; never switches it."""
+    def run_check():
+        with dialogue_gate.acquire(), gpu_coordinator.acquire_for_inference():
+            from app.model_resolver import is_mlx_model
+            if is_mlx_model(DEFAULT_CHAT_MODEL):
+                runtime = probe_mlx_runtime(force=True)
+                if not runtime["ready"]:
+                    return {"ready": False, "model": DEFAULT_CHAT_MODEL, "message": runtime["message"], "code": runtime["code"]}
+                client = TrainedModelClient(model_name=DEFAULT_CHAT_MODEL)
+                answer = client.chat_complete(
+                    [{"role": "user", "content": "Chỉ trả lời: OK"}], max_tokens=16, temperature=0.0,
+                )
+            else:
+                client = ollama
+                answer = client.chat_complete(
+                    [{"role": "user", "content": "Chỉ trả lời: OK"}], model=DEFAULT_CHAT_MODEL,
+                    num_predict=16, temperature=0.0, think=False,
+                )
+            done_reason = getattr(client, "last_done_reason", None)
+            if done_reason != "stop":
+                raise RuntimeError(f"Mô hình phản hồi chưa trọn vẹn (done_reason: {done_reason or 'unknown'})")
+            clean_answer = str(answer or "")
+            clean_answer = re.sub(r"(?is)<\s*(?:think|analysis|reasoning)\b[^>]*>.*?<\s*/\s*(?:think|analysis|reasoning)\s*>", "", clean_answer).strip()
+            if not clean_answer or clean_answer.startswith(("❌", "Lỗi từ Ollama", "Lỗi:", "Error:")):
+                raise RuntimeError("Empty or failed model response")
+            return {"ready": True, "model": DEFAULT_CHAT_MODEL, "code": "inference_verified",
+                    "message": "Đã chạy thử mô hình cục bộ thành công. Kết quả này không chứng nhận độ chính xác học thuật."}
+    try:
+        return await run_in_threadpool(run_check)
+    except (DialogueBusyError, GPUBusyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"}) from exc
+    except Exception as exc:
+        logger.exception("Local model self-check failed")
+        return {"ready": False, "model": DEFAULT_CHAT_MODEL, "code": "inference_failed", "message": runtime_failure_message(exc)}
+
 
 @app.get("/api/models")
 async def get_models():
@@ -1166,18 +1300,9 @@ async def get_models():
         if "vl" not in m.get("name", "").lower() and "vision" not in m.get("name", "").lower()
     ]
     if is_mlx:
-        if is_9b_model(DEFAULT_CHAT_MODEL):
-            active_adapter = None
-            model_mode = "unadapted_base"
-            model_description = "Qwen3.5 9B (MLX Nền tảng cục bộ - unadapted base)"
-        else:
-            active_adapter = registry_info.get("active_adapter")
-            model_mode = registry_info.get("mode", "unadapted_base")
-            model_description = (
-                "Qwen2.5 3B (MLX Nền tảng cục bộ - unadapted base)"
-                if registry_info.get("mode") == "unadapted_base"
-                else f"Qwen2.5 3B (MLX LoRA - {registry_info.get('active_adapter', {}).get('id')})"
-            )
+        active_adapter = None
+        model_mode = "unadapted_base"
+        model_description = "Qwen3.5 9B (MLX Nền tảng cục bộ - unadapted base)"
     else:
         active_adapter = None
         model_mode = "unadapted_base"
@@ -1186,11 +1311,23 @@ async def get_models():
         "models": qa_models,
         "default_model": DEFAULT_CHAT_MODEL,
         "default_model_backend": "mlx" if is_mlx else "ollama",
+        "availability_check": "local_artifacts",
         "default_model_available": _inference_model_available(TrainedModelClient.available(), models),
         "trained_model": DEFAULT_CHAT_MODEL if (is_mlx and TrainedModelClient.available()) else (TRAINED_MODEL_NAME if TrainedModelClient.available() else None),
         "active_adapter": active_adapter,
         "model_mode": model_mode,
         "model_description": model_description,
+    }
+
+@app.get("/api/storage")
+async def get_storage_info():
+    return {
+        "sources_dir": str(SRC_DIR),
+        "data_dir": str(DATA_DIR),
+        "persistent": True,
+        "local_only": True,
+        "auto_watch": False,
+        "policy": "Tài liệu tải lên được lưu trữ trên máy tính này, được bảo toàn sau khi khởi động lại, không tự động xuất bản hay dùng để huấn luyện mô hình."
     }
 
 @app.get("/api/status")
@@ -1202,7 +1339,8 @@ async def get_index_status():
     gpu_status = gpu_coordinator.get_status()
     gpu_busy = bool(gpu_status.get("busy", False))
     mlx_available = TrainedModelClient.available()
-    model_ready = _inference_model_available(mlx_available, models)
+    runtime = await run_in_threadpool(probe_mlx_runtime) if requires_mlx and sys.platform == "darwin" else None
+    model_ready = _inference_model_available(mlx_available, models) and (runtime is None or runtime["ready"])
 
     if gpu_busy:
         service_state = "degraded"
@@ -1214,18 +1352,28 @@ async def get_index_status():
         inference_ready = False
     elif not model_ready:
         service_state = "degraded"
-        service_message = (f"Mô hình MLX {DEFAULT_CHAT_MODEL} chưa khả dụng" if _requires_mlx_model()
+        service_message = (runtime["message"] if runtime and not runtime["ready"] else f"Mô hình MLX {DEFAULT_CHAT_MODEL} chưa khả dụng" if _requires_mlx_model()
                            else f"Mô hình Ollama {DEFAULT_CHAT_MODEL} chưa khả dụng")
         inference_ready = False
     else:
         service_state = "healthy"
-        service_message = "Tất cả dịch vụ hoạt động bình thường"
+        service_message = "Môi trường mô hình sẵn sàng. Dùng Kiểm tra mô hình để chạy thử suy luận."
         inference_ready = True
+
+    storage_info = {
+        "sources_dir": str(SRC_DIR),
+        "data_dir": str(DATA_DIR),
+        "persistent": True,
+        "local_only": True,
+        "auto_watch": False,
+        "policy": "Tài liệu tải lên được lưu trữ trên máy tính này, được bảo toàn sau khi khởi động lại, không tự động xuất bản hay dùng để huấn luyện mô hình."
+    }
 
     return {
         "service_state": service_state,
         "service_message": service_message,
         "inference_ready": inference_ready,
+        "runtime": runtime,
         "knowledge_base": status,
         "trained_model": {"name": DEFAULT_CHAT_MODEL if _requires_mlx_model() else TRAINED_MODEL_NAME, "available": mlx_available},
         "ollama": {
@@ -1233,7 +1381,8 @@ async def get_index_status():
             "url": ollama.base_url,
             "models": [m.get("name") for m in models]
         },
-        "gpu": gpu_status
+        "gpu": gpu_status,
+        "storage": storage_info
     }
 
 @app.post("/api/index")

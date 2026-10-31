@@ -9,7 +9,6 @@ from app import trained_client
 def test_mlx_bridge_forwards_request_context_limit(monkeypatch):
     observed = []
     monkeypatch.setattr(trained_client.TrainedModelClient, 'available', lambda *args, **kwargs: True)
-    monkeypatch.setattr(trained_client.active_registry, 'get_active_adapter_dir', lambda: None)
 
     def completed(*args, **kwargs):
         observed.append(json.loads(kwargs['input']))
@@ -28,7 +27,11 @@ def test_overflow_is_rejected_before_loading_model_weights(tmp_path, monkeypatch
     import sys
     from types import ModuleType
     import pytest
-    config = {'max_position_embeddings': model_capacity}
+    config = {'model_type':'qwen3_5','architectures':['Qwen3_5ForConditionalGeneration'],
+              'text_config':{'model_type':'qwen3_5_text','hidden_size':4096,
+                             'num_hidden_layers':32,'num_attention_heads':16},
+              'quantization':{'bits':4,'group_size':64,'mode':'affine'},
+              'max_position_embeddings': model_capacity}
     (tmp_path / 'config.json').write_text(json.dumps(config))
     calls = []
     class Tokenizer:
@@ -48,7 +51,9 @@ def test_overflow_is_rejected_before_loading_model_weights(tmp_path, monkeypatch
     lm = ModuleType('mlx_lm')
     lm.load = lambda *args, **kwargs: calls.append('load') or (object(), Tokenizer())
     lm.generate = lambda *args, **kwargs: calls.append('generate') or 'result'
+    lm.stream_generate = lambda *args, **kwargs: calls.append('generate') or iter(())
     sampler = ModuleType('mlx_lm.sample_utils'); sampler.make_sampler = lambda **kwargs: None
+    sampler.make_logits_processors = lambda **kwargs: []
     mx = ModuleType('mlx.core'); mx.random = SimpleNamespace(seed=lambda _: None)
     package = ModuleType('mlx'); package.core = mx
     for name, value in [('transformers', tl), ('mlx_lm', lm), ('mlx_lm.sample_utils', sampler), ('mlx', package), ('mlx.core', mx)]:

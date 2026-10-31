@@ -2,11 +2,12 @@ import json
 import logging
 import re
 import unicodedata
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from html import unescape
 from xml.sax.saxutils import escape
 from typing import Dict, Any, List, Optional, Generator
 
+from app.runtime_health import runtime_failure_message
 from app.config import (
     DEFAULT_CHAT_MODEL, DEFAULT_EMBED_MODEL, TRAINED_MODEL_NAME,
     DEFAULT_TOP_K, ANSWER_MODE_MAX_TOKENS
@@ -22,22 +23,30 @@ from app.query_normalizer import normalize_query, normalize_query_with_model, is
 from app.dialogue import dialogue_intent, build_context, context_capacity, ContextLimitError
 from app.answer_modes import validate_mode_format, get_mode_retry_prompt, validate_compare_mode
 from app.token_counter import get_exact_token_counter
+from app.source_consistency import differing_value_reference_signatures, inconsistent_prime_extraction_example
 
 logger = logging.getLogger(__name__)
 
-QUERY_STOPWORDS = {
+def _normalize_stopword(word: str) -> str:
+    text = unicodedata.normalize('NFC', str(word or '')).casefold()
+    text = ''.join(c for c in unicodedata.normalize('NFKD', text) if not unicodedata.combining(c))
+    return re.sub(r'\s+', ' ', text.replace('đ', 'd').replace('_', ' ')).strip()
+
+_BASE_QUERY_STOPWORDS = {
     "của", "và", "trong", "theo", "như", "thế", "nào", "được", "là", "cho",
     "về", "giữa", "gì", "tại", "sao", "bao", "nhiêu", "the", "and", "what",
     "how", "such", "with", "có", "hay", "không", "ở", "này", "đó", "kia"
 }
+QUERY_STOPWORDS = _BASE_QUERY_STOPWORDS | {_normalize_stopword(w) for w in _BASE_QUERY_STOPWORDS if _normalize_stopword(w)}
 
-DIRECTIVE_STOPWORDS = {
+_BASE_DIRECTIVE_STOPWORDS = {
     "nêu", "hãy", "cho", "biết", "tìm", "trình", "bày", "giải", "thích",
     "liệt", "kê", "mô", "tả", "hai", "ba", "bốn", "năm", "các", "những",
     "một", "mấy", "tài", "liệu", "chất", "sách", "chương", "cuốn", "trang",
     "từng", "bước", "thật", "rõ", "ràng", "tóm", "tắt", "ngắn", "gọn",
     "chi", "tiết", "cụ", "thể", "so", "sánh", "đối", "chiếu", "phân", "biệt"
 }
+DIRECTIVE_STOPWORDS = _BASE_DIRECTIVE_STOPWORDS | {_normalize_stopword(w) for w in _BASE_DIRECTIVE_STOPWORDS if _normalize_stopword(w)}
 
 
 def weak_keyword_evidence(query: str, chunks: list[dict]) -> bool:
@@ -95,8 +104,158 @@ def has_unsupported_bare_quantity(claim: str, sources: list[str]) -> bool:
     return True
 
 
+def extract_numeric_content(text: str) -> tuple[set[Decimal], set[str]]:
+    """Extract distinct parsed Decimal values and unparsed/ambiguous numeric tokens.
+
+    Preserves decimal-comma and decimal-dot, signed values and scientific exponents,
+    without accepting constituent fragments as separate numbers. Identifies ambiguous
+    thousands grouping, multi-dot sequences, and malformed scientific tokens.
+    """
+    if not text or not isinstance(text, str):
+        return set(), set()
+
+    # Normalize unicode minus sign (U+2212) to standard ASCII minus
+    text = text.replace("−", "-")
+
+    unparsed_tokens = set()
+
+    # 1. Identify multi-dot sequences: e.g. 1.000.000 or 1.2.3 (malformed / ambiguous)
+    multi_dot_spans = set()
+    for m in re.finditer(r"(?<![\w])([+-])?\s*(\d+(?:\.\d+){2,})\b", text):
+        multi_dot_spans.add((m.start(), m.end()))
+        tok = (m.group(1) or "") + m.group(2)
+        unparsed_tokens.add(tok)
+
+    # 2. Identify multi-comma unspaced sequences: e.g. [2,4,6,8,10] or 1,000,000
+    multi_comma_spans = {}
+    for m in re.finditer(r"(?<![\w])([+-])?\s*(\d+(?:,\d+){2,})\b", text):
+        parts = m.group(2).split(",")
+        is_thousands = len(parts[0]) in (1, 2, 3) and all(len(p) == 3 for p in parts[1:])
+        multi_comma_spans[(m.start(), m.end())] = (is_thousands, parts)
+        if is_thousands:
+            tok = (m.group(1) or "") + m.group(2)
+            unparsed_tokens.add(tok)
+
+    # 3. Identify malformed scientific notation: e.g. 6e, 7e+, 7e-
+    for m in re.finditer(r"(?<![\w])([+-]?\s*\d+(?:[.,]\d+)?[eE](?![+-]?\d)[+-]?)(?![\w])", text):
+        tok = m.group(1).replace(" ", "")
+        unparsed_tokens.add(tok)
+
+    # 4. Candidate numeric literal pattern:
+    # (?<![\w]) : must not be preceded by a word char
+    # ([+-])?   : optional sign
+    # \s*       : optional space between sign and digits (e.g. - 2.5)
+    # mantissa  : dot-decimal (\d+\.\d+|\.\d+), comma-decimal (\d+,\d+), or integer (\d+)
+    # exponent  : optional scientific notation ([eE][+-]?\d+)
+    # (?![\w])  : must not be followed by a word char (prevents fragment extraction)
+    pattern = re.compile(
+        r"(?<![\w])"
+        r"([+-])?\s*"
+        r"("
+        r"(?:\d+\.\d+|\.\d+|\d+,\d+|\d+)"
+        r"(?:[eE][+-]?\d+)?"
+        r")"
+        r"(?![\w])"
+    )
+
+    results = set()
+
+    for match in pattern.finditer(text):
+        full_match_start = match.start()
+        full_match_end = match.end()
+        sign_str = match.group(1)
+        num_str = match.group(2)
+
+        # Ignore numbers within multi-dot spans (malformed / ambiguous grouping)
+        if any(s <= full_match_start and full_match_end <= e for s, e in multi_dot_spans):
+            continue
+
+        # Handle numbers within multi-comma spans
+        in_multi_comma = False
+        for (s, e), (is_thousands, parts) in multi_comma_spans.items():
+            if s <= full_match_start and full_match_end <= e:
+                in_multi_comma = True
+                if not is_thousands:
+                    for p in parts:
+                        try:
+                            results.add(Decimal(p))
+                        except InvalidOperation:
+                            pass
+                break
+        if in_multi_comma:
+            continue
+
+        # Decimal comma vs ambiguous thousands grouping check
+        if "," in num_str:
+            if not re.search(r"[eE]", num_str):
+                int_part, frac_part = num_str.split(",", 1)
+                # If integer part is non-zero and fractional part is exactly 3 digits,
+                # it is ambiguous thousands grouping (e.g. 1,000 or 25,000)
+                if int_part != "0" and re.fullmatch(r"[1-9]\d{0,2}", int_part) and len(frac_part) == 3:
+                    tok = (sign_str or "") + num_str
+                    unparsed_tokens.add(tok)
+                    continue
+            num_str = num_str.replace(",", ".")
+
+        # Determine if leading minus is unary sign vs binary subtraction / hyphen
+        has_minus = False
+        if sign_str == "-":
+            sign_idx = match.start(1)
+            pre = text[:sign_idx].rstrip()
+            if not pre:
+                has_minus = True
+            else:
+                last_char = pre[-1]
+                if last_char in ")]}":
+                    has_minus = False  # Binary subtraction after closing bracket
+                elif last_char.isdigit():
+                    has_minus = False  # Binary subtraction after digit
+                elif last_char in "=<>+*/×÷^%~:;,!?([{":
+                    has_minus = True   # Unary sign after operator / opening bracket / punctuation
+                elif last_char == "-":
+                    has_minus = True   # Double minus: e.g. 3 - -2
+                elif last_char.isalpha() or last_char in "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđĐ":
+                    if sign_idx > 0 and text[sign_idx - 1] not in " \t":
+                        has_minus = False  # Hyphen in compound word (e.g. COVID-19, L1-L3)
+                    else:
+                        words = re.findall(r"[\w]+", pre)
+                        if words and len(words[-1]) == 1 and words[-1].isascii() and words[-1].isalpha():
+                            has_minus = False  # Single algebraic variable: e.g. x - 2.5
+                        else:
+                            has_minus = True   # Word before sign: e.g. bằng -2.5, là -2.5
+                else:
+                    has_minus = False
+
+        final_str = ("-" if has_minus else "") + num_str
+        try:
+            results.add(Decimal(final_str))
+        except InvalidOperation:
+            pass
+
+    return results, unparsed_tokens
+
+
+def extract_numeric_literals(text: str) -> set[Decimal]:
+    """Extract distinct numeric values from text for evidence substantiation.
+
+    Preserves decimal-comma and decimal-dot, signed values and scientific exponents,
+    without accepting constituent fragments as separate numbers. Rejects ambiguous
+    thousands grouping and malformed dot/comma sequences.
+    """
+    return extract_numeric_content(text)[0]
+
+
+def extract_unparsed_numeric_tokens(text: str) -> set[str]:
+    """Extract distinct unparsed or ambiguous numeric tokens from text."""
+    return extract_numeric_content(text)[1]
+
+
 def has_relevant_evidence(query: str, chunks: list[dict]) -> bool:
     if not chunks:
+        return False
+    identifiers = re.findall(r'\b[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)+\b|\b\d{7,}\b',query)
+    source_text = '\n'.join(str(c.get('text','')) for c in chunks).casefold()
+    if any(len(identifier) >= 8 and identifier.casefold() not in source_text for identifier in identifiers):
         return False
     if not weak_keyword_evidence(query, chunks):
         return True
@@ -333,6 +492,9 @@ def build_suggested_actions(reason: str, scope: dict) -> List[Dict[str, str]]:
     if reason == "technical_error":
         actions.append({"action": "retry", "label": "Thử lại câu hỏi", "description": "Lỗi kỹ thuật có thể tạm thời; thử lại cùng phạm vi."})
         actions.append({"action": "select_other_document", "label": "Chọn tài liệu khác", "description": "Kiểm tra bằng một nguồn khác trong thư viện."})
+    elif reason in ("source_visual_content_unverified", "source_example_inconsistent"):
+        actions.append({"action": "select_other_page", "label": "Chọn trang khác", "description": "Tìm và chọn một trang tài liệu khác."})
+        actions.append({"action": "select_other_document", "label": "Chọn tài liệu khác", "description": "Tìm một nguồn khác để đối chiếu."})
     elif kind == "page":
         actions.append({
             "action": "expand_to_document",
@@ -415,6 +577,14 @@ def insufficient_evidence_message(reason: str, scope: dict) -> str:
     else:
         location = "kết quả tìm kiếm hiện tại"
 
+    if reason == "source_visual_content_unverified":
+        return "Bản chữ của nguồn có thể thiếu hoặc thể hiện sai công thức hay hình minh họa, nên tôi chưa thể trả lời chắc chắn. Vui lòng xem trang tài liệu gốc để kiểm tra hoặc chọn nguồn khác."
+    if reason == "source_example_inconsistent":
+        return "Ví dụ trong nguồn có danh sách số nguyên tố không khớp với dữ liệu đầu vào. Tôi chưa thể dùng kết quả đó làm đáp án đáng tin cậy; hãy xem trang gốc và kiểm tra lại."
+    if reason == "source_signature_difference_unverified":
+        return ("Đoạn nguồn có khai báo và định nghĩa cùng tên, một tham số truyền giá trị còn tham số kia "
+                "là tham chiếu. Chúng có chữ ký khác nhau và có thể là các hàm nạp chồng; hãy đối chiếu "
+                "bản gốc và các tệp liên quan trước khi kết luận ảnh hưởng đến biên dịch hoặc liên kết.")
     if reason in ("page_empty", "page_scope_too_narrow"):
         return f"Tôi chưa tìm thấy đủ căn cứ trong trang {scope.get('page_num')} của tài liệu đã chọn cho câu hỏi này. Bạn có thể mở rộng tìm kiếm ra toàn tài liệu hoặc chọn một trang khác."
     elif reason == "low_relevance":
@@ -423,7 +593,7 @@ def insufficient_evidence_message(reason: str, scope: dict) -> str:
         return f"Có kết quả truy xuất trong {location}, nhưng chúng chưa đủ liên quan hoặc căn cứ trực tiếp để trả lời chắc chắn. Bạn có thể thử diễn đạt lại câu hỏi hoặc chọn phạm vi tài liệu khác."
     elif reason == "partial_evidence":
         return f"Tài liệu trong {location} chỉ cung cấp bằng chứng cho một phần câu hỏi (chưa tìm thấy đủ căn cứ để đối chiếu đầy đủ). Bạn có thể hỏi riêng từng khái niệm hoặc mở rộng phạm vi tìm kiếm."
-    elif reason in ("technical_error", "retrieval_error"):
+    elif reason in ("retrieval_error", "technical_error"):
         return "Không thể truy cập hoặc xử lý tài liệu do lỗi kỹ thuật. Vui lòng thử lại sau."
     elif reason == "unverified_scope":
         return "Tôi chưa tìm thấy đủ căn cứ trong kết quả hiện tại để trả lời câu hỏi. Bạn có thể thử diễn đạt lại câu hỏi hoặc chọn phạm vi tài liệu khác."
@@ -441,7 +611,8 @@ Answer only the question; add examples only if requested. In true/false tasks, s
 """
 
 
-MLX_SOURCE_PROMPT = """Trả lời câu hỏi học tập bằng tiếng Việt, chỉ dựa trên nguồn hiện tại. Chỉ xuất JSON:
+MLX_SOURCE_PROMPT = """Answer ONLY the user_query, in Vietnamese, using the relevant current source passages. Do not summarize the supplied documents. Omit unrequested topics, examples, advice and introductory restatements. Once the requested answer is complete, close the JSON and stop.
+Chỉ xuất JSON:
 {"claims":[{"text":"câu trả lời đầy đủ","source_ids":["S1"],"evidence_lines":[1,1]}]}.
 source_ids của mỗi claim phải chứa đúng một mã nguồn. Không gộp công thức từ nguồn này và kết quả từ nguồn khác vào cùng claim. Nếu cần nhiều nguồn, viết các claims riêng, mỗi claim có một nguồn và phạm vi dòng riêng chứng minh toàn bộ text của nó.
 Mỗi dòng nguồn có nhãn L1|, L2|... evidence_lines là [số dòng đầu, số dòng cuối], hai số nguyên trong cùng MỘT source_id, tính cả hai đầu. Chọn đoạn liên tục chứng minh toàn bộ text, gồm tiền đề, hàm/đối tượng, điều kiện và kết luận. Chọn cả đề và lời giải khi lời giải đánh số hoặc chỉ ghi True/False; không ghép các bài khác nhau. Ứng dụng tự lấy nguyên văn từ các dòng đã chọn, không cần chép evidence_quote.
@@ -1056,7 +1227,13 @@ class PsychologyAgent:
         complexity = classify_query_complexity(query, compare_concepts)
         suggest_careful = bool(complexity.get("is_complex")) and resolved_level == "standard"
         careful_suggestion = complexity.get("suggestion") if suggest_careful else None
-        max_gen_tokens = 2048 if is_attached_doc_query else (1100 if resolved_level == "careful" else 900)
+        from app.model_resolver import is_9b_model
+        # Native source-line JSON needs room for the complete answer plus its
+        # evidence structure. The former 900-token budget cut ordinary lists.
+        native_budget = 2000 if resolved_level == "careful" else 1600
+        max_gen_tokens = 2048 if is_attached_doc_query else (
+            native_budget if is_9b_model(model) else (1100 if resolved_level == "careful" else 900)
+        )
 
         try:
             if source_page:
@@ -1150,8 +1327,8 @@ class PsychologyAgent:
                                 retrieved_chunks = doc_chunks[:max(effective_top_k, 16)]
                 except Exception as ex:
                     logger.warning("Could not fetch document chunks for attached file: %s", ex)
-        except Exception:
-            logger.exception("Document retrieval failed")
+        except Exception as retrieval_error:
+            logger.exception("Document retrieval database failure: %s", retrieval_error)
             retrieval_reason = "technical_error"
             suggested_actions = build_suggested_actions(retrieval_reason, search_scope)
             message = insufficient_evidence_message(retrieval_reason, search_scope)
@@ -1161,6 +1338,7 @@ class PsychologyAgent:
                 "code": "retrieval_error",
                 "response_kind": "technical_error",
                 "insufficient_reason": retrieval_reason,
+                "error_stage": "retrieval_database",
                 "search_scope": search_scope,
                 "suggested_actions": suggested_actions,
                 "generation_calls": 0,
@@ -1243,13 +1421,69 @@ class PsychologyAgent:
             except Exception as ex:
                 logger.warning("Neighboring context expansion failed, keeping anchors: %s", ex)
 
-        # Citation preview translations are never answer evidence. Fast must
-        # not spend additional model calls generating these optional previews.
-        if resolved_level == "standard":
-            read_cached = getattr(self.translator, "get_cached", None)
-            translations = read_cached(retrieved_chunks) if callable(read_cached) else {}
-        else:
-            translations = self.translator.translate(retrieved_chunks)
+        # Document-overview chunks are read directly, and context expansion can
+        # add new chunks. Attach their page quality before any text reaches the
+        # model. A warning alone cannot make a malformed formula trustworthy.
+        attach_quality = getattr(self.searcher, "_attach_page_quality_metadata", None)
+        if callable(attach_quality):
+            attach_quality(retrieved_chunks)
+        if any(
+            (c.get("page_quality") or {}).get("needs_review")
+            and "unrepresented_formula_or_diagram_suspected"
+            in ((c.get("page_quality") or {}).get("warnings") or [])
+            for c in retrieved_chunks
+        ):
+            reason = "source_visual_content_unverified"
+            message = insufficient_evidence_message(reason, search_scope)
+            yield {"type": "token", "content": message}
+            yield {
+                "type": "done",
+                "citations": [],
+                "response_kind": "insufficient_evidence",
+                "insufficient_reason": reason,
+                "search_scope": search_scope,
+                "suggested_actions": build_suggested_actions(reason, search_scope),
+                "message": message,
+                "generation_calls": 0,
+            }
+            return
+
+        if any(inconsistent_prime_extraction_example(c.get("text", "")) for c in retrieved_chunks):
+            reason = "source_example_inconsistent"
+            message = insufficient_evidence_message(reason, search_scope)
+            yield {"type": "token", "content": message}
+            yield {
+                "type": "done",
+                "citations": [],
+                "response_kind": "insufficient_evidence",
+                "insufficient_reason": reason,
+                "search_scope": search_scope,
+                "suggested_actions": build_suggested_actions(reason, search_scope),
+                "message": message,
+                "generation_calls": 0,
+            }
+            return
+
+        if any(differing_value_reference_signatures(c.get("text", ""), query) for c in retrieved_chunks):
+            reason = "source_signature_difference_unverified"
+            message = insufficient_evidence_message(reason, search_scope)
+            yield {"type": "token", "content": message}
+            yield {
+                "type": "done",
+                "citations": [],
+                "response_kind": "insufficient_evidence",
+                "insufficient_reason": reason,
+                "search_scope": search_scope,
+                "suggested_actions": build_suggested_actions(reason, search_scope),
+                "message": message,
+                "generation_calls": 0,
+            }
+            return
+
+        # Citation previews are optional and never answer evidence. Neither QA
+        # mode waits for a separate generation just to translate these previews.
+        read_cached = getattr(self.translator, "get_cached", None)
+        translations = read_cached(retrieved_chunks) if callable(read_cached) else {}
 
         yield {"type": "retrieval_trace", "chunks": retrieved_chunks, "is_broad": is_broad}
 
@@ -1329,6 +1563,13 @@ class PsychologyAgent:
                 "Tóm tắt các chủ đề có trong những đoạn được cung cấp, giữ nguyên điều kiện "
                 "và dẫn mã nguồn cho từng ý. Không khẳng định đã đọc toàn tài liệu nếu chỉ có một phần.\n"
             )
+        elif is_9b_model(model):
+            mode_instruction += (
+                "\nAnswer ONLY user_query. Other passages are candidates, not a list of topics to cover. "
+                "Return only the requested answer in the JSON claims schema. "
+                "Do not repeat an overview before explaining the same items. "
+                "When all requested parts are answered, close the JSON and stop."
+            )
         user_prompt = (
             "<user_query>\n"
             f"{_escape_data_content(query)}\n"
@@ -1389,7 +1630,7 @@ class PsychologyAgent:
             logger.error("Inference exception during primary generation: %s", e)
             yield {
                 "type": "error",
-                "content": "Không thể tạo câu trả lời lúc này. Hãy kiểm tra mô hình cục bộ và thử lại.",
+                "content": runtime_failure_message(e),
                 "code": "model_unavailable",
                 "generation_calls": gen_calls,
                 "response_kind": "technical_error",
@@ -1679,10 +1920,10 @@ class PsychologyAgent:
                         return True, None, "citation_invalid", source_ids
                     # A question may contain the inputs, but cannot substantiate
                     # a numeric result that is absent from the chosen evidence.
-                    def numbers(value):
-                        return {Decimal(n) for n in re.findall(r"(?<![\w])(?:\d+(?:\.\d+)?|\.\d+)", value)}
+                    claim_numbers, claim_unparsed = extract_numeric_content(item_text)
+                    quote_numbers, quote_unparsed = extract_numeric_content(normalized_quote)
 
-                    if not numbers(item_text).issubset(numbers(normalized_quote)):
+                    if not claim_numbers.issubset(quote_numbers) or not claim_unparsed.issubset(quote_unparsed):
                         source_selection_failed = True
                         source_evidence_feedback.append(
                             f"{source_ids[0]}: text có số không nằm trong đoạn đã chọn. "

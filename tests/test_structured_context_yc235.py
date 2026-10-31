@@ -318,7 +318,7 @@ def test_spaced_differential_keeps_full_operand(sign, entity):
     ([1.0, 0.0], [1.0], False), ([1.0, 0.0], RuntimeError('embedding unavailable'), False),
 ])
 def test_selected_page_uses_real_scoped_vectors_without_lexical_bypass(tmp_path, monkeypatch, vector, query_vector, can_answer):
-    # This fixture represents the Windows legacy vector basis; native proof is tested separately.
+    # This fixture represents a current Ollama artifact; native proof is tested separately.
     from types import SimpleNamespace
     from app import searcher as search_module
     monkeypatch.setattr(search_module, "sys", SimpleNamespace(platform="win32"))
@@ -332,7 +332,17 @@ def test_selected_page_uses_real_scoped_vectors_without_lexical_bypass(tmp_path,
         # A different page/document must never supply the selected page score.
         for cid, did, page in [(2,10,3),(3,11,2)]:
             db.execute("INSERT INTO chunks VALUES (?,?,'Other','other.pdf',?,0,?,?)", (cid,did,page,'Điều kiện cân bằng tĩnh là tổng lực bằng không.',struct.pack('2f',1,0)))
+    import hashlib
+    identity = 'ollama-sha256:' + 'a'*64
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE corpus_vector_provenance(chunk_id INTEGER PRIMARY KEY,text_sha256 TEXT,model_digest TEXT,vector_sha256 TEXT,dimensions INTEGER,full_text INTEGER,embedded_at TEXT)')
+        for cid, text, stored in db.execute('SELECT id,text,embedding FROM chunks').fetchall():
+            if stored is not None:
+                db.execute('INSERT INTO corpus_vector_provenance VALUES(?,?,?,?,?,?,?)',
+                    (cid,hashlib.sha256(text.encode()).hexdigest(),identity,
+                     hashlib.sha256(stored).hexdigest(),len(stored)//4,1,'fixture'))
     finder = HybridSearcher(path)
+    finder.ollama.embedding_identity = lambda model: identity
     def get_embedding(*args, **kwargs):
         if isinstance(query_vector, Exception):
             raise query_vector
@@ -366,6 +376,7 @@ def test_selected_page_score_requires_exact_source_identity(searcher, monkeypatc
     with sqlite3.connect(searcher.db_path) as db:
         db.execute('ALTER TABLE chunks ADD COLUMN embedding BLOB')
         db.execute('UPDATE chunks SET embedding=? WHERE id=1', (struct.pack('2f', 1, 0),))
+    searcher.ollama.embedding_identity = lambda model: 'ollama-sha256:'+'a'*64
     searcher.ollama.get_embedding = lambda *args, **kwargs: [1.0, 0.0]
     hit = anchor(searcher)
     hit[field] = value
@@ -384,6 +395,7 @@ def test_selected_page_embedding_never_bypasses_resource_admission(searcher, mon
         calls.append(True)
         return [1.0, 0.0]
     monkeypatch.setattr('app.gpu_lock.gpu_coordinator.acquire_for_inference', unavailable)
+    searcher.ollama.embedding_identity = lambda model: 'ollama-sha256:'+'a'*64
     searcher.ollama.get_embedding = embedding
     hit = anchor(searcher)
     searcher.score_page_chunks([hit], 'Test question', 10, 2, embed_model='test-embedding')

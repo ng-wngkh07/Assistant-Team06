@@ -103,6 +103,8 @@ class NativeEmbeddingClient:
 
     @classmethod
     def available(cls, model_dir: Optional[Path] = None) -> bool:
+        if sys.platform != "darwin":
+            return False
         md = Path(model_dir or MLX_BGE_DIR)
         if not md.is_dir():
             return False

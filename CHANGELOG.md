@@ -14,9 +14,19 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 - Replace runtime assertions across dataset preparation and validation tools with explicit exception gates to ensure enforcement under Python optimization.
 - Fail closed during source page validation when physical page counts cannot be established from existing files.
 - Move manual historical C++ review script inputs from shared temporary directories to repository-local storage.
+- Enforce explicit complete source-bound per-physical-page review coverage (`--page-reviews`) during publisher knowledge-pack export; enumerate physical PDF pages and PPTX slides from original containers, reconcile expected production chunk projections against indexed passages, and fail closed on omitted, duplicate, out-of-range, partial, or HOLD reviews, tampered evidence, or altered indexed passages even when re-embedded vectors are valid.
+- Enforce unambiguous canonical JSON serialization for physical page passage digests, validate contiguous canonical chunk indexing (`0..N-1`) over installed database sequence `ORDER BY chunk_index, id`, and reject out-of-range or extraneous physical page chunks before export in knowledge packs.
+- Validate portable physical-page review coverage and passage digests during pack installation and application distribution bundling (`scripts/build_distribution.py`), preventing unreviewed or modified packs from entering production.
 
 ### Added
 
+- Require source-bound content review and a coverage ledger for every physical page or slide before full-corpus acceptance, including pages without extraction warnings. Preserve unreadable regions and verify repaired passages and affected retrieval data separately.
+- Define production acceptance for the complete agreed real library, usable original citations, precomputed retrieval, reproducible model settings and persistent personal uploads. Track these separately from synthetic test coverage and private training data.
+- Build application distributions from a committed source revision and explicitly approved knowledge packs, with a bundled descriptor and a separate persistent personal library for uploads, retrieval, history and calendar state. Display the actual local source directory and its privacy policy in the library interface.
+- Document source-by-source redistribution and privacy review, full-library coverage reconciliation and separate delivery of public knowledge packs and private training storage.
+- Add an allowlisted publisher knowledge-pack exporter and checked installation into a separate local library. Include approved originals, source chunks and compatible vectors without copying private database tables or running user-side document extraction, embedding or training. Provide separate verified BGE-M3 pack formats for native macOS and Ollama; retain each runtime's exact embedding identity and normalization protocol.
+- Provide a user-operated model check endpoint (`POST /api/model/check`) and sidebar control button that runs genuine local inference on the configured model to confirm runtime execution readiness without changing models.
+- Add native macOS (`Start Study Agent.command`) and Windows (`Start Study Agent.bat`) one-click launch scripts with environment checks and automatic browser opening.
 - Show the last packed context budget, output reserve and omitted-history warning, with an explicit new-chat action that preserves the next draft. Label live draft byte size separately from token usage.
 - Report missing timetable fields, clipped course names and invalid time ranges in editable drafts, including cached results. Keep insufficient-information learning examples separate from positive schedule labels and training approval.
 - Scan Python, JavaScript, GitHub Actions and the standalone Apple Vision Swift helper with CodeQL; compile the helper explicitly on macOS.
@@ -24,6 +34,15 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Changed
 
+- Warn when a supported source comparison shows a function declaration and definition with value versus reference parameters, without assuming whether the functions are intentional overloads or the complete program will link.
+
+- Display original library PDF pages in the document viewer, with extracted text labeled separately because it can omit formulas or illustrations.
+- Broaden easy-difficulty study material generation prompts in `app/study_materials.py` to allow key concept definitions and terms alongside numerical expressions, and eliminate double-counted chat overhead in conservative token estimation so single-question review fits within model capacity.
+- Reject vector rebuilding from obsolete extraction versions or missing/mismatched source-quality records before creating a stage or running the model. Source refreshes update physical paths and retain human acceptance only when native text is unchanged or a valid source-bound review supplies the replacement.
+- Replace arbitrary first-page heading topic extraction with an authored concept taxonomy in `app/topic_catalog.py`, grouping chapters under stable concepts and using FTS5-accelerated discovery with candidate text scoping, Unicode NFC/NFD alias coverage, literal phrase verification, and cached membership. Expand coverage for public originals with broad concepts in astronomy/optics, biology/genetics, chemistry, relational databases, economics, information theory, networking, and measurement/units, qualify thermal entropy to prevent misclassification of Shannon entropy, and add precise aliases for binary search and sample mean.
+- Increase the native MLX 9B answer generation token budget to 1600 tokens for standard mode and 2000 tokens for careful mode to provide headroom for structured answers with citations, noting that completion remains bounded by model throughput and context constraints.
+- Configure the native MLX model worker subprocess timeout with a 600s default to accommodate 4000-token prompt prefill and full generation on Apple Silicon 9B models.
+- Exclude table-of-contents, index, and reference passages from learning theory chunks to avoid generating questions from non-instructional boilerplate.
 - Install IANA timezone data for calendar recurrence on Windows and isolate mocked native tests from host model assets and worker network guards.
 
 - Bound native text prefill to 128 tokens per step to reduce transient memory, and report model load, prefill and generation diagnostics without dropping prompt tokens.
@@ -36,12 +55,38 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 - Replace large attachment previews in the chat composer with compact, keyboard-accessible file banners. Keep explicit document opening and removal, reduce composer height and preserve independent message scrolling.
 - Add GitHub Actions security workflows for actionlint syntax linting, Dependency Review and Gitleaks secret detection, with workflow instructions in testing documentation.
 - Default QA to Fast, suggest Careful for complex requests without resubmitting the question, and preserve explicit mode choices. Practice keeps its fixed verification workflow.
-- Select the pinned local MLX Qwen3.5 9B 4-bit base on Apple Silicon with an 8192-token operational budget. Keep legacy 3B identity and adapter compatibility separate; model installation does not authorize training or adapter activation.
+- Select the pinned local MLX Qwen3.5 9B 4-bit base on Apple Silicon with an 8192-token operational budget. Reject retired model aliases and remove incompatible adapter execution paths; model installation does not authorize training or adapter activation.
 - Prefer paragraph, line, sentence and word boundaries when indexing new text, retaining exact source slices and configured overlap. After accepted hybrid retrieval, add bounded adjacent chunks from the same document, filename and page as independent citation sources; preserve existing indexes and evidence gates.
 - Consume canonical material filenames after upload in the client interface for preview, active attachment scoping, QA, downloads, and generation.
 
 ### Fixed
 
+- Decline document answers, practice questions, and library study-material generation when a selected page still needs review for potentially missing formulas or diagrams, and direct learners to the original page or another source instead of presenting an uncertain transcription as fact.
+- Warn in document answers and decline library study-material generation when a supported two-file prime-number example has an output list that does not match its input.
+- Set selected knowledge-pack paths before importing application configuration, start an explicitly requested Ollama service before pack verification, and select query/index embeddings from the installed corpus identity.
+
+- Recover knowledge-pack installation after failed artifact reads by validating receipt presence rather than directory existence, safely cleaning up only wholly empty directory trees while preserving nonempty databases and user data.
+- Reject standalone Markdown headings and maintain per-document heading hierarchy stacks to exclude child sections of exercise bodies, answer keys, references, and untrusted injection instructions from learning theory evidence, and add narrow unit-conversion aliases for area and volume conversion to reach substantive theory passages.
+- Bind generated practice quotations to exact excerpts from the selected passage. Preserve distinct passages with repeated page headers and prioritize explicit source rules for hard-question candidates; source, answer and difficulty review remain required.
+- Keep stale retired model settings unavailable in health, status and model discovery even if those old weights are still installed.
+- Constrain practice question and review output to an explicit JSON schema on native MLX and Ollama, preventing missing braces and misplaced answer fields. Source/difficulty verification still rejects unsupported questions. Missing native completion metadata no longer counts as a successful stop; the supported runtime requires streaming finish metadata.
+- Retire obsolete 3B/7B training authorization and memory-estimate code. Current diagnostics inspect the nested Qwen3.5 architecture, while training remains blocked pending a separately reviewed 9B protocol. Preserve exact token, source and paired retention review gates; absent model identity is reported as unknown rather than labeled with an old repository/revision.
+- Health coverage checks the embedding artifact actually configured on disk in a worker thread, so changed weights cannot leave stale vectors labeled healthy or block the web event loop during validation.
+- Fall back to keyword retrieval when the optional embedding provider cannot establish its actual artifact identity or execute a query embedding, rather than failing the entire question-answering request.
+- Require medium/hard study questions to pass independent source, answer and difficulty checks. Report insufficient verified output explicitly instead of silently substituting easy cloze questions under a harder label.
+- Expose truthful configured-index vector coverage (`coverage_ratio`, `compatible_native_chunks`, `status`) and degraded keyword fallback status in `/api/health` separately from installed embedding artifact readiness.
+- Gate hybrid retrieval and semantic candidate similarity under partial native indexing to drop nearest-neighbor noise from unrelated topics while preserving valid synonyms and diverse document selections.
+- Elevate substantive authored concept explanations, definitions, property tables, and code syntax in learning quiz source selection while filtering out covers, conventions, and glossary noise, and deduplicating identical source passages.
+- Scope learning exercise discovery to the queried concept or its local instructional section within broader textbooks, eliminating unrelated elementary programming exercises from broad reference manuals.
+- Prefer direct read-only original PDF page extraction in document inspection, merging chunk overlap conservatively on fallback without trigger-reindexing side effects, and report truthful chunk counts in document lookup.
+- Detect database and WAL file modifications via filesystem and header change-counter fingerprints to reliably invalidate catalog topic caching on same-length text updates across separate connections.
+- Fix Windows batch startup script control flow by replacing in-block goto labels with subroutines and respecting custom Ollama daemon URL configurations.
+- Honor requested question count (1 to 10) and difficulty levels ("easy", "medium", "hard") in the learning UI and backend, retrying truncated batches boundedly with smaller batches while preserving previously verified questions, and displaying the explicit partial count and selected difficulty inside the modal dialog.
+- Allocate practice generation time by the requested number of batches while retaining a 180-second ceiling per inference call. Require concrete source-rule scenarios for hard questions and prohibit shortened, noncontiguous evidence quotes.
+- Use request-local passage handles for practice generation and resolve them to exact database sources on the server. Reject unknown handles; keep training-example prompt/target preparation on the same contract, requiring regeneration of older preparation outputs before any future training.
+- Strip leading Vietnamese enumeration phrasing (e.g. "Bốn tính chất cơ bản của...") and add OOP aliases in query concept extraction so hybrid retrieval targets the actual subject rather than generic counting words.
+- Distinguish installed model artifacts from executable runtime capability (such as GPU Metal access) in `/api/health`, preventing misleading missing-model messages when operating system restrictions deny Metal access.
+- Differentiate database read failures from model inference or startup errors, reporting actionable retrieval-specific guidance ("Không thể truy xuất cơ sở dữ liệu học tập...") while classifying database read, truncated generation, and runtime execution errors in runtime health.
 - Exclude numbered answer labels from factual audits while preserving numeric claims. Prefer compact evidence identifiers that resolve to exact source passages, retaining full claim coverage and fail-closed verification.
 - Request intermediate equalities for explicitly requested worked calculations, and clarify the two-endpoint source-line format during bounded citation repair.
 - Reject a single requested limit replaced by a neighboring quotient in the same source. Keep formula-transcription repair separate from extra line-format guidance, preserving the requested function and its condition.

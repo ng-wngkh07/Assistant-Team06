@@ -12,4 +12,6 @@ If a credential is exposed, revoke it at the provider first. Coordinate remediat
 
 Keep `.env`, personal uploads, conversations, SQLite files, embeddings, datasets, weights and private reports out of Git. Use synthetic test data. Preserve original documents and unresolved OCR states. Code licensing does not grant permission to redistribute source documents or models.
 
+Public knowledge packs deliberately contain readable originals and source text. Review their rights, privacy and exact coverage before release; vectors do not conceal private content. Follow the [document distribution procedure](docs/data-distribution.md) and reconstruct an allowlisted pack rather than publishing a working database.
+
 A past scan or a passing test suite is not a certification that a later revision is free from vulnerabilities. Review the exact public diff before publication.

@@ -44,7 +44,8 @@ def isolated_study_sources(tmp_path, monkeypatch, native_context_metadata):
     monkeypatch.setattr(TrainedModelClient, 'available', classmethod(lambda cls: False))
     indexer = KnowledgeIndexer(db_path=db, src_dir=src)
     indexer.index_all(ocr=False, embed_model=None)
-    monkeypatch.setattr(server, 'document_lookup', DocumentLookup(db_path=db, src_dir=src))
+    # Follow patched config as the production singleton does, including per-test library changes.
+    monkeypatch.setattr(server, 'document_lookup', DocumentLookup())
     # materials_cache is a snapshot property; replace the actual session store.
     monkeypatch.setattr(study_material_manager, "_materials", {})
     monkeypatch.setattr(study_material_manager, "_raw_files", {})
@@ -128,14 +129,7 @@ def test_deterministic_fallback_quiz_and_flashcards():
     ]
     
     quiz = manager.fallback_generate_quiz(sample_pages, count=3)
-    assert len(quiz) >= 1
-    for q in quiz:
-        assert "question" in q
-        assert "choices" in q and len(q["choices"]) == 4
-        assert q["correct_answer"] in ["A", "B", "C", "D"]
-        assert "evidence_quote" in q
-        assert "page_num" in q
-        assert q["page_num"] in [1, 2]
+    assert quiz == []  # Retired: generic distractors must never masquerade as a quiz.
 
     flashcards = manager.fallback_generate_flashcards(sample_pages, count=5)
     assert len(flashcards) >= 1
@@ -151,6 +145,7 @@ def test_api_upload_material_text_file(client):
     b64 = "data:text/plain;base64," + base64.b64encode(content.encode("utf-8")).decode("utf-8")
     
     res = client.post("/api/materials/upload", json={
+        "difficulty": "easy",
         "filename": "lich_su.txt",
         "file_base64": b64
     })
@@ -159,7 +154,8 @@ def test_api_upload_material_text_file(client):
     assert data["status"] == "success"
     material = data["material"]
     assert material["filename"] == "lich_su.txt"
-    assert len(material["quiz"]) >= 1
+    assert material["quiz"] == []
+    assert material["generation"]["quiz"] == "unavailable"
     assert len(material["flashcards"]) >= 1
     assert material["id"] in study_material_manager.materials_cache
 
@@ -169,6 +165,7 @@ def test_api_get_material_by_id(client):
     b64 = base64.b64encode(content.encode("utf-8")).decode("utf-8")
     
     upload_res = client.post("/api/materials/upload", json={
+        "difficulty": "easy",
         "filename": "algorithms.txt",
         "file_base64": b64
     })
@@ -219,16 +216,18 @@ def test_api_generate_from_library_document(client):
 
     try:
         res = client.post("/api/materials/generate-from-library", json={
+        "difficulty": "easy",
             "filename": test_filename
         })
         assert res.status_code == 200
         data = res.json()
         assert data["status"] == "success"
         material = data["material"]
-        assert len(material["quiz"]) >= 1
+        assert material["quiz"] == []
+        assert material["generation"]["quiz"] == "unavailable"
         assert len(material["flashcards"]) >= 1
-        assert material["quiz"][0]["page_num"] == 1
-        assert "Newton" in material["quiz"][0]["evidence_quote"]
+        assert material["flashcards"][0]["page_num"] == 1
+        assert "Newton" in material["flashcards"][0]["evidence_quote"]
     finally:
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
@@ -256,6 +255,7 @@ def test_api_upload_image_png_and_jpeg(client, monkeypatch):
     b64_png = "data:image/png;base64," + base64.b64encode(buf_png.getvalue()).decode("ascii")
 
     res_png = client.post("/api/materials/upload", json={
+        "difficulty": "easy",
         "filename": "dinh_ly_pythagoras.png",
         "file_base64": b64_png,
     })
@@ -263,7 +263,8 @@ def test_api_upload_image_png_and_jpeg(client, monkeypatch):
     data_png = res_png.json()
     assert data_png["status"] == "success"
     assert data_png["material"]["filename"] == "dinh_ly_pythagoras.png"
-    assert len(data_png["material"]["quiz"]) >= 1
+    assert data_png["material"]["quiz"] == []
+    assert data_png["material"]["generation"]["quiz"] == "unavailable"
     assert len(data_png["material"]["flashcards"]) >= 1
 
     # 2. JPEG support with explicit recognized text; unreadable images are rejected separately.
@@ -272,6 +273,7 @@ def test_api_upload_image_png_and_jpeg(client, monkeypatch):
     b64_jpg = "data:image/jpeg;base64," + base64.b64encode(buf_jpg.getvalue()).decode("ascii")
 
     res_jpg = client.post("/api/materials/upload", json={
+        "difficulty": "easy",
         "filename": "so_do_tam_ly_hoc_nhan_thuc.jpg",
         "file_base64": b64_jpg,
     })
@@ -279,7 +281,8 @@ def test_api_upload_image_png_and_jpeg(client, monkeypatch):
     data_jpg = res_jpg.json()
     assert data_jpg["status"] == "success"
     assert data_jpg["material"]["filename"] == "so_do_tam_ly_hoc_nhan_thuc.jpg"
-    assert len(data_jpg["material"]["quiz"]) >= 1
+    assert data_jpg["material"]["quiz"] == []
+    assert data_jpg["material"]["generation"]["quiz"] == "unavailable"
     assert len(data_jpg["material"]["flashcards"]) >= 1
 
 
@@ -304,13 +307,15 @@ def test_api_upload_image_with_primary_ocr_mocked(client, monkeypatch):
     )
 
     res = client.post("/api/materials/upload", json={
+        "difficulty": "easy",
         "filename": "bai_giang_tri_nho.png",
         "file_base64": b64_png,
     })
     assert res.status_code == 200
     material = res.json()["material"]
     assert material["total_pages"] == 1
-    assert len(material["quiz"]) >= 1
+    assert material["quiz"] == []
+    assert material["generation"]["quiz"] == "unavailable"
     assert len(material["flashcards"]) >= 1
 
 
@@ -379,10 +384,11 @@ def test_attachment_preview_card_modal_structure_and_centered_chat_layout(client
     assert len(docs) >= 1
     first_doc_name = docs[0]["filename"]
 
-    gen_res = client.post("/api/materials/generate-from-library", json={"filename": first_doc_name})
+    gen_res = client.post("/api/materials/generate-from-library", json={"filename": first_doc_name, "difficulty":"easy"})
     assert gen_res.status_code == 200
     mat = gen_res.json()["material"]
-    assert len(mat["quiz"]) >= 1
+    assert mat["quiz"] == []
+    assert mat["generation"]["quiz"] == "unavailable"
     assert len(mat["flashcards"]) >= 1
     assert len(mat.get("pages", [])) >= 1
 
@@ -415,6 +421,7 @@ def test_ingest_to_src_without_auto_quiz_and_on_demand_generate(client, tmp_path
 
     # Step 1: Add file with generate_study_set=False, persist_to_src=True
     res = client.post("/api/materials/upload", json={
+        "difficulty": "easy",
         "filename": "cay_nhi_phan.txt",
         "file_base64": b64,
         "generate_study_set": False,
@@ -439,11 +446,12 @@ def test_ingest_to_src_without_auto_quiz_and_on_demand_generate(client, tmp_path
         assert chunks >= 1
 
     # Step 2: Click dedicated button to generate Quiz & Flashcard on demand
-    gen_res = client.post("/api/materials/generate-from-library", json={"filename": "cay_nhi_phan.txt"})
+    gen_res = client.post("/api/materials/generate-from-library", json={"filename": "cay_nhi_phan.txt", "difficulty":"easy"})
     assert gen_res.status_code == 200
     gen_mat = gen_res.json()["material"]
     assert gen_mat["study_generated"] is True
-    assert len(gen_mat["quiz"]) >= 1
+    assert gen_mat["quiz"] == []
+    assert gen_mat["generation"]["quiz"] == "unavailable"
     assert len(gen_mat["flashcards"]) >= 1
 
 
@@ -456,6 +464,7 @@ def test_upload_webp_study_material(client, monkeypatch):
     img.save(buf, format="WEBP")
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
     res = client.post("/api/materials/upload", json={
+        "difficulty": "easy",
         "filename": "diagram.webp",
         "file_base64": b64,
         "generate_study_set": True,
@@ -466,7 +475,8 @@ def test_upload_webp_study_material(client, monkeypatch):
     assert res.status_code == 200
     mat = res.json()["material"]
     assert mat["filename"] == "diagram.webp"
-    assert len(mat["quiz"]) >= 1
+    assert mat["quiz"] == []
+    assert mat["generation"]["quiz"] == "unavailable"
     assert len(mat["flashcards"]) >= 1
 
 
@@ -1037,6 +1047,7 @@ def test_successful_session_only_upload_keeps_original_download(client, generate
     from app import config as cfg
     raw = b'Session-only source MEMORY-418 must retain its original download after successful extraction without durable indexing.'
     response = client.post('/api/materials/upload', json={
+        "difficulty": "easy",
         'filename': 'session-only-source.txt',
         'file_base64': base64.b64encode(raw).decode(),
         'persist_to_src': False,
@@ -1084,8 +1095,8 @@ def test_quiz_rejects_weaker_nonzero_option_next_to_positive_condition():
     source = PDFExtractionResult(filename="synthetic.txt", filepath=Path("synthetic.txt"))
     source.extracted_pages = [{"page_num": 1, "text": text}]
     source.total_chars = len(text); source.total_pages = 1
-    result = StudyMaterialManager(Client()).generate_materials_from_pages(source, model="test-ollama", quiz_count=1)
-    assert result["generation"]["quiz"] == "extractive_fallback"
+    result = StudyMaterialManager(Client()).generate_materials_from_pages(source, model="test-ollama", quiz_count=1, difficulty="easy")
+    assert result["generation"]["quiz"] == "unavailable"
 
 
 
@@ -1126,6 +1137,7 @@ def test_uploaded_material_gets_native_vectors_without_any_daemon_probe(client, 
     monkeypatch.setattr(NativeEmbeddingClient, 'get_identity', lambda self: BGE_NATIVE_IDENTITY)
     source = 'Entropy Shannon đo độ bất định của biến ngẫu nhiên rời rạc hữu hạn.'
     response = client.post('/api/materials/upload', json={
+        "difficulty": "easy",
         'filename': 'native-entropy.txt',
         'file_base64': base64.b64encode(source.encode()).decode(),
     })
@@ -1168,3 +1180,174 @@ def test_native_upload_preserves_busy_admission_before_vector_inference(client, 
     assert response.headers['retry-after'] == '2'
     assert not (cfg.SRC_DIR / 'native-busy-source.txt').exists()
     assert calls == []
+
+
+def test_resolve_safe_source_file_nested_and_traversal(tmp_path):
+    from app.study_materials import resolve_safe_source_file
+    nested_dir = tmp_path / "src" / "cslt" / "tieng Viet"
+    nested_dir.mkdir(parents=True)
+    sample_file = nested_dir / "lecture_2D_2.pptx"
+    sample_file.write_bytes(b"PK\x03\x04test_presentation")
+
+    search_dirs = [tmp_path / "src"]
+
+    # Nested path as stored in documents
+    found1 = resolve_safe_source_file("cslt/tieng Viet/lecture_2D_2.pptx", search_dirs=search_dirs)
+    assert found1 == sample_file
+
+    # Path with leading src/
+    found2 = resolve_safe_source_file("src/cslt/tieng Viet/lecture_2D_2.pptx", search_dirs=search_dirs)
+    assert found2 == sample_file
+
+    # Just basename
+    found3 = resolve_safe_source_file("lecture_2D_2.pptx", search_dirs=search_dirs)
+    assert found3 == sample_file
+
+    # Path traversal attack must be rejected
+    assert resolve_safe_source_file("../../../secret.txt", search_dirs=search_dirs) is None
+    assert resolve_safe_source_file("cslt/../../etc/passwd", search_dirs=search_dirs) is None
+
+
+def test_merge_chunk_texts_provenance_and_repeats():
+    from app.study_materials import StudyMaterialManager
+    manager = StudyMaterialManager()
+
+    # 1. With exact char_start / char_end provenance
+    chunks_with_prov = [
+        {"text": "Đoạn văn mở đầu khái niệm A.", "char_start": 0, "char_end": 28},
+        {"text": "khái niệm A. Phần tiếp nối giải thích chi tiết.", "char_start": 16, "char_end": 62},
+    ]
+    merged_prov = manager._merge_chunk_texts(chunks_with_prov)
+    assert merged_prov == "Đoạn văn mở đầu khái niệm A. Phần tiếp nối giải thích chi tiết."
+
+    # 2. Without provenance: genuine repeats must NOT be stripped merely because edges match
+    chunks_without_prov = [
+        "Ví dụ 1: Tính toán giá trị entropy trong điều kiện A.",
+        "Ví dụ 1: Tính toán giá trị entropy trong điều kiện B.",
+    ]
+    merged_repeats = manager._merge_chunk_texts(chunks_without_prov)
+    assert "điều kiện A" in merged_repeats
+    assert "điều kiện B" in merged_repeats
+    assert merged_repeats.count("Ví dụ 1:") == 2
+
+
+def test_difficulty_gate_hard_rejects_easy_cloze_and_fallback():
+    from app.pdf_extractor import PDFExtractionResult
+    from app.study_materials import StudyMaterialManager, StudyMaterialError
+    class OfflineClient:
+        def check_health(self): return False
+    manager = StudyMaterialManager(OfflineClient())
+    res = PDFExtractionResult(filename="entropy.txt", filepath=Path("entropy.txt"))
+    res.extracted_pages = [{"page_num": 1, "text": "Entropy là độ bất định trung bình của một biến ngẫu nhiên."}]
+    res.total_pages = 1
+    res.total_chars = len(res.extracted_pages[0]["text"])
+
+    # Fallback fill-in questions are strictly 'easy'; requesting 'hard' must reject them
+    with pytest.raises(StudyMaterialError, match="Không có câu hỏi đạt kiểm định nguồn và độ khó 'khó'"):
+        manager.generate_materials_from_pages(res, quiz_count=3, difficulty="hard")
+
+
+def test_difficulty_gate_partial_count_with_warning(monkeypatch):
+    """When only 1 hard question passes verification for count=3, honest partial set is returned."""
+    import json
+    from app.pdf_extractor import PDFExtractionResult
+    from app.study_materials import StudyMaterialManager
+
+    # Authored two-rule case: override changes the thermal sensor only.
+    rules = ("Máy chỉ chạy khi cửa bảo vệ đóng và khóa an toàn đã cài. "
+             "Nút ghi đè chỉ bỏ qua cảm biến nhiệt, không thay điều kiện cửa hoặc khóa.")
+    hard_q = {
+        "question":"Phân tích tình huống cửa đã đóng, khóa chưa cài và nút ghi đè đã bật: máy có được chạy không?",
+        "choices":{"A":"Không được chạy do thiếu khóa an toàn", "B":"Được chạy vì ghi đè bỏ qua khóa",
+                   "C":"Được chạy vì cửa đã đóng", "D":"Mở cửa thì được chạy"},
+        "answer":"A", "explanation":"Thiếu khóa nên chưa đủ điều kiện chạy. Ghi đè chỉ bỏ qua cảm biến nhiệt.",
+        "evidence_quote":rules, "page_num":1, "difficulty":"hard",
+    }
+    easy_q = {
+        "question": "Entropy là gì theo định nghĩa của tài liệu?",
+        "choices": {"A": "Độ bất định", "B": "Nhiệt độ", "C": "Khối lượng", "D": "Năng lượng"},
+        "answer": "A",
+        "evidence_quote": "Entropy là độ bất định trung bình của một biến ngẫu nhiên.",
+        "page_num": 1,
+        "difficulty": "easy",
+    }
+
+    class MockModelClient:
+        last_done_reason = "stop"
+        def check_health(self): return True
+        def chat_complete(self, *args, **kwargs):
+            self.last_done_reason = "stop"
+            prompt = kwargs['messages'][0]['content']
+            if 'Kiểm định độc lập từng câu' in prompt:
+                item = json.JSONDecoder().raw_decode(prompt.split('Dữ liệu cần kiểm định:\n',1)[1])[0][0]
+                is_match = (item['question'] == hard_q['question'])
+                return json.dumps({'checks':[{'index':1,
+                    'input_audit': 'Đề bài nêu rõ đầy đủ các điều kiện cửa, khóa và ghi đè.' if is_match else 'Câu hỏi khái niệm không có dữ kiện bài tập tình huống.',
+                    'independent_solution': 'Suy luận độc lập từ hai quy tắc nguồn: thiếu khóa nên máy không được chạy.' if is_match else 'Nhận diện khái niệm theo một câu định nghĩa.',
+                    'choice_comparison': 'Lựa chọn A là đáp án duy nhất phù hợp.' if is_match else 'Lựa chọn A là định nghĩa trực tiếp.',
+                    'explanation_audit': 'Giải thích phân tích đúng cả hai điều kiện theo nguồn.' if is_match else 'Giải thích chỉ nhắc lại định nghĩa.',
+                    'supported':True,'explanation_supported':True,
+                    'unique_answer':True,'qualifiers_preserved':True,'verified_answer':'A',
+                    'difficulty_matches':is_match}]})
+            return json.dumps({
+                "questions": [hard_q, easy_q],
+                "flashcards": [{"front": "Khái niệm", "back": "Định nghĩa", "evidence_quote": "Entropy là độ bất định trung bình của một biến ngẫu nhiên.", "page_num": 1}]
+            })
+
+    res = PDFExtractionResult(filename="test.txt", filepath=Path("test.txt"))
+    text = (
+        "Entropy là độ bất định trung bình của một biến ngẫu nhiên. "
+        + rules
+    )
+    res.extracted_pages = [{"page_num": 1, "text": text}]
+    res.total_pages = 1
+    res.total_chars = len(text)
+
+    manager = StudyMaterialManager(MockModelClient())
+    record = manager.generate_materials_from_pages(res, model="test-ollama", quiz_count=3, difficulty="hard")
+    assert record["requested_quiz_count"] == 3
+    assert record["actual_quiz_count"] == 1
+    assert record["complete"] is False
+    assert record["difficulty"] == "hard"
+    assert "1/3 câu" in record["warning"]
+    assert record["quiz"][0]["difficulty"] == "hard"
+
+
+def test_generate_from_library_read_only_no_index_mutation(tmp_path, monkeypatch):
+    import sqlite3
+    import app.config as cfg
+    from app.study_materials import StudyMaterialManager
+    manager = StudyMaterialManager()
+
+    doc_file = cfg.SRC_DIR / "sample_guide.txt"
+    doc_file.write_text("Hướng dẫn học tập: Cấu trúc dữ liệu và giải thuật trong lập trình.", encoding="utf-8")
+
+    with sqlite3.connect(cfg.DB_PATH) as db:
+        initial_docs = db.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        initial_chunks = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+
+    record = manager.generate_from_library_document(filename="sample_guide.txt", quiz_count=2, difficulty="easy")
+    assert record["filename"] == "sample_guide.txt"
+
+    with sqlite3.connect(cfg.DB_PATH) as db:
+        final_docs = db.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        final_chunks = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+
+    # Database must remain untouched (safe read-only physical page extraction)
+    assert initial_docs == final_docs
+    assert initial_chunks == final_chunks
+
+
+def test_api_generate_from_library_carries_controls(client, monkeypatch):
+    seen = []
+    def capture(extracted, **kwargs):
+        seen.append(kwargs)
+        return {'id':'transport-fixture','filename':extracted.filename,'quiz':[],'flashcards':[]}
+    monkeypatch.setattr(study_material_manager,'generate_materials_from_pages',capture)
+    response = client.post("/api/materials/generate-from-library", json={
+        "filename":"synthetic.txt", "quiz_count":5, "flashcard_count":7, "difficulty":"medium"})
+    assert response.status_code == 200, response.text
+    assert len(seen) == 1
+    assert seen[0]['quiz_count'] == 5
+    assert seen[0]['flashcard_count'] == 7
+    assert seen[0]['difficulty'] == 'medium'

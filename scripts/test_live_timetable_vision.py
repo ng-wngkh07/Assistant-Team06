@@ -1,4 +1,4 @@
-"""Live evaluation of local Qwen2.5-VL 3B timetable extraction against synthetic oracle images.
+"""Live evaluation of the current local vision model timetable extraction against synthetic oracle images.
 
 Implements S03 verification from docs/project/TIMETABLE_VISION_AND_DATA_2026-10-05.md.
 Uses purely synthetic schedules (no personal data), evaluates course/day/start/end/room accuracy.
@@ -189,7 +189,7 @@ def evaluate_extraction(predicted_entries, oracle_entries):
 
 def main():
     print("=== LIVE VLM TIMETABLE BENCHMARK (S03) ===")
-    print("Model: qwen2.5vl:3b via Ollama (temperature=0, keep_alive=0s)")
+    print("Model: configured local vision engine; inspect runtime digest in the result")
     out_dir = BASE_DIR / "data" / "evaluation" / "timetable-20261005"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -208,7 +208,7 @@ def main():
         {"weekday": 5, "course": "Vat ly dai cuong 1", "start_time": "08:00", "end_time": "10:00", "room": "D105"},
     ]
 
-    print("Executing live extraction on Image 1 via qwen2.5vl:3b...")
+    print("Executing live extraction on Image 1 via the configured local vision engine...")
     t0 = time.time()
     res1 = timetable_vision.call_vlm_extract(
         image_bytes=img1_bytes,
@@ -238,7 +238,7 @@ def main():
         {"weekday": 4, "course": "Toan roi rac", "start_time": None, "end_time": None, "period": "7-9", "room": "Hoi truong B"},
     ]
 
-    print("Executing live extraction on Image 2 via qwen2.5vl:3b...")
+    print("Executing live extraction on Image 2 via the configured local vision engine...")
     t0 = time.time()
     res2 = timetable_vision.call_vlm_extract(
         image_bytes=img2_bytes,

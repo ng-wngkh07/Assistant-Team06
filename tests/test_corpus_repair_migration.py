@@ -60,3 +60,34 @@ def test_changed_pdf_is_rejected_without_touching_original(tmp_path):
         module.repair(original,tmp_path/'shadow.db',src,tmp_path,tmp_path/'report.json')
     assert original.read_bytes() == before
     assert json.loads((tmp_path/'report.json').read_text())['status'] == 'FAILED_NOT_PUBLISHED'
+
+
+def test_new_native_text_does_not_inherit_old_human_acceptance(tmp_path):
+    original, src, _ = fixture_db(tmp_path)
+    shadow = tmp_path / 'shadow.db'
+    module.repair(original, shadow, src, tmp_path, tmp_path / 'report.json')
+    with sqlite3.connect(shadow) as db:
+        assert db.execute('SELECT state FROM corpus_source_pages').fetchone()[0] == 'native_text_extracted'
+        assert db.execute('SELECT review_path FROM corpus_source_pages').fetchone()[0] == ''
+
+
+def test_repair_refreshes_current_original_path_without_changing_identity(tmp_path):
+    original, src, pdf = fixture_db(tmp_path)
+    with sqlite3.connect(original) as db:
+        db.execute("UPDATE documents SET filepath='/obsolete/location/code.pdf'")
+    shadow = tmp_path / 'shadow.db'
+    module.repair(original, shadow, src, tmp_path, tmp_path / 'report.json')
+    with sqlite3.connect(shadow) as db:
+        assert db.execute('SELECT id,filename,filepath FROM documents').fetchone() == (41, 'code.pdf', str(pdf.resolve()))
+
+
+def test_native_refresh_preserves_pending_capture_and_hold_state(tmp_path):
+    original, src, _ = fixture_db(tmp_path)
+    with sqlite3.connect(original) as db:
+        db.execute("UPDATE corpus_source_pages SET state='ocr_pending_review'")
+    shadow = tmp_path / 'shadow.db'
+    module.repair(original, shadow, src, tmp_path, tmp_path / 'report.json')
+    with sqlite3.connect(shadow) as db:
+        assert db.execute('SELECT state FROM corpus_source_pages').fetchone()[0] == 'ocr_pending_review'
+        assert db.execute('SELECT text FROM chunks').fetchone()[0] == 'class Sinh Vien { int ho Ten; };'
+        assert db.execute('SELECT needs_review FROM corpus_page_quality').fetchone()[0] == 1

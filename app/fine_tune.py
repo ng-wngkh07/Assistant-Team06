@@ -1,24 +1,18 @@
-"""Launch a real MLX LoRA fine-tune, keeping the training environment separate."""
+"""Audit legacy training requests; execution is retired pending a reviewed 9B protocol."""
 
 import argparse
 import hashlib
 import json
 import logging
 import math
-import os
-import re
-import subprocess
 from pathlib import Path
 from typing import Optional
 
 from app.config import BASE_DIR, TRAINING_MODEL_DIR
-from app.corrective_training import validate_corrective_trial
 from app.gpu_lock import GPULockManager, gpu_coordinator
-from app.memory_preflight import LiveMemoryMonitor, get_hardware_memory_profile
 from app.run_ledger import (
     RunLedger, run_ledger,
-    STATUS_CREATED, STATUS_PREFLIGHT, STATUS_RUNNING,
-    STATUS_COMPLETED, STATUS_FAILED, STATUS_OOM,
+    STATUS_PREFLIGHT, STATUS_FAILED,
     STATUS_REJECTED, STATUS_KILLED_ABNORMAL,
 )
 
@@ -48,49 +42,6 @@ def _get_active_ledger(data_dir: Path, explicit_ledger: Optional[RunLedger] = No
         test_runs = data_dir.parent / "test_runs"
         return RunLedger(runs_dir=test_runs, index_file=test_runs / "index.jsonl")
     return run_ledger
-
-
-def _stop_child_process_bounded(proc, timeout_sec: float = 5.0) -> Optional[int]:
-    """Gracefully terminate child process with bounded wait, escalate to kill if necessary, and reap."""
-    if not proc:
-        return None
-    try:
-        if hasattr(proc, "poll") and proc.poll() is not None:
-            return proc.returncode
-    except Exception:
-        pass
-
-    try:
-        if hasattr(proc, "terminate"):
-            proc.terminate()
-    except (ProcessLookupError, OSError):
-        return getattr(proc, "returncode", None)
-    except Exception:
-        pass
-
-    try:
-        if hasattr(proc, "wait"):
-            return proc.wait(timeout=timeout_sec)
-    except (subprocess.TimeoutExpired, TypeError):
-        pass
-    except Exception:
-        pass
-
-    try:
-        if hasattr(proc, "kill"):
-            proc.kill()
-    except (ProcessLookupError, OSError):
-        return getattr(proc, "returncode", None)
-    except Exception:
-        pass
-
-    try:
-        if hasattr(proc, "wait"):
-            return proc.wait(timeout=timeout_sec)
-    except Exception:
-        pass
-
-    return getattr(proc, "returncode", None)
 
 
 def train(data_dir: Path, iterations: int = 80, num_layers: int = 4,
@@ -131,8 +82,6 @@ def train(data_dir: Path, iterations: int = 80, num_layers: int = 4,
     )
     run_id = run_record["run_id"]
 
-    monitor: Optional[LiveMemoryMonitor] = None
-    proc: Optional[subprocess.Popen] = None
     terminal_status_set = False
 
     try:
@@ -251,297 +200,17 @@ def train(data_dir: Path, iterations: int = 80, num_layers: int = 4,
         # Phase 3: Preflight checks
         active_ledger.update_status(run_id, STATUS_PREFLIGHT)
 
-        from app.preflight_7b import inspect_model_architecture
-        arch_info = inspect_model_architecture(model_dir)
-        model_type = arch_info.get("model_type")
-
-        trial = validate_corrective_trial(data_dir, model_dir, adapter_dir, approval, run_config)
-
-        if model_type == "7B":
-            from app.preflight_7b import preflight_check_7b_training
-            pre = preflight_check_7b_training(model_dir=model_dir, batch_size=1,
-                                              num_layers=num_layers, max_seq_length=max_seq_length,
-                                              grad_checkpoint=True)
-        else:
-            from app.memory_preflight import preflight_check_memory_training
-            pre = preflight_check_memory_training(model_dir=model_dir, dataset_dir=data_dir,
-                                                  batch_size=1, num_layers=num_layers,
-                                                  max_seq_length=max_seq_length,
-                                                  grad_checkpoint=True)
-
-        if not pre.get("eligible_for_training"):
-            raise RuntimeError(f"CHẶN HUẤN LUYỆN: {pre.get('violations')}")
-
-        # Read the live corpus before preparing output or acquiring any GPU lock.
-        from app.corpus_readiness import require_complete_corpus
-        require_complete_corpus(BASE_DIR)
-        from app.corpus_scope import verify_dataset_scope
-        verify_dataset_scope(data_dir, root=BASE_DIR)
-        from app.dataset_balance import require_balanced_dataset
-        require_balanced_dataset(BASE_DIR, data_dir, model_dir)
-
-        python = BASE_DIR / ".train-venv" / "bin" / "python"
-        if not python.exists():
-            raise FileNotFoundError("Chưa cài .train-venv với mlx-lm")
-
-        # Phase 4: Training execution setup
-        adapter_dir.mkdir(parents=True, exist_ok=True)
-        log_file_path = adapter_dir / "training.log"
-
-        command = [
-            str(python), "-m", "mlx_lm.lora",
-            "--model", str(model_dir),
-            "--train", "--data", str(data_dir),
-            "--adapter-path", str(adapter_dir),
-            "--fine-tune-type", "lora",
-            "--mask-prompt",
-            "--batch-size", "1",
-            "--num-layers", str(num_layers),
-            "--iters", str(iterations),
-            "--learning-rate", str(learning_rate),
-            "--max-seq-length", str(max_seq_length),
-            "--grad-checkpoint",
-            "--steps-per-report", "5",
-            "--steps-per-eval", str(max(10, min(40, iterations))),
-            "--save-every", str(max(10, min(40, iterations))),
-        ]
-        print(json.dumps({"train_examples": train_size, "valid_examples": valid_size, "command": command}, ensure_ascii=False), flush=True)
-
-        extra_info = {
-            "data_version": data_dir.name,
-            "iterations": iterations,
-            "num_layers": num_layers,
-            "learning_rate": learning_rate,
-            "adapter_dir": str(adapter_dir),
-            "corrective_trial": trial,
-            "run_id": run_id,
-        }
-        if coordinator is None:
-            runtime_dir = BASE_DIR / "data" / "runtime"
-            coordinator = GPULockManager(
-                lock_path=runtime_dir / "gpu.lock",
-                state_path=runtime_dir / "gpu_state.json",
-                intent_path=runtime_dir / "gpu_intent.lock",
-            )
-
-        active_ledger.update_status(run_id, STATUS_RUNNING)
-
-        def abort_cb(reason: str):
-            if proc and hasattr(proc, "terminate"):
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
-
-        def mem_telemetry_cb(avail_gb, swap_mb):
-            if run_id:
-                try:
-                    hw_total = None
-                    try:
-                        hw_total = get_hardware_memory_profile().get("total_gb")
-                    except Exception:
-                        pass
-                    sys_used_mb = (
-                        round((hw_total - avail_gb) * 1024, 1)
-                        if (hw_total and hw_total > 0 and avail_gb is not None)
-                        else None
-                    )
-                    mlx_rss_mb = None
-                    if proc and getattr(proc, "pid", None):
-                        try:
-                            rss_out = subprocess.check_output(
-                                ["ps", "-p", str(proc.pid), "-o", "rss="],
-                                text=True, stderr=subprocess.DEVNULL
-                            )
-                            if rss_out.strip():
-                                mlx_rss_mb = round(int(rss_out.strip()) / 1024.0, 1)
-                        except Exception:
-                            pass
-                    active_ledger.update_status(
-                        run_id, STATUS_RUNNING,
-                        system_used_mb=sys_used_mb,
-                        peak_memory_mb=mlx_rss_mb,
-                        peak_swap_mb=round(swap_mb, 1) if swap_mb is not None else None,
-                    )
-                except Exception:
-                    pass
-
-        monitor = LiveMemoryMonitor(
-            check_interval_sec=1.5,
-            abort_callback=abort_cb,
-            telemetry_callback=mem_telemetry_cb,
+        # Historical dataset approvals cannot authorize execution for the
+        # current multimodal 9B base.
+        # No environment switch or old approval enables this path.
+        raise RuntimeError(
+            "Huấn luyện đang bị chặn: giao thức 3B/7B đã ngừng sử dụng; "
+            "Qwen3.5 9B cần giao thức bộ nhớ, dữ liệu và nghiệm thu adapter mới. "
+            "Dùng train-plan để lập đề xuất; chưa có adapter được phê duyệt."
         )
-        monitor.start()
 
-        with coordinator.acquire_for_training(timeout=60.0, extra_info=extra_info, evict_ollama=evict_ollama) as lock_info:
-            fds = getattr(lock_info, "fds", (int(lock_info),))
-            with open(log_file_path, "w", encoding="utf-8") as log_file:
-                proc = subprocess.Popen(command, cwd=BASE_DIR, pass_fds=fds, stdout=log_file, stderr=subprocess.STDOUT)
-                coordinator.update_child_pid(proc.pid)
-                active_ledger.update_child_pid(run_id, proc.pid)
-
-                import time as _t
-                start_time = _t.time()
-                from app.training_telemetry import TrainingTelemetry
-                telemetry = TrainingTelemetry(active_ledger, run_id, log_file_path, adapter_dir)
-
-                def sync_loss_telemetry():
-                    telemetry.poll()
-
-                try:
-                    if hasattr(proc, "poll"):
-                        returncode = None
-                        while returncode is None:
-                            returncode = proc.poll()
-                            sync_loss_telemetry()
-                            if returncode is not None:
-                                break
-                            if _t.time() - start_time > timeout_seconds:
-                                raise subprocess.TimeoutExpired(command, timeout_seconds)
-                            _t.sleep(0.5)
-                    else:
-                        try:
-                            returncode = proc.wait(timeout=timeout_seconds)
-                        except TypeError:
-                            returncode = proc.wait()
-                        sync_loss_telemetry()
-                except subprocess.TimeoutExpired:
-                    sync_loss_telemetry()
-                    actual_rc = _stop_child_process_bounded(proc)
-                    (adapter_dir / "orchestration_checkpoint.json").write_text(json.dumps({
-                        "status": "timed_out", "child_pid": getattr(proc, "pid", None),
-                        "return_code": actual_rc,
-                        "error_type": "TimeoutExpired", "automatic_stop_sent": True,
-                        "trial": trial, "requires_process_and_artifact_readback": True,
-                    }, ensure_ascii=False, indent=2), encoding="utf-8")
-                    active_ledger.update_status(
-                        run_id, STATUS_FAILED,
-                        diagnosis=f"Tiến trình huấn luyện quá hạn ({timeout_seconds}s)",
-                        return_code=actual_rc,
-                        decision="TIMEOUT_EXPIRED",
-                    )
-                    terminal_status_set = True
-                    raise
-                except (KeyboardInterrupt, SystemExit) as exc:
-                    sync_loss_telemetry()
-                    actual_rc = _stop_child_process_bounded(proc)
-                    (adapter_dir / "orchestration_checkpoint.json").write_text(json.dumps({
-                        "status": "interrupted_by_signal", "child_pid": getattr(proc, "pid", None),
-                        "return_code": actual_rc or -9,
-                        "error_type": type(exc).__name__, "automatic_stop_sent": True,
-                        "trial": trial, "requires_process_and_artifact_readback": True,
-                    }, ensure_ascii=False, indent=2), encoding="utf-8")
-                    active_ledger.update_status(
-                        run_id, STATUS_KILLED_ABNORMAL,
-                        diagnosis=f"Tiến trình bị gián đoạn tín hiệu: {type(exc).__name__}",
-                        return_code=actual_rc or -9,
-                        decision="INTERRUPTED_BY_SIGNAL",
-                    )
-                    terminal_status_set = True
-                    raise
-                except BaseException as exc:
-                    sync_loss_telemetry()
-                    actual_rc = _stop_child_process_bounded(proc)
-                    auto_stop = True
-                    status_str = "interrupted_by_exception"
-
-                    (adapter_dir / "orchestration_checkpoint.json").write_text(json.dumps({
-                        "status": status_str, "child_pid": getattr(proc, "pid", None),
-                        "return_code": actual_rc,
-                        "error_type": type(exc).__name__, "automatic_stop_sent": auto_stop,
-                        "trial": trial, "requires_process_and_artifact_readback": True,
-                    }, ensure_ascii=False, indent=2), encoding="utf-8")
-                    active_ledger.update_status(
-                        run_id, STATUS_KILLED_ABNORMAL,
-                        diagnosis=f"Tiến trình bị gián đoạn/ngoại lệ: {type(exc).__name__}: {exc}",
-                        return_code=actual_rc if actual_rc is not None else -9,
-                        decision="RUNNER_INTERRUPTED_ABNORMAL",
-                    )
-                    terminal_status_set = True
-                    raise
-
-        mem_stats = monitor.stop()
-        monitor = None
-        with (adapter_dir / "memory_monitor.json").open("x", encoding="utf-8") as stream:
-            json.dump(mem_stats, stream, ensure_ascii=False, indent=2)
-            stream.flush()
-            os.fsync(stream.fileno())
-        sync_loss_telemetry()
-
-        telemetry.poll(final=True)
-
-        if mem_stats.get("abort_triggered"):
-            active_ledger.update_status(
-                run_id, STATUS_OOM,
-                diagnosis=mem_stats.get("abort_reason"),
-                peak_swap_mb=mem_stats.get("peak_swap_used_mb"),
-                decision="ABORTED_MEMORY_PRESSURE",
-            )
-            terminal_status_set = True
-            raise RuntimeError(f"Dừng khẩn cấp do bộ nhớ: {mem_stats.get('abort_reason')}")
-
-        if returncode != 0:
-            if mem_stats.get("abort_triggered"):
-                status = STATUS_OOM
-                decision = "ABORTED_MEMORY_PRESSURE"
-                diagnosis = f"Dừng do áp lực bộ nhớ (mã {returncode}): {mem_stats.get('abort_reason')}"
-            elif returncode in (-9, 137):
-                status = STATUS_KILLED_ABNORMAL
-                decision = "KILLED_BY_SIGNAL_WITHOUT_OOM_EVIDENCE"
-                diagnosis = f"MLX bị dừng bởi tín hiệu SIGKILL (mã {returncode}); telemetry không ghi nhận OOM rõ ràng"
-            else:
-                status = STATUS_FAILED
-                decision = f"TERMINATED_{status}"
-                diagnosis = f"MLX fine-tune thất bại (mã {returncode})"
-
-            active_ledger.update_status(
-                run_id, status,
-                diagnosis=diagnosis,
-                return_code=returncode,
-                peak_swap_mb=mem_stats.get("peak_swap_used_mb"),
-                decision=decision,
-            )
-            terminal_status_set = True
-            raise RuntimeError(diagnosis)
-
-        # Phase 5: Post-training validation
-        if not (adapter_dir / "adapters.safetensors").exists():
-            raise RuntimeError("MLX kết thúc nhưng không tìm thấy adapter đã lưu")
-        if hashlib.sha256(train_file.read_bytes() + valid_file.read_bytes()).hexdigest() != dataset_digest:
-            raise RuntimeError("Dữ liệu thay đổi trong lúc huấn luyện; adapter cần được đánh giá lại")
-        if approval.get("approved_manifest_sha256") and hashlib.sha256(
-            (data_dir / "approved_manifest.jsonl").read_bytes()
-        ).hexdigest() != approval["approved_manifest_sha256"]:
-            raise RuntimeError("Manifest nguồn thay đổi trong lúc huấn luyện; không được dùng adapter")
-        verify_auxiliary_files(data_dir, approval)
-        if validate_corrective_trial(data_dir, model_dir, adapter_dir, approval, run_config) != trial:
-            raise RuntimeError("Hồ sơ trial/base đã đổi trong lúc huấn luyện; không được dùng adapter")
-
-        if train_size >= 20 and valid_size >= 2 and iterations >= 40:
-            (adapter_dir / "ready.json").write_text(
-                json.dumps({"train_examples": train_size, "valid_examples": valid_size, "iterations": iterations, "learning_rate": learning_rate, "max_seq_length": max_seq_length, "dataset_sha256": dataset_digest, "data_version": data_dir.name, "corrective_trial": trial, "quality_status": "unreviewed_not_promoted"}, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        if adapter_dir.exists():
-            for p in sorted(adapter_dir.glob("*.safetensors")):
-                step_m = re.search(r"(\d+)", p.name)
-                step_num = int(step_m.group(1)) if step_m else iterations
-                active_ledger.record_checkpoint(run_id, step=step_num, checkpoint_path=p)
-
-        active_ledger.update_status(
-            run_id, STATUS_COMPLETED,
-            return_code=0,
-            peak_swap_mb=mem_stats.get("peak_swap_used_mb"),
-            decision="TRIAL_SUCCESSFUL",
-        )
-        terminal_status_set = True
 
     except BaseException as err:
-        if monitor:
-            try:
-                monitor.stop()
-            except Exception:
-                pass
         if not terminal_status_set:
             status_to_record = STATUS_KILLED_ABNORMAL if isinstance(err, (KeyboardInterrupt, SystemExit)) else STATUS_REJECTED
             err_msg = str(err)

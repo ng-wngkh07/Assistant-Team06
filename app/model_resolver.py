@@ -11,26 +11,17 @@ from app.config import (
     DATA_DIR,
     DEFAULT_CHAT_MODEL,
     MLX_CONTEXT_TOKENS,
-    TRAINED_MODEL_NAME,
 )
 
 # 9B Model Constants
 MLX_9B_NAME = "qwen3.5-9b-4bit"
 MLX_9B_ALIASES = {MLX_9B_NAME, "mlx-9b", "qwen3.5:9b"}
 
-# Legacy 3B Model Constants
-MLX_3B_NAME = "qwen2.5-3b-4bit"
-MLX_3B_ALIASES = {MLX_3B_NAME, "tam-ly-mlx", "mlx-3b", "local", TRAINED_MODEL_NAME.casefold()}
-
-# Model directories (supporting explicit MLX_MODEL_DIR and distinct 3B/BGE overrides independent of AGENT_DATA_DIR)
+# Explicit path overrides remain independent of AGENT_DATA_DIR.
 MLX_9B_DIR = Path(
     os.getenv("MLX_MODEL_DIR")
     or os.getenv("MLX_9B_MODEL_DIR")
     or str(DATA_DIR / "models" / "qwen3.5-9b-4bit")
-)
-MLX_3B_DIR = Path(
-    os.getenv("MLX_3B_MODEL_DIR")
-    or str(DATA_DIR / "models" / "qwen2.5-3b-4bit")
 )
 MLX_BGE_DIR = Path(
     os.getenv("MLX_BGE_MODEL_DIR")
@@ -39,24 +30,52 @@ MLX_BGE_DIR = Path(
 )
 
 
+def reject_retired_model(model_name: str) -> None:
+    """Reject retired identities before any provider call, including stale envs."""
+    target = (model_name or "").strip().casefold()
+    if "qwen2.5" in target or target in {"mlx-3b", "tam-ly-mlx", "qwen3:4b"}:
+        raise ValueError(
+            "Mô hình đã ngừng hỗ trợ (retired). Xóa cấu hình mô hình cũ trong .env; "
+            "dùng Qwen3.5 9B cục bộ và chạy lại kiểm tra mô hình."
+        )
+
+
+def validate_native_model_config(model_dir: Path) -> dict:
+    """Check the actual base architecture, never a directory name or adapter label."""
+    try:
+        cfg = json.loads((Path(model_dir) / "config.json").read_text(encoding="utf-8"))
+        text = cfg.get("text_config", {})
+        quant = cfg.get("quantization") or cfg.get("quantization_config") or {}
+        valid = (
+            cfg.get("model_type") == "qwen3_5"
+            and isinstance(cfg.get("architectures"), list)
+            and "Qwen3_5ForConditionalGeneration" in cfg["architectures"]
+            and text.get("model_type") == "qwen3_5_text"
+            and text.get("hidden_size") == 4096
+            and text.get("num_hidden_layers") == 32
+            and text.get("num_attention_heads") == 16
+            and quant.get("bits") == 4 and quant.get("group_size") == 64
+            and quant.get("mode") == "affine"
+        )
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        raise ValueError("Không đọc được cấu hình Qwen3.5 9B 4-bit cục bộ.") from exc
+    if not valid:
+        raise ValueError("Trọng số không khớp Qwen3.5 9B 4-bit. Kiểm tra MLX_MODEL_DIR; không dùng mô hình hoặc adapter cũ.")
+    return cfg
+
+
 def is_9b_model(model_name: Optional[str] = None) -> bool:
     """Return True if model identity resolves strictly to 9B base via exact allowlist."""
     target = (model_name or DEFAULT_CHAT_MODEL or "").strip().lower()
     if not target and sys.platform == "darwin":
         return True
-    if target == "qwen3.5:9b":
-        return sys.platform == "darwin"
-    return target in {MLX_9B_NAME, "mlx-9b"}
-
-
-def is_3b_model(model_name: Optional[str] = None) -> bool:
-    """Return True if model identity resolves strictly to 3B base via exact allowlist."""
-    target = (model_name or DEFAULT_CHAT_MODEL or "").strip().lower()
-    return target in MLX_3B_ALIASES
+    return target in MLX_9B_ALIASES
 
 
 def is_mlx_model(model_name: Optional[str] = None) -> bool:
     """Return True if the model runs directly under MLX (never Ollama or remote)."""
+    if os.getenv("LLM_PROVIDER") == "ollama" or os.getenv("CHAT_BACKEND") == "ollama":
+        return False
     target = (model_name or DEFAULT_CHAT_MODEL or "").strip().lower()
     if not target:
         return sys.platform == "darwin"
@@ -64,8 +83,6 @@ def is_mlx_model(model_name: Optional[str] = None) -> bool:
         return sys.platform == "darwin"
     if target in {MLX_9B_NAME, "mlx-9b"}:
         return sys.platform == "darwin"
-    if target in MLX_3B_ALIASES:
-        return True
     return False
 
 
@@ -73,20 +90,16 @@ def resolve_mlx_model_dir(model_name: Optional[str] = None) -> Path:
     """Resolve exact base model weights directory. Unknown models raise ValueError before load."""
     if model_name is not None and model_name.strip():
         target = model_name.strip().lower()
+        reject_retired_model(target)
         if is_9b_model(target):
             return MLX_9B_DIR
-        if is_3b_model(target):
-            return MLX_3B_DIR
         raise ValueError(f"Không thể phân giải mô hình không xác định sang thư mục cục bộ: {model_name}")
 
     target = (DEFAULT_CHAT_MODEL or "").strip().lower()
+    reject_retired_model(target)
     if is_9b_model(target):
         return MLX_9B_DIR
-    if is_3b_model(target):
-        return MLX_3B_DIR
-    if sys.platform == "darwin":
-        return MLX_9B_DIR
-    return MLX_3B_DIR
+    raise ValueError("Chọn Qwen3.5 9B trước khi dùng backend MLX.")
 
 
 def get_model_context_capacity(model_name: Optional[str] = None) -> int:

@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,12 +19,19 @@ QUESTION = {
     },
     "answer": "B",
     "explanation": "Nguồn chỉ nói hiện tượng có thể xảy ra trong điều kiện A.",
-    "source_chunk_id": 17,
+    "source_chunk_id": 1,
     "evidence_quote": "Trong điều kiện A, hiện tượng X có thể xảy ra",
+}
+AUDIT_FIELDS = {
+    "input_audit": "Đề bài nêu rõ điều kiện A và hiện tượng X.",
+    "independent_solution": "Trong điều kiện A, hiện tượng X có thể xảy ra.",
+    "choice_comparison": "Khớp với B, loại A, C, D.",
+    "explanation_audit": "Giải thích chuẩn xác theo nguồn.",
 }
 VALIDATION = {
     "checks": [{
         "index": 1,
+        **AUDIT_FIELDS,
         "supported": True,
         "explanation_supported": True,
         "unique_answer": True,
@@ -90,6 +98,88 @@ def make_service(responses=None, passages=None, db_path=None):
     return service, searcher, ollama
 
 
+def test_practice_rejects_page_with_unverified_visual_content_before_generation(monkeypatch):
+    source = passage()
+    source["page_quality"] = {
+        "needs_review": True,
+        "warnings": ["unrepresented_formula_or_diagram_suspected"],
+    }
+    service, _, ollama = make_service(passages=[source])
+    monkeypatch.setattr(service, "_generate_text", lambda *args, **kwargs: pytest.fail("model called"))
+
+    with pytest.raises(PracticeGenerationError, match="trang tài liệu gốc"):
+        service.generate(1, 4, count=1, source_chunk_id=17)
+    assert not ollama.prompts
+
+
+def test_practice_attaches_quality_to_direct_learning_passages(monkeypatch):
+    service, searcher, _ = make_service()
+    source = passage()
+
+    def attach(items):
+        items[0]["page_quality"] = {
+            "needs_review": True,
+            "warnings": ["unrepresented_formula_or_diagram_suspected"],
+        }
+
+    monkeypatch.setattr(searcher, "_attach_page_quality_metadata", attach, raising=False)
+    monkeypatch.setattr(service, "_generate_text", lambda *args, **kwargs: pytest.fail("model called"))
+    with pytest.raises(PracticeGenerationError, match="trang tài liệu gốc"):
+        service.generate_from_passages([source], count=1)
+
+
+@pytest.mark.parametrize("quality", [
+    {"needs_review": False, "warnings": ["unrepresented_formula_or_diagram_suspected"]},
+    {"needs_review": True, "warnings": ["another_warning"]},
+])
+def test_practice_keeps_generating_when_visual_warning_does_not_require_review(quality):
+    source = passage()
+    source["page_quality"] = quality
+    service, _, _ = make_service([{"questions": [QUESTION]}, VALIDATION], [source])
+
+    result = service.generate(1, 4, count=1, model="test-model")
+    assert len(result["questions"]) == 1
+
+
+def test_generation_maps_short_prompt_handles_to_exact_database_sources(monkeypatch):
+    """Real 9B returned ordinal 1/4 for five-digit IDs; handles are server-owned."""
+    service, _, _ = make_service([])
+    captured = []
+    def chat(prompt, *args, **kwargs):
+        captured.append(prompt)
+        return json.dumps({'questions': [{**QUESTION, 'source_chunk_id': 2},
+                                         {**QUESTION, 'source_chunk_id': 999}]})
+    monkeypatch.setattr(service, '_chat_complete', chat)
+    raw = service._generate_text([passage(82910), passage(83063)], 2, 'test-model')
+    questions = json.loads(raw)['questions']
+    assert [q['source_chunk_id'] for q in questions] == [83063]
+    assert '<passage id="1"' in captured[0] and '<passage id="2"' in captured[0]
+    assert '<passage id="82910"' not in captured[0]
+
+
+def test_generation_decoder_binds_exact_quotes_to_their_visible_source(monkeypatch):
+    """The live model paraphrased tables into fabricated 'verbatim' quotes."""
+    service, _, _ = make_service([])
+    first = passage(82910, text='Only a closed door and an engaged lock allow operation. Override bypasses heat only.')
+    second = passage(83063, text='A private member cannot be accessed directly outside its class. Public methods provide access.')
+    observed = []
+    def chat(prompt, *args, **kwargs):
+        observed.append(kwargs['response_schema'])
+        return json.dumps({'questions': []})
+    monkeypatch.setattr(service, '_chat_complete', chat)
+    service._generate_text([first, second], 2, 'test-model')
+    constraints = observed[0]['properties']['questions']['items']['allOf'][0]['anyOf']
+    assert len(constraints) == 2
+    for handle, (constraint, source) in enumerate(zip(constraints, [first, second]), 1):
+        properties = constraint['properties']
+        assert properties['source_chunk_id'] == {'const': handle}
+        quotes = properties['evidence_quote']['enum']
+        assert quotes and all(20 <= len(q) <= 240 for q in quotes)
+        assert all(service._normalized(q) in service._normalized(source['text']) for q in quotes)
+        other = second if handle == 1 else first
+        assert all(service._normalized(q) not in service._normalized(other['text']) for q in quotes)
+
+
 def test_answers_are_withheld_until_answer_submission_and_source_is_specific():
     service, _, _ = make_service([{"questions": [QUESTION]}, VALIDATION])
 
@@ -153,8 +243,8 @@ def test_exact_selected_chunk_is_the_only_source_sent_to_model():
     service, searcher, ollama = make_service([{"questions": [QUESTION]}, VALIDATION], [passage(), other])
     result = service.generate(1, 4, count=1, model="test-model", source_chunk_id=17)
     assert searcher.calls == [(1, 4, 1000)]
-    assert '<passage id="17"' in ollama.prompts[0]
-    assert '<passage id="18"' not in ollama.prompts[0]
+    assert '<passage id="1"' in ollama.prompts[0]
+    assert '<passage id="2"' not in ollama.prompts[0]
     assert result["questions"][0]["source"]["chunk_id"] == 17
 
 
@@ -163,8 +253,8 @@ def test_page_scope_sends_at_most_six_passages_to_the_generator():
     service, searcher, ollama = make_service([{"questions": [QUESTION]}, VALIDATION], passages)
     service.generate(1, 4, count=1, model="test-model")
     assert searcher.calls == [(1, 4, 6)]
-    assert '<passage id="22"' in ollama.prompts[0]
-    assert '<passage id="23"' not in ollama.prompts[0]
+    assert '<passage id="6"' in ollama.prompts[0]
+    assert '<passage id="7"' not in ollama.prompts[0]
 
 
 def test_example_extraction_returns_original_source_text_and_ocr_warning(tmp_path):
@@ -219,6 +309,7 @@ def test_example_extraction_returns_empty_when_source_has_no_exercises(tmp_path)
     assert service.list_example_exercises(1, 4, 4) == []
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 def test_practice_routes_mlx_model_to_trained_client(monkeypatch):
     class MockTrainedClient:
         def __init__(self):
@@ -228,7 +319,219 @@ def test_practice_routes_mlx_model_to_trained_client(monkeypatch):
 
     monkeypatch.setattr("app.practice.TrainedModelClient", MockTrainedClient)
     service = PracticeService(None, None, ollama=None)
-    for model_name in ("qwen2.5-3b-4bit", "local", "tam-ly-mlx", "mlx-3b"):
+    for model_name in ("qwen3.5-9b-4bit", "mlx-9b", "qwen3.5:9b"):
         res = service._chat_complete("test prompt", model=model_name, max_tokens=100)
         assert res == "fake-mlx-output"
 
+
+@pytest.mark.parametrize("invalid_count", [0, 11, -1, 2.5, "3", True, False, None])
+def test_practice_count_validation(invalid_count):
+    service, _, _ = make_service()
+    with pytest.raises(PracticeGenerationError, match="Số câu phải là số nguyên từ 1 đến 10"):
+        service.generate_from_passages([passage()], count=invalid_count, model="test-model")
+
+
+@pytest.mark.parametrize("invalid_diff", ["extreme", "super-hard", "", "1", None])
+def test_practice_difficulty_validation(invalid_diff):
+    service, _, _ = make_service()
+    with pytest.raises(PracticeGenerationError, match="Độ khó không hợp lệ"):
+        service.generate_from_passages([passage()], count=3, difficulty=invalid_diff, model="test-model")
+
+
+def test_practice_batching_and_honest_partial_warning():
+    q1 = {**QUESTION, "question": "Câu hỏi kiểm tra số 1 về hiện tượng X?"}
+    q2 = {
+        **QUESTION,
+        "question": "Câu hỏi kiểm tra số 2 về hiện tượng X?",
+        "choices": {
+            "A": "Hiện tượng X hoàn toàn độc lập.",
+            "B": "Hiện tượng X phụ thuộc điều kiện A theo nguồn.",
+            "C": "Hiện tượng X không xác định.",
+            "D": "Hiện tượng X xảy ra ngẫu nhiên.",
+        },
+        "answer": "B",
+    }
+    batch1_gen = {"questions": [q1, q2]}
+    batch1_val = {
+        "checks": [
+            {"index": 1, **AUDIT_FIELDS, "supported": True, "explanation_supported": True, "unique_answer": True, "qualifiers_preserved": True, "difficulty_matches": True, "verified_answer": "B"},
+            {"index": 2, **AUDIT_FIELDS, "supported": True, "explanation_supported": True, "unique_answer": True, "qualifiers_preserved": True, "difficulty_matches": True, "verified_answer": "B"},
+        ]
+    }
+    q3 = {**QUESTION, "question": "Câu hỏi kiểm tra số 3 về hiện tượng X?"}
+    batch2_gen = {"questions": [q3]}
+    batch2_val = {
+        "checks": [
+            {"index": 1, **AUDIT_FIELDS, "supported": True, "explanation_supported": True, "unique_answer": True, "qualifiers_preserved": True, "difficulty_matches": False, "verified_answer": "B"},
+        ]
+    }
+    service, _, ollama = make_service([batch1_gen, batch1_val, batch2_gen, batch2_val])
+    result = service.generate_from_passages([passage()], count=5, difficulty="hard", model="test-model", enforce_difficulty=True)
+    assert result["requested_count"] == 5
+    assert result["difficulty"] == "hard"
+    assert result["count"] == 2
+    assert result["complete"] is False
+    assert "2/5 câu" in result["warning"]
+
+
+def test_practice_recovers_from_truncated_batch_and_preserves_earlier_questions():
+    """Truncated/failed batch attempt must not discard earlier accepted questions; should retry smaller batch."""
+    q1 = {**QUESTION, "question": "Câu 1 đạt kiểm định về hiện tượng X?"}
+    batch1_gen = {"questions": [q1]}
+    batch1_val = {
+        "checks": [
+            {"index": 1, **AUDIT_FIELDS, "supported": True, "explanation_supported": True, "unique_answer": True, "qualifiers_preserved": True, "verified_answer": "B"},
+        ]
+    }
+    # Batch 2 simulates truncated/invalid model response that triggers PracticeGenerationError
+    batch2_gen = "INVALID TRUNCATED JSON {questions: ["
+    # Batch 3 recovers and yields second valid question
+    q2 = {
+        **QUESTION,
+        "question": "Câu 2 đạt kiểm định sau khi phục hồi?",
+        "choices": {
+            "A": "Hiện tượng X độc lập.",
+            "B": "Hiện tượng X xảy ra có điều kiện.",
+            "C": "Hiện tượng X vô định.",
+            "D": "Hiện tượng X không xảy ra.",
+        },
+        "answer": "B",
+    }
+    batch3_gen = {"questions": [q2]}
+    batch3_val = {
+        "checks": [
+            {"index": 1, **AUDIT_FIELDS, "supported": True, "explanation_supported": True, "unique_answer": True, "qualifiers_preserved": True, "verified_answer": "B"},
+        ]
+    }
+    service, _, _ = make_service([batch1_gen, batch1_val, batch2_gen, batch3_gen, batch3_val])
+    result = service.generate_from_passages([passage()], count=2, model="test-model", allow_retry=True)
+    assert result["count"] == 2
+    assert result["complete"] is True
+    assert len(result["questions"]) == 2
+    assert result["questions"][0]["question"] == "Câu 1 đạt kiểm định về hiện tượng X?"
+    assert result["questions"][1]["question"] == "Câu 2 đạt kiểm định sau khi phục hồi?"
+
+
+def test_practice_fast_perfect_count_10():
+    """Verify requesting 10 questions works in 4 perfect batches (3+3+3+1) within max_attempts bounds."""
+    batches = []
+    checks = []
+    for i in range(1, 11):
+        q = {
+            **QUESTION,
+            "question": f"Câu hỏi số {i} về hiện tượng X trong điều kiện A?",
+            "choices": {
+                "A": f"Hiện tượng X luôn xảy ra phương án {i}.",
+                "B": f"Hiện tượng X có thể xảy ra phương án {i}.",
+                "C": f"Hiện tượng X không thể xảy ra phương án {i}.",
+                "D": f"Hiện tượng X ngẫu nhiên phương án {i}.",
+            },
+            "answer": "B",
+        }
+        batches.append(q)
+
+    responses = [
+        {"questions": batches[0:3]},
+        {"checks": [{"index": j, **AUDIT_FIELDS, "supported": True, "explanation_supported": True, "unique_answer": True, "qualifiers_preserved": True, "verified_answer": "B"} for j in range(1, 4)]},
+        {"questions": batches[3:6]},
+        {"checks": [{"index": j, **AUDIT_FIELDS, "supported": True, "explanation_supported": True, "unique_answer": True, "qualifiers_preserved": True, "verified_answer": "B"} for j in range(1, 4)]},
+        {"questions": batches[6:9]},
+        {"checks": [{"index": j, **AUDIT_FIELDS, "supported": True, "explanation_supported": True, "unique_answer": True, "qualifiers_preserved": True, "verified_answer": "B"} for j in range(1, 4)]},
+        {"questions": batches[9:10]},
+        {"checks": [{"index": 1, **AUDIT_FIELDS, "supported": True, "explanation_supported": True, "unique_answer": True, "qualifiers_preserved": True, "verified_answer": "B"}]},
+    ]
+    service, _, _ = make_service(responses)
+    result = service.generate_from_passages([passage()], count=10, model="test-model")
+    assert result["count"] == 10
+    assert result["complete"] is True
+    assert result["requested_count"] == 10
+    assert len(result["questions"]) == 10
+
+
+def test_practice_deadline_bounding_raises_when_no_questions(monkeypatch):
+    """When elapsed time exceeds deadline and 0 questions are produced, raises PracticeGenerationError."""
+    import time
+    fake_now = 1000.0
+    def mock_monotonic():
+        nonlocal fake_now
+        val = fake_now
+        fake_now += 200.0  # simulates > 180s elapsed
+        return val
+
+    monkeypatch.setattr(time, "monotonic", mock_monotonic)
+    service, _, _ = make_service([{"questions": [QUESTION]}, VALIDATION])
+    with pytest.raises(PracticeGenerationError, match="Quá thời gian tạo câu hỏi"):
+        service.generate_from_passages([passage()], count=3, model="test-model")
+
+
+def test_five_questions_allow_two_realistic_generation_and_review_batches(monkeypatch):
+    """A fixed 180s total must not silently cap a five-question request to one batch."""
+    import subprocess
+    from types import SimpleNamespace
+    clock = SimpleNamespace(now=1000.)
+    questions = []
+    for i in range(5):
+        question = {**QUESTION, 'question': f'Câu hỏi độc lập số {i + 1} về điều kiện A?',
+                    'choices': {**QUESTION['choices'], 'B': f'Điều kiện A là căn cứ được nêu, cách diễn đạt {i + 1}.'}}
+        questions.append(question)
+    responses = []
+    for batch in (questions[:3], questions[3:]):
+        responses.extend([{'questions': batch}, {'checks': [
+            {'index': index, **AUDIT_FIELDS, 'supported': True, 'explanation_supported': True,
+             'unique_answer': True, 'qualifiers_preserved': True, 'verified_answer': 'B'}
+            for index in range(1, len(batch) + 1)]}])
+    service, _, _ = make_service([])
+    calls = []
+    def timed_chat(prompt, model, max_tokens, timeout=None, **kwargs):
+        seconds = 100. if max_tokens == 1800 else 20.
+        calls.append(timeout)
+        if timeout < seconds:
+            raise subprocess.TimeoutExpired('fixture-native-inference', timeout)
+        clock.now += seconds
+        return json.dumps(responses.pop(0), ensure_ascii=False)
+    monkeypatch.setattr('app.practice.time.monotonic', lambda: clock.now)
+    monkeypatch.setattr(service, '_chat_complete', timed_chat)
+    result = service.generate_from_passages([passage()], count=5, model='test-model')
+    assert result['count'] == 5 and result['complete'] is True
+    assert len(calls) == 4 and all(0 < timeout <= 180 for timeout in calls)
+
+
+def test_practice_timeout_preserves_verified_partial_questions(monkeypatch):
+    """When timeout occurs on attempt 2 after attempt 1 produced a verified question, partial set is returned."""
+    import subprocess
+    q1 = {**QUESTION, "question": "Câu 1 kiểm tra thành công về hiện tượng X?"}
+    batch1_gen = {"questions": [q1]}
+    batch1_val = {
+        "checks": [
+            {"index": 1, **AUDIT_FIELDS, "supported": True, "explanation_supported": True, "unique_answer": True, "qualifiers_preserved": True, "verified_answer": "B"},
+        ]
+    }
+    service, _, ollama = make_service([batch1_gen, batch1_val])
+    original_generate = service._generate_text
+    call_count = 0
+
+    def mock_generate(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return original_generate(*args, **kwargs)
+        raise subprocess.TimeoutExpired(cmd="chat", timeout=5.0)
+
+    monkeypatch.setattr(service, "_generate_text", mock_generate)
+    result = service.generate_from_passages([passage()], count=3, model="test-model", allow_retry=True)
+    assert result["count"] == 1
+    assert result["requested_count"] == 3
+    assert result["complete"] is False
+    assert "1/3 câu" in result["warning"]
+
+
+def test_practice_busy_error_is_reraised_immediately(monkeypatch):
+    """GPUBusyError or DialogueBusyError must re-raise immediately without swallow or batch=1 retry."""
+    from app.gpu_lock import GPUBusyError
+    service, _, _ = make_service([])
+    def mock_generate(*args, **kwargs):
+        raise GPUBusyError("GPU đang bận phục vụ tác vụ khác")
+
+    monkeypatch.setattr(service, "_generate_text", mock_generate)
+    with pytest.raises(GPUBusyError, match="GPU đang bận"):
+        service.generate_from_passages([passage()], count=3, model="test-model")
