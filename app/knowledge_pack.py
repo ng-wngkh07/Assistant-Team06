@@ -60,10 +60,10 @@ def _enumerate_physical_pages(source: Path) -> int:
         finally:
             doc.close()
     elif suffix == '.pptx':
-        import xml.etree.ElementTree as ET
+        from defusedxml import ElementTree as ET
         ns = {'p': 'http://schemas.openxmlformats.org/presentationml/2006/main'}
         with zipfile.ZipFile(source) as z:
-            presentation = ET.fromstring(z.read('ppt/presentation.xml'))
+            presentation = ET.fromstring(z.read('ppt/presentation.xml'), forbid_dtd=True)
             slides = presentation.findall('p:sldIdLst/p:sldId', ns)
             return len(slides)
     elif suffix in ('.md', '.txt'):

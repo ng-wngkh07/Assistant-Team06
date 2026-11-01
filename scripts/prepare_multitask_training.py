@@ -22,7 +22,7 @@ import re
 import sqlite3
 import subprocess
 import sys
-import xml.sax.saxutils
+from html import escape as _html_escape
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -674,7 +674,7 @@ def prepare_dataset_and_reports():
             passage=hctx["passage"],
         )
 
-        escaped_book = xml.sax.saxutils.escape(hctx["filename"], {'"': '&quot;'})
+        escaped_book = _html_escape(hctx["filename"], quote=False).replace('"', '&quot;')
         clean_safe_text = sanitize_for_prompt_context(hctx["passage"])[:900]
         doc_block = f'<document id="S1" book="{escaped_book}" page="{hctx["page_num"]}">\n{clean_safe_text}\n</document>'
 

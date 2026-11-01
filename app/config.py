@@ -87,6 +87,7 @@ ANSWER_MODE_MAX_TOKENS = {
 # Server settings
 SERVER_HOST = os.getenv("HOST", "127.0.0.1")
 SERVER_PORT = int(os.getenv("PORT", "8000"))
+VISION_TIMEOUT_SECONDS = float(_positive_int_setting("VISION_TIMEOUT_SECONDS", 360))
 
 # Emergency medical service in Vietnam. Do not add local counselling numbers
 # without checking their current availability and operating hours.

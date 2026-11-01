@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image, ImageOps
 import requests
 
-from app.config import OLLAMA_BASE_URL, OLLAMA_AUX_CHAT_MODEL
+from app.config import OLLAMA_BASE_URL, OLLAMA_AUX_CHAT_MODEL, VISION_TIMEOUT_SECONDS
 from app.gpu_lock import GPUBusyError, gpu_coordinator
 from app import timetable_store
 
@@ -277,14 +277,18 @@ def assess_timetable_completeness(entries, classification=None):
             fields.append("valid_time_range")
         if fields:
             missing.append({"row": index, "fields": fields})
-            warnings.append(f"Buổi {index} thiếu hoặc chưa rõ: {', '.join(labels[field] for field in fields)}. "
-                            "Vui lòng gửi thêm ảnh đầy đủ, rõ hơn hoặc tự bổ sung thông tin vào bản nháp.")
+            warnings.append(
+                f"Buổi {index} thiếu hoặc chưa rõ: {', '.join(labels[field] for field in fields)}. "
+                "Vui lòng điền bổ sung trực tiếp các ô được tô nổi bật trong bản nháp bên dưới (hoặc gửi thêm ảnh đầy đủ, rõ hơn)."
+            )
     if classification == "registration_windows":
         status = "not_class_timetable"
         warnings.append("Đây là thời hạn đăng ký, chưa phải lịch các buổi học. Vui lòng gửi ảnh thời khóa biểu đã xếp.")
     elif not entries:
         status = "insufficient_information"
-        warnings.append("Chưa đọc được buổi học có đủ dữ kiện từ ảnh. Vui lòng gửi thêm ảnh thời khóa biểu đầy đủ, rõ hơn hoặc tự nhập thông tin.")
+        warnings.append(
+            "Chưa đọc được buổi học có đủ giờ học từ ảnh. Các môn đọc được một phần (nếu có) đã giữ lại trong bảng nháp để bạn điền bổ sung trực tiếp (hoặc gửi thêm ảnh thời khóa biểu đầy đủ, rõ hơn)."
+        )
     else:
         status = "insufficient_information" if missing else "visible_rows_have_required_fields"
     warnings.append("Bản nháp chỉ phản ánh phần ảnh đọc được; hãy kiểm tra phần bị cắt và phạm vi ngày trước khi xác nhận hoặc xuất lịch.")
@@ -329,7 +333,7 @@ def call_vlm_extract(
     image_bytes: bytes,
     image_hash: str,
     filename: str,
-    timeout_seconds: float = 90.0,
+    timeout_seconds: float = VISION_TIMEOUT_SECONDS,
 ) -> Dict[str, Any]:
     """Execute local vision model under GPU lock to extract timetable into draft.
 
@@ -352,7 +356,9 @@ def call_vlm_extract(
             raw_model_output=json.dumps(record, ensure_ascii=False), model_digest=digest, prompt_version=version,
             options={'engine':literal['engine'], 'cpu_only':True, 'literal_cells':True})
         return {'draft_id':draft_id, 'status':'draft', 'filename':filename, 'image_hash':image_hash,
-            'model_digest':digest, 'entries':record['entries'], 'uncertainties':record['uncertainties'],
+            'model_digest':digest, 'entries':record['entries'],
+            'partial_entries':record.get('partial_entries', []),
+            'uncertainties':record['uncertainties'],
             'has_periods_without_clock_time':False, 'cached':bool(cached), 'extraction_method':'literal_table_ocr',
             'classification':record.get('classification', 'registered_classes'),
             'data_sufficiency':record['data_sufficiency']}

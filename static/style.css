@@ -1,7 +1,6 @@
 /* ==========================================================================
    Trợ Lý Học Tập Cục Bộ — giao diện tối + tím phẳng (phong cách Echo AI)
    Chỉ đổi màu sắc / hình thức. Không đổi ID, class, văn bản hay logic JS.
-   Bản giao diện sáng cũ được giữ trong style.light-backup.css
    ========================================================================== */
 :root {
     color-scheme: dark;
@@ -4048,3 +4047,13 @@ body.sidebar-collapsed #btn-open-sidebar { display: inline-flex; }
 .context-status { font-size: .8rem; color: var(--text-secondary, #64748b); line-height: 1.5; }
 .context-status span:not([hidden]) { display: block; margin-bottom: .35rem; }
 .context-status [hidden] { display: none !important; }
+
+/* Timetable partial field highlighting (YC-06) */
+.draft-field-missing {
+    border-color: #f59e0b !important;
+    background-color: rgba(245, 158, 11, 0.12) !important;
+    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.35);
+}
+.draft-field-missing::placeholder {
+    color: #fbbf24;
+}

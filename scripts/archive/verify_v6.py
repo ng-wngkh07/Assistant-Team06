@@ -34,7 +34,7 @@ def main():
                 file_hash=db.execute("SELECT file_hash FROM documents WHERE filename=?",(filename,)).fetchone()[0]
                 if file_hash in heldout_hashes:leaked.append(filename)
         if leaked:raise ValueError("Held-out contents present in training")
-    tokenizer=AutoTokenizer.from_pretrained(str(MLX_MODEL_DIR),local_files_only=True)
+    tokenizer=AutoTokenizer.from_pretrained(str(MLX_MODEL_DIR),local_files_only=True,trust_remote_code=False)
     lengths={}
     train_queries=set()
     for split in ("train","valid"):

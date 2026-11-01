@@ -6,9 +6,16 @@ import json
 import re
 import sqlite3
 import unicodedata
+from html import escape as _html_escape
 from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
-from xml.sax.saxutils import escape
+
+
+def escape(text: str, entities: Optional[Dict[str, str]] = None) -> str:
+    res = _html_escape(text, quote=False)
+    for k, v in (entities or {}).items():
+        res = res.replace(k, v)
+    return res
 
 
 from app.config import DB_PATH, DEFAULT_CHAT_MODEL, OLLAMA_BASE_URL, TRAINED_MODEL_NAME

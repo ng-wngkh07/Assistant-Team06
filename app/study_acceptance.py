@@ -10,7 +10,7 @@ SUITE_HASH = '4752827e56b9d3e24bc6ec6b12bc479c5abbc5cacd016a0efafa9de656eb42d7'
 BASE_RAW_HASH = '370726de91575058976721e02d59034f9e66904d6751ec6bbbb60724ac3525ea'
 BASE_REVIEW_HASH = 'd079104e18add16a75993dd715e352e2f5ec7f1147012bee93fd397d51ef24a8'
 NO_SOURCE = {f'codex-holdout-{i}' for i in range(25, 29)}
-RANK = {'fail': 0, 'partial': 1, 'pass': 2}
+RANK = dict(zip(('fail', 'partial', 'pass'), (0, 1, 2)))
 
 
 def need(condition, reason):

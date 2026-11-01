@@ -16,10 +16,24 @@ import tempfile
 import unicodedata
 from pathlib import Path
 from PIL import Image, ImageOps, ImageDraw
-from app.config import BASE_DIR, OLLAMA_BASE_URL, OLLAMA_AUX_CHAT_MODEL
+from app.config import BASE_DIR, OLLAMA_BASE_URL, OLLAMA_AUX_CHAT_MODEL, VISION_TIMEOUT_SECONDS
 from app.gpu_lock import gpu_coordinator, GPUBusyError
 
 VERSION = 'registered-table-literal-v4-registration-hold'
+
+
+def _find_tesseract_executable() -> str | None:
+    found = shutil.which('tesseract')
+    if found:
+        return found
+    if sys.platform == 'win32':
+        for candidate in (
+            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+            r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+        ):
+            if Path(candidate).is_file():
+                return candidate
+    return None
 
 
 def cache_is_current(record):
@@ -76,8 +90,28 @@ def classify_registration_hold(lines):
                 'uncertainties': ['Ảnh chứa thời hạn đăng ký, không phải các buổi học; không dùng ngày đăng ký để tạo lịch học.']}
     clock_range = re.search(r'\d{1,2}\s*[:g]\s*\d{2}\s*[-–→>]\s*\d{1,2}\s*[:g]\s*\d{2}', text)
     if 'chuabiet' in compact and not clock_range:
-        return {'classification': 'incomplete_registration', 'entries': [], 'source_cells': [],
-                'uncertainties': ['Ảnh đăng ký ghi lịch Chưa biết và chưa có khoảng giờ học. Cần ảnh lịch đã được xếp; không suy đoán thứ hoặc tiết từ số thứ tự.']}
+        partial_entries = []
+        seen_courses = set()
+        for line in lines:
+            raw_line = (line.get('text') or '').strip()
+            code_match = re.search(r'\b([A-Z]{2,8}\d{3,8})\b(?:\s*[-–:]\s*(.+))?', raw_line)
+            if code_match:
+                c_code = code_match.group(1).strip()
+                c_name = (code_match.group(2) or '').strip() or c_code
+                if c_code not in seen_courses:
+                    seen_courses.add(c_code)
+                    partial_entries.append({
+                        'course': c_name,
+                        'course_code': c_code,
+                        'weekday': None,
+                        'start_time': None,
+                        'end_time': None,
+                        'room': None,
+                        'period': None,
+                        'missing_fields': ['weekday', 'start_time', 'end_time'],
+                    })
+        return {'classification': 'incomplete_registration', 'entries': [], 'partial_entries': partial_entries, 'source_cells': [],
+                'uncertainties': ['Ảnh đăng ký ghi lịch Chưa biết và chưa có khoảng giờ học. Các môn đọc được đã giữ lại trong bảng nháp để bạn điền bổ sung trực tiếp thứ và giờ học (hoặc gửi thêm ảnh lịch đã xếp).']}
     return None
 
 
@@ -242,7 +276,7 @@ def read_local_lines(path):
             if r.returncode==0 and data.get('success'):
                 return data['lines'],'apple-vision',hashlib.sha256(binary.read_bytes()).hexdigest()
         except (OSError,ValueError,subprocess.TimeoutExpired): pass
-    executable=shutil.which('tesseract')
+    executable=_find_tesseract_executable()
     if not executable: return [],'unavailable',''
     try:
         r=subprocess.run([executable,str(path),'stdout','-l','vie+eng','--psm','11','tsv'],capture_output=True,text=True,timeout=25)
@@ -321,7 +355,7 @@ def read_room_codes(image, room_lines):
             'options': {'temperature': 0, 'num_predict': 256},
         }
         with gpu_coordinator.acquire_for_inference(timeout=3):
-            response = client.session.post(client.base_url + '/api/generate', json=payload, timeout=80, allow_redirects=False)
+            response = client.session.post(client.base_url + '/api/generate', json=payload, timeout=VISION_TIMEOUT_SECONDS, allow_redirects=False)
         response.raise_for_status()
         envelope = response.json()
         if envelope.get('done_reason') == 'length':

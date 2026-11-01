@@ -24,16 +24,12 @@ def resolve_processing_level(
     query: str,
     compare_concepts: Optional[Tuple[str, str]] = None,
 ) -> Literal["standard", "careful"]:
-    """Resolve user-selected or auto processing level deterministically."""
-    level_lower = (level or "auto").lower()
-    if level_lower == "standard":
-        return "standard"
+    """Resolve user-selected processing level deterministically.
+
+    Defaults to 'standard' (Fast) unless the user explicitly selects 'careful' (YC-03).
+    """
+    level_lower = (level or "standard").strip().lower()
     if level_lower == "careful":
-        return "careful"
-    # auto: choose careful for comparisons or multi-concept synthesis, standard for definitions
-    if compare_concepts is not None:
-        return "careful"
-    if COMPARISON_SYNTHESIS_PATTERN.search(query):
         return "careful"
     return "standard"
 

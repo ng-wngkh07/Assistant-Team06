@@ -35,8 +35,15 @@ TASKS = {
     "session_summary",
 }
 
-from xml.sax.saxutils import escape
+from html import escape as _html_escape
 from app.text_cleaner import sanitize_for_prompt_context
+
+
+def escape(text: str, entities: Optional[Dict[str, str]] = None) -> str:
+    res = _html_escape(text, quote=False)
+    for k, v in (entities or {}).items():
+        res = res.replace(k, v)
+    return res
 
 RAG_SYSTEM_PROMPT = (
     "Bạn là trợ lý học tập tra cứu tài liệu và hỏi đáp dựa trên tài liệu đa lĩnh vực bằng tiếng Việt. "

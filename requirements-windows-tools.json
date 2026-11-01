@@ -4,7 +4,8 @@
   "packages": [
     {"name": "python", "id": "Python.Python.3.12", "profiles": ["demo", "full"]},
     {"name": "git", "id": "Git.Git", "profiles": ["demo", "full"]},
-    {"name": "ollama", "id": "Ollama.Ollama", "profiles": ["full"]}
+    {"name": "ollama", "id": "Ollama.Ollama", "profiles": ["full"]},
+    {"name": "tesseract", "id": "UB-Mannheim.TesseractOCR", "profiles": ["full"]}
   ],
   "ollama_base_url": "http://127.0.0.1:11434",
   "models": [

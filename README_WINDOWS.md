@@ -19,7 +19,7 @@ Without Git, download the [main ZIP](https://github.com/ng-wngkh07/Assistant-Tea
 
 ## Full model setup
 
-Run setup without `-DemoOnly` to prepare the tools and models listed in `requirements-windows-tools.json`:
+Run setup without `-DemoOnly` to prepare the tools and models listed in `requirements-windows-tools.json` (Git, Python 3.12, Node.js LTS, Ollama, and Tesseract OCR for literal timetable table recognition):
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\setup_windows.ps1

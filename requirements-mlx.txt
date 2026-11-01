@@ -2,6 +2,8 @@
 # Local reviewed JSONL datasets; no optional Hugging Face dataset loader.
 # Installing this profile does not download a model or approve training.
 -c constraints-mlx-py313.txt
+certifi>=2026.10.18,<2027
+filelock>=4.2.1,<5
 mlx>=0.32.2,<0.33; platform_system == "Darwin" and platform_machine == "arm64"
 mlx-lm>=0.31.3,<0.32; platform_system == "Darwin" and platform_machine == "arm64"
 transformers>=5.17,<6; platform_system == "Darwin" and platform_machine == "arm64"

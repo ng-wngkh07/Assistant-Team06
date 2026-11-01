@@ -253,11 +253,14 @@ document.addEventListener("DOMContentLoaded", () => {
             uncertaintiesBox.innerHTML = "";
         }
 
-        // Render rows
-        if (entries.length === 0) {
+        // Render rows (retain partial_entries when full scheduled entries are absent — YC-06)
+        const rowsToRender = entries.length > 0
+            ? entries
+            : (Array.isArray(data.partial_entries) && data.partial_entries.length > 0 ? data.partial_entries : []);
+        if (rowsToRender.length === 0) {
             addEmptyDraftRow();
         } else {
-            entries.forEach(e => appendDraftRow(e));
+            rowsToRender.forEach(e => appendDraftRow(e));
         }
 
         saveDraftStateLocally();
@@ -377,7 +380,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         tr.innerHTML = `
             <td>
-                <select class="form-input draft-weekday" style="padding: 4px;">
+                <select class="form-input draft-weekday ${weekdayVal === "" ? "draft-field-missing" : ""}" style="padding: 4px;" title="${weekdayVal === "" ? "Còn thiếu thứ học — vui lòng chọn thứ" : ""}">
                     <option value="" ${weekdayVal === "" ? "selected" : ""}>-- Chọn thứ --</option>
                     <option value="1" ${weekdayVal === 1 ? "selected" : ""}>Thứ 2</option>
                     <option value="2" ${weekdayVal === 2 ? "selected" : ""}>Thứ 3</option>
@@ -389,16 +392,16 @@ document.addEventListener("DOMContentLoaded", () => {
                 </select>
             </td>
             <td>
-                <input type="text" class="form-input draft-course" required value="${escapeHtml(courseVal)}" placeholder="Tên môn học">
+                <input type="text" class="form-input draft-course ${!courseVal.trim() ? "draft-field-missing" : ""}" required value="${escapeHtml(courseVal)}" placeholder="Tên môn học (cần điền)">
             </td>
             <td>
                 <input type="text" class="form-input draft-period" value="${escapeHtml(periodVal)}" placeholder="Tiết (1-3)">
             </td>
             <td>
-                <input type="time" class="form-input draft-start" required value="${escapeHtml(startVal)}">
+                <input type="time" class="form-input draft-start ${!startVal ? "draft-field-missing" : ""}" required value="${escapeHtml(startVal)}" title="${!startVal ? "Còn thiếu giờ bắt đầu — vui lòng nhập giờ" : ""}">
             </td>
             <td>
-                <input type="time" class="form-input draft-end" required value="${escapeHtml(endVal)}">
+                <input type="time" class="form-input draft-end ${!endVal ? "draft-field-missing" : ""}" required value="${escapeHtml(endVal)}" title="${!endVal ? "Còn thiếu giờ kết thúc — vui lòng nhập giờ" : ""}">
             </td>
             <td>
                 <input type="text" class="form-input draft-room" value="${escapeHtml(roomVal)}" placeholder="Phòng">
@@ -408,8 +411,20 @@ document.addEventListener("DOMContentLoaded", () => {
             </td>
         `;
 
-        tr.addEventListener("input", saveDraftStateLocally);
-        tr.addEventListener("change", saveDraftStateLocally);
+        const syncMissingHighlight = () => {
+            const wEl = tr.querySelector(".draft-weekday");
+            const cEl = tr.querySelector(".draft-course");
+            const sEl = tr.querySelector(".draft-start");
+            const eEl = tr.querySelector(".draft-end");
+            if (wEl) wEl.classList.toggle("draft-field-missing", !wEl.value);
+            if (cEl) cEl.classList.toggle("draft-field-missing", !cEl.value.trim());
+            if (sEl) sEl.classList.toggle("draft-field-missing", !sEl.value);
+            if (eEl) eEl.classList.toggle("draft-field-missing", !eEl.value);
+            saveDraftStateLocally();
+        };
+
+        tr.addEventListener("input", syncMissingHighlight);
+        tr.addEventListener("change", syncMissingHighlight);
 
         tr.querySelector(".btn-del-row").addEventListener("click", () => {
             tr.remove();

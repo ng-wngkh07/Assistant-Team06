@@ -11,7 +11,16 @@ from collections import Counter
 from contextlib import closing
 from typing import Any, Optional
 
-from app.topic_catalog import TOPICS, PATTERNS, matches, normalized, resolve_topic
+from app.topic_catalog import (
+    CHILD_TO_PARENT,
+    TOPICS,
+    PATTERNS,
+    get_topic_tree_catalog,
+    matches,
+    normalized,
+    resolve_topic,
+    resolve_topic_hierarchy,
+)
 from app.config import DEFAULT_CHAT_MODEL
 from app.practice import PracticeGenerationError, PracticeService
 from app.rag_agent import DIRECTIVE_STOPWORDS, QUERY_STOPWORDS
@@ -267,10 +276,22 @@ class LearningService:
 
     def topics(self) -> dict[str, Any]:
         members = self._catalog_members(self.document_lookup.documents())
-        return {"topics": [
-            {"id": label, "label": label, "document_count": len(members[label])}
-            for label, _ in TOPICS if members[label]
-        ], "catalog_version": 1, "origin": "authored_catalog"}
+        counts = {label: len(members[label]) for label, _ in TOPICS}
+        return {
+            "topics": [
+                {
+                    "id": label,
+                    "label": label,
+                    "document_count": len(members[label]),
+                    "parent_id": CHILD_TO_PARENT.get(label, {}).get("parent_id", "general"),
+                    "parent_label": CHILD_TO_PARENT.get(label, {}).get("parent_label", label),
+                }
+                for label, _ in TOPICS if members[label]
+            ],
+            "topic_tree": get_topic_tree_catalog(counts),
+            "catalog_version": 1,
+            "origin": "authored_catalog",
+        }
 
     def _extract_document_topic(self, doc: dict) -> str:
         doc_id = doc["id"]
@@ -359,6 +380,15 @@ class LearningService:
         if authored:
             ids = self._catalog_members(available)[authored[0]]
             return [doc for doc in available if doc["id"] in ids]
+
+        hierarchy = resolve_topic_hierarchy(topic)
+        if hierarchy and hierarchy.get("is_parent"):
+            catalog_members = self._catalog_members(available)
+            parent_doc_ids = set()
+            for child_label in hierarchy.get("child_topics", ()):
+                parent_doc_ids.update(catalog_members.get(child_label, set()))
+            if parent_doc_ids:
+                return [doc for doc in available if doc["id"] in parent_doc_ids]
 
         return []
 
