@@ -6,6 +6,10 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Security
 
+- Upgrade `pillow` to `>=13.0.0`, `certifi` to `>=2026.10.18`, `filelock` to `>=4.2.1`, and `streamlit` to `1.66.1` across dependency and constraint manifests to address Dependabot advisories.
+- Reconstruct validated OCR cache filenames from an explicit hex alphabet and enforce normalized `CACHE_DIR` prefix containment in `app/vision_ocr.py`, sanitize error responses across `app/routes/` and `app/server.py` to prevent exception stack-trace exposure, and eliminate overlapping whitespace quantifiers in `app/answer_format.py` (`_SOURCE_SECTION`) to prevent polynomial ReDoS backtracking.
+- Replace `xml.etree.ElementTree` with `defusedxml.ElementTree` (`forbid_dtd=True`) in `app/knowledge_pack.py` and replace `xml.sax.saxutils.escape` with `html.escape` across RAG and training-data modules.
+
 - Report the full Python scan through pinned Bandit and its official SARIF formatter, retaining native severity and failing on incomplete analysis.
 
 - Parse DOCX and PPTX XML documents using `defusedxml` with forbidden DTD and entity expansion to prevent XML injection and external entity attacks; discard partial output when parsing fails.

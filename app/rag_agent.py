@@ -3,9 +3,15 @@ import logging
 import re
 import unicodedata
 from decimal import Decimal, InvalidOperation
-from html import unescape
-from xml.sax.saxutils import escape
+from html import escape as _html_escape, unescape
 from typing import Dict, Any, List, Optional, Generator
+
+
+def escape(text: str, entities: Optional[Dict[str, str]] = None) -> str:
+    res = _html_escape(text, quote=False)
+    for k, v in (entities or {}).items():
+        res = res.replace(k, v)
+    return res
 
 from app.runtime_health import runtime_failure_message
 from app.config import (

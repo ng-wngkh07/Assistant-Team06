@@ -6,8 +6,11 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("psychology_agent")
 
 
 def evaluate_question_difficulty(q: Dict[str, Any]) -> str:
@@ -77,17 +80,17 @@ def parse_json_from_response(raw_text: str) -> Optional[dict]:
     if m:
         try:
             return json.loads(m.group(1))
-        except Exception:
-            pass
+        except json.JSONDecodeError as exc:
+            logger.debug("Fenced JSON block parse failed: %s", exc)
     m = re.search(r"(\{.*\})", raw_text, re.DOTALL)
     if m:
         try:
             return json.loads(m.group(1))
-        except Exception:
-            pass
+        except json.JSONDecodeError as exc:
+            logger.debug("Braced JSON block parse failed: %s", exc)
     try:
         return json.loads(raw_text.strip())
-    except Exception:
+    except json.JSONDecodeError:
         return None
 
 

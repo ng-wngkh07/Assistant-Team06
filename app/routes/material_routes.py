@@ -53,8 +53,8 @@ async def upload_and_generate_materials(req: MaterialUploadRequest):
         if "," in raw_b64:
             raw_b64 = raw_b64.split(",", 1)[1]
         file_bytes = base64.b64decode(raw_b64)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Dữ liệu tệp tải lên (Base64) không hợp lệ: {e}")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Dữ liệu tệp tải lên (Base64) không hợp lệ.")
 
     def run_extraction_and_generation():
         extracted = _srv.study_material_manager.extract_document(
@@ -184,9 +184,9 @@ async def generate_materials_from_library(req: MaterialLibraryGenerateRequest):
         raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
     except DialogueBusyError as exc:
         raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
-    except Exception as exc:
+    except Exception:
         logger.exception("Lỗi tạo câu hỏi từ thư viện")
-        raise HTTPException(status_code=500, detail=f"Lỗi tạo câu hỏi từ thư viện: {exc}")
+        raise HTTPException(status_code=500, detail="Lỗi tạo câu hỏi từ thư viện. Vui lòng thử lại sau.")
 
 
 @router.get("/api/materials/documents")

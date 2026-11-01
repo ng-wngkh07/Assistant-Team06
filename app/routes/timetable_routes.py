@@ -147,9 +147,9 @@ async def extract_timetable(payload: TimetableExtractRequest):
         raise HTTPException(status_code=422, detail=str(e))
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("Error extracting timetable from image")
-        raise HTTPException(status_code=500, detail=f"Lỗi trích xuất thời khóa biểu: {e}")
+        raise HTTPException(status_code=500, detail="Lỗi trích xuất thời khóa biểu từ hình ảnh.")
 
 
 @router.post("/api/timetable/confirm")
@@ -262,6 +262,6 @@ async def export_timetable_ics(
         raise
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
+    except Exception:
         logger.exception("Lỗi xuất lịch sang ICS")
-        raise HTTPException(status_code=500, detail=f"Lỗi xuất tệp lịch .ics: {e}")
+        raise HTTPException(status_code=500, detail="Lỗi xuất tệp lịch .ics.")

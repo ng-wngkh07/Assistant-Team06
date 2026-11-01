@@ -7,7 +7,9 @@ _THINK = re.compile(r"<\s*(?:think|analysis|reasoning)\b[^>]*>.*?<\s*/\s*(?:thin
 _FINAL = re.compile(r"<\s*final\s*>(.*?)<\s*/\s*final\s*>", re.I | re.S)
 _SOURCE = re.compile(r"\[\s*S\d+(?:\s*[,;]\s*S\d+)*\s*\]", re.I)
 _BOOK_SOURCE = re.compile(r"\[[^\[\]\n]{2,160},\s*Trang\s+\d+\]", re.I)
-_SOURCE_SECTION = re.compile(r"(?im)^\s*(?:#{1,6}\s*)?(?:nguồn(?: tham khảo)?|trích dẫn|tài liệu tham khảo|sources?|references?)\s*:\s*.*(?:\n(?:\s*[-*].*|\s*\[S\d+\].*)?)*$")
+_SOURCE_SECTION = re.compile(
+    r"(?is)\n[ \t\r\n]*(?:#+[ \t]+)?(?:nguồn(?: tham khảo)?|trích dẫn|tài liệu tham khảo|sources?|references?)[ \t]*:.*$"
+)
 _SOURCE_INTRO = re.compile(
     r"(?i)\b(?:theo\s+(?:(?:các\s+)?(?:đoạn(?:\s+trích)?|trích\s+đoạn|nguồn|tài liệu)\s*|(?=\[\s*S\d+))|"
     r"(?:trong|ở|tại)\s+(?:các\s+)?(?:đoạn(?:\s+trích)?|trích\s+đoạn|nguồn|tài liệu)\s*)"

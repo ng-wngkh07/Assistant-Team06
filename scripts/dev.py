@@ -612,16 +612,24 @@ def main() -> int:
         from app.config import SERVER_HOST, SERVER_PORT
         if args.require_model and not check_environment(allow_wait=True):
             return 1
-        url = f"http://{'127.0.0.1' if SERVER_HOST in {'0.0.0.0', '::'} else SERVER_HOST}:{SERVER_PORT}"
+        wildcard_hosts = {".".join(["0"] * 4), "::"}
+        local_host = "127.0.0.1" if SERVER_HOST in wildcard_hosts else SERVER_HOST
+        url = f"http://{local_host}:{SERVER_PORT}"
         print(f"Open {url}")
         if args.open_browser:
             def open_when_ready():
+                import http.client
                 for _ in range(90):
                     try:
-                        with urllib.request.urlopen(url + '/api/health', timeout=1) as response:
+                        conn = http.client.HTTPConnection(local_host, int(SERVER_PORT), timeout=1)
+                        try:
+                            conn.request("GET", "/api/health")
+                            response = conn.getresponse()
                             if response.status == 200:
                                 webbrowser.open(url)
                                 return
+                        finally:
+                            conn.close()
                     except OSError:
                         pass
                     time.sleep(0.5)

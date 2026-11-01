@@ -664,7 +664,7 @@ async def trigger_indexing(req: IndexRequest):
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.exception("Error during indexing")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=runtime_failure_message(e))
 
 @app.post("/api/chat")
 async def chat_sync(req: ChatRequest):
@@ -964,7 +964,7 @@ async def chat_stream(req: ChatRequest):
             yield f"data: {json.dumps(err_event, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.exception("Stream error")
-            err_event = {"type": "error", "content": str(e)}
+            err_event = {"type": "error", "content": runtime_failure_message(e)}
             yield f"data: {json.dumps(err_event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(

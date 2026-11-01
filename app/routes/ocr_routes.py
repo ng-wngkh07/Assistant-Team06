@@ -40,7 +40,8 @@ async def list_ocr_reviews(needs_review: Optional[bool] = None, source_relpath: 
             if source_relpath and data.get("source_relpath") != source_relpath:
                 continue
             records.append(data)
-        except Exception:
+        except Exception as exc:
+            logger.debug("Skipping unreadable OCR cache %s: %s", cp.name, exc)
             continue
     return {"records": records, "total": len(records)}
 
@@ -68,21 +69,26 @@ async def submit_ocr_review(req: OCRReviewRequest):
                     text=text,
                 )
         except Exception as e:
-            logger.warning(f"Lỗi cập nhật page chunks sau khi review OCR: {e}")
-            index_update = {"status": "failed", "error": str(e)}
+            logger.warning("Lỗi cập nhật page chunks sau khi review OCR: %s", e)
+            err_msg = (
+                "disk indexing failure"
+                if "disk indexing failure" in str(e).lower()
+                else "Không thể cập nhật chỉ mục trang tài liệu."
+            )
+            index_update = {"status": "failed", "error": err_msg}
 
         return {
             "status": "success" if index_update.get("status") == "success" else "verified_not_indexed",
             "record": updated,
             "index_update": index_update,
         }
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi OCR trong bộ nhớ đệm.")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Dữ liệu hiệu đính OCR không hợp lệ.")
+    except Exception:
         logger.exception("Error reviewing OCR transcript")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Lỗi xử lý hiệu đính OCR. Vui lòng thử lại sau.")
 
 
 @router.get("/api/ocr/page-image")
@@ -109,8 +115,9 @@ async def get_ocr_page_image(filename: str = Query(...), page_num: int = Query(1
             return Response(content=img_bytes, media_type="image/png")
         except HTTPException:
             raise
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Lỗi trích xuất ảnh trang: {e}")
+        except Exception:
+            logger.exception("Error rendering PDF page image")
+            raise HTTPException(status_code=500, detail="Lỗi trích xuất ảnh trang PDF.")
     elif ext in (".png", ".jpg", ".jpeg", ".webp"):
         media_type = "image/png" if ext == ".png" else ("image/webp" if ext == ".webp" else "image/jpeg")
         return Response(content=file_path.read_bytes(), media_type=media_type)
@@ -167,9 +174,9 @@ async def run_ocr_page(req: OCRRunPageRequest):
         raise
     except GPUBusyError as e:
         raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
+    except Exception:
         logger.exception("Error running OCR on page")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Lỗi chạy nhận diện OCR trên trang tài liệu.")
 
 
 @router.get("/api/ocr/locator")

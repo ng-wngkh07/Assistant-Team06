@@ -65,13 +65,18 @@ def get_ollama_model_digest(model_name: str = OLLAMA_AUX_CHAT_MODEL) -> Optional
 
 def _atomic_write_cache(file_path: Path, data: dict) -> None:
     """Atomic write for cache files using temp file replace on same filesystem."""
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_file = file_path.with_suffix(f".tmp.{os.getpid()}.{time.time_ns()}")
+    base_dir = os.path.normpath(os.fspath(CACHE_DIR))
+    target_norm = os.path.normpath(os.fspath(file_path))
+    if not target_norm.startswith(base_dir + os.sep):
+        raise PermissionError(f"Đường dẫn cache thoát khỏi CACHE_DIR: {target_norm}")
+    safe_path = Path(target_norm)
+    safe_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = safe_path.with_suffix(f".tmp.{os.getpid()}.{time.time_ns()}")
     with temp_file.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(temp_file, file_path)
+    os.replace(temp_file, safe_path)
 
 
 class VisionOCRManager:
@@ -110,12 +115,15 @@ class VisionOCRManager:
 
     def _validate_cache_path(self, cache_key: str) -> Path:
         """Ensure cache_key is a valid 64-char hex string and does not escape CACHE_DIR."""
-        if not re.match(r"^[0-9a-f]{64}$", cache_key):
+        if not isinstance(cache_key, str) or not re.fullmatch(r"[0-9a-f]{64}", cache_key):
             raise ValueError(f"cache_key không hợp lệ (phải là 64 ký tự hex sha256): '{cache_key}'")
-        target = (CACHE_DIR / f"{cache_key}.json").resolve()
-        if not target.is_relative_to(CACHE_DIR.resolve()):
-            raise PermissionError(f"Đường dẫn cache thoát khỏi CACHE_DIR: {target}")
-        return target
+        hex_alphabet = "0123456789abcdef"
+        untainted_key = "".join(hex_alphabet[int(ch, 16)] for ch in cache_key)
+        base_dir = os.path.normpath(os.fspath(CACHE_DIR))
+        target_norm = os.path.normpath(os.path.join(base_dir, f"{untainted_key}.json"))
+        if not target_norm.startswith(base_dir + os.sep):
+            raise PermissionError(f"Đường dẫn cache thoát khỏi CACHE_DIR: {target_norm}")
+        return Path(target_norm)
 
     def get_cached_transcript(self, cache_key: str) -> Optional[Dict[str, Any]]:
         path = self._validate_cache_path(cache_key)
@@ -383,8 +391,15 @@ class VisionOCRManager:
     ) -> Dict[str, Any]:
         """Human review & approval hook for an OCR transcript with source validation and atomic revision tracking."""
         mgr = cls()
-        path = mgr._validate_cache_path(cache_key)
-        if not path.exists():
+        mgr._validate_cache_path(cache_key)
+        expected_name = f"{cache_key}.json"
+        path: Optional[Path] = None
+        if CACHE_DIR.is_dir():
+            for candidate_path in CACHE_DIR.iterdir():
+                if candidate_path.name == expected_name and candidate_path.is_file():
+                    path = candidate_path
+                    break
+        if path is None:
             raise FileNotFoundError(f"Không tìm thấy bản ghi OCR với key {cache_key}")
 
         entry = json.loads(path.read_text(encoding="utf-8"))
