@@ -2622,8 +2622,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 loading: true
             });
 
+            const isInstantStudyToolUpload = Boolean(inputEl && studyToolFileInput && inputEl === studyToolFileInput);
             if (studyToolStatus) {
-                studyToolStatus.textContent = `⏳ Đang đọc và nạp tệp "${file.name}" vào thư viện cá nhân...`;
+                studyToolStatus.textContent = isInstantStudyToolUpload
+                    ? `⚡ Đang trích xuất nhanh tệp "${file.name}" trong bộ nhớ tạm (không chờ lập chỉ mục dài hạn)...`
+                    : `⏳ Đang đọc và nạp tệp "${file.name}" vào thư viện cá nhân...`;
             }
 
             const res = await fetch("/api/materials/upload", {
@@ -2633,7 +2636,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     filename: file.name,
                     file_base64: base64Data,
                     generate_study_set: false,
-                    persist_to_src: true
+                    persist_to_src: !isInstantStudyToolUpload
                 })
             });
 
@@ -2688,7 +2691,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             }
             if (studyToolStatus) {
-                if (chunksCount === 0) {
+                if (isInstantStudyToolUpload) {
+                    studyToolStatus.textContent = `⚡ Đã trích xuất nhanh "${canonicalFilename}" (${pagesCount} trang) trong bộ nhớ tạm. Nhấn "⚡ Tạo Trắc nghiệm & Flashcard" để tạo ngay lập tức!`;
+                } else if (chunksCount === 0) {
                     studyToolStatus.textContent = `⚠️ Đã nạp "${canonicalFilename}" nhưng chưa có đoạn trích xuất khả dụng trong chỉ mục.`;
                 } else if (isKeywordOnly) {
                     studyToolStatus.textContent = `✅ Đã nạp thành công "${canonicalFilename}" (${pagesCount} trang, chế độ tra cứu từ khóa) vào thư viện cá nhân. Sẵn sàng hỏi đáp và ôn luyện.`;

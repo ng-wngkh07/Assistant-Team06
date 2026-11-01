@@ -20,6 +20,10 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Added
 
+- Add a hierarchical two-level parent-child topic tree (`app/topic_tree.py`) shared between QA and topic-based learning (`app/learning.py`), mapping course subtopics under parent academic domains.
+- Render `.pptx` slides and `.docx` pages as visual PNG previews via `app/slide_preview.py` for `/api/documents/{document_id}/pages/{page_num}/image` and `/api/ocr/page-image`.
+- Add Tesseract OCR (`UB-Mannheim.TesseractOCR`) to the Windows setup manifest (`requirements-windows-tools.json`), installer script (`scripts/windows_setup.ps1`), and Windows documentation (`README_WINDOWS.md`), with automatic Windows installation path detection in `app/timetable_table.py`.
+- Retain partial timetable rows (`partial_entries`) during incomplete course-registration screenshot extraction and highlight missing required schedule fields (`.draft-field-missing`) in the timetable draft UI so users can complete missing weekday, time, or room values directly.
 - Require source-bound content review and a coverage ledger for every physical page or slide before full-corpus acceptance, including pages without extraction warnings. Preserve unreadable regions and verify repaired passages and affected retrieval data separately.
 - Define production acceptance for the complete agreed real library, usable original citations, precomputed retrieval, reproducible model settings and persistent personal uploads. Track these separately from synthetic test coverage and private training data.
 - Build application distributions from a committed source revision and explicitly approved knowledge packs, with a bundled descriptor and a separate persistent personal library for uploads, retrieval, history and calendar state. Display the actual local source directory and its privacy policy in the library interface.
@@ -34,6 +38,10 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Changed
 
+- Split monolithic backend files into focused single-responsibility modules: `app/lexical_search.py` and `app/semantic_search.py` (from `app/searcher.py`); `app/material_storage.py`, `app/question_validator.py`, `app/quiz_generator.py`, and `app/flashcard_generator.py` (from `app/study_materials.py`); `app/rag_query_analyzer.py`, `app/rag_evidence_validator.py`, and `app/rag_citation_repair.py` (from `app/rag_agent.py`); and domain route modules under `app/routes/` (from `app/server.py`), while preserving backward-compatible re-exports.
+- Move legacy `v4`–`v6` model evaluation and preparation scripts from `app/` to `scripts/archive/` and remove unused `static/style.light-backup.css`.
+- Default `resolve_processing_level` in `app/reasoning_policy.py` to `"standard"` unless `"careful"` is explicitly requested, and use in-memory extraction (`persist_to_src: false`) when uploading files directly from the Flashcard/Quiz study modal so generation does not block on corpus indexing.
+- Unify timetable vision extraction timeout across macOS and Windows via `VISION_TIMEOUT_SECONDS` (360 seconds default).
 - Warn when a supported source comparison shows a function declaration and definition with value versus reference parameters, without assuming whether the functions are intentional overloads or the complete program will link.
 
 - Display original library PDF pages in the document viewer, with extracted text labeled separately because it can omit formulas or illustrations.

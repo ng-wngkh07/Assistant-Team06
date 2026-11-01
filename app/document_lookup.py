@@ -272,13 +272,17 @@ class DocumentLookup:
         return {"results": results, "method": "hybrid" if semantic else "fts", "notice": notice}
 
     def page_image(self, doc_id: int, page_num: int) -> Optional[bytes]:
-        """Render the original PDF page without rewriting its text, math or layout."""
+        """Render the original PDF page (or PPTX/DOCX preview) without rewriting its text, math or layout."""
         import pymupdf
         doc = self.document(doc_id)
         if not doc or page_num < 1:
             return None
         path = self.pdf_path(doc['filename'])
         if not path:
+            raw_path = self.file_path(doc['filename'])
+            if raw_path and raw_path.suffix.lower() in ('.pptx', '.docx'):
+                from app.slide_preview import render_office_page_png
+                return render_office_page_png(raw_path, page_num=page_num)
             return None
         with pymupdf.open(path) as pdf:
             if page_num > len(pdf):

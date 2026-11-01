@@ -38,6 +38,7 @@ function Get-ToolPath {
     $path = switch ($Name) {
         'git' { "$env:ProgramFiles\Git\cmd\git.exe" }
         'ollama' { "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" }
+        'tesseract' { "$env:ProgramFiles\Tesseract-OCR\tesseract.exe" }
         default { throw "Unknown tool: $Name" }
     }
     if (Test-Path $path) { return $path }
