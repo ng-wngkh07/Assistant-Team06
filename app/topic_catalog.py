@@ -16,12 +16,14 @@ from app.topic_tree import (
     resolve_topic,
     resolve_topic_hierarchy,
 )
+from app.topic_router import TopicRouter
 
 __all__ = [
     "CHILD_TO_PARENT",
     "PATTERNS",
     "TOPIC_TREE",
     "TOPICS",
+    "TopicRouter",
     "get_topic_tree_catalog",
     "infer_query_topic_hierarchy",
     "matches",

@@ -257,22 +257,50 @@ class DocumentLookup:
                 continue
             seen.add(key)
             item.pop("rank_score", None)
-            item["pdf_url"] = (
-                f"/api/documents/{item['doc_id']}/pdf#page={item['page_num']}"
-                if self.pdf_path(item.get("filename", ""))
-                else None
-            )
-            item["page_image_url"] = (
-                f"/api/documents/{item['doc_id']}/pages/{item['page_num']}/image"
-                if self.pdf_path(item.get("filename", "")) else None
-            )
+            doc_id = item["doc_id"]
+            filename = item.get("filename", "")
+            path = self.supported_path(filename)
+            ext = path.suffix.lower() if path else Path(filename).suffix.lower()
+            original_url = f"/api/documents/{doc_id}/original" if path else None
+
+            if ext == ".pdf":
+                item["source_kind"] = "pdf"
+                item["page_label"] = f"Trang PDF {item['page_num']}"
+                item["pdf_url"] = f"/api/documents/{doc_id}/pdf#page={item['page_num']}"
+                item["page_image_url"] = f"/api/documents/{doc_id}/pages/{item['page_num']}/image"
+                item["original_url"] = original_url
+                item["preview_available"] = True
+            elif ext == ".pptx":
+                from app.slide_preview import is_pptx_preview_available
+                preview_avail = bool(path and is_pptx_preview_available(path))
+                item["source_kind"] = "pptx"
+                item["page_label"] = f"Slide {item['page_num']}"
+                item["pdf_url"] = None
+                item["page_image_url"] = f"/api/documents/{doc_id}/pages/{item['page_num']}/image" if preview_avail else None
+                item["original_url"] = original_url
+                item["preview_available"] = preview_avail
+            elif ext == ".docx":
+                item["source_kind"] = "docx"
+                item["page_label"] = f"Phần {item['page_num']}"
+                item["pdf_url"] = None
+                item["page_image_url"] = None
+                item["original_url"] = original_url
+                item["preview_available"] = False
+            else:
+                item["source_kind"] = ext.lstrip(".") or "text"
+                item["page_label"] = f"Phần {item['page_num']}"
+                item["pdf_url"] = None
+                item["page_image_url"] = None
+                item["original_url"] = original_url
+                item["preview_available"] = False
+
             results.append(item)
             if len(results) == limit:
                 break
         return {"results": results, "method": "hybrid" if semantic else "fts", "notice": notice}
 
     def page_image(self, doc_id: int, page_num: int) -> Optional[bytes]:
-        """Render the original PDF page (or PPTX/DOCX preview) without rewriting its text, math or layout."""
+        """Render the original PDF page (or PPTX slide preview) without rewriting its text, math or layout."""
         import pymupdf
         doc = self.document(doc_id)
         if not doc or page_num < 1:
@@ -280,7 +308,7 @@ class DocumentLookup:
         path = self.pdf_path(doc['filename'])
         if not path:
             raw_path = self.file_path(doc['filename'])
-            if raw_path and raw_path.suffix.lower() in ('.pptx', '.docx'):
+            if raw_path and raw_path.suffix.lower() == '.pptx':
                 from app.slide_preview import render_office_page_png
                 return render_office_page_png(raw_path, page_num=page_num)
             return None
@@ -299,8 +327,52 @@ class DocumentLookup:
         """Resolve persisted citations using database IDs, never user paths or URLs."""
         with closing(self.connect()) as db:
             row = db.execute('SELECT id FROM documents WHERE filename=?', (filename,)).fetchone()
-        if not row or not self.pdf_path(filename) or page_num < 1:
+        path = self.supported_path(filename)
+        if not row or not path or page_num < 1:
             return {}
         doc_id = row['id']
-        return {'doc_id': doc_id, 'page_image_url': f'/api/documents/{doc_id}/pages/{page_num}/image',
-                'pdf_url': f'/api/documents/{doc_id}/pdf#page={page_num}'}
+        ext = path.suffix.lower()
+        original_url = f"/api/documents/{doc_id}/original"
+
+        if ext == ".pdf":
+            return {
+                'doc_id': doc_id,
+                'source_kind': 'pdf',
+                'page_label': f"Trang {page_num}",
+                'pdf_url': f'/api/documents/{doc_id}/pdf#page={page_num}',
+                'page_image_url': f'/api/documents/{doc_id}/pages/{page_num}/image',
+                'original_url': original_url,
+                'preview_available': True,
+            }
+        elif ext == ".pptx":
+            from app.slide_preview import is_pptx_preview_available
+            preview_avail = bool(path and is_pptx_preview_available(path))
+            return {
+                'doc_id': doc_id,
+                'source_kind': 'pptx',
+                'page_label': f"Slide {page_num}",
+                'pdf_url': None,
+                'page_image_url': f'/api/documents/{doc_id}/pages/{page_num}/image' if preview_avail else None,
+                'original_url': original_url,
+                'preview_available': preview_avail,
+            }
+        elif ext == ".docx":
+            return {
+                'doc_id': doc_id,
+                'source_kind': 'docx',
+                'page_label': f"Phần {page_num}",
+                'pdf_url': None,
+                'page_image_url': None,
+                'original_url': original_url,
+                'preview_available': False,
+            }
+        else:
+            return {
+                'doc_id': doc_id,
+                'source_kind': ext.lstrip(".") or "text",
+                'page_label': f"Phần {page_num}",
+                'pdf_url': None,
+                'page_image_url': None,
+                'original_url': original_url,
+                'preview_available': False,
+            }

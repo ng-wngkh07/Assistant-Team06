@@ -45,3 +45,25 @@ test('searching extracted content opens the matching preview while preserving th
   assert.match(ui.docContentPagesList.innerHTML, /<details class="canvas-extracted-text" open>/);
   assert.match(ui.docContentPagesList.innerHTML, /<mark class="canvas-mark">f\(x\)<\/mark>/i);
 });
+
+test('library PPTX presentation viewer displays slide layout with original download and image preview without PDF routes', () => {
+  const ui = viewer();
+  ui.renderDocumentContentPages({filename: 'lecture.pptx', doc_id: 155, total_pages: 2,
+    pages: [{page_num: 1, text: 'Slide 1 Introduction'}, {page_num: 2, text: 'Slide 2 Algorithms'}]});
+  assert.match(ui.docContentPagesList.innerHTML, /Slide 1/);
+  assert.match(ui.docContentPagesList.innerHTML, /Slide 2/);
+  assert.match(ui.docContentPagesList.innerHTML, /href="\/api\/documents\/155\/original"/);
+  assert.match(ui.docContentPagesList.innerHTML, /src="\/api\/documents\/155\/pages\/1\/image"/);
+  assert.match(ui.docContentPagesList.innerHTML, /canvas-render-unavailable/);
+  assert.doesNotMatch(ui.docContentPagesList.innerHTML, /\/api\/documents\/155\/pdf/);
+});
+
+test('library DOCX document viewer displays logical reading sections and original download without forging page images', () => {
+  const ui = viewer();
+  ui.renderDocumentContentPages({filename: 'notes.docx', doc_id: 162, total_pages: 2,
+    pages: [{page_num: 1, text: 'Phần 1: Khái niệm'}, {page_num: 2, text: 'Phần 2: Ứng dụng'}]});
+  assert.match(ui.docContentPagesList.innerHTML, /Phần 1 \(phân đoạn đọc\)/);
+  assert.match(ui.docContentPagesList.innerHTML, /href="\/api\/documents\/162\/original"/);
+  assert.doesNotMatch(ui.docContentPagesList.innerHTML, /canvas-original-page-image/);
+  assert.doesNotMatch(ui.docContentPagesList.innerHTML, /\/api\/documents\/162\/pdf/);
+});

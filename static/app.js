@@ -1362,8 +1362,11 @@ document.addEventListener("DOMContentLoaded", () => {
             const summary = document.createElement("summary");
             summary.className = "citation-summary";
             const page = Number(c.page_num || c.page);
-            const isPdf = Boolean(c.filename && c.filename.toLowerCase().endsWith(".pdf"));
-            const unitLabel = isPdf ? "trang" : "phần";
+            const fname = c.filename || "";
+            const isPdf = Boolean(fname.toLowerCase().endsWith(".pdf"));
+            const isPptx = Boolean(fname.toLowerCase().endsWith(".pptx"));
+            const isDocx = Boolean(fname.toLowerCase().endsWith(".docx"));
+            const unitLabel = isPdf ? "trang" : (isPptx ? "slide" : "phần");
             summary.textContent = `[${c.id || 'S'}] ${c.book_title || c.filename || c.book || ''} · ${unitLabel} ${page || '?'}`;
             detail.appendChild(summary);
             if (c.page_quality?.needs_review) {
@@ -1424,11 +1427,30 @@ document.addEventListener("DOMContentLoaded", () => {
                     link.rel = "noopener noreferrer";
                     link.textContent = `📄 Mở trang PDF ${page} để đối chiếu`;
                     detail.appendChild(link);
+                } else if (isPptx) {
+                    const origLink = document.createElement("a");
+                    origLink.className = "citation-preview-link";
+                    origLink.href = `/api/documents/${id}/original`;
+                    origLink.target = "_blank";
+                    origLink.rel = "noopener noreferrer";
+                    origLink.textContent = `📊 Tải tệp bài giảng gốc (.pptx)`;
+                    detail.appendChild(origLink);
+                } else if (isDocx) {
+                    const origLink = document.createElement("a");
+                    origLink.className = "citation-preview-link";
+                    origLink.href = `/api/documents/${id}/original`;
+                    origLink.target = "_blank";
+                    origLink.rel = "noopener noreferrer";
+                    origLink.textContent = `📝 Tải tài liệu Word gốc (.docx) · Phần ${page}`;
+                    detail.appendChild(origLink);
                 } else {
-                    const textNotice = document.createElement("p");
-                    textNotice.className = "citation-text-fallback";
-                    textNotice.textContent = "📝 Trích đoạn từ tệp văn bản / Markdown nguồn (không có bản scan ảnh trang).";
-                    detail.appendChild(textNotice);
+                    const origLink = document.createElement("a");
+                    origLink.className = "citation-preview-link";
+                    origLink.href = `/api/documents/${id}/original`;
+                    origLink.target = "_blank";
+                    origLink.rel = "noopener noreferrer";
+                    origLink.textContent = `📥 Tải tệp nguồn gốc`;
+                    detail.appendChild(origLink);
                 }
             }
             attachOriginalPage();
@@ -2344,13 +2366,17 @@ document.addEventListener("DOMContentLoaded", () => {
             ? entry.extracted_pages
             : [];
         const q = (filterQuery || "").toLowerCase().trim();
-        const isPdf = Boolean(entry && entry.filename && entry.filename.toLowerCase().endsWith(".pdf"));
+        const fname = String(entry?.filename || "").toLowerCase();
+        const isPdf = fname.endsWith(".pdf");
+        const isPptx = fname.endsWith(".pptx");
+        const isDocx = fname.endsWith(".docx");
         const documentId = Number(entry?.doc_id);
         const showOriginalPages = isPdf && Number.isSafeInteger(documentId) && documentId > 0;
+        const showPptxSlides = isPptx && Number.isSafeInteger(documentId) && documentId > 0;
 
         // Text extraction may omit diagrams, formulas, or entire pages. For a
-        // library PDF, the physical pages are the primary reading surface.
-        if (showOriginalPages) {
+        // library PDF or PPTX deck, the physical pages/slides are the primary reading surface.
+        if (showOriginalPages || showPptxSlides) {
             const totalPages = Number(entry.total_pages);
             if (Number.isSafeInteger(totalPages) && totalPages > 0 && totalPages <= 100000) {
                 const textByPage = new Map(pages.map(p => [Number(p.page_num), p]));
@@ -2361,7 +2387,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         const filteredPages = q
-            ? pages.filter(p => String(p.text || "").toLowerCase().includes(q) || `trang ${p.page_num}`.includes(q))
+            ? pages.filter(p => String(p.text || "").toLowerCase().includes(q) || `trang ${p.page_num}`.includes(q) || `slide ${p.page_num}`.includes(q) || `phần ${p.page_num}`.includes(q))
             : pages;
 
         if (canvasSearchCount) {
@@ -2370,7 +2396,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 let count = 0;
                 pages.forEach(p => {
                     const matches = (String(p.text || "").toLowerCase().match(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
-                    count += matches + (`trang ${p.page_num}`.includes(q) ? 1 : 0);
+                    count += matches + (`trang ${p.page_num}`.includes(q) || `slide ${p.page_num}`.includes(q) || `phần ${p.page_num}`.includes(q) ? 1 : 0);
                 });
                 canvasSearchCount.textContent = `${count} kết quả`;
             } else {
@@ -2403,8 +2429,31 @@ document.addEventListener("DOMContentLoaded", () => {
                         ${formatCanvasBlock(pageText, pageNumber, idx === 0, q, false)}
                     </details>` : ""}
                 </section>`;
+            } else if (showPptxSlides && Number.isSafeInteger(pageNumber) && pageNumber > 0) {
+                const originalUrl = `/api/documents/${documentId}/original`;
+                const imageUrl = `/api/documents/${documentId}/pages/${pageNumber}/image`;
+                fullHtml += `<section class="canvas-original-page" data-page="${pageNumber}">
+                    <div class="canvas-original-page-heading"><span>Slide ${pageNumber}</span>
+                    <a href="${originalUrl}" target="_blank" rel="noopener noreferrer" download>Tải bài giảng gốc (.pptx)</a></div>
+                    <img class="canvas-original-page-image" src="${imageUrl}" alt="Slide ${pageNumber}" loading="lazy" decoding="async" onerror="this.style.display='none'; this.nextElementSibling?.removeAttribute('hidden');">
+                    <div class="canvas-render-unavailable text-muted" style="padding: 12px; font-size: 13px;" hidden>⚠️ Máy chủ chưa thể hiển thị ảnh slide gốc (cần LibreOffice để kết xuất slide gốc). Hãy tải bài giảng gốc để xem chi tiết.</div>
+                    ${pageText ? `<details class="canvas-extracted-text"${q && pageText.toLowerCase().includes(q) ? " open" : ""}>
+                        <summary>Văn bản trích xuất từ slide</summary>
+                        ${formatCanvasBlock(pageText, pageNumber, idx === 0, q, false)}
+                    </details>` : ""}
+                </section>`;
             } else if (pageText) {
-                fullHtml += formatCanvasBlock(pageText, p.page_num || (idx + 1), idx === 0, q, isPdf);
+                const isDocxWithId = isDocx && Number.isSafeInteger(documentId) && documentId > 0;
+                if (isDocxWithId) {
+                    const originalUrl = `/api/documents/${documentId}/original`;
+                    fullHtml += `<section class="canvas-document-section" data-section="${p.page_num || (idx + 1)}">
+                        <div class="canvas-original-page-heading"><span>Phần ${p.page_num || (idx + 1)} (phân đoạn đọc)</span>
+                        <a href="${originalUrl}" target="_blank" rel="noopener noreferrer" download>Tải tài liệu Word gốc (.docx)</a></div>
+                        ${formatCanvasBlock(pageText, p.page_num || (idx + 1), idx === 0, q, false)}
+                    </section>`;
+                } else {
+                    fullHtml += formatCanvasBlock(pageText, p.page_num || (idx + 1), idx === 0, q, isPdf);
+                }
             }
         });
         docContentPagesList.innerHTML = fullHtml || `<div class="canvas-empty-state">Không có nội dung văn bản.</div>`;
@@ -2429,10 +2478,18 @@ document.addEventListener("DOMContentLoaded", () => {
             docContentModalTitle.textContent = `📄 ${fname}`;
         }
         if (docContentModalMeta) {
-            docContentModalMeta.textContent = `${totalPages} ${/\.pdf$/i.test(fname) ? "trang" : "phần"} · ${totalChars.toLocaleString("vi-VN")} ký tự`;
+            let unit = "phần";
+            if (/\.pdf$/i.test(fname)) unit = "trang";
+            else if (/\.pptx$/i.test(fname)) unit = "slide";
+            docContentModalMeta.textContent = `${totalPages} ${unit} · ${totalChars.toLocaleString("vi-VN")} ký tự`;
         }
         if (docContentSrcBadge) {
-            docContentSrcBadge.textContent = `📂 ${srcPath}`;
+            const docId = Number(entry?.doc_id);
+            if (Number.isSafeInteger(docId) && docId > 0) {
+                docContentSrcBadge.innerHTML = `📂 ${escapeHtml(srcPath)} · <a href="/api/documents/${docId}/original" target="_blank" rel="noopener noreferrer" download style="color: inherit; text-decoration: underline;">Tải tệp gốc</a>`;
+            } else {
+                docContentSrcBadge.textContent = `📂 ${srcPath}`;
+            }
         }
         if (docContentSearchInput) {
             docContentSearchInput.value = "";

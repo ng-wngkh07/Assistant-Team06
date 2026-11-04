@@ -1138,6 +1138,7 @@ def test_uploaded_material_gets_native_vectors_without_any_daemon_probe(client, 
     source = 'Entropy Shannon đo độ bất định của biến ngẫu nhiên rời rạc hữu hạn.'
     response = client.post('/api/materials/upload', json={
         "difficulty": "easy",
+        'persist_to_src': True,
         'filename': 'native-entropy.txt',
         'file_base64': base64.b64encode(source.encode()).decode(),
     })

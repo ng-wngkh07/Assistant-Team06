@@ -22,7 +22,13 @@ from typing import Dict, Any, List, Optional, Tuple
 import requests
 
 
-from app.config import DATA_DIR, SRC_DIR, OLLAMA_BASE_URL, OLLAMA_AUX_CHAT_MODEL
+from app.config import (
+    DATA_DIR,
+    SRC_DIR,
+    OLLAMA_BASE_URL,
+    OLLAMA_AUX_CHAT_MODEL,
+    VISION_TIMEOUT_SECONDS,
+)
 from app.gpu_lock import gpu_coordinator, GPUBusyError
 from app.text_cleaner import normalize_vietnamese_text
 
@@ -90,13 +96,15 @@ class VisionOCRManager:
         vision_model: str = OLLAMA_AUX_CHAT_MODEL,
         max_pages: int = 30,
         max_image_mb: float = 10.0,
-        timeout_seconds: int = 120,
+        timeout_seconds: Optional[float] = VISION_TIMEOUT_SECONDS,
     ):
         self.backend = backend
         self.vision_model = vision_model
         self.max_pages = max_pages
         self.max_image_mb = max_image_mb
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = (
+            timeout_seconds if timeout_seconds is not None else VISION_TIMEOUT_SECONDS
+        )
 
     @classmethod
     def compute_cache_key(
