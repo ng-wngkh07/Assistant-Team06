@@ -1,5 +1,6 @@
 """Document Lookup, Source Preview & Original Page Image API Routes (Single Responsibility Module)."""
 
+from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -9,6 +10,19 @@ from starlette.concurrency import run_in_threadpool
 from app.dialogue import DialogueBusyError
 
 router = APIRouter()
+
+DOCUMENT_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".markdown": "text/markdown; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
 
 
 @router.get("/api/documents")
@@ -54,6 +68,27 @@ async def document_source_preview(
     if not result:
         raise HTTPException(status_code=404, detail="Không tìm thấy trang nguồn.")
     return result
+
+
+@router.get("/api/documents/{document_id}/original")
+async def download_document_original(document_id: int):
+    from app import server as _srv
+    doc = await run_in_threadpool(_srv.document_lookup.document, document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Không tìm thấy tài liệu trong thư viện.")
+    path = _srv.document_lookup.supported_path(doc["filename"])
+    if not path or not path.is_file():
+        raise HTTPException(status_code=404, detail="Không tìm thấy tệp nguồn của tài liệu.")
+    ext = path.suffix.lower()
+    media_type = DOCUMENT_MEDIA_TYPES.get(ext)
+    if not media_type:
+        raise HTTPException(status_code=404, detail="Định dạng tệp không được hỗ trợ tải về.")
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=Path(doc["filename"]).name,
+        content_disposition_type="attachment",
+    )
 
 
 @router.get("/api/documents/{document_id}/pdf")

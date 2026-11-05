@@ -86,3 +86,7 @@ One writer owns a canonical index or model operation at a time. Local inference 
 The running `/docs` page is the authoritative endpoint and payload reference. Core routes cover chat and streaming, sessions, document lookup, material upload/inspection/generation/download, practice and timetables. Do not duplicate business logic in a second backend or infer current contracts from a UI mockup.
 
 Practice generation and source review pass an explicit JSON schema through the native worker or Ollama format parameter. The native worker uses the structured decoder provided by the installed MLX-VLM/llguidance runtime. A valid JSON structure is not evidence of factual correctness; passage, answer uniqueness, qualifiers and difficulty checks remain separate. Missing finish metadata is an incomplete result.
+
+## Shared topic routing
+
+QA retrieval and practice use the authored hierarchy in `app/topic_tree.py`. The query router derives document candidates from indexed passages without changing the database schema or rebuilding vectors. Recognized topic queries try those candidates first; unrecognized queries, empty candidate sets and inadequate scoped evidence use global retrieval. Explicit document or page selection remains authoritative. Existing ranking, source-quality warnings and citation checks still apply. Topic matching and evidence adequacy are heuristics, not semantic guarantees or a measured latency improvement. Request diagnostics report the attempted scope and fallback as JSON-safe metadata.

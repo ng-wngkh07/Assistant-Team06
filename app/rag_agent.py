@@ -536,9 +536,14 @@ def normalize_evidence_bound_comparisons(item_text: str, cited_sources: list[str
 
 class PsychologyAgent:
     def __init__(self, searcher: Optional[HybridSearcher] = None, ollama: Optional[OllamaClient] = None, translator: Optional[LocalTranslator] = None):
-        self.searcher = searcher or HybridSearcher()
-        self.ollama = ollama or OllamaClient()
-        self.translator = translator or LocalTranslator()
+        self.searcher = searcher if searcher is not None else HybridSearcher()
+        self.ollama = ollama if ollama is not None else OllamaClient()
+        self.translator = translator if translator is not None else LocalTranslator()
+        self._last_topic_routing = None
+
+    @property
+    def last_topic_routing(self) -> Optional[Dict[str, Any]]:
+        return getattr(self, "_last_topic_routing", None)
 
     def process_query_stream(
         self,
@@ -559,6 +564,13 @@ class PsychologyAgent:
         Stream agent response with safety checks, context retrieval, and Ollama generation.
         Yields events: {"type": "citation" | "token" | "done" | "error" | "crisis", ...}
         """
+
+        self._last_topic_routing = None
+        if isinstance(self.searcher, HybridSearcher) or "last_topic_routing" in getattr(self.searcher, "__dict__", {}):
+            try:
+                self.searcher.last_topic_routing = None
+            except Exception:
+                pass
 
         search_scope = (
             {"kind": "page", "document_id": source_page[0], "page_num": source_page[1]}
@@ -698,9 +710,11 @@ class PsychologyAgent:
             native_budget if is_9b_model(model) else (1100 if resolved_level == "careful" else 900)
         )
 
+        topic_routing_snapshot: Optional[Dict[str, Any]] = None
         try:
             if source_page:
                 retrieved_chunks = self.searcher.source_page_chunks(*source_page, limit=effective_top_k)
+                topic_routing_snapshot = None
             elif compare_concepts:
                 c1, c2 = compare_concepts
                 chunks_c1 = self.searcher.search_hybrid(
@@ -732,6 +746,7 @@ class PsychologyAgent:
                             seen_chunk_keys.add(ckey)
                             combined.append(sc)
                 retrieved_chunks = combined[:effective_top_k]
+                topic_routing_snapshot = getattr(self.searcher, "last_topic_routing", None)
             elif is_broad:
                 facets = extract_query_facets(query, search_query)
                 all_facet_chunks = []
@@ -751,6 +766,7 @@ class PsychologyAgent:
                             seen_chunk_keys.add(ckey)
                             all_facet_chunks.append(sc)
                 retrieved_chunks = all_facet_chunks[:effective_top_k]
+                topic_routing_snapshot = getattr(self.searcher, "last_topic_routing", None)
             else:
                 retrieved_chunks = self.searcher.search_hybrid(
                     query=search_query,
@@ -759,6 +775,9 @@ class PsychologyAgent:
                     is_broad=is_broad,
                     document_id=source_document_id,
                 )
+                topic_routing_snapshot = getattr(self.searcher, "last_topic_routing", None)
+
+            self._last_topic_routing = topic_routing_snapshot
 
             if source_document_id and retrieved_chunks:
                 retrieved_chunks = [c for c in retrieved_chunks if c.get("doc_id") == source_document_id]
@@ -948,7 +967,12 @@ class PsychologyAgent:
         read_cached = getattr(self.translator, "get_cached", None)
         translations = read_cached(retrieved_chunks) if callable(read_cached) else {}
 
-        yield {"type": "retrieval_trace", "chunks": retrieved_chunks, "is_broad": is_broad}
+        yield {
+            "type": "retrieval_trace",
+            "chunks": retrieved_chunks,
+            "is_broad": is_broad,
+            "topic_routing": self._last_topic_routing,
+        }
 
         # Keep retrieved passages separate from sources actually cited in the answer.
         citations_by_id = {}
@@ -1954,6 +1978,7 @@ class PsychologyAgent:
             "check_status": check_status,
             "search_scope": search_scope,
             "review_notice": review_notice,
+            "topic_routing": getattr(self, "_last_topic_routing", None),
         }
 
     def process_query_sync(
@@ -2074,6 +2099,7 @@ class PsychologyAgent:
             "generation_calls": gen_calls,
             "check_status": check_status,
             "review_notice": review_notice,
+            "topic_routing": getattr(self, "_last_topic_routing", None),
         }
 
 

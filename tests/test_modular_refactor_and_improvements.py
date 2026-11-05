@@ -68,7 +68,10 @@ def test_yc08_find_tesseract_executable_returns_str_or_none():
     _check(exe is None or isinstance(exe, str))
 
 
-def test_pptx_slide_preview_renders_valid_png(tmp_path: Path):
+def test_pptx_slide_preview_renders_valid_png(tmp_path: Path, monkeypatch):
+    from app import slide_preview
+    monkeypatch.setattr(slide_preview, "CACHE_DIR", tmp_path / "cache")
+
     pptx_path = tmp_path / "sample_deck.pptx"
     pres_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -101,6 +104,21 @@ def test_pptx_slide_preview_renders_valid_png(tmp_path: Path):
     slides = extract_pptx_slide_texts(pptx_path)
     _check(len(slides) == 1)
     _check("Tâm lý học nhận thức" in slides[0][0])
+
+    # 1. Force an isolated missing renderer (deterministic absent renderer check)
+    monkeypatch.setattr(slide_preview, "find_soffice_executable", lambda: None)
+    _check(render_office_page_png(pptx_path, page_num=1) is None)
+
+    # 2. Malformed minimal OOXML (missing [Content_Types].xml) is deterministically
+    # rejected by preflight without relying on host-dependent LibreOffice behavior
+    is_safe, reason = slide_preview.preflight_pptx_for_preview(pptx_path)
+    _check(is_safe is False)
+
+    # 3. Separate valid synthetic converted fixture test renders genuine PNG bytes and respects boundaries
+    sample_pdf_bytes = b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 100 100]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000052 00000 n \n0000000101 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF"
+    pdf_fixture = tmp_path / "valid_render.pdf"
+    pdf_fixture.write_bytes(sample_pdf_bytes)
+    monkeypatch.setattr(slide_preview, "convert_pptx_to_pdf_cached", lambda path: pdf_fixture)
 
     png_bytes = render_office_page_png(pptx_path, page_num=1)
     _check(png_bytes is not None)

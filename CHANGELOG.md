@@ -6,6 +6,8 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Security
 
+- Bound Office preview conversion with local OOXML validation, isolated macro-disabled renderer profiles and source-content cache keys. Reject external relationships and active payloads before automatic conversion; verify source and PDF digests for explicitly imported static slide renditions.
+
 - Upgrade `pillow` to `>=13.0.0`, `certifi` to `>=2026.10.18`, `filelock` to `>=4.2.1`, and `streamlit` to `1.66.1` across dependency and constraint manifests to address Dependabot advisories.
 - Reconstruct validated OCR cache filenames from an explicit hex alphabet and enforce normalized `CACHE_DIR` prefix containment in `app/vision_ocr.py`, sanitize error responses across `app/routes/` and `app/server.py` to prevent exception stack-trace exposure, and eliminate overlapping whitespace quantifiers in `app/answer_format.py` (`_SOURCE_SECTION`) to prevent polynomial ReDoS backtracking.
 - Replace `xml.etree.ElementTree` with `defusedxml.ElementTree` (`forbid_dtd=True`) in `app/knowledge_pack.py` and replace `xml.sax.saxutils.escape` with `html.escape` across RAG and training-data modules.
@@ -25,7 +27,7 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 ### Added
 
 - Add a hierarchical two-level parent-child topic tree (`app/topic_tree.py`) shared between QA and topic-based learning (`app/learning.py`), mapping course subtopics under parent academic domains.
-- Render `.pptx` slides and `.docx` pages as visual PNG previews via `app/slide_preview.py` for `/api/documents/{document_id}/pages/{page_num}/image` and `/api/ocr/page-image`.
+- Provide original-layout PPTX slide previews using a local LibreOffice renderer or explicitly imported, source-bound static PDF renditions. Preserve DOCX logical reading sections and original downloads without fabricating physical page images.
 - Add Tesseract OCR (`UB-Mannheim.TesseractOCR`) to the Windows setup manifest (`requirements-windows-tools.json`), installer script (`scripts/windows_setup.ps1`), and Windows documentation (`README_WINDOWS.md`), with automatic Windows installation path detection in `app/timetable_table.py`.
 - Retain partial timetable rows (`partial_entries`) during incomplete course-registration screenshot extraction and highlight missing required schedule fields (`.draft-field-missing`) in the timetable draft UI so users can complete missing weekday, time, or room values directly.
 - Require source-bound content review and a coverage ledger for every physical page or slide before full-corpus acceptance, including pages without extraction warnings. Preserve unreadable regions and verify repaired passages and affected retrieval data separately.
@@ -41,6 +43,8 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 - Add sample university timetable and course-registration screenshots in `calendar_src/` as references for timetable import.
 
 ### Changed
+
+- Route recognized QA topics through the shared parent-child taxonomy before hybrid retrieval, retaining explicit document scope and global fallback when heuristic evidence checks reject the candidate search. Routing diagnostics are JSON-safe and request-specific.
 
 - Split monolithic backend files into focused single-responsibility modules: `app/lexical_search.py` and `app/semantic_search.py` (from `app/searcher.py`); `app/material_storage.py`, `app/question_validator.py`, `app/quiz_generator.py`, and `app/flashcard_generator.py` (from `app/study_materials.py`); `app/rag_query_analyzer.py`, `app/rag_evidence_validator.py`, and `app/rag_citation_repair.py` (from `app/rag_agent.py`); and domain route modules under `app/routes/` (from `app/server.py`), while preserving backward-compatible re-exports.
 - Move legacy `v4`–`v6` model evaluation and preparation scripts from `app/` to `scripts/archive/` and remove unused `static/style.light-backup.css`.
@@ -72,6 +76,9 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 - Consume canonical material filenames after upload in the client interface for preview, active attachment scoping, QA, downloads, and generation.
 
 ### Fixed
+
+- Treat omitted or null `persist_to_src` as instant use in material uploads and library inspection. API clients that require durable library indexing must send `persist_to_src: true` explicitly.
+- Use the shared vision timeout (360 seconds by default) for document OCR while retaining explicit caller overrides.
 
 - Decline document answers, practice questions, and library study-material generation when a selected page still needs review for potentially missing formulas or diagrams, and direct learners to the original page or another source instead of presenting an uncertain transcription as fact.
 - Warn in document answers and decline library study-material generation when a supported two-file prime-number example has an output list that does not match its input.

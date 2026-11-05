@@ -5,8 +5,9 @@ import re
 import sqlite3
 import struct
 import sys
+from contextlib import closing
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Collection
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ from app.config import (
 from app.text_cleaner import normalize_vietnamese_text, sanitize_for_prompt_context
 from app.ollama_client import OllamaClient
 from app.indexer import unpack_vector
+from app.topic_router import TopicRouter
 from app.lexical_search import (
     STOPWORDS,
     check_local_definition_and_catalog,
@@ -38,6 +40,8 @@ class HybridSearcher:
     def __init__(self, db_path: Optional[Union[Path, str]] = None):
         self._db_path = Path(db_path) if db_path is not None else None
         self.ollama = OllamaClient()
+        self.topic_router = TopicRouter(self._db_path)
+        self.last_topic_routing: Optional[Dict[str, Any]] = None
 
     @property
     def db_path(self) -> Path:
@@ -49,6 +53,14 @@ class HybridSearcher:
     @db_path.setter
     def db_path(self, val: Optional[Union[Path, str]]):
         self._db_path = Path(val) if val is not None else None
+        if hasattr(self, "topic_router"):
+            self.topic_router.db_path = self._db_path
+
+    def plan_topic_routing(self, query: str, document_id: Optional[int] = None) -> Dict[str, Any]:
+        with closing(self.get_connection()) as conn:
+            return self.topic_router.plan_routing(
+                query, conn=conn, db_path=self.db_path, document_id=document_id
+            )
 
     def get_connection(self) -> sqlite3.Connection:
         if not self.db_path.exists():
@@ -494,7 +506,13 @@ class HybridSearcher:
                     phrases.append(phrase)
         return " OR ".join('"' + phrase + '"' for phrase in phrases)
 
-    def search_fts(self, query: str, limit: int = 20, document_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    def search_fts(
+        self,
+        query: str,
+        limit: int = 20,
+        document_id: Optional[int] = None,
+        document_ids: Optional[Collection[int]] = None,
+    ) -> List[Dict[str, Any]]:
         """Perform Full-Text BM25 Search using SQLite FTS5 with heading demotion and document scope."""
         fts_query = self._clean_fts_query(query)
         if not fts_query:
@@ -551,18 +569,33 @@ class HybridSearcher:
             with self.get_connection() as conn:
                 phrase_rows = []
 
+                if document_id is not None:
+                    doc_filter = "AND (? IS NULL OR c.doc_id = ?)"
+                    doc_params = [document_id, document_id]
+                elif document_ids is not None:
+                    id_list = list(document_ids)
+                    if id_list:
+                        doc_filter = f"AND c.doc_id IN ({','.join('?' for _ in id_list)})"
+                        doc_params = id_list
+                    else:
+                        doc_filter = "AND 0"
+                        doc_params = []
+                else:
+                    doc_filter = "AND (? IS NULL OR c.doc_id = ?)"
+                    doc_params = [None, None]
+
                 # 0. Differential operand phrase queries with source whitespace variants
                 if diff_fts_phrases:
                     unique_diff = list(dict.fromkeys(diff_fts_phrases))
                     or_diff_query = " OR ".join(unique_diff)
                     try:
-                        d_rows = conn.execute("""
+                        d_rows = conn.execute(f"""
                             SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num,
                                    c.chunk_index, c.text, bm25(chunks_fts) as rank_score
                             FROM chunks_fts f JOIN chunks c ON f.rowid = c.id
-                            WHERE chunks_fts MATCH ? AND (? IS NULL OR c.doc_id = ?)
+                            WHERE chunks_fts MATCH ? {doc_filter}
                             ORDER BY rank_score ASC LIMIT ?
-                        """, (f"text : ({or_diff_query})", document_id, document_id, fetch_limit)).fetchall()
+                        """, (f"text : ({or_diff_query})", *doc_params, fetch_limit)).fetchall()
                         phrase_rows.extend(d_rows)
                     except Exception:
                         pass
@@ -572,13 +605,13 @@ class HybridSearcher:
                     clean_cp = re.sub(r'["\'\*\^\:\(\)\[\]\{\}\+\-\~]', ' ', cp).strip()
                     if clean_cp:
                         try:
-                            p_rows = conn.execute("""
+                            p_rows = conn.execute(f"""
                                 SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num,
                                        c.chunk_index, c.text, bm25(chunks_fts) as rank_score
                                 FROM chunks_fts f JOIN chunks c ON f.rowid = c.id
-                                WHERE chunks_fts MATCH ? AND (? IS NULL OR c.doc_id = ?)
+                                WHERE chunks_fts MATCH ? {doc_filter}
                                 ORDER BY rank_score ASC LIMIT ?
-                            """, (f'text : ("{clean_cp}")', document_id, document_id, fetch_limit)).fetchall()
+                            """, (f'text : ("{clean_cp}")', *doc_params, fetch_limit)).fetchall()
                             phrase_rows.extend(p_rows)
                         except Exception:
                             pass
@@ -590,13 +623,13 @@ class HybridSearcher:
                     if len(cp_words) >= 2:
                         and_clause = " AND ".join(f'"{w}"*' for w in cp_words)
                         try:
-                            a_rows = conn.execute("""
+                            a_rows = conn.execute(f"""
                                 SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num,
                                        c.chunk_index, c.text, bm25(chunks_fts) as rank_score
                                 FROM chunks_fts f JOIN chunks c ON f.rowid = c.id
-                                WHERE chunks_fts MATCH ? AND (? IS NULL OR c.doc_id = ?)
+                                WHERE chunks_fts MATCH ? {doc_filter}
                                 ORDER BY rank_score ASC LIMIT ?
-                            """, (f"text : ({and_clause})", document_id, document_id, fetch_limit)).fetchall()
+                            """, (f"text : ({and_clause})", *doc_params, fetch_limit)).fetchall()
                             phrase_rows.extend(a_rows)
                         except Exception:
                             pass
@@ -605,27 +638,27 @@ class HybridSearcher:
                 phrase_query = self._number_phrases(query)
                 if phrase_query:
                     try:
-                        n_rows = conn.execute("""
+                        n_rows = conn.execute(f"""
                             SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num,
                                    c.chunk_index, c.text, bm25(chunks_fts) as rank_score
                             FROM chunks_fts f JOIN chunks c ON f.rowid = c.id
-                            WHERE chunks_fts MATCH ? AND (? IS NULL OR c.doc_id = ?)
+                            WHERE chunks_fts MATCH ? {doc_filter}
                             ORDER BY rank_score ASC LIMIT ?
-                        """, (f"text : ({phrase_query})", document_id, document_id, fetch_limit)).fetchall()
+                        """, (f"text : ({phrase_query})", *doc_params, fetch_limit)).fetchall()
                         phrase_rows.extend(n_rows)
                     except Exception:
                         pass
 
                 # 4. Broader OR terms query
-                cursor = conn.execute("""
+                cursor = conn.execute(f"""
                     SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num, c.chunk_index, c.text,
                            bm25(chunks_fts) as rank_score
                     FROM chunks_fts f
                     JOIN chunks c ON f.rowid = c.id
-                    WHERE chunks_fts MATCH ? AND (? IS NULL OR c.doc_id = ?)
+                    WHERE chunks_fts MATCH ? {doc_filter}
                     ORDER BY rank_score ASC
                     LIMIT ?
-                """, (fts_query, document_id, document_id, fetch_limit))
+                """, (fts_query, *doc_params, fetch_limit))
 
                 rows = phrase_rows + cursor.fetchall()
                 seen = set()
@@ -806,6 +839,7 @@ class HybridSearcher:
         embed_model: str = DEFAULT_EMBED_MODEL,
         limit: int = 20,
         document_id: Optional[int] = None,
+        document_ids: Optional[Collection[int]] = None,
     ) -> List[Dict[str, Any]]:
         """Perform semantic vector search using cosine similarity over embeddings."""
         use_native = False
@@ -909,6 +943,13 @@ class HybridSearcher:
             if document_id is not None:
                 sql += " AND c.doc_id = ?"
                 params.append(document_id)
+            elif document_ids is not None:
+                id_list = list(document_ids)
+                if id_list:
+                    sql += f" AND c.doc_id IN ({','.join('?' for _ in id_list)})"
+                    params.extend(id_list)
+                else:
+                    sql += " AND 0"
             cursor = conn.execute(sql, params)
             rows = cursor.fetchall()
             
@@ -974,19 +1015,119 @@ class HybridSearcher:
         is_broad: bool = False,
         max_per_book: Optional[int] = None,
         document_id: Optional[int] = None,
+        document_ids: Optional[Collection[int]] = None,
+        enable_topic_routing: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Execute Hybrid Search combining FTS5 and Vector Search via Reciprocal Rank Fusion (RRF).
-        Supports relaxed per-book limits for broad queries to ensure important chapters are retained.
+        Supports topic routing into document candidates with global fallback when scoped evidence appears inadequate under heuristic check.
         """
         query_clean = normalize_vietnamese_text(query)
         if not query_clean:
+            self.last_topic_routing = None
             return []
 
-        fts_results = self.search_fts(query_clean, limit=top_k * 3, document_id=document_id)
+        # If explicit document scope or disabled topic routing, bypass candidate routing
+        if document_id is not None or document_ids is not None or not enable_topic_routing:
+            self.last_topic_routing = {
+                "applied": False,
+                "explicit_scope": bool(document_id is not None or document_ids is not None),
+                "document_id": document_id,
+                "candidate_doc_ids": (
+                    [document_id]
+                    if document_id is not None
+                    else (sorted(list(set(document_ids))) if document_ids else [])
+                ),
+                "matched_topics": [],
+                "parent_ids": [],
+                "parent_labels": [],
+                "fallback_to_global": False,
+                "fallback_reason": None,
+            }
+            return self._execute_hybrid_search(
+                query_clean=query_clean,
+                top_k=top_k,
+                embed_model=embed_model,
+                is_broad=is_broad,
+                max_per_book=max_per_book,
+                document_id=document_id,
+                document_ids=document_ids,
+            )
+
+        # Plan topic routing
+        with closing(self.get_connection()) as conn:
+            plan = self.topic_router.plan_routing(
+                query_clean,
+                conn=conn,
+                db_path=self.db_path,
+                document_id=document_id,
+                document_ids=document_ids,
+            )
+
+        if not plan["applied"]:
+            # Unrecognized topic, empty candidates, or DB unavailable -> global fallback
+            self.last_topic_routing = plan
+            return self._execute_hybrid_search(
+                query_clean=query_clean,
+                top_k=top_k,
+                embed_model=embed_model,
+                is_broad=is_broad,
+                max_per_book=max_per_book,
+                document_id=None,
+                document_ids=None,
+            )
+
+        # Topic candidates confidently found: perform candidate-scoped search
+        scoped_results = self._execute_hybrid_search(
+            query_clean=query_clean,
+            top_k=top_k,
+            embed_model=embed_model,
+            is_broad=is_broad,
+            max_per_book=max_per_book,
+            document_id=None,
+            document_ids=plan["candidate_doc_ids"],
+        )
+
+        # Heuristic check for scoped evidence adequacy using shared evidence validator
+        # Note: heuristic adequacy reduces risk of evidence loss but does not guarantee zero evidence loss
+        from app.rag_evidence_validator import has_relevant_evidence
+        has_adequate_evidence = has_relevant_evidence(query_clean, scoped_results)
+
+        if has_adequate_evidence:
+            plan["fallback_to_global"] = False
+            plan["fallback_reason"] = None
+            self.last_topic_routing = plan
+            return scoped_results
+
+        # Scoped evidence appears inadequate under heuristic check: automatically fall back to global search
+        global_results = self._execute_hybrid_search(
+            query_clean=query_clean,
+            top_k=top_k,
+            embed_model=embed_model,
+            is_broad=is_broad,
+            max_per_book=max_per_book,
+            document_id=None,
+            document_ids=None,
+        )
+        plan["fallback_to_global"] = True
+        plan["fallback_reason"] = "scoped_evidence_inadequate"
+        self.last_topic_routing = plan
+        return global_results
+
+    def _execute_hybrid_search(
+        self,
+        query_clean: str,
+        top_k: int = DEFAULT_TOP_K,
+        embed_model: Optional[str] = DEFAULT_EMBED_MODEL,
+        is_broad: bool = False,
+        max_per_book: Optional[int] = None,
+        document_id: Optional[int] = None,
+        document_ids: Optional[Collection[int]] = None,
+    ) -> List[Dict[str, Any]]:
+        fts_results = self.search_fts(query_clean, limit=top_k * 3, document_id=document_id, document_ids=document_ids)
         semantic_results = []
         if embed_model:
-            semantic_results = self.search_semantic(query_clean, embed_model=embed_model, limit=top_k * 3, document_id=document_id)
+            semantic_results = self.search_semantic(query_clean, embed_model=embed_model, limit=top_k * 3, document_id=document_id, document_ids=document_ids)
 
         query_concepts = extract_query_concepts(query_clean)
         query_diff_operands = extract_differential_operands(query_clean)

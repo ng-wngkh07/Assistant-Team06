@@ -26,7 +26,14 @@ class MaterialUploadRequest(BaseModel):
     flashcard_count: int = Field(default=5, ge=1, le=15)
     difficulty: Literal["easy", "medium", "hard"] = "medium"
     generate_study_set: bool = True
-    persist_to_src: Optional[bool] = None
+    persist_to_src: Optional[bool] = Field(
+        default=False,
+        description=(
+            "Whether to persist document to src/ and index into knowledge base. "
+            "Defaults to False (instant use; omitted or null is treated as false). "
+            "Pass True explicitly to persist and index."
+        ),
+    )
 
 
 class MaterialLibraryGenerateRequest(BaseModel):
@@ -42,7 +49,14 @@ class MaterialLibraryGenerateRequest(BaseModel):
 class MaterialLibraryInspectRequest(BaseModel):
     document_id: Optional[int] = Field(default=None, ge=1)
     filename: Optional[str] = None
-    persist_to_src: Optional[bool] = None
+    persist_to_src: Optional[bool] = Field(
+        default=False,
+        description=(
+            "Whether to persist inspected document to src/ and index. "
+            "Defaults to False (instant use; omitted or null is treated as false). "
+            "Pass True explicitly to persist and index."
+        ),
+    )
 
 
 @router.post("/api/materials/upload")
@@ -62,7 +76,7 @@ async def upload_and_generate_materials(req: MaterialUploadRequest):
             file_bytes,
             allow_image_without_text=not req.generate_study_set,
         )
-        should_persist = True if req.persist_to_src is None else bool(req.persist_to_src)
+        should_persist = bool(req.persist_to_src)
         ingestion_info = None
         if should_persist:
             ingestion_info = _srv.study_material_manager.ingest_to_src_and_index(
@@ -123,7 +137,7 @@ async def inspect_library_document_endpoint(req: MaterialLibraryInspectRequest):
     from app import server as _srv
 
     def run_lib_inspect():
-        should_persist = True if req.persist_to_src is None else bool(req.persist_to_src)
+        should_persist = bool(req.persist_to_src)
         return _srv.study_material_manager.inspect_library_document(
             doc_id=req.document_id,
             filename=req.filename,
