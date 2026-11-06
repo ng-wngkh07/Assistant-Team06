@@ -27,6 +27,13 @@ PINNED_BGE_FILES = {
 }
 
 
+class _VerifiedBatchResult(list):
+    """List-compatible container carrying verified post-generation model identity."""
+    def __init__(self, items: list, verified_identity: str):
+        super().__init__(items)
+        self.verified_identity = verified_identity
+
+
 class NativeEmbeddingClient:
     """Direct local MLX embedding client using pinned BGE-M3 MLX artifact."""
 
@@ -183,9 +190,15 @@ class NativeEmbeddingClient:
         results = self.get_batch_embeddings([text], max_length=max_length)
         vector = results[0] if results else None
         if vector is not None:
-            # An artifact replaced during generation cannot populate the old key.
-            if self.get_identity() != identity:
-                raise RuntimeError("Mô hình embedding đã thay đổi trong khi xử lý câu hỏi.")
+            # Reuse actual verified post-generation identity from batch embedding when available,
+            # retaining byte rehash for custom overrides returning plain lists.
+            batch_identity = getattr(results, "verified_identity", None)
+            if batch_identity is not None:
+                if batch_identity != identity:
+                    raise RuntimeError("Mô hình embedding đã thay đổi trong khi xử lý câu hỏi.")
+            else:
+                if self.get_identity() != identity:
+                    raise RuntimeError("Mô hình embedding đã thay đổi trong khi xử lý câu hỏi.")
             with self._query_cache_lock:
                 self._query_cache[key] = tuple(vector)
                 self._query_cache.move_to_end(key)
@@ -254,4 +267,4 @@ class NativeEmbeddingClient:
             if norm <= 0 or abs(norm - 1.0) > 1e-3:
                 raise RuntimeError(f"Vector {idx} chưa được chuẩn hóa L2 hợp lệ (norm = {norm})")
 
-        return vectors
+        return _VerifiedBatchResult(vectors, verified_identity=expected_identity)

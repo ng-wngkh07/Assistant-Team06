@@ -26,6 +26,8 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Added
 
+- Add persistent hierarchical retrieval tree sidecar database (`app/retrieval_tree.py`) and maintenance builder CLI (`scripts/build_retrieval_tree.py`) providing candidate chunk filtering over authored taxonomies without modifying the original database.
+- Add source-bound sidecar fingerprint validation and shared membership reader (`read_source_bound_tree_memberships`) for QA retrieval and `LearningService` cataloging, ensuring safe fallback to global search upon source mutations or WAL commits.
 - Add a hierarchical two-level parent-child topic tree (`app/topic_tree.py`) shared between QA and topic-based learning (`app/learning.py`), mapping course subtopics under parent academic domains.
 - Provide original-layout PPTX slide previews using a local LibreOffice renderer or explicitly imported, source-bound static PDF renditions. Preserve DOCX logical reading sections and original downloads without fabricating physical page images.
 - Add Tesseract OCR (`UB-Mannheim.TesseractOCR`) to the Windows setup manifest (`requirements-windows-tools.json`), installer script (`scripts/windows_setup.ps1`), and Windows documentation (`README_WINDOWS.md`), with automatic Windows installation path detection in `app/timetable_table.py`.
@@ -44,6 +46,8 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Changed
 
+- Optimize `NativeEmbeddingClient.get_embedding` by reusing verified post-generation batch model identity, eliminating redundant parent full-artifact byte hashing on cache misses while preserving byte verification on cache hits and fail-closed integrity checks.
+- Wire `HybridSearcher.search_hybrid` to query an adjacent `retrieval_tree.db` sidecar by default before falling back to legacy topic routing, preserving explicit document scopes and global fallbacks.
 - Route recognized QA topics through the shared parent-child taxonomy before hybrid retrieval, retaining explicit document scope and global fallback when heuristic evidence checks reject the candidate search. Routing diagnostics are JSON-safe and request-specific.
 
 - Split monolithic backend files into focused single-responsibility modules: `app/lexical_search.py` and `app/semantic_search.py` (from `app/searcher.py`); `app/material_storage.py`, `app/question_validator.py`, `app/quiz_generator.py`, and `app/flashcard_generator.py` (from `app/study_materials.py`); `app/rag_query_analyzer.py`, `app/rag_evidence_validator.py`, and `app/rag_citation_repair.py` (from `app/rag_agent.py`); and domain route modules under `app/routes/` (from `app/server.py`), while preserving backward-compatible re-exports.

@@ -9,6 +9,7 @@ import threading
 import unicodedata
 from collections import Counter
 from contextlib import closing
+from pathlib import Path
 from typing import Any, Optional
 
 from app.topic_catalog import (
@@ -209,17 +210,40 @@ class LearningService:
         by_id = {doc["id"]: doc for doc in available}
         if not by_id:
             return {label: set() for label, _ in TOPICS}
-        with closing(self.document_lookup.connect()) as db:
-            db_path = getattr(self.document_lookup, "db_path", None)
-            fp = _get_sqlite_fingerprint(db_path)
-            key = (
-                tuple(sorted((d["id"], d.get("file_hash", ""), d.get("updated_at", "")) for d in available)),
-                fp,
-            )
-            with self._catalog_lock:
-                if self._cached_catalog_members is not None and self._cached_catalog_key == key:
-                    return self._cached_catalog_members
 
+        db_path = getattr(self.document_lookup, "db_path", None)
+        sidecar_path = Path(db_path).with_name("retrieval_tree.db") if db_path else None
+
+        # Validate sidecar BEFORE cached membership reuse so removed/modified sidecars don't remain active via cache
+        from app.retrieval_tree import read_source_bound_tree_memberships, get_source_binding_fingerprint
+        sidecar_members = None
+        sidecar_fp = None
+        if db_path and sidecar_path and sidecar_path.is_file():
+            sidecar_members = read_source_bound_tree_memberships(db_path, sidecar_path)
+            if sidecar_members is not None:
+                sidecar_fp = get_source_binding_fingerprint(sidecar_path)
+
+        fp = _get_sqlite_fingerprint(db_path)
+        key = (
+            tuple(sorted((d["id"], d.get("file_hash", ""), d.get("updated_at", "")) for d in available)),
+            fp,
+            sidecar_fp,
+        )
+        with self._catalog_lock:
+            if self._cached_catalog_members is not None and self._cached_catalog_key == key:
+                return self._cached_catalog_members
+
+        if sidecar_members is not None:
+            # Intersect permitted available document IDs
+            members = {label: set() for label, _ in TOPICS}
+            for label in members:
+                members[label] = {did for did in sidecar_members.get(label, set()) if did in by_id}
+            with self._catalog_lock:
+                self._cached_catalog_members = members
+                self._cached_catalog_key = key
+            return members
+
+        with closing(self.document_lookup.connect()) as db:
             members = {label: set() for label, _ in TOPICS}
             has_fts = False
             try:
