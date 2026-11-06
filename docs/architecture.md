@@ -90,3 +90,15 @@ Practice generation and source review pass an explicit JSON schema through the n
 ## Shared topic routing
 
 QA retrieval and practice use the authored hierarchy in `app/topic_tree.py`. The query router derives document candidates from indexed passages without changing the database schema or rebuilding vectors. Recognized topic queries try those candidates first; unrecognized queries, empty candidate sets and inadequate scoped evidence use global retrieval. Explicit document or page selection remains authoritative. Existing ranking, source-quality warnings and citation checks still apply. Topic matching and evidence adequacy are heuristics, not semantic guarantees or a measured latency improvement. Request diagnostics report the attempted scope and fallback as JSON-safe metadata.
+
+## Sidecar retrieval tree and retrieval operation
+
+The persistent hierarchical retrieval tree is stored in an adjacent sidecar SQLite database (`retrieval_tree.db`), leaving the active source database (`knowledge_base.db`) completely unchanged. The sidecar index is built via `scripts/build_retrieval_tree.py --source-db PATH --output PATH`.
+
+At query time, passage text, vectors, and provenance rows are read directly from the original source database in read-only mode (`mode=ro`). The sidecar is used exclusively for persistent taxonomy, document, and chunk topic memberships.
+
+On every query, the sidecar reader verifies the canonical filesystem and SQLite header fingerprint of the active source database (resolved path, inode, file size, modification time, header change counter, and WAL status). Any modification to the source database—such as new user uploads, document deletions, or committed WAL transactions—or a missing/mismatched database binding immediately triggers a safe fallback to global retrieval. This ensures that new uploads are never hidden by an outdated index.
+
+Maintenance limitation: The retrieval tree is a derived index, not a source corpus replacement or training approval. When the active library changes, fallback to standard retrieval remains correct until an operator runs a maintenance rebuild via `scripts/build_retrieval_tree.py`. There is no automatic rebuild or background scheduler.
+
+Additionally, embedding query processing reuses the verified post-generation batch model identity to eliminate redundant full-artifact byte hashing on cache misses, while preserving strict actual-byte verification on every cache hit and fail-closed security.
