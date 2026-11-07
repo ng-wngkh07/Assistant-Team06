@@ -976,11 +976,18 @@
             </section>
             <section id="timetable-panel" class="timetable-panel" aria-label="Thời khóa biểu từ ảnh" hidden>
                 <div class="timetable-header">
-                    <h2>📅 Lập Thời Khóa Biểu từ Ảnh</h2>
-                    <p class="lookup-description">Tải ảnh chụp thời khóa biểu (PNG, JPEG, WebP). Hệ thống AI cục bộ sẽ trích xuất thành bản nháp để bạn đối chiếu, sửa và xác nhận trước khi lưu. Dữ liệu chỉ lưu trên máy này.</p>
+                    <h2>📅 Lập Thời Khóa Biểu từ Ảnh &amp; Trợ Lý AI Lập Lịch Học Tập Cá Nhân</h2>
+                    <p class="lookup-description">Tải ảnh chụp thời khóa biểu (PNG, JPEG, WebP). Hệ thống AI cục bộ sẽ trích xuất thành bản nháp để bạn đối chiếu, sửa và xác nhận trước khi lưu. Sau đó khai báo lịch sinh hoạt hằng tuần, khung giờ có thể học và deadline để Trợ lý AI tạo lịch học tập cá nhân. Dữ liệu chỉ lưu trên máy này.</p>
+                    <div class="planner-step-nav" aria-label="Các bước lập lịch học tập">
+                        <a href="#timetable-step-ocr" class="planner-step-pill">1. Thời khóa biểu OCR</a>
+                        <a href="#planner-step-routines" class="planner-step-pill">2. Lịch sinh hoạt &amp; Khung giờ học</a>
+                        <a href="#planner-step-tasks" class="planner-step-pill">3. Bài tập &amp; Deadline</a>
+                        <a href="#planner-step-generate" class="planner-step-pill">4. Tạo &amp; Duyệt Kế hoạch AI</a>
+                        <a href="#planner-step-master-schedule" class="planner-step-pill">5. Lịch tuần tổng hợp</a>
+                    </div>
                 </div>
 
-                <div class="timetable-grid">
+                <div id="timetable-step-ocr" class="timetable-grid">
                     <!-- Left Column: Upload, Image Preview & Period Converter -->
                     <div class="timetable-col-left">
                         <div class="timetable-card">
@@ -1164,10 +1171,415 @@
                                         </div>
                                     </div>
                                     <button type="submit" class="btn btn-sm btn-primary" style="background: #16a34a; border-color: #16a34a; flex: 0 0 auto;">📥 Tải tệp .ics</button>
+                                    <label for="export-include-planner" style="width: 100%; display: flex; align-items: center; gap: 6px; font-size: 0.78rem; cursor: pointer; margin-top: 4px;">
+                                        <input type="checkbox" id="export-include-planner" checked>
+                                        <span>Bao gồm cả lịch sinh hoạt cá nhân &amp; phiên tự học đã xác nhận</span>
+                                    </label>
                                 </form>
                                 <p id="export-status" style="margin: 6px 0 0 0; font-size: 0.8rem;"></p>
                             </div>
+
+                            <div id="step1-next-banner" class="planner-next-banner" style="display: none; margin-top: 14px;">
+                                <div>
+                                    <strong>✅ Đã có lịch học cố định trên trường!</strong>
+                                    <p class="text-muted" style="font-size: 0.8rem; margin: 2px 0 0 0;">Bước tiếp theo: Hãy khai báo lịch sinh hoạt hằng tuần, giờ nghỉ ngơi, khung giờ có thể học và các deadline bài tập bên dưới.</p>
+                                </div>
+                                <a href="#planner-step-routines" id="btn-go-step2" class="btn btn-sm btn-primary">Tiếp tục lập lịch cá nhân ↓</a>
+                            </div>
                         </div>
+                    </div>
+                </div>
+
+                <!-- =========================================================================
+                     BƯỚC 2: LỊCH SINH HOẠT HẰNG TUẦN, THỜI GIAN NGHỈ & KHUNG GIỜ CÓ THỂ HỌC
+                     ========================================================================= -->
+                <div id="planner-step-routines" class="timetable-card planner-section-card" style="margin-top: 22px;">
+                    <div class="planner-section-header">
+                        <div>
+                            <span class="planner-badge-recurring">🔁 Lịch lặp lại hằng tuần</span>
+                            <h3 style="margin-top: 6px;">🏃 Bước 2: Lịch sinh hoạt hằng tuần, Giờ nghỉ ngơi &amp; Khung giờ có thể học</h3>
+                            <p class="text-muted" style="font-size: 0.82rem; margin: 4px 0 0 0;">
+                                Khai báo các hoạt động cố định (tập gym, thể thao, đi chơi), thời gian nghỉ ngơi cần bảo vệ và các khung giờ cho phép xếp phiên tự học.
+                            </p>
+                        </div>
+                        <div class="planner-header-actions">
+                            <button type="button" id="btn-add-routine-row" class="btn btn-sm btn-outline">＋ Thêm hoạt động</button>
+                            <button type="button" id="btn-add-study-window-row" class="btn btn-sm btn-outline">＋ Thêm khung giờ có thể học</button>
+                            <button type="button" id="btn-load-sample-routines" class="btn btn-sm btn-secondary" title="Điền nhanh mẫu lịch sinh hoạt & khung giờ tự học">✨ Điền mẫu gợi ý</button>
+                            <button type="button" id="btn-save-routines-bulk" class="btn btn-sm btn-primary">💾 Lưu bảng lịch sinh hoạt</button>
+                        </div>
+                    </div>
+
+                    <!-- Giải thích 4 cách xếp lịch -->
+                    <div class="planner-rule-legend">
+                        <div class="rule-legend-item rule-fixed">
+                            <strong>🔒 Cố định:</strong> Không tự động thay đổi (VD: giờ học, lịch cá nhân đã chốt).
+                        </div>
+                        <div class="rule-legend-item rule-protected">
+                            <strong>🛡️ Cần giữ:</strong> Không xếp việc học vào đây (VD: ngủ, nghỉ trưa, ăn uống).
+                        </div>
+                        <div class="rule-legend-item rule-flexible">
+                            <strong>🔄 Có thể đổi giờ:</strong> Trợ lý chỉ đề xuất giờ khác khi thiếu chỗ, không tự ý đổi khi chưa được bạn đồng ý.
+                        </div>
+                        <div class="rule-legend-item rule-window">
+                            <strong>📖 Có thể học:</strong> Khoảng thời gian cho phép xếp phiên tự học (chưa phải phiên học đã lên lịch).
+                        </div>
+                    </div>
+
+                    <div class="table-responsive" style="max-height: 380px; overflow-x: auto; overflow-y: auto; margin-top: 12px;">
+                        <table class="kb-table timetable-editor-table" id="routine-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 110px;">Ngày trong tuần</th>
+                                    <th style="width: 105px;">Bắt đầu</th>
+                                    <th style="width: 105px;">Kết thúc</th>
+                                    <th>Tên hoạt động / Khung giờ</th>
+                                    <th style="width: 190px;">Loại hoạt động</th>
+                                    <th style="width: 230px;">Cách xếp lịch</th>
+                                    <th style="width: 50px; text-align: center;">Xóa</th>
+                                </tr>
+                            </thead>
+                            <tbody id="routine-table-body">
+                                <tr><td colspan="7" style="text-align: center;" class="text-muted">Đang tải bảng lịch sinh hoạt...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p id="routine-save-status" style="margin: 8px 0 0 0; font-size: 0.82rem;" role="status" aria-live="polite"></p>
+
+                    <!-- Giới hạn cá nhân & Sở thích học tập -->
+                    <div class="planner-preferences-box" style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
+                        <h4 style="font-size: 0.92rem; margin: 0 0 10px 0;">⚙️ Giới hạn cá nhân &amp; Sở thích học tập cho Trợ lý AI</h4>
+                        <form id="planner-preferences-form" class="planner-prefs-grid">
+                            <div>
+                                <label for="pref-earliest-time">Giờ sớm nhất có thể học</label>
+                                <input type="time" id="pref-earliest-time" class="form-input" value="07:00" required>
+                            </div>
+                            <div>
+                                <label for="pref-latest-time">Giờ muộn nhất muốn kết thúc</label>
+                                <input type="time" id="pref-latest-time" class="form-input" value="22:30" required>
+                            </div>
+                            <div>
+                                <label for="pref-max-daily-minutes">Số phút tự học tối đa / ngày</label>
+                                <input type="number" id="pref-max-daily-minutes" class="form-input" min="30" max="960" step="15" value="240" required>
+                                <small class="text-muted" id="pref-max-daily-hint" style="font-size: 0.74rem;">240 phút = 4.0 giờ/ngày</small>
+                            </div>
+                            <div>
+                                <label for="pref-session-minutes">Thời lượng mỗi phiên học (phút)</label>
+                                <input type="number" id="pref-session-minutes" class="form-input" min="15" max="240" step="15" value="60" required>
+                                <small class="text-muted" style="font-size: 0.74rem;">Chia bài tập dài thành các phiên vừa sức</small>
+                            </div>
+                            <div class="planner-prefs-notes">
+                                <label for="pref-ai-notes">Yêu cầu hoặc sở thích dành cho Trợ lý AI (Tiếng Việt tự nhiên)</label>
+                                <input type="text" id="pref-ai-notes" class="form-input" placeholder="VD: Ưu tiên học buổi sáng, không học sau 21:30, nghỉ Chủ nhật...">
+                            </div>
+                            <div class="planner-prefs-actions">
+                                <button type="submit" id="btn-save-preferences" class="btn btn-sm btn-secondary">💾 Lưu giới hạn &amp; sở thích</button>
+                            </div>
+                        </form>
+                        <p id="pref-save-status" style="margin: 6px 0 0 0; font-size: 0.8rem;" role="status" aria-live="polite"></p>
+                    </div>
+                </div>
+
+                <!-- =========================================================================
+                     BƯỚC 3: NHẬP BÀI TẬP & DEADLINE
+                     ========================================================================= -->
+                <div id="planner-step-tasks" class="timetable-card planner-section-card" style="margin-top: 20px;">
+                    <div class="planner-section-header">
+                        <div>
+                            <h3>📝 Bước 3: Nhập Bài tập, Công việc học tập &amp; Deadline</h3>
+                            <p class="text-muted" style="font-size: 0.82rem; margin: 4px 0 0 0;">
+                                Thêm bài tập kèm môn học, ngày giờ hạn nộp (deadline), thời lượng ước tính và mức độ ưu tiên. Bài tập dài sẽ được tự động chia thành nhiều phiên học hợp lý.
+                            </p>
+                        </div>
+                    </div>
+
+                    <datalist id="planner-course-datalist"></datalist>
+
+                    <form id="form-add-task" class="planner-task-form" style="margin-top: 12px;">
+                        <input type="hidden" id="task-edit-id" value="">
+                        <div class="planner-task-grid">
+                            <div class="task-col-wide">
+                                <label for="task-title">Tên bài tập hoặc công việc *</label>
+                                <input type="text" id="task-title" class="form-input" required placeholder="VD: Bài tập lớn Chương 3, Ôn tập Giữa kỳ...">
+                            </div>
+                            <div>
+                                <label for="task-course">Môn học *</label>
+                                <input type="text" id="task-course" list="planner-course-datalist" class="form-input" required placeholder="Chọn hoặc nhập môn học">
+                            </div>
+                            <div>
+                                <label for="task-deadline-weekday">Thứ hạn nộp *</label>
+                                <select id="task-deadline-weekday" class="form-select" required>
+                                    <option value="1">Thứ 2</option>
+                                    <option value="2">Thứ 3</option>
+                                    <option value="3">Thứ 4</option>
+                                    <option value="4">Thứ 5</option>
+                                    <option value="5" selected>Thứ 6</option>
+                                    <option value="6">Thứ 7</option>
+                                    <option value="7">Chủ nhật</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="task-deadline-date">Ngày cụ thể (tùy chọn)</label>
+                                <input type="date" id="task-deadline-date" class="form-input">
+                            </div>
+                            <div>
+                                <label for="task-deadline-time">Giờ deadline *</label>
+                                <input type="time" id="task-deadline-time" class="form-input" value="23:59" required>
+                            </div>
+                            <div>
+                                <label for="task-estimated-minutes">Thời lượng ước tính (phút)</label>
+                                <input type="number" id="task-estimated-minutes" class="form-input" min="15" max="10000" step="15" placeholder="VD: 120 (2 giờ)">
+                            </div>
+                            <div>
+                                <label for="task-priority">Mức độ ưu tiên</label>
+                                <select id="task-priority" class="form-select">
+                                    <option value="high">🔴 Cao</option>
+                                    <option value="medium" selected>🟡 Trung bình</option>
+                                    <option value="low">🟢 Thấp</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 10px;">
+                            <label for="task-splittable" style="display: flex; align-items: center; gap: 6px; font-size: 0.82rem; cursor: pointer;">
+                                <input type="checkbox" id="task-splittable" checked>
+                                <span>Cho phép chia công việc này thành nhiều phiên học nhỏ</span>
+                            </label>
+                            <div style="display: flex; gap: 8px;">
+                                <button type="button" id="btn-cancel-task-edit" class="btn btn-sm btn-secondary" style="display: none;">Hủy sửa</button>
+                                <button type="submit" id="btn-submit-task" class="btn btn-sm btn-primary">＋ Thêm bài tập vào danh sách</button>
+                            </div>
+                        </div>
+                        <p id="task-form-status" style="margin: 6px 0 0 0; font-size: 0.8rem;" role="status" aria-live="polite"></p>
+                    </form>
+
+                    <div class="table-responsive" style="max-height: 320px; overflow-x: auto; overflow-y: auto; margin-top: 14px;">
+                        <table class="kb-table" id="tasks-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 65px; text-align: center;">Xong</th>
+                                    <th>Tên bài tập / Công việc</th>
+                                    <th style="width: 150px;">Môn học</th>
+                                    <th style="width: 165px;">Deadline</th>
+                                    <th style="width: 170px;">Thời lượng dự kiến</th>
+                                    <th style="width: 105px;">Ưu tiên</th>
+                                    <th style="width: 110px; text-align: center;">Thao tác</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tasks-table-body">
+                                <tr><td colspan="7" style="text-align: center;" class="text-muted">Chưa có bài tập hoặc deadline nào.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- =========================================================================
+                     BƯỚC 4: TRỢ LÝ AI TẠO & DUYỆT KẾ HOẠCH HỌC TẬP CÁ NHÂN
+                     ========================================================================= -->
+                <div id="planner-step-generate" class="timetable-card planner-section-card" style="margin-top: 20px;">
+                    <div class="planner-section-header">
+                        <div>
+                            <h3>🤖 Bước 4: Tạo Lịch Học Cá Nhân &amp; Duyệt Đề Xuất Của Trợ Lý AI</h3>
+                            <p class="text-muted" style="font-size: 0.82rem; margin: 4px 0 0 0;">
+                                Trợ lý kết hợp lịch học OCR đã xác nhận, lịch sinh hoạt, thời gian nghỉ được bảo vệ, khung giờ có thể học và deadline để đề xuất các phiên tự học. Bạn luôn được kiểm tra, chỉnh sửa và xác nhận trước khi lưu.
+                            </p>
+                        </div>
+                        <div class="planner-header-actions">
+                            <button type="button" id="btn-reschedule-incomplete" class="btn btn-sm btn-secondary" title="Giữ nguyên lịch cố định, các phiên đã hoàn thành và đã khóa; chỉ xếp lại phần chưa xong">
+                                🔄 Sắp xếp lại phần chưa hoàn thành
+                            </button>
+                            <button type="button" id="btn-generate-study-plan" class="btn btn-sm btn-primary">
+                                🤖 Tạo lịch học cá nhân
+                            </button>
+                        </div>
+                    </div>
+
+                    <p id="planner-generate-status" style="margin: 8px 0 0 0; font-size: 0.84rem;" role="status" aria-live="polite"></p>
+
+                    <!-- Giải thích của Trợ lý AI -->
+                    <div id="planner-explanation-box" class="planner-ai-explanation" style="display: none; margin-top: 12px;">
+                        <strong>🧠 Giải thích từ Trợ lý AI:</strong>
+                        <p id="planner-explanation-text" style="margin: 4px 0 0 0; font-size: 0.84rem; line-height: 1.55;"></p>
+                    </div>
+
+                    <!-- Cảnh báo thiếu thời gian / chưa đủ chỗ -->
+                    <div id="planner-warnings-box" class="planner-warnings-alert" style="display: none; margin-top: 12px;"></div>
+
+                    <!-- Gợi ý điều chỉnh để người dùng tự quyết định -->
+                    <div id="planner-suggestions-box" class="planner-suggestions-panel" style="display: none; margin-top: 12px;"></div>
+
+                    <!-- Bản nháp các phiên tự học do Trợ lý đề xuất -->
+                    <div id="planner-draft-card" class="planner-draft-review-box" style="display: none; margin-top: 14px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;">
+                            <div>
+                                <span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; border: 1px solid #fde68a;">
+                                    ĐỀ XUẤT CỦA TRỢ LÝ AI — XEM LẠI &amp; CHỈNH SỬA TRƯỚC KHI LƯU
+                                </span>
+                                <h4 style="margin: 6px 0 0 0; font-size: 0.95rem;">Các phiên tự học được đề xuất</h4>
+                            </div>
+                            <button type="button" id="btn-add-plan-draft-row" class="btn btn-sm btn-outline">＋ Thêm phiên vào bản nháp</button>
+                        </div>
+
+                        <div class="table-responsive" style="max-height: 360px; overflow-x: auto; overflow-y: auto;">
+                            <table class="kb-table timetable-editor-table" id="planner-draft-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 105px;">Thứ</th>
+                                        <th style="width: 100px;">Bắt đầu</th>
+                                        <th style="width: 100px;">Kết thúc</th>
+                                        <th>Tên phiên tự học</th>
+                                        <th style="width: 160px;">Môn học</th>
+                                        <th style="width: 95px;">Ưu tiên</th>
+                                        <th style="width: 75px; text-align: center;">Khóa giờ</th>
+                                        <th style="width: 45px; text-align: center;">Xóa</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="planner-draft-table-body"></tbody>
+                            </table>
+                        </div>
+
+                        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; flex-wrap: wrap;">
+                            <button type="button" id="btn-discard-study-plan" class="btn btn-sm btn-secondary">Hủy bản nháp</button>
+                            <button type="button" id="btn-confirm-study-plan" class="btn btn-sm btn-primary">✅ Xác nhận &amp; Lưu lịch học tập</button>
+                        </div>
+                        <p id="planner-confirm-status" style="margin: 6px 0 0 0; font-size: 0.82rem;" role="status" aria-live="polite"></p>
+                    </div>
+                </div>
+
+                <!-- =========================================================================
+                     BƯỚC 5: HIỂN THỊ & CHỈNH SỬA LỊCH TỔNG HỢP TUẦN / NGÀY
+                     ========================================================================= -->
+                <div id="planner-step-master-schedule" class="timetable-card planner-section-card" style="margin-top: 20px;">
+                    <div class="planner-section-header">
+                        <div>
+                            <h3>🗓️ Bước 5: Lịch Tuần Tổng Hợp (Lớp học, Sinh hoạt, Nghỉ ngơi &amp; Phiên tự học)</h3>
+                            <p class="text-muted" style="font-size: 0.82rem; margin: 4px 0 0 0;">
+                                Theo dõi toàn bộ lịch học trên trường (OCR), hoạt động cá nhân, giờ nghỉ ngơi và các phiên tự học. Đánh dấu hoàn thành, khóa giờ cố định hoặc yêu cầu sắp xếp lại bất cứ lúc nào.
+                            </p>
+                        </div>
+                        <div class="planner-header-actions">
+                            <button type="button" id="btn-toggle-add-manual-session" class="btn btn-sm btn-outline">＋ Tự thêm phiên học</button>
+                            <button type="button" id="btn-reschedule-from-master" class="btn btn-sm btn-secondary">🔄 Sắp xếp lại phần chưa hoàn thành</button>
+                        </div>
+                    </div>
+
+                    <!-- Thanh thống kê nhanh -->
+                    <div id="planner-summary-bar" class="planner-summary-grid" style="margin-top: 12px;">
+                        <div class="planner-stat-box stat-class">
+                            <span class="planner-stat-label">🏫 Lớp học cố định (OCR)</span>
+                            <strong id="sum-class-count">0 buổi (0 giờ)</strong>
+                        </div>
+                        <div class="planner-stat-box stat-routine">
+                            <span class="planner-stat-label">🏃 Sinh hoạt &amp; 😴 Nghỉ ngơi</span>
+                            <strong id="sum-routine-count">0 mục (0 giờ)</strong>
+                        </div>
+                        <div class="planner-stat-box stat-window">
+                            <span class="planner-stat-label">📖 Khung giờ cho phép học</span>
+                            <strong id="sum-window-hours">0 khung (0 giờ)</strong>
+                        </div>
+                        <div class="planner-stat-box stat-study">
+                            <span class="planner-stat-label">📚 Phiên tự học &amp; Hoàn thành</span>
+                            <strong id="sum-study-progress">0/0 phút hoàn thành</strong>
+                        </div>
+                    </div>
+
+                    <!-- Bộ lọc Xem theo Tuần / Ngày & Loại lịch -->
+                    <div class="planner-filter-bar" style="margin-top: 14px;">
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                            <div>
+                                <label for="schedule-filter-day" style="font-size: 0.78rem; margin-right: 4px;">Xem theo:</label>
+                                <select id="schedule-filter-day" class="form-select" style="width: auto; display: inline-block; min-height: 34px; padding: 4px 10px; font-size: 0.82rem;">
+                                    <option value="all">📅 Cả tuần (Thứ 2 - Chủ nhật)</option>
+                                    <option value="1">Thứ 2</option>
+                                    <option value="2">Thứ 3</option>
+                                    <option value="3">Thứ 4</option>
+                                    <option value="4">Thứ 5</option>
+                                    <option value="5">Thứ 6</option>
+                                    <option value="6">Thứ 7</option>
+                                    <option value="7">Chủ nhật</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="schedule-filter-category" style="font-size: 0.78rem; margin-right: 4px;">Loại lịch:</label>
+                                <select id="schedule-filter-category" class="form-select" style="width: auto; display: inline-block; min-height: 34px; padding: 4px 10px; font-size: 0.82rem;">
+                                    <option value="all">Tất cả mục lịch</option>
+                                    <option value="class">🏫 Lớp học (OCR / Đã xác nhận)</option>
+                                    <option value="routine">🏃 Sinh hoạt cá nhân</option>
+                                    <option value="rest">😴 Nghỉ ngơi / Ăn uống</option>
+                                    <option value="study_session">📚 Phiên tự học</option>
+                                </select>
+                            </div>
+                            <label for="schedule-show-windows" style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; cursor: pointer;">
+                                <input type="checkbox" id="schedule-show-windows">
+                                <span>Hiện cả dòng Khung giờ có thể học</span>
+                            </label>
+                        </div>
+                        <div class="planner-badge-legend">
+                            <span class="sched-badge badge-class">🏫 Lớp học (OCR)</span>
+                            <span class="sched-badge badge-routine">🏃 Sinh hoạt cá nhân</span>
+                            <span class="sched-badge badge-rest">😴 Nghỉ ngơi (Bảo vệ)</span>
+                            <span class="sched-badge badge-study-ai">🤖 Tự học (Trợ lý AI)</span>
+                            <span class="sched-badge badge-study-done">✅ Đã hoàn thành</span>
+                        </div>
+                    </div>
+
+                    <!-- Form thêm nhanh phiên tự học thủ công -->
+                    <form id="form-manual-study-session" class="form-manual-entry" style="display: none; margin-top: 12px;">
+                        <strong id="manual-session-form-title" style="font-size: 0.85rem; display: block; margin-bottom: 8px;">Thêm / Chỉnh sửa phiên tự học:</strong>
+                        <input type="hidden" id="manual-session-edit-id" value="">
+                        <div class="form-manual-grid">
+                            <div>
+                                <label for="manual-session-weekday" style="font-size: 0.75rem; display: block;">Thứ</label>
+                                <select id="manual-session-weekday" class="form-input" style="font-size: 0.8rem; padding: 4px; width: 100%;">
+                                    <option value="1">Thứ 2</option>
+                                    <option value="2">Thứ 3</option>
+                                    <option value="3">Thứ 4</option>
+                                    <option value="4">Thứ 5</option>
+                                    <option value="5">Thứ 6</option>
+                                    <option value="6">Thứ 7</option>
+                                    <option value="7">Chủ nhật</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="manual-session-title" style="font-size: 0.75rem; display: block;">Tên phiên tự học</label>
+                                <input type="text" id="manual-session-title" required placeholder="VD: Làm bài tập Giải tích" class="form-input" style="font-size: 0.8rem; padding: 4px 6px; width: 100%;">
+                            </div>
+                            <div>
+                                <label for="manual-session-course" style="font-size: 0.75rem; display: block;">Môn học</label>
+                                <input type="text" id="manual-session-course" list="planner-course-datalist" required placeholder="Tên môn học" class="form-input" style="font-size: 0.8rem; padding: 4px 6px; width: 100%;">
+                            </div>
+                            <div>
+                                <label for="manual-session-start" style="font-size: 0.75rem; display: block;">Bắt đầu</label>
+                                <input type="time" id="manual-session-start" required class="form-input" style="font-size: 0.8rem; padding: 4px 6px; width: 100%;">
+                            </div>
+                            <div>
+                                <label for="manual-session-end" style="font-size: 0.75rem; display: block;">Kết thúc</label>
+                                <input type="time" id="manual-session-end" required class="form-input" style="font-size: 0.8rem; padding: 4px 6px; width: 100%;">
+                            </div>
+                        </div>
+                        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; flex-wrap: wrap;">
+                            <button type="button" id="btn-cancel-manual-session" class="btn btn-sm btn-secondary">Đóng</button>
+                            <button type="submit" id="btn-save-manual-session" class="btn btn-sm btn-primary">Lưu phiên tự học</button>
+                        </div>
+                        <p id="manual-session-status" style="margin: 6px 0 0 0; font-size: 0.8rem;"></p>
+                    </form>
+
+                    <div class="table-responsive" style="max-height: 520px; overflow-x: auto; overflow-y: auto; margin-top: 12px;">
+                        <table class="kb-table" id="master-schedule-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 95px;">Ngày</th>
+                                    <th style="width: 120px;">Khung giờ</th>
+                                    <th style="width: 175px;">Phân loại &amp; Nguồn</th>
+                                    <th>Hoạt động / Phiên học</th>
+                                    <th style="width: 150px;">Môn học / Phòng</th>
+                                    <th style="width: 150px;">Trạng thái / Quy tắc</th>
+                                    <th style="width: 170px; text-align: center;">Thao tác</th>
+                                </tr>
+                            </thead>
+                            <tbody id="master-schedule-table-body">
+                                <tr><td colspan="7" style="text-align: center;" class="text-muted">Đang tải lịch tổng hợp...</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </section>

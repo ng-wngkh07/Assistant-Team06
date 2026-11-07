@@ -2,12 +2,13 @@
 
 import logging
 import re
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
+from app import study_planner
 from app.gpu_lock import GPUBusyError
 
 logger = logging.getLogger("psychology_agent")
@@ -221,6 +222,29 @@ async def add_timetable_manual_entry(payload: TimetableManualEntryRequest):
         raise HTTPException(status_code=422, detail=msg)
 
 
+@router.put("/api/timetable/entries/{entry_id}")
+async def update_timetable_entry(entry_id: int, payload: TimetableManualEntryRequest):
+    from app import server as _srv
+    try:
+        updated = await run_in_threadpool(
+            _srv.timetable_store.update_entry,
+            entry_id=entry_id,
+            course=payload.course,
+            weekday=payload.weekday,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+            room=payload.room,
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        return {"status": "ok", "id": entry_id}
+    except ValueError as e:
+        msg = str(e)
+        if "Xung đột" in msg or "Trùng lịch" in msg:
+            raise HTTPException(status_code=409, detail=msg)
+        raise HTTPException(status_code=422, detail=msg)
+
+
 @router.delete("/api/timetable/entries/{entry_id}")
 async def delete_timetable_entry(entry_id: int):
     from app import server as _srv
@@ -241,10 +265,33 @@ async def clear_timetable():
 async def export_timetable_ics(
     start_date: str = Query(..., description="Start date of semester in YYYY-MM-DD"),
     end_date: str = Query(..., description="End date of semester in YYYY-MM-DD"),
+    include_planner: bool = Query(False, description="Include personal routines and study sessions"),
 ):
     from app import server as _srv
     try:
-        entries = await run_in_threadpool(_srv.timetable_store.get_confirmed_entries)
+        entries = list(await run_in_threadpool(_srv.timetable_store.get_confirmed_entries))
+        if include_planner:
+            routines = await run_in_threadpool(study_planner.get_routines)
+            for r in routines:
+                if r["flexibility"] != "study_window":
+                    entries.append({
+                        "course": f"[Cá nhân] {r['title']}",
+                        "weekday": r["weekday"],
+                        "start_time": r["start_time"],
+                        "end_time": r["end_time"],
+                        "room": r.get("activity_type_label") or "",
+                        "notes": r.get("flexibility_label") or "",
+                    })
+            sessions = await run_in_threadpool(study_planner.get_study_sessions)
+            for s in sessions:
+                entries.append({
+                    "course": f"[Tự học - {s['course']}] {s['title']}",
+                    "weekday": s["weekday"],
+                    "start_time": s["start_time"],
+                    "end_time": s["end_time"],
+                    "room": s.get("source_label") or "",
+                    "notes": s.get("notes") or "",
+                })
         if not entries:
             raise HTTPException(
                 status_code=400,
@@ -265,3 +312,312 @@ async def export_timetable_ics(
     except Exception:
         logger.exception("Lỗi xuất lịch sang ICS")
         raise HTTPException(status_code=500, detail="Lỗi xuất tệp lịch .ics.")
+
+
+# ==========================================
+# Personal Study Schedule Assistant Endpoints
+# ==========================================
+
+
+class RoutineItemPayload(BaseModel):
+    weekday: int
+    start_time: str
+    end_time: str
+    title: str
+    activity_type: str = "other"
+    flexibility: Optional[str] = None
+    is_recurring: bool = True
+    note: Optional[str] = ""
+
+
+class RoutineBulkPayload(BaseModel):
+    routines: List[RoutineItemPayload]
+
+
+class StudyPreferencesPayload(BaseModel):
+    earliest_study_time: Optional[str] = None
+    latest_study_time: Optional[str] = None
+    max_daily_study_minutes: Optional[int] = None
+    preferred_session_minutes: Optional[int] = None
+    min_session_minutes: Optional[int] = None
+    buffer_before_deadline_hours: Optional[int] = None
+    ai_notes: Optional[str] = None
+    week_start_date: Optional[str] = None
+
+
+class StudyTaskCreatePayload(BaseModel):
+    title: str
+    course: str
+    deadline: Optional[str] = None
+    deadline_weekday: Optional[int] = None
+    deadline_time: Optional[str] = "23:59"
+    deadline_date: Optional[str] = None
+    estimated_minutes: Optional[int] = None
+    priority: str = "medium"
+    completed: bool = False
+    splittable: bool = True
+    notes: Optional[str] = ""
+
+
+class StudyTaskUpdatePayload(BaseModel):
+    title: Optional[str] = None
+    course: Optional[str] = None
+    deadline: Optional[str] = None
+    deadline_weekday: Optional[int] = None
+    deadline_time: Optional[str] = None
+    deadline_date: Optional[str] = None
+    estimated_minutes: Optional[int] = None
+    priority: Optional[str] = None
+    completed: Optional[bool] = None
+    splittable: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+class StudyPlanGeneratePayload(BaseModel):
+    reschedule_only: bool = False
+    ai_notes: Optional[str] = None
+    require_estimates: bool = False
+
+
+class StudyPlanConfirmPayload(BaseModel):
+    plan_id: str
+    sessions: Optional[List[Dict[str, Any]]] = None
+
+
+class StudySessionPayload(BaseModel):
+    task_id: Optional[int] = None
+    title: str
+    course: str
+    weekday: int
+    start_time: str
+    end_time: str
+    priority: Optional[str] = "medium"
+    completed: Optional[bool] = False
+    locked: Optional[bool] = True
+    notes: Optional[str] = ""
+
+
+class StudySessionUpdatePayload(BaseModel):
+    title: Optional[str] = None
+    course: Optional[str] = None
+    weekday: Optional[int] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    completed: Optional[bool] = None
+    locked: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+@router.get("/api/timetable/planner/state")
+async def get_planner_state():
+    return await run_in_threadpool(study_planner.get_full_planner_state)
+
+
+@router.get("/api/timetable/planner/schedule")
+async def get_planner_combined_schedule():
+    return await run_in_threadpool(study_planner.get_combined_weekly_schedule)
+
+
+@router.get("/api/timetable/planner/routines")
+async def list_planner_routines():
+    routines = await run_in_threadpool(study_planner.get_routines)
+    return {"routines": routines}
+
+
+@router.post("/api/timetable/planner/routines")
+async def create_planner_routine(payload: RoutineItemPayload):
+    try:
+        res = await run_in_threadpool(study_planner.add_routine, payload.model_dump())
+        return {"status": "ok", **res}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.put("/api/timetable/planner/routines/bulk")
+async def replace_planner_routines_bulk(payload: RoutineBulkPayload):
+    try:
+        items = [r.model_dump() for r in payload.routines]
+        res = await run_in_threadpool(study_planner.replace_routines_bulk, items)
+        return {"status": "ok", **res}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.put("/api/timetable/planner/routines/{routine_id}")
+async def update_planner_routine(routine_id: int, payload: RoutineItemPayload):
+    try:
+        res = await run_in_threadpool(study_planner.update_routine, routine_id, payload.model_dump())
+        return {"status": "ok", **res}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.delete("/api/timetable/planner/routines/{routine_id}")
+async def delete_planner_routine(routine_id: int):
+    ok = await run_in_threadpool(study_planner.delete_routine, routine_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Không tìm thấy mục lịch sinh hoạt")
+    return {"status": "ok"}
+
+
+@router.get("/api/timetable/planner/preferences")
+async def get_planner_preferences():
+    prefs = await run_in_threadpool(study_planner.get_preferences)
+    return {"preferences": prefs}
+
+
+@router.put("/api/timetable/planner/preferences")
+async def save_planner_preferences(payload: StudyPreferencesPayload):
+    try:
+        clean = {k: v for k, v in payload.model_dump().items() if v is not None}
+        prefs = await run_in_threadpool(study_planner.update_preferences, clean)
+        return {"status": "ok", "preferences": prefs}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/api/timetable/planner/tasks")
+async def list_planner_tasks():
+    tasks = await run_in_threadpool(study_planner.get_tasks)
+    return {"tasks": tasks}
+
+
+@router.post("/api/timetable/planner/tasks")
+async def create_planner_task(payload: StudyTaskCreatePayload):
+    try:
+        task = await run_in_threadpool(study_planner.add_task, payload.model_dump())
+        return {"status": "ok", "task": task}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.put("/api/timetable/planner/tasks/{task_id}")
+async def update_planner_task(task_id: int, payload: StudyTaskUpdatePayload):
+    try:
+        clean = {k: v for k, v in payload.model_dump(exclude_unset=True).items()}
+        task = await run_in_threadpool(study_planner.update_task, task_id, clean)
+        return {"status": "ok", "task": task}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.delete("/api/timetable/planner/tasks/{task_id}")
+async def delete_planner_task(task_id: int):
+    ok = await run_in_threadpool(study_planner.delete_task, task_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bài tập")
+    return {"status": "ok"}
+
+
+@router.post("/api/timetable/planner/generate")
+async def generate_planner_schedule(payload: Optional[StudyPlanGeneratePayload] = None):
+    req = payload or StudyPlanGeneratePayload()
+    if req.require_estimates:
+        tasks = await run_in_threadpool(study_planner.get_tasks)
+        missing = [t for t in tasks if not t.get("completed") and t.get("missing_estimate")]
+        if missing:
+            names = ", ".join(f"'{t['title']}' ({t['course']})" for t in missing)
+            raise HTTPException(
+                status_code=422,
+                detail=f"Vui lòng nhập thời gian ước tính hoàn thành (phút) cho: {names} trước khi tạo kế hoạch.",
+            )
+    try:
+        draft = await run_in_threadpool(
+            study_planner.generate_study_plan,
+            reschedule_only=req.reschedule_only,
+            ai_notes_override=req.ai_notes,
+        )
+        return {"status": "ok", "draft": draft}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/api/timetable/planner/drafts/{plan_id}")
+async def get_planner_draft_endpoint(plan_id: str):
+    draft = await run_in_threadpool(study_planner.get_plan_draft, plan_id)
+    if not draft:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản nháp kế hoạch")
+    return draft
+
+
+@router.delete("/api/timetable/planner/drafts/{plan_id}")
+async def discard_planner_draft_endpoint(plan_id: str):
+    ok = await run_in_threadpool(study_planner.discard_plan_draft, plan_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản nháp kế hoạch")
+    return {"status": "ok"}
+
+
+@router.post("/api/timetable/planner/confirm")
+async def confirm_planner_draft_endpoint(payload: StudyPlanConfirmPayload):
+    try:
+        res = await run_in_threadpool(
+            study_planner.confirm_study_plan,
+            payload.plan_id,
+            payload.sessions,
+        )
+        return res
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        msg = str(e)
+        if "trùng giờ" in msg or "xâm phạm" in msg:
+            raise HTTPException(status_code=409, detail=msg)
+        raise HTTPException(status_code=422, detail=msg)
+
+
+@router.post("/api/timetable/planner/apply-suggestion")
+async def apply_planner_suggestion_endpoint(payload: Dict[str, Any]):
+    try:
+        res = await run_in_threadpool(study_planner.apply_planner_suggestion, payload)
+        return res
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/api/timetable/planner/sessions")
+async def list_planner_sessions():
+    sessions = await run_in_threadpool(study_planner.get_study_sessions)
+    return {"sessions": sessions}
+
+
+@router.post("/api/timetable/planner/sessions")
+async def add_planner_session(payload: StudySessionPayload):
+    try:
+        session = await run_in_threadpool(study_planner.add_manual_study_session, payload.model_dump())
+        return {"status": "ok", "session": session}
+    except ValueError as e:
+        msg = str(e)
+        if "trùng giờ" in msg or "xâm phạm" in msg:
+            raise HTTPException(status_code=409, detail=msg)
+        raise HTTPException(status_code=422, detail=msg)
+
+
+@router.put("/api/timetable/planner/sessions/{session_id}")
+async def update_planner_session(session_id: int, payload: StudySessionUpdatePayload):
+    try:
+        clean = {k: v for k, v in payload.model_dump(exclude_unset=True).items()}
+        session = await run_in_threadpool(study_planner.update_study_session, session_id, clean)
+        return {"status": "ok", "session": session}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        msg = str(e)
+        if "trùng giờ" in msg or "xâm phạm" in msg:
+            raise HTTPException(status_code=409, detail=msg)
+        raise HTTPException(status_code=422, detail=msg)
+
+
+@router.delete("/api/timetable/planner/sessions/{session_id}")
+async def delete_planner_session(session_id: int):
+    ok = await run_in_threadpool(study_planner.delete_study_session, session_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phiên học")
+    return {"status": "ok"}
+
