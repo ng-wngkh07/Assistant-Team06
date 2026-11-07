@@ -26,6 +26,7 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Added
 
+- Expand timetable OCR into a Personal AI Study Schedule Assistant (`app/study_planner.py`, `app/timetable_store.py`, `app/routes/timetable_routes.py`, `static/timetable.js`) supporting weekly personal routines (`fixed`, `protected`, `flexible`, `study_window`), personal study limits, deadline-driven task splitting, constraint-verified study session scheduling with capacity warnings/suggestions, and unified master schedule management with completion/lock/reschedule controls.
 - Add a hierarchical two-level parent-child topic tree (`app/topic_tree.py`) shared between QA and topic-based learning (`app/learning.py`), mapping course subtopics under parent academic domains.
 - Provide original-layout PPTX slide previews using a local LibreOffice renderer or explicitly imported, source-bound static PDF renditions. Preserve DOCX logical reading sections and original downloads without fabricating physical page images.
 - Add Tesseract OCR (`UB-Mannheim.TesseractOCR`) to the Windows setup manifest (`requirements-windows-tools.json`), installer script (`scripts/windows_setup.ps1`), and Windows documentation (`README_WINDOWS.md`), with automatic Windows installation path detection in `app/timetable_table.py`.
