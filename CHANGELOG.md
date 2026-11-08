@@ -26,6 +26,8 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Added
 
+- Use concise source-grounded verification for single-question local 9B practice, including an explicit missing-input gate and literal integer-array index references. Expose the selected review profile and actual adapter diagnostics separately; compatible adapters require artifact, content and performance acceptance before activation.
+- Let users select one, two or three questions when practising from a specific source excerpt; keep three as the default.
 - Add persistent hierarchical retrieval tree sidecar database (`app/retrieval_tree.py`) and maintenance builder CLI (`scripts/build_retrieval_tree.py`) providing candidate chunk filtering over authored taxonomies without modifying the original database.
 - Add source-bound sidecar fingerprint validation and shared membership reader (`read_source_bound_tree_memberships`) for QA retrieval and `LearningService` cataloging, ensuring safe fallback to global search upon source mutations or WAL commits.
 - Add a hierarchical two-level parent-child topic tree (`app/topic_tree.py`) shared between QA and topic-based learning (`app/learning.py`), mapping course subtopics under parent academic domains.

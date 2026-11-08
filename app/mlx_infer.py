@@ -55,8 +55,17 @@ def main():
     except (OSError, ValueError, TypeError) as exc:
         raise ValueError("Cấu hình mô hình không hợp lệ hoặc thiếu giới hạn ngữ cảnh") from exc
 
+    adapter_acceptance = None
+    validation_started = time.perf_counter()
     if adapter_path is not None:
-        raise ValueError("Chưa có adapter được nghiệm thu cho Qwen3.5 9B; không nạp adapter thử nghiệm hoặc mô hình cũ.")
+        from app.practice_adapter import load_practice_adapter, request_matches_scope
+        adapter_acceptance = load_practice_adapter(model_path, require_active=False)
+        if (adapter_acceptance is None or
+                adapter_path.resolve() != Path(adapter_acceptance["path"]).resolve() or
+                not request_matches_scope(request)):
+            raise ValueError("Adapter chưa được nghiệm thu cho loại yêu cầu này.")
+        request["seed"] = 42
+    adapter_validation_seconds = time.perf_counter() - validation_started
 
     try:
         max_tokens = int(request.get("max_tokens", 700))
@@ -171,9 +180,12 @@ def main():
         "base_model": str(base_identity),
         "adapter_loaded": has_adapter,
         "adapter_path": str(adapter_path) if has_adapter else None,
+        "adapter_sha256": adapter_acceptance["sha256"] if adapter_acceptance else None,
+        "adapter_scope": adapter_acceptance["scope"] if adapter_acceptance else None,
         "generation_profile": {"presence_penalty": presence_penalty, "presence_context_size": 2048},
         "timings": {
             "load_seconds": load_seconds,
+            "adapter_validation_seconds": adapter_validation_seconds,
             "first_token_seconds": first_token_seconds,
             "generation_seconds": generation_seconds,
             "worker_seconds": time.perf_counter() - started,

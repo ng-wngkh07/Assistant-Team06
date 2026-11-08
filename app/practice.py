@@ -328,6 +328,14 @@ class PracticeService:
                 max_tokens=max_tokens,
                 **kwargs
             )
+            diagnostics = getattr(client, "last_diagnostics", {})
+            if diagnostics.get("practice_review_profile"):
+                logger.info("Practice review profile %s; adapter_loaded=%s; input_tokens=%s; output_tokens=%s",
+                            diagnostics["practice_review_profile"], diagnostics.get("adapter_loaded"),
+                            diagnostics.get("input_tokens"), diagnostics.get("output_tokens"))
+            if diagnostics.get("adapter_loaded") is True:
+                logger.info("Practice review used accepted adapter %s (%s)",
+                            diagnostics.get("adapter_sha256"), diagnostics.get("adapter_scope"))
             if getattr(client, "last_done_reason", None) != "stop":
                 raise PracticeGenerationError("Mô hình bị gián đoạn hoặc vượt quá độ dài quy định.")
             result = re.sub(r"(?is)<\s*(?:think|analysis|reasoning)\b[^>]*>.*?<\s*/\s*(?:think|analysis|reasoning)\s*>", "", result)
@@ -419,6 +427,22 @@ class PracticeService:
             return []
         prompt = build_practice_review_prompt(review, difficulty=difficulty)
         review_tokens = min(2400, max(1000, 500 * len(review)))
+        if len(review) == 1 and difficulty is None:
+            from app.model_resolver import is_mlx_model
+            from app.practice_adapter import (
+                SYSTEM_PROMPT,
+                build_compact_review_prompt, request_matches_scope,
+            )
+            if is_mlx_model(model or DEFAULT_CHAT_MODEL):
+                compact = build_compact_review_prompt(review)
+                request = {
+                    "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                                 {"role": "user", "content": compact}],
+                    "max_tokens": review_tokens, "num_ctx": 8192,
+                    "temperature": 0, "response_schema": practice_review_schema(1, None),
+                }
+                if request_matches_scope(request):
+                    prompt = compact
         try:
             raw_checks = self._chat_complete(prompt, model, review_tokens, timeout=timeout,
                                              response_schema=practice_review_schema(len(review), difficulty))

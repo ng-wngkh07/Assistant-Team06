@@ -98,6 +98,22 @@ def make_service(responses=None, passages=None, db_path=None):
     return service, searcher, ollama
 
 
+@pytest.mark.parametrize('count,difficulty,compact', [(1, None, True), (2, None, False), (1, 'medium', False)])
+def test_native_single_review_uses_compact_base_without_adapter(monkeypatch, count, difficulty, compact):
+    import app.model_resolver as resolver
+    import app.practice_adapter as profile
+    from app.model_resolver import DEFAULT_CHAT_MODEL
+    service, _, _ = make_service()
+    prompts = []
+    monkeypatch.setattr(resolver, 'is_mlx_model', lambda model: True)
+    monkeypatch.setattr(profile, 'active_practice_adapter', lambda model: None)
+    monkeypatch.setattr(service, '_chat_complete', lambda prompt, *args, **kwargs: prompts.append(prompt) or '{"checks": []}')
+    questions = [dict(QUESTION, source={'chunk_id': 17}) for _ in range(count)]
+    service._verify_questions(questions, {17: passage()}, DEFAULT_CHAT_MODEL, difficulty=difficulty)
+    assert len(prompts) == 1
+    assert ('Mỗi trường audit tối đa 30 từ' in prompts[0]) is compact
+
+
 def test_practice_rejects_page_with_unverified_visual_content_before_generation(monkeypatch):
     source = passage()
     source["page_quality"] = {

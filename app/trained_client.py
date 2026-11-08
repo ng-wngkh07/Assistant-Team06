@@ -112,7 +112,6 @@ class TrainedModelClient:
         training_python = BASE_DIR / ".train-venv" / "bin" / "python"
         tokens_limit = int(max_tokens or num_predict or kwargs.get("num_predict") or 700)
 
-        # No compatible adapter is approved for this product base.
         adapter_path: Optional[str] = None
 
         full_messages = list(messages)
@@ -140,6 +139,14 @@ class TrainedModelClient:
         if sd is not None:
             request["seed"] = sd
 
+        from app.practice_adapter import active_practice_adapter, request_matches_scope
+        compact_review = request_matches_scope(request)
+        if compact_review:
+            request["seed"] = 42
+            accepted = active_practice_adapter(model_dir)
+            if accepted:
+                request["adapter_path"] = accepted["path"]
+
         # Serialize model workloads through exclusive native worker admission and training lock inheritance
         with gpu_coordinator.acquire_for_inference() as lock_fds:
             kwargs_run = {
@@ -160,6 +167,8 @@ class TrainedModelClient:
         if completed.returncode != 0:
             raise RuntimeError(f"Không thể chạy mô hình MLX: {completed.stderr[-1000:]}")
         result_data = json.loads(completed.stdout)
+        if compact_review:
+            result_data["practice_review_profile"] = "compact_review_v1"
         answer = result_data["answer"]
         reason = result_data.get("done_reason")
         self.last_done_reason = reason if reason in {"stop", "length"} else None

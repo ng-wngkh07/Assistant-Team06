@@ -61,6 +61,7 @@ async function createApp(seed = [], options = {}) {
     const events = [];
     const exampleRequests = [];
     const learningRequests = [];
+    const practiceRequests = [];
     const documentListeners = {};
     let ready;
     const document = {
@@ -84,6 +85,7 @@ async function createApp(seed = [], options = {}) {
         if (url === '/api/learning/topics') return { ok: true, json: async () => ({ topics: [{ id: 'Trí nhớ', label: 'Trí nhớ', document_count: 3 }] }) };
         if (url === '/api/learning/exercises') { learningRequests.push({url, body: JSON.parse(options.body)}); return { ok: true, json: async () => ({items: exampleItems}) }; }
         if (url === '/api/learning/generate') learningRequests.push({url, body: JSON.parse(options.body)});
+        if (url === '/api/practice/generate') practiceRequests.push(JSON.parse(options.body));
         if (url === '/api/learning/generate' && validationError) return { ok: false, status: 422, json: async () => ({detail:[{msg:'Value error, Chủ đề không hợp lệ.'}]}) };
         if (url === '/api/documents') return { ok: true, json: async () => ({ documents: [
             { id: 4, filename: 'algebra.pdf', clean_title: 'Đại số tuyến tính', total_pages: 8 },
@@ -120,7 +122,7 @@ async function createApp(seed = [], options = {}) {
     });
     ready();
     await Promise.resolve();
-    return { document, elements, events, exampleRequests, learningRequests, localStorage, get answerCalls() { return answerCalls; } };
+    return { document, elements, events, exampleRequests, learningRequests, practiceRequests, localStorage, get answerCalls() { return answerCalls; } };
 }
 
 function sampleReview(id = 'saved-1') {
@@ -402,4 +404,17 @@ test('Invalid question counts are explained without submitting a different count
     await app.elements.get('btn-learning-generate').click();
     assert.equal(app.learningRequests.length, 0);
     assert.match(app.elements.get('learning-generate-status').textContent, /số nguyên/);
+});
+
+
+test('Selected page practice honors the requested count and keeps three as the default', async () => {
+    for (const [value, expected] of [['1', 1], ['', 3], ['100', 3]]) {
+        const app = await createApp();
+        app.document.getElementById('practice-count').value = value;
+        app.document.dispatchEvent({ type: 'app-source-selected', detail: { doc_id: 1, page_num: 4, chunk_id: 17, title: 'Tài liệu' } });
+        await app.elements.get('btn-practice-current').click();
+        assert.equal(app.practiceRequests.length, 1);
+        assert.equal(app.practiceRequests[0].count, expected);
+        assert.equal(app.practiceRequests[0].source_chunk_id, 17);
+    }
 });

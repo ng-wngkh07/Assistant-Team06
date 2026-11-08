@@ -1,6 +1,7 @@
 document.addEventListener("DOMContentLoaded", () => {
     const progressKey = "study-agent-review-v1";
     const practiceButton = document.getElementById("btn-practice-current");
+    const practiceCount = document.getElementById("practice-count");
     const clearScopeButton = document.getElementById("btn-clear-practice-scope");
     const scopeLabel = document.getElementById("practice-scope-label");
     const reviewCount = document.getElementById("review-count");
@@ -54,17 +55,23 @@ document.addEventListener("DOMContentLoaded", () => {
     document.addEventListener("app-source-cleared", clearSelectedScope);
     document.addEventListener("app-show-qa", clearSelectedScope);
     practiceButton?.addEventListener("click", startPractice);
+    practiceCount?.addEventListener("change", updateSelectedScope);
     document.addEventListener("app-start-practice", startPractice);
     clearScopeButton?.addEventListener("click", () => document.dispatchEvent(new CustomEvent("app-source-cleared")));
     btnLearningGenerate?.addEventListener("click", startLearningGenerate);
     btnReviewGenerate?.addEventListener("click", startReviewGenerate);
     btnLearningExercises?.addEventListener("click", searchLearningExercises);
 
+    function selectedPracticeCount() {
+        const count = Number(practiceCount?.value || 3);
+        return Number.isInteger(count) && count >= 1 && count <= 3 ? count : 3;
+    }
+
     function updateSelectedScope() {
         if (practiceButton) practiceButton.disabled = !selectedScope;
         if (clearScopeButton) clearScopeButton.disabled = !selectedScope;
         if (scopeLabel) scopeLabel.textContent = selectedScope
-            ? `Nguồn đã chọn: ${selectedScope.title} · trang ${selectedScope.page_num}${selectedScope.source_chunk_id ? " · đoạn cụ thể" : ""}. Bộ câu hỏi giới hạn tối đa 3 câu.`
+            ? `Nguồn đã chọn: ${selectedScope.title} · trang ${selectedScope.page_num}${selectedScope.source_chunk_id ? " · đoạn cụ thể" : ""}. Bộ câu hỏi giới hạn tối đa ${selectedPracticeCount()} câu.`
             : "Tìm và chọn một trích đoạn bên dưới, hoặc chọn một trang từ phần Hỏi đáp.";
     }
 
@@ -128,18 +135,20 @@ document.addEventListener("DOMContentLoaded", () => {
     async function startPractice() {
         if (!selectedScope || requestPending) return;
         const scope = { ...selectedScope };
+        const count = selectedPracticeCount();
         practiceDialog.showModal();
         practiceSubtitle.textContent = `${scope.title} · trang ${scope.page_num}`;
         practiceSession = null;
         quizResults = [];
-        showMessage("Đang tạo tối đa 3 câu từ nguồn đã chọn…");
+        showMessage(`Đang tạo tối đa ${count} câu từ nguồn đã chọn…`);
         requestPending = true;
         practiceButton.disabled = true;
+        if (practiceCount) practiceCount.disabled = true;
         try {
             const request = {
                 source_document_id: scope.doc_id,
                 source_page_num: scope.page_num,
-                count: 3,
+                count,
             };
             if (scope.source_chunk_id) request.source_chunk_id = scope.source_chunk_id;
             practiceSession = await postJson("/api/practice/generate", request);
@@ -151,6 +160,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } finally {
             requestPending = false;
             practiceButton.disabled = !selectedScope;
+            if (practiceCount) practiceCount.disabled = false;
         }
     }
 

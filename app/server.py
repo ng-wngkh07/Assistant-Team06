@@ -553,6 +553,8 @@ async def check_local_model():
 async def get_models():
     from app.active_registry import active_registry
     from app.model_resolver import is_9b_model
+    from app.practice_adapter import active_practice_adapter
+    from app.model_resolver import resolve_mlx_model_dir
     registry_info = active_registry.get_active_info()
     is_mlx = _requires_mlx_model()
     models = [] if is_mlx else (ollama.list_models() if ollama.check_health() else [])
@@ -579,6 +581,8 @@ async def get_models():
         "active_adapter": active_adapter,
         "model_mode": model_mode,
         "model_description": model_description,
+        "practice_review_adapter": active_practice_adapter(resolve_mlx_model_dir()) if is_mlx else None,
+        "practice_review_profile": "compact_review_v1" if is_mlx else None,
     }
 
 @app.get("/api/storage")
