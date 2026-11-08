@@ -24,7 +24,7 @@ def test_current_base_never_loads_registry_adapter(tmp_path, monkeypatch):
     assert requests[0]['adapter_path'] is None
 
 
-def test_schema_reaches_native_worker_and_missing_finish_is_not_success(monkeypatch):
+def test_schema_reaches_native_worker_and_missing_finish_is_not_success(monkeypatch, native_context_metadata):
     monkeypatch.setattr(trained_client.TrainedModelClient, 'available', lambda *a: True)
     monkeypatch.setattr(trained_client.gpu_coordinator, 'acquire_for_inference', lambda: nullcontext())
     requests = []
@@ -36,10 +36,11 @@ def test_schema_reaches_native_worker_and_missing_finish_is_not_success(monkeypa
     client = trained_client.TrainedModelClient()
     assert client.chat_complete([], response_schema=schema) == '{}'
     assert requests[0]['response_schema'] == schema
+    assert requests[0]['num_ctx'] == 8192
     assert client.last_done_reason is None
 
 
-def test_trained_model_chat_stream_respects_num_predict_and_truncation(monkeypatch):
+def test_trained_model_chat_stream_respects_num_predict_and_truncation(monkeypatch, native_context_metadata):
     client = trained_client.TrainedModelClient()
     monkeypatch.setattr(client, "available", lambda *args, **kwargs: True)
 
