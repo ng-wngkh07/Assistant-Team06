@@ -6,6 +6,8 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Security
 
+- Add optional local accounts with salted password hashes, revocable sessions, request-origin checks and separate planner, history and upload storage. Remote API access requires authentication; public registration remains disabled by default.
+
 - Bound Office preview conversion with local OOXML validation, isolated macro-disabled renderer profiles and source-content cache keys. Reject external relationships and active payloads before automatic conversion; verify source and PDF digests for explicitly imported static slide renditions.
 
 - Upgrade `pillow` to `>=13.0.0`, `certifi` to `>=2026.10.18`, `filelock` to `>=4.2.1`, and `streamlit` to `1.66.1` across dependency and constraint manifests to address Dependabot advisories.
@@ -25,6 +27,10 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 - Validate portable physical-page review coverage and passage digests during pack installation and application distribution bundling (`scripts/build_distribution.py`), preventing unreviewed or modified packs from entering production.
 
 ### Added
+
+- Rename timetable import to study planning and split it into four guided screens: class import, personal time, editable plans and dated deadlines, and calendar export. Save first-use guidance per account and feature, with manual replay.
+- Export dated study sessions and deadline alarms in iCalendar files, with stable account-scoped event identifiers. Keep weekly class recurrence and reject undated legacy deadlines instead of guessing dates. Calendar applications control notification delivery.
+- Document private website deployment, current database limitations and the distinction between private hosting and permission to use source materials.
 
 - Use concise source-grounded verification for single-question local 9B practice, including an explicit missing-input gate and literal integer-array index references. Expose the selected review profile and actual adapter diagnostics separately; compatible adapters require artifact, content and performance acceptance before activation.
 - Let users select one, two or three questions when practising from a specific source excerpt; keep three as the default.
@@ -83,6 +89,8 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 - Consume canonical material filenames after upload in the client interface for preview, active attachment scoping, QA, downloads, and generation.
 
 ### Fixed
+
+- Clarify constant-derivative and schematic-inference review and distinguish question assumptions from source claims in generated practice explanations. This improves bounded regression cases; independent source-quality failures remain and the new 9B adapter stays inactive.
 
 - Treat omitted or null `persist_to_src` as instant use in material uploads and library inspection. API clients that require durable library indexing must send `persist_to_src: true` explicitly.
 - Use the shared vision timeout (360 seconds by default) for document OCR while retaining explicit caller overrides.

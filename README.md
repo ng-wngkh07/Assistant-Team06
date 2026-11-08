@@ -9,7 +9,7 @@ Study Agent helps learners ask questions about their own course materials and ch
 - Generate quizzes and source-based flashcards. Check the cited passage before relying on a generated answer.
 - Find exercises, review uncertain answers and keep a local conversation history. Practice uses its fixed careful verification workflow.
 - Start QA in **Nhanh** (fast) and select **Kiểm tra kỹ** (careful) for an additional source audit. Complex questions can prompt a suggestion; the user controls the choice.
-- Extract a timetable from an image, correct the draft and confirm it before saving or exporting.
+- Build a study plan from a timetable image, personal commitments and deadlines; approve sessions and export calendar reminders.
 
 Question answering is the core product. An answer should identify its evidence, preserve the source's conditions and say when the available material is insufficient. A valid citation alone does not prove that the answer is correct.
 
@@ -82,6 +82,8 @@ Supported uploads include PDF, DOCX, PPTX, TXT, Markdown, PNG, JPEG and WebP, up
 | [Data preparation](docs/data-preparation.md) | Every-page inventory, source review, vector integrity and training gates |
 | [Document distribution](docs/data-distribution.md) | Publication rights, privacy, full-library coverage and safe knowledge-pack delivery |
 | [Timetable workflow](docs/timetable-workflow.md) | Recognition, user review, confirmation and calendar export |
+| [Study planning](docs/study-planning.md) | Four-step planning, deadlines, calendar alarms and account guides |
+| [Private website assessment](docs/web-deployment.md) | Hosting costs, model hardware, accounts and database readiness |
 | [Deployment](docs/deployment.md) | Running, updating and checking the application |
 | [Testing](docs/testing.md) | Regression checks and real-model evaluation |
 | [Roadmap](docs/roadmap.md) | Priorities and acceptance criteria |
@@ -95,7 +97,7 @@ The API reference is available at `/docs` on a running instance.
 
 ## Current limits
 
-The application targets a trusted local environment. It does not yet provide authenticated users, per-user source permissions or a service-level availability guarantee. Local model work is serialized. Do not expose the API as a shared public service without addressing access control and deployment hardening.
+The application targets a trusted local environment. Optional accounts separate planner data, history and uploads, but shared-library source permissions and public-service operational acceptance are incomplete. Local model work is serialized. See the [private website assessment](docs/web-deployment.md) before exposing the application to other users.
 
 Generated content still needs source review, especially formulas, OCR output and multiple-choice answers. Software tests and small synthetic model evaluations do not establish accuracy across courses. See [testing](docs/testing.md) for the acceptance process.
 

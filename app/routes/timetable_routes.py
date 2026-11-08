@@ -265,16 +265,30 @@ async def clear_timetable():
 async def export_timetable_ics(
     start_date: str = Query(..., description="Start date of semester in YYYY-MM-DD"),
     end_date: str = Query(..., description="End date of semester in YYYY-MM-DD"),
-    include_planner: bool = Query(False, description="Include personal routines and study sessions"),
+    include_planner: bool = Query(False, description="Include personal routines, confirmed study sessions and dated deadlines"),
+    reminder_minutes: int = Query(60, ge=0, le=10080),
 ):
     from app import server as _srv
     try:
         entries = list(await run_in_threadpool(_srv.timetable_store.get_confirmed_entries))
+        for entry in entries:
+            if entry.get("id") is not None:
+                entry["uid"] = f"class:{entry['id']}"
+        deadlines = []
         if include_planner:
+            preferences = await run_in_threadpool(study_planner.get_preferences)
+            from datetime import date, timedelta
+            from app.accounts import account_id
+            tasks = await run_in_threadpool(study_planner.get_tasks)
+            week_start = study_planner._infer_week_monday(preferences, tasks)
             routines = await run_in_threadpool(study_planner.get_routines)
+            if week_start is None and (any(not r.get("is_recurring", True) for r in routines) or await run_in_threadpool(study_planner.get_study_sessions)):
+                raise ValueError("Hãy chọn tuần lập kế hoạch trước khi xuất buổi học hoặc hoạt động một lần.")
             for r in routines:
                 if r["flexibility"] != "study_window":
                     entries.append({
+                        "uid": f"routine:{r['id']}",
+                        "event_date": None if r.get("is_recurring", True) else (week_start + timedelta(days=r["weekday"]-1)).isoformat(),
                         "course": f"[Cá nhân] {r['title']}",
                         "weekday": r["weekday"],
                         "start_time": r["start_time"],
@@ -285,6 +299,8 @@ async def export_timetable_ics(
             sessions = await run_in_threadpool(study_planner.get_study_sessions)
             for s in sessions:
                 entries.append({
+                    "uid": f"study:{s['id']}",
+                    "event_date": (week_start + timedelta(days=s["weekday"]-1)).isoformat(),
                     "course": f"[Tự học - {s['course']}] {s['title']}",
                     "weekday": s["weekday"],
                     "start_time": s["start_time"],
@@ -292,12 +308,14 @@ async def export_timetable_ics(
                     "room": s.get("source_label") or "",
                     "notes": s.get("notes") or "",
                 })
-        if not entries:
+            deadlines = await run_in_threadpool(study_planner.get_tasks)
+        if not entries and not deadlines:
             raise HTTPException(
                 status_code=400,
                 detail="Thời khóa biểu hiện chưa có môn học nào để xuất lịch. Vui lòng thêm môn học trước.",
             )
-        ics_content = _srv.timetable_ics.generate_ics(entries, start_date, end_date)
+        from app.accounts import account_id
+        ics_content = _srv.timetable_ics.generate_ics(entries, start_date, end_date, deadlines=deadlines, reminder_minutes=reminder_minutes, namespace=account_id.get() or "local")
         return Response(
             content=ics_content,
             media_type="text/calendar; charset=utf-8",

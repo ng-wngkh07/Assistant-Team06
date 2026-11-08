@@ -209,3 +209,12 @@ def test_rebinding_a_different_adapter_scale_cannot_reuse_other_config_acceptanc
     subject.REGISTRY_FILE.write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match='configuration changed'):
         subject.load_practice_adapter(model)
+
+
+def test_compact_review_prompt_distinguishes_source_rules_and_forbids_audit_hallucinations():
+    item = {'index': 1, 'source': 'Passage.', 'question': 'Question?', 'choices': dict(A='1', B='2', C='3', D='4'), 'proposed_answer': 'A', 'explanation': 'Expl.', 'evidence_quote': 'Passage.'}
+    prompt = subject.build_compact_review_prompt(item)
+    assert "ký hiệu toán học như f'(x) đã nêu rõ yêu cầu tính đạo hàm, không coi là thiếu yêu cầu" in prompt
+    assert "sơ đồ suy luận có ký hiệu ngữ cảnh (...) và biểu thức theo biến đã định nghĩa không cần giá trị số của biến" in prompt
+    assert "Đọc đúng explanation, không cho là thiếu điều kiện khi explanation đã nêu rõ" in prompt
+    assert "Bắt buộc đặt explanation_supported=false nếu explanation khẳng định sai rằng passage chứa quy tắc mà passage không có" in prompt

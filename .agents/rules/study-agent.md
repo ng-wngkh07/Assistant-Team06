@@ -18,6 +18,12 @@ description: "Study Agent: source-grounded learning QA, isolated data, regressio
 11. A pull request describes the problem, resulting behavior, evidence and remaining limits. Titles describe the change. Keep other assigned work intact. After important changes or defect fixes, complete applicable verification and privacy review, commit and push the feature branch, and open or update its PR without waiting for another reminder. This is standing owner authorization for branch publication. Do not merge main, delete branches, bypass protections or change repository settings without specific authorization.
 12. Report what was edited, tested and verified separately from proposals and unrun checks. Passing CI does not certify source completeness, learning quality or release readiness. Link reviewable files and evidence without exposing private content.
 
+## Durable request tracking in Codex projects
+
+For every user request made while working in a Codex project, first normalize the complete request into ordered requirements, constraints, acceptance evidence and exclusions. Save them in the existing project tracker or working checkpoint before implementation. Preserve earlier unfinished requirements when adding new scope. Keep private operational details in ignored storage and public behavior changes in CHANGELOG.md.
+
+Execute the recorded requirements in order. Mark each as pending, in progress, completed with actual evidence, or blocked with a concrete reason. Record the current requirement, exact next action, active jobs and write ownership before a handoff, interruption or context transition; resume from that cursor. A partial result or a passing check cannot erase an unfinished requirement. Complete and verify the assigned scope before starting unrelated speculative defect discovery. Reproduction, review and repairs needed to satisfy that scope remain part of the work. This tracking rule applies only inside Codex projects, not ordinary standalone tasks.
+
 ## Local model execution only
 
 Inference, embeddings, OCR/vision, dataset generation, evaluation and training must run on local models and local files. External model APIs, cloud teachers and automatic cloud fallback are prohibited. Missing artifacts or unavailable local capability must produce an explicit unavailable/HOLD result. Researching public documentation is separate from product model execution. Upload persistence and retrieval do not authorize fine-tuning or adapter activation; unreviewed sources remain excluded from training.
@@ -25,6 +31,8 @@ Inference, embeddings, OCR/vision, dataset generation, evaluation and training m
 ## Production release contract
 
 Confirm each newly reported release defect in the actual application, real checkout/install and configured source/data paths before classifying it as a product defect. Isolated harness failures are diagnostic leads. After completing page review and repairs, freeze the candidate for one consolidated final functional acceptance run. Record failures honestly and recheck affected flows after any repair; preserve private data during all live checks.
+
+For owner-selected hosted web delivery, deploy private runtime assets behind authorized source access instead of publishing an installer or corpus bundle to GitHub. Preserve all integrity, privacy, source verification and model acceptance gates. Hosting does not establish source rights.
 
 Apply REL-01 through REL-07 in [Automated review guidance](../../AGENT.md#production-release-requirements) and [Definition of done](../../DEFINITION_OF_DONE.md#production-release-acceptance) to every end-user release:
 

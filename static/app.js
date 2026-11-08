@@ -1,4 +1,5 @@
 document.addEventListener("DOMContentLoaded", () => {
+    const storageScope = document.querySelector?.('meta[name="study-account-scope"]')?.content || "local";
     let selectedSourcePage = null;
     let selectedSourceMode = "page";
     const sourceScope = document.getElementById("qa-source-scope");
@@ -247,10 +248,10 @@ document.addEventListener("DOMContentLoaded", () => {
     fetchKnowledgeBaseStatus();
     fetchOllamaModels();
     loadSessions().then(() => {
-        const savedSessionId = sessionStorage.getItem("active_session_id");
+        const savedSessionId = sessionStorage.getItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
         if (savedSessionId && sessionsApiSupported) {
             return openSession(savedSessionId, { autoRestore: true }).catch(() => {
-                sessionStorage.removeItem("active_session_id");
+                sessionStorage.removeItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
                 currentSessionId = null;
             });
         }
@@ -811,7 +812,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     // Update session ID if newly created
                     if (event.session_id) {
                         currentSessionId = event.session_id;
-                        sessionStorage.setItem("active_session_id", event.session_id);
+                        sessionStorage.setItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`), event.session_id);
                         if (sessionActiveTitle) sessionActiveTitle.textContent = event.session_title || "Cuộc trò chuyện";
                         if (sessionBar) sessionBar.style.display = "flex";
                         loadSessions(inputSessionSearch ? inputSessionSearch.value.trim() : "");
@@ -1066,7 +1067,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (requestedView !== viewRevision) return;
             if (!res.ok) {
                 if (res.status === 404) {
-                    sessionStorage.removeItem("active_session_id");
+                    sessionStorage.removeItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
                     currentSessionId = null;
                     if (!autoRestore) {
                         startNewChat();
@@ -1081,7 +1082,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             currentSessionId = data.id;
             resetContextUsage();
-            sessionStorage.setItem("active_session_id", data.id);
+            sessionStorage.setItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`), data.id);
             sessionActiveTitle.textContent = data.title || "Cuộc trò chuyện";
             sessionBar.style.display = "flex";
 
@@ -1151,7 +1152,7 @@ document.addEventListener("DOMContentLoaded", () => {
         btnSend.disabled = false;
         currentSessionId = null;
         resetContextUsage();
-        sessionStorage.removeItem("active_session_id");
+        sessionStorage.removeItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
         clientChatHistory = [];
         window.sessionActiveAttachment = null;
         renderResumeControls(null);
@@ -1225,7 +1226,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch(`/api/sessions/${sid}`, { method: "DELETE" });
             if (res.ok) {
                 if (currentSessionId === sid) {
-                    sessionStorage.removeItem("active_session_id");
+                    sessionStorage.removeItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
                     startNewChat();
                 }
                 loadSessions(inputSessionSearch ? inputSessionSearch.value.trim() : "");
@@ -1309,7 +1310,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     const data = await res.json();
                     if (requestedView !== viewRevision || isGenerating) return;
                     currentSessionId = null;
-                    sessionStorage.removeItem("active_session_id");
+                    sessionStorage.removeItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
                     clientChatHistory = [
                         { role: "user", content: data.question },
                         { role: "assistant", content: data.answer }

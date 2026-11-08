@@ -36,9 +36,9 @@ Use study tools to find exercises and available answers, create practice questio
 
 For topic practice, select an authored subject, a count from 1 to 10, and easy, medium or hard difficulty. The application checks candidates against the selected source and requested level. If it cannot verify the full set, it reports the returned count and an explicit shortage; a partial set is not completion of the requested task. Medium and hard practice do not silently fall back to easy missing-phrase questions. Inspect the question, alternatives, answer explanation and source together.
 
-## Timetables
+## Study planning
 
-Upload a timetable image, compare every subject and time with the original, correct uncertain fields, choose whether to replace the existing schedule, and confirm before exporting. The export uses confirmed rows. Review the semester range and resulting calendar contents. See the [recognition and calendar workflow](timetable-workflow.md) for the full procedure and public multi-subject fixture.
+Follow four screens: confirm the class timetable, add personal commitments and study windows, review an editable plan with dated deadlines, then export an iCalendar file with deadline reminders. Review every recognized subject and time against the image before confirmation. See [study planning](study-planning.md) for the full workflow and notification limits, and [image recognition](timetable-workflow.md) for the public multi-subject fixture.
 
 ## History and privacy
 

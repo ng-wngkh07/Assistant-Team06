@@ -21,6 +21,10 @@ TIME_REGEX = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
 def get_db_path() -> Path:
     """Return the database path, honoring the TIMETABLE_DB_PATH environment variable."""
+    from app.accounts import private_dir
+    scoped = private_dir()
+    if scoped is not None:
+        return scoped / "timetable.db"
     env_path = os.environ.get("TIMETABLE_DB_PATH")
     if env_path:
         p = Path(env_path)
@@ -33,6 +37,12 @@ def get_db_path() -> Path:
 
 def get_images_dir() -> Path:
     """Return directory for local timetable images outside src/ and RAG."""
+    from app.accounts import private_dir
+    scoped = private_dir()
+    if scoped is not None:
+        p = scoped / "timetable_images"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
     env_img = os.environ.get("TIMETABLE_IMAGES_DIR")
     if env_img:
         p = Path(env_img)

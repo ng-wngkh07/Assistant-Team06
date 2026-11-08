@@ -1,5 +1,6 @@
 document.addEventListener("DOMContentLoaded", () => {
-    const progressKey = "study-agent-review-v1";
+    const storageScope = document.querySelector?.('meta[name="study-account-scope"]')?.content || "local";
+    const progressKey = storageScope === "local" ? "study-agent-review-v1" : `study-agent-review-v1-${storageScope}`;
     const practiceButton = document.getElementById("btn-practice-current");
     const practiceCount = document.getElementById("practice-count");
     const clearScopeButton = document.getElementById("btn-clear-practice-scope");
