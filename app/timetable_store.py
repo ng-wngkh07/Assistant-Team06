@@ -124,6 +124,87 @@ def init_schema(conn: sqlite3.Connection) -> None:
         )
     """)
 
+    # Personal Study Schedule Assistant tables (stored in same isolated DB)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS personal_routines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            weekday INTEGER NOT NULL,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            title TEXT NOT NULL,
+            activity_type TEXT NOT NULL,
+            flexibility TEXT NOT NULL,
+            is_recurring INTEGER NOT NULL DEFAULT 1,
+            note TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS study_preferences (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            earliest_study_time TEXT NOT NULL DEFAULT '07:00',
+            latest_study_time TEXT NOT NULL DEFAULT '22:30',
+            max_daily_study_minutes INTEGER NOT NULL DEFAULT 240,
+            preferred_session_minutes INTEGER NOT NULL DEFAULT 60,
+            min_session_minutes INTEGER NOT NULL DEFAULT 30,
+            buffer_before_deadline_hours INTEGER NOT NULL DEFAULT 12,
+            ai_notes TEXT DEFAULT '',
+            week_start_date TEXT,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS study_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            course TEXT NOT NULL,
+            deadline_weekday INTEGER NOT NULL,
+            deadline_time TEXT NOT NULL DEFAULT '23:59',
+            deadline_date TEXT,
+            estimated_minutes INTEGER,
+            priority TEXT NOT NULL DEFAULT 'medium',
+            completed INTEGER NOT NULL DEFAULT 0,
+            completed_minutes INTEGER NOT NULL DEFAULT 0,
+            splittable INTEGER NOT NULL DEFAULT 1,
+            notes TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS study_plan_drafts (
+            plan_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            sessions_json TEXT NOT NULL,
+            unscheduled_json TEXT NOT NULL,
+            warnings_json TEXT NOT NULL,
+            suggestions_json TEXT NOT NULL,
+            explanation TEXT,
+            preserved_sessions_json TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS study_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id TEXT,
+            task_id INTEGER,
+            title TEXT NOT NULL,
+            course TEXT NOT NULL,
+            weekday INTEGER NOT NULL,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            duration_minutes INTEGER NOT NULL,
+            priority TEXT DEFAULT 'medium',
+            source TEXT NOT NULL DEFAULT 'ai_assistant',
+            completed INTEGER NOT NULL DEFAULT 0,
+            locked INTEGER NOT NULL DEFAULT 0,
+            session_index INTEGER DEFAULT 1,
+            total_sessions INTEGER DEFAULT 1,
+            notes TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
 
 @contextmanager
 def get_connection() -> Generator[sqlite3.Connection, None, None]:
@@ -362,6 +443,46 @@ def add_manual_entry(
             (c, w, st, et, room.strip() if room else None, now),
         )
         return cursor.lastrowid or 0
+
+
+def update_entry(
+    entry_id: int,
+    course: str,
+    weekday: int,
+    start_time: str,
+    end_time: str,
+    room: Optional[str] = None,
+) -> bool:
+    """Update an existing confirmed timetable entry after validation and conflict checking."""
+    c, w, st, et = validate_entry_values(course, weekday, start_time, end_time)
+    with get_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        exists = conn.execute(
+            "SELECT id FROM timetable_confirmed WHERE id = ?", (entry_id,)
+        ).fetchone()
+        if not exists:
+            return False
+
+        existing = conn.execute(
+            "SELECT id, course, start_time, end_time FROM timetable_confirmed WHERE weekday = ? AND id != ?",
+            (w, entry_id),
+        ).fetchall()
+        for ex in existing:
+            if st < ex["end_time"] and ex["start_time"] < et:
+                raise ValueError(
+                    f"Trùng lịch học với môn {ex['course']} ({ex['start_time']} - {ex['end_time']}) vào thứ {w}"
+                )
+
+        conn.execute(
+            """
+            UPDATE timetable_confirmed
+            SET course = ?, weekday = ?, start_time = ?, end_time = ?, room = ?
+            WHERE id = ?
+            """,
+            (c, w, st, et, room.strip() if room else None, entry_id),
+        )
+        return True
+
 
 
 def delete_entry(entry_id: int) -> bool:

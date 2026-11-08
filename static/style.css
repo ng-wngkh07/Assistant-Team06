@@ -4057,3 +4057,250 @@ body.sidebar-collapsed #btn-open-sidebar { display: inline-flex; }
 .draft-field-missing::placeholder {
     color: #fbbf24;
 }
+
+/* ==========================================================================
+   Trợ lý AI lập lịch học tập cá nhân (Personal Study Schedule Assistant)
+   ========================================================================== */
+.planner-step-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+.planner-step-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 14px;
+    border-radius: 9999px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: border-color 0.2s, color 0.2s;
+}
+.planner-step-pill:hover {
+    border-color: var(--primary);
+    color: var(--text-primary);
+}
+.planner-next-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+}
+.planner-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+.planner-header-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.planner-badge-recurring {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 9999px;
+    font-size: 11px;
+    font-weight: 600;
+    background: rgba(56, 189, 248, 0.14);
+    color: #7dd3fc;
+    border: 1px solid rgba(56, 189, 248, 0.3);
+}
+.planner-rule-legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+}
+.rule-legend-item {
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    line-height: 1.45;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+}
+.rule-legend-item.rule-fixed { border-left: 3px solid #38bdf8; }
+.rule-legend-item.rule-protected { border-left: 3px solid #2dd4bf; }
+.rule-legend-item.rule-flexible { border-left: 3px solid #f59e0b; }
+.rule-legend-item.rule-window { border-left: 3px solid #a855f7; }
+
+.planner-prefs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 12px;
+    align-items: start;
+}
+.planner-prefs-notes {
+    grid-column: 1 / -1;
+}
+.planner-prefs-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.planner-task-form {
+    padding: 14px;
+    border-radius: 12px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+}
+.planner-task-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+    gap: 10px;
+    align-items: end;
+}
+.planner-task-grid .task-col-wide {
+    grid-column: span 2;
+}
+@media (max-width: 640px) {
+    .planner-task-grid .task-col-wide {
+        grid-column: 1 / -1;
+    }
+}
+
+.planner-ai-explanation {
+    padding: 12px 16px;
+    border-radius: 12px;
+    background: rgba(56, 189, 248, 0.1);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    color: var(--text-primary);
+}
+.planner-warnings-alert {
+    padding: 12px 16px;
+    border-radius: 12px;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.38);
+    color: #fde68a;
+    font-size: 13px;
+}
+.planner-suggestions-panel {
+    padding: 12px 16px;
+    border-radius: 12px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border-strong);
+}
+.suggestion-option-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    margin-top: 8px;
+    border-radius: 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+}
+.planner-draft-review-box {
+    padding: 14px;
+    border-radius: 14px;
+    background: var(--bg-elev);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.planner-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+}
+.planner-stat-box {
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.planner-stat-box.stat-class { border-left: 3px solid #38bdf8; }
+.planner-stat-box.stat-routine { border-left: 3px solid #f472b6; }
+.planner-stat-box.stat-window { border-left: 3px solid #a855f7; }
+.planner-stat-box.stat-study { border-left: 3px solid #10b981; }
+.planner-stat-label {
+    font-size: 11.5px;
+    color: var(--text-muted);
+}
+.planner-stat-box strong {
+    font-size: 15px;
+    color: var(--text-primary);
+}
+
+.planner-filter-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+}
+.planner-badge-legend {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.sched-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    border-radius: 9999px;
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.sched-badge.badge-class {
+    background: rgba(56, 189, 248, 0.15);
+    color: #7dd3fc;
+    border: 1px solid rgba(56, 189, 248, 0.35);
+}
+.sched-badge.badge-routine {
+    background: rgba(244, 114, 182, 0.15);
+    color: #f9a8d4;
+    border: 1px solid rgba(244, 114, 182, 0.35);
+}
+.sched-badge.badge-rest {
+    background: rgba(45, 212, 191, 0.15);
+    color: #5eead4;
+    border: 1px solid rgba(45, 212, 191, 0.35);
+}
+.sched-badge.badge-study-ai {
+    background: rgba(245, 158, 11, 0.16);
+    color: #fcd34d;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+}
+.sched-badge.badge-study-done {
+    background: rgba(16, 185, 129, 0.16);
+    color: #6ee7b7;
+    border: 1px solid rgba(16, 185, 129, 0.35);
+}
+.sched-badge.badge-window {
+    background: rgba(168, 85, 247, 0.15);
+    color: #d8b4fe;
+    border: 1px dashed rgba(168, 85, 247, 0.45);
+}
+.master-row-completed td {
+    opacity: 0.72;
+}
+.master-row-completed .master-item-title {
+    text-decoration: line-through;
+}
+
