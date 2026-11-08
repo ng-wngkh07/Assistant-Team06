@@ -1,4 +1,4 @@
-"""Personal AI Study Schedule Assistant (Trợ lý AI lập lịch học tập cá nhân).
+"""Personal AI Study Schedule Assistant (Bộ xếp lịch lập lịch học tập cá nhân).
 
 Combines confirmed OCR class timetables, weekly personal routines (fixed, protected rest,
 flexible activities, and study windows), personal daily limits, and task deadlines to
@@ -30,6 +30,8 @@ WEEKDAY_NAMES: Dict[int, str] = {
 }
 
 ACTIVITY_TYPES: Dict[str, str] = {
+    "work": "Đi làm",
+    "extra_class": "Học thêm",
     "gym": "Tập gym hoặc tập thể dục",
     "sport": "Chơi thể thao",
     "personal": "Đi chơi hoặc hoạt động cá nhân",
@@ -744,7 +746,7 @@ def _enrich_session(row_dict: Dict[str, Any]) -> Dict[str, Any]:
     d["completed"] = bool(d.get("completed", 0))
     d["locked"] = bool(d.get("locked", 0))
     d["source_label"] = (
-        "Trợ lý AI đề xuất" if d.get("source") == "ai_assistant" else "Người dùng tự xếp"
+        "Bộ xếp lịch đề xuất" if d.get("source") == "ai_assistant" else "Người dùng tự xếp"
     )
     return d
 
@@ -1479,7 +1481,7 @@ def _build_ai_explanation(
     parts: List[str] = []
     mode_str = "sắp xếp lại các phần việc chưa hoàn thành" if reschedule_only else "tạo kế hoạch học tập cá nhân mới"
     parts.append(
-        f"Trợ lý AI đã {mode_str} dựa trên {len(confirmed_classes)} buổi học cố định trên trường, "
+        f"Bộ xếp lịch đã {mode_str} dựa trên {len(confirmed_classes)} buổi học cố định trên trường, "
         f"{len(fixed_routines)} hoạt động cá nhân cố định, {len(protected_routines)} khung giờ nghỉ ngơi được bảo vệ "
         f"và {len(study_windows)} khung giờ cho phép tự học."
     )
@@ -1943,7 +1945,7 @@ def get_combined_weekly_schedule() -> Dict[str, Any]:
             "task_id": s.get("task_id"),
             "category": "study_session",
             "category_label": "Phiên tự học",
-            "source_badge": "Trợ lý AI đề xuất" if s.get("source") == "ai_assistant" else "Người dùng tự xếp",
+            "source_badge": "Bộ xếp lịch đề xuất" if s.get("source") == "ai_assistant" else "Người dùng tự xếp",
             "weekday": w,
             "weekday_label": WEEKDAY_NAMES.get(w, f"Thứ {w}"),
             "start_time": s["start_time"],

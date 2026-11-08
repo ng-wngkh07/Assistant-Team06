@@ -19,6 +19,8 @@ The owner merges through the repository's protected workflow. A green test suite
 
 ## Production release acceptance
 
+The current target is a hosted website rather than a GitHub installer or bundled data release. Read REL-01 through REL-07 as service acceptance: authenticated source access, private server-side precomputed retrieval, durable account-isolated personal storage and verified deployed model/runtime behavior. Public data/installer distribution is not required. Hosting does not remove source-use, privacy, source-quality or model gates.
+
 An end-user release also satisfies every [production release requirement](AGENT.md#production-release-requirements). Keep the requirement IDs in the local evidence checkpoint so later work cannot replace the requested outcome with a demo.
 
 - **REL-01:** The real source inventory is reconciled with the delivered originals, passages and compatible retrieval data. Missing or unresolved documents are explicit; full-library acceptance requires the complete agreed real corpus, not synthetic fixtures.

@@ -70,6 +70,10 @@ def build_practice_generation_prompt(
         "Đầu vào bài tập: câu hỏi có thể đưa ra các dữ kiện giả định cụ thể làm đầu vào bài tập (được ghi rõ trong câu hỏi); "
         "các dữ kiện này không phải là khẳng định rằng văn bản gốc chứa các số liệu đó. "
         "Mọi trạng thái ban đầu, đơn vị tính và quy ước chỉ số cần thiết để giải phải được nêu tường minh và đầy đủ ngay trong câu hỏi. "
+        "Phân biệt rạch ròi giữa quy tắc có trong passage với quy ước hoặc dữ kiện do câu hỏi tự đặt ra. "
+        "Tuyệt đối không khẳng định trong explanation rằng passage/tài liệu nêu một quy ước, định nghĩa hay quy tắc khi passage không hề chứa quy tắc đó "
+        "(ví dụ: passage chỉ nêu cú pháp truy xuất mảng <Tên mảng>[<Chỉsố>] mà không nêu quy ước chỉ số bắt đầu từ 0 thì explanation không được khẳng định nguồn nêu chỉ số bắt đầu từ 0; "
+        "quy ước đó nếu dùng phải do câu hỏi tự xác định hoặc nêu rõ là giả định lập trình, không gán ghép cho đoạn trích nguồn). "
         "Đáp án đúng phải suy luận chặt chẽ từ quy tắc của passage kết hợp với dữ kiện đầu vào đầy đủ đó, và phải là duy nhất. "
         "Tự giải độc lập trước khi gắn khóa để đảm bảo: chữ cái đáp án (A, B, C hoặc D), nội dung lựa chọn tương ứng và lời giải thích hoàn toàn khớp nhau; "
         "nếu có tính toán hoặc lập luận trung gian, phải trình bày ngắn gọn nhưng chính xác từng bước trong explanation, tuyệt đối không có bước tính hay chỉ số sai. "
@@ -125,25 +129,28 @@ def build_practice_review_prompt(
         "Tự giải độc lập từ quy tắc trong passage và dữ kiện câu hỏi để tìm verified_answer, "
         "rồi đối chiếu với proposed_answer, explanation và các lựa chọn; không lấy proposed_answer hay explanation làm bằng chứng.\n"
         "Quy tắc kiểm tra tính đầy đủ của dữ kiện đề bài (input completeness):\n"
-        "1. Mọi dữ kiện để giải phải xuất hiện rõ ràng trong câu hỏi (question), tuyệt đối không lấy dữ kiện từ explanation để bù vào.\n"
+        "1. Mọi dữ kiện để giải phải xuất hiện rõ trong question, tuyệt đối không lấy dữ kiện từ explanation để bù vào.\n"
         "2. Quy tắc đầu vào: dữ kiện giả định nêu rõ trong đề là đầu vào bài tập hợp lệ; nhưng nếu thuật toán yêu cầu đoạn [lo, hi] hoặc bài toán yêu cầu các biến số: "
-        "câu hỏi bắt buộc phải có câu nêu rõ đoạn ban đầu [lo, hi] (ví dụ: 'đoạn tìm kiếm ban đầu là [lo=0, hi=6]') hoặc giá trị các biến số. "
-        "Nếu question chỉ nêu mảng và khóa K mà KHÔNG có câu nêu đoạn tìm kiếm ban đầu [lo, hi]: tuyệt đối không tự suy đoán [lo=0, hi=n-1] từ độ dài mảng; "
+        "câu hỏi bắt buộc phải có câu nêu rõ đoạn ban đầu [lo, hi] (ví dụ: 'đoạn tìm kiếm ban đầu là [lo=0, hi=6]') hoặc giá trị biến số. "
+        "Nếu question chỉ nêu mảng và khóa K mà KHÔNG có câu nêu đoạn ban đầu [lo, hi]: tuyệt đối không tự suy đoán [lo=0, hi=n-1]; "
         "bắt buộc ghi nhận 'Question thiếu đoạn tìm kiếm ban đầu [lo, hi]' trong input_audit, đặt supported=false, verified_answer=\"\", unique_answer=false.\n"
-        "3. Nếu question thiếu bất kỳ dữ kiện nào (như thiếu nhiệt độ cuối, thiếu đoạn [lo, hi]): bắt buộc đặt supported=false, verified_answer=\"\", unique_answer=false. "
-        "Nếu question đã nêu rõ đầy đủ dữ kiện hoặc là câu hỏi khái niệm/định nghĩa: ghi nhận đủ dữ kiện.\n"
+        "3. Nếu question thiếu bất kỳ dữ kiện nào: bắt buộc đặt supported=false, verified_answer=\"\", unique_answer=false. "
+        "Nếu question đã nêu rõ đầy đủ dữ kiện hoặc là câu hỏi khái niệm/định nghĩa: ghi nhận đủ dữ kiện. "
+        "Phân biệt dữ kiện câu hỏi với quy tắc nguồn: câu hỏi hỏi giá trị hàm/đạo hàm tại điểm số (như f'(-7)) hoặc sơ đồ có ký hiệu ngữ cảnh (...) không phải là thiếu dữ kiện.\n"
         "Với mỗi index, thực hiện kiểm định theo thứ tự các trường (mỗi trường viết 1-3 câu ngắn gọn, có dấu chấm câu kết thúc):\n"
         "- input_audit: kiểm tra tính đầy đủ dữ kiện theo quy tắc trên. Nếu question thiếu biến hoặc thiếu đoạn ban đầu [lo, hi], ghi rõ question thiếu dữ kiện và đặt supported=false, verified_answer=\"\", unique_answer=false; nếu đủ ghi nhận đủ dữ kiện.\n"
         "- independent_solution: nếu input_audit xác định thiếu dữ kiện thì ghi rõ 'Không đủ dữ kiện để giải độc lập do question thiếu dữ kiện.' và dừng; "
         "nếu đủ dữ kiện thì tự giải độc lập từng bước chỉ từ passage và question (hoàn toàn không xem explanation). "
-        "Khi question có mảng phần tử và đã cho trước đoạn [lo, hi], bắt buộc liệt kê rõ các chỉ số từ 0 và giá trị tương ứng (a[0]=..., a[1]=..., a[2]=...) trực tiếp từ danh sách phần tử trong question để xác định chính xác phần tử a[mid] cần tra cứu trước khi so sánh.\n"
+        "Khi question có mảng phần tử và cho trước đoạn [lo, hi], bắt buộc liệt kê rõ chỉ số từ 0 và giá trị (a[0]=..., a[1]=...) trực tiếp từ danh sách phần tử trong question để xác định chính xác phần tử a[mid] cần tra cứu trước khi so sánh.\n"
         "- choice_comparison: đối chiếu kết quả tự giải với từng lựa chọn A, B, C, D; chỉ rõ chữ cái lựa chọn trùng khớp với kết quả tự giải (hoặc ghi không xác định được đáp án nếu thiếu dữ kiện).\n"
-        "- explanation_audit: kiểm tra độc lập từng bước giải, chỉ số trung gian và mọi câu khẳng định trong explanation đối chiếu với question và passage (ngắn gọn 1-3 câu, không nhận xét về độ khó). "
-        "Bắt buộc kiểm tra cả các câu kết luận cuối cùng: chỉ rõ nếu explanation có bất kỳ bước tính toán sai, chỉ số trung gian sai (như explanation ghi sai giá trị phần tử mảng a[mid]), hoặc chứa khẳng định/quy tắc bịa thêm ngoài passage (như tự thêm quy tắc tìm kiếm tuyến tính hay tính chất ngoài nguồn). "
-        "Nếu explanation có bất kỳ lỗi nào hoặc câu khẳng định ngoài passage, nêu rõ lỗi đó và bắt buộc đặt explanation_supported=false (tuyệt đối không đảo ngược để coi giá trị sai trong explanation là đúng); chỉ đặt explanation_supported=true khi toàn bộ bước giải và mọi câu khẳng định trong explanation đều hoàn toàn đúng và bám sát passage.\n"
+        "- explanation_audit: kiểm tra độc lập từng bước giải, chỉ số trung gian và mọi khẳng định trong explanation đối chiếu với question và passage (1-3 câu, không nhận xét độ khó). "
+        "Đọc chính xác explanation, không bịa ra thiếu sót mà explanation đã nêu rõ. "
+        "Bắt buộc kiểm tra cả câu kết luận cuối: chỉ rõ nếu explanation có bước tính sai, chỉ số trung gian sai (như ghi sai a[mid]), "
+        "hoặc chứa khẳng định ngoài passage (như gán ghép passage quy định chỉ số từ 0 khi nguồn chỉ nêu cú pháp). "
+        "Nếu explanation có lỗi hoặc khẳng định ngoài passage, nêu rõ lỗi đó và bắt buộc đặt explanation_supported=false; chỉ đặt explanation_supported=true khi toàn bộ bước giải và khẳng định đều đúng và bám sát passage.\n"
         "- supported: true nếu question đủ dữ kiện và suy diễn hợp lệ từ passage; false nếu thiếu dữ kiện hoặc dựa vào quy tắc ngoài passage.\n"
         "- explanation_supported: true nếu mọi bước tính toán, chỉ số trung gian và mọi khẳng định trong explanation đều đúng và bám sát passage; "
-        "false nếu có bất kỳ bước tính toán, chỉ số trung gian sai hoặc khẳng định không căn cứ (dù đáp án cuối đúng).\n"
+        "false nếu có bước tính, chỉ số sai hoặc khẳng định không căn cứ (dù đáp án cuối đúng).\n"
         "- unique_answer: true nếu có đúng một lựa chọn trùng khớp với kết quả tự giải và 3 lựa chọn còn lại sai; "
         "false nếu thiếu dữ kiện hoặc có nhiều hơn một lựa chọn đúng.\n"
         "- qualifiers_preserved: true nếu giữ nguyên điều kiện và mức độ chắc chắn, không suy diễn từ sự im lặng của passage.\n"
@@ -328,6 +335,14 @@ class PracticeService:
                 max_tokens=max_tokens,
                 **kwargs
             )
+            diagnostics = getattr(client, "last_diagnostics", {})
+            if diagnostics.get("practice_review_profile"):
+                logger.info("Practice review profile %s; adapter_loaded=%s; input_tokens=%s; output_tokens=%s",
+                            diagnostics["practice_review_profile"], diagnostics.get("adapter_loaded"),
+                            diagnostics.get("input_tokens"), diagnostics.get("output_tokens"))
+            if diagnostics.get("adapter_loaded") is True:
+                logger.info("Practice review used accepted adapter %s (%s)",
+                            diagnostics.get("adapter_sha256"), diagnostics.get("adapter_scope"))
             if getattr(client, "last_done_reason", None) != "stop":
                 raise PracticeGenerationError("Mô hình bị gián đoạn hoặc vượt quá độ dài quy định.")
             result = re.sub(r"(?is)<\s*(?:think|analysis|reasoning)\b[^>]*>.*?<\s*/\s*(?:think|analysis|reasoning)\s*>", "", result)
@@ -419,6 +434,22 @@ class PracticeService:
             return []
         prompt = build_practice_review_prompt(review, difficulty=difficulty)
         review_tokens = min(2400, max(1000, 500 * len(review)))
+        if len(review) == 1 and difficulty is None:
+            from app.model_resolver import is_mlx_model
+            from app.practice_adapter import (
+                SYSTEM_PROMPT,
+                build_compact_review_prompt, request_matches_scope,
+            )
+            if is_mlx_model(model or DEFAULT_CHAT_MODEL):
+                compact = build_compact_review_prompt(review)
+                request = {
+                    "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                                 {"role": "user", "content": compact}],
+                    "max_tokens": review_tokens, "num_ctx": 8192,
+                    "temperature": 0, "response_schema": practice_review_schema(1, None),
+                }
+                if request_matches_scope(request):
+                    prompt = compact
         try:
             raw_checks = self._chat_complete(prompt, model, review_tokens, timeout=timeout,
                                              response_schema=practice_review_schema(len(review), difficulty))

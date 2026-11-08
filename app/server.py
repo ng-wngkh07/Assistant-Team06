@@ -44,7 +44,13 @@ from app.input_policy import (
 logger = logging.getLogger("psychology_agent")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+from app.accounts import AccountMiddleware, router as _account_router, private_dir
+from app.account_services import AccountService, make_material_manager
+
 app = FastAPI(title="Local Multi-domain Study Agent", version="1.0.0")
+
+app.add_middleware(AccountMiddleware)
+app.include_router(_account_router)
 
 @app.exception_handler(RequestValidationError)
 async def custom_validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -118,13 +124,18 @@ searcher = HybridSearcher()
 document_lookup = DocumentLookup()
 agent = PsychologyAgent(searcher=searcher)
 practice_service = PracticeService(searcher=searcher, document_lookup=document_lookup)
-learning_service = LearningService(document_lookup=document_lookup, practice_service=practice_service, searcher=searcher)
+practice_service = AccountService(practice_service, lambda: PracticeService(searcher=searcher, document_lookup=document_lookup))
+learning_service = AccountService(LearningService(document_lookup=document_lookup, practice_service=practice_service, searcher=searcher), lambda: LearningService(document_lookup=document_lookup, practice_service=practice_service.current(), searcher=searcher))
+study_material_manager = AccountService(study_material_manager, make_material_manager)
 import os
 
 _history_store: Optional[HistoryStore] = None
 
 def get_history_store() -> HistoryStore:
     global _history_store
+    scoped = private_dir()
+    if scoped is not None:
+        return HistoryStore(scoped / "history.db")
     if _history_store is None:
         db_path = os.environ.get("HISTORY_DB_PATH")
         _history_store = HistoryStore(Path(db_path) if db_path else DATA_DIR / "history.db")
@@ -342,7 +353,10 @@ if hasattr(app.router, "_mark_routes_changed"):
 async def serve_index():
     index_html = STATIC_DIR / "index.html"
     if index_html.exists():
-        return HTMLResponse(content=index_html.read_text(encoding="utf-8"))
+        from app.accounts import account_id
+        scope = account_id.get() or "local"
+        content = index_html.read_text(encoding="utf-8").replace("</head>", f'<meta name="study-account-scope" content="{scope}"></head>')
+        return HTMLResponse(content=content, headers={"Cache-Control": "no-store", "Vary": "Cookie"})
     return HTMLResponse(content="<h1>Study QA Agent Backend Running</h1><p>index.html not found in static/</p>")
 
 def _requires_mlx_model():
@@ -553,6 +567,8 @@ async def check_local_model():
 async def get_models():
     from app.active_registry import active_registry
     from app.model_resolver import is_9b_model
+    from app.practice_adapter import active_practice_adapter
+    from app.model_resolver import resolve_mlx_model_dir
     registry_info = active_registry.get_active_info()
     is_mlx = _requires_mlx_model()
     models = [] if is_mlx else (ollama.list_models() if ollama.check_health() else [])
@@ -579,6 +595,8 @@ async def get_models():
         "active_adapter": active_adapter,
         "model_mode": model_mode,
         "model_description": model_description,
+        "practice_review_adapter": active_practice_adapter(resolve_mlx_model_dir()) if is_mlx else None,
+        "practice_review_profile": "compact_review_v1" if is_mlx else None,
     }
 
 @app.get("/api/storage")

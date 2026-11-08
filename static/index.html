@@ -664,6 +664,7 @@
             border-radius: 14px !important;
         }
     </style>
+    <link rel="stylesheet" href="/static/planner-wizard.css?v=1">
 </head>
 <body>
     <div class="ambient-glow glow-1"></div>
@@ -724,7 +725,7 @@
                             <button id="btn-open-kb" class="tool-tile">Xem chi tiết thư viện</button>
                             <button id="btn-reindex" class="tool-tile">🔄 Đồng bộ thư viện</button>
                             <button id="btn-open-ocr-review" class="tool-tile">📝 Thẩm định OCR cục bộ</button>
-                            <button id="btn-open-timetable" class="tool-tile">📅 Thời khóa biểu từ ảnh</button>
+                            <button id="btn-open-timetable" class="tool-tile">📅 Lập kế hoạch học tập</button>
                         </div>
                         <div class="storage-info-box" id="storage-info-box" style="margin-top: 10px; padding: 10px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem;">
                             <div style="font-weight: 600; margin-bottom: 4px; color: var(--text-primary); display: flex; align-items: center; justify-content: space-between;">
@@ -767,7 +768,7 @@
                 <nav class="mode-switch" aria-label="Chế độ ứng dụng">
                     <button id="mode-qa" class="mode-button active" aria-pressed="true" aria-controls="qa-panel">💬 Hỏi đáp tài liệu</button>
                     <button id="mode-tools" class="mode-button" aria-pressed="false" aria-controls="learning-tools-panel">🧰 Công cụ học tập</button>
-                    <button id="mode-timetable" class="mode-button" aria-pressed="false" aria-controls="timetable-panel">📅 Thời khóa biểu từ ảnh</button>
+                    <button id="mode-timetable" class="mode-button" aria-pressed="false" aria-controls="timetable-panel">📅 Lập kế hoạch học tập</button>
                 </nav>
             </header>
 
@@ -877,6 +878,13 @@
                                 <p id="practice-scope-label" class="text-muted">Tìm và chọn một trích đoạn bên dưới, hoặc chọn một trang từ phần Hỏi đáp.</p>
                             </div>
                             <div class="tool-practice-actions">
+                                <label for="practice-count">Số câu hỏi
+                                    <select id="practice-count">
+                                        <option value="1">1</option>
+                                        <option value="2">2</option>
+                                        <option value="3" selected>3</option>
+                                    </select>
+                                </label>
                                 <button type="button" id="btn-clear-practice-scope" class="btn btn-outline btn-sm" disabled>Bỏ chọn nguồn</button>
                                 <button type="button" id="btn-practice-current" class="btn btn-primary btn-sm" disabled>📝 Tạo câu hỏi từ nội dung này</button>
                             </div>
@@ -974,17 +982,12 @@
                     </details>
                 </section>
             </section>
-            <section id="timetable-panel" class="timetable-panel" aria-label="Thời khóa biểu từ ảnh" hidden>
+            <section id="timetable-panel" class="timetable-panel" aria-label="Lập kế hoạch học tập" hidden>
                 <div class="timetable-header">
-                    <h2>📅 Lập Thời Khóa Biểu từ Ảnh &amp; Trợ Lý AI Lập Lịch Học Tập Cá Nhân</h2>
-                    <p class="lookup-description">Tải ảnh chụp thời khóa biểu (PNG, JPEG, WebP). Hệ thống AI cục bộ sẽ trích xuất thành bản nháp để bạn đối chiếu, sửa và xác nhận trước khi lưu. Sau đó khai báo lịch sinh hoạt hằng tuần, khung giờ có thể học và deadline để Trợ lý AI tạo lịch học tập cá nhân. Dữ liệu chỉ lưu trên máy này.</p>
-                    <div class="planner-step-nav" aria-label="Các bước lập lịch học tập">
-                        <a href="#timetable-step-ocr" class="planner-step-pill">1. Thời khóa biểu OCR</a>
-                        <a href="#planner-step-routines" class="planner-step-pill">2. Lịch sinh hoạt &amp; Khung giờ học</a>
-                        <a href="#planner-step-tasks" class="planner-step-pill">3. Bài tập &amp; Deadline</a>
-                        <a href="#planner-step-generate" class="planner-step-pill">4. Tạo &amp; Duyệt Kế hoạch AI</a>
-                        <a href="#planner-step-master-schedule" class="planner-step-pill">5. Lịch tuần tổng hợp</a>
-                    </div>
+                    <h2>Lập kế hoạch học tập</h2>
+                    <p class="lookup-description">Từ lịch học đến kế hoạch vừa sức: thêm thời gian cá nhân, chia việc học trước deadline và mang lịch sang ứng dụng bạn đang dùng.</p>
+                    <nav id="planner-wizard-progress" class="planner-wizard-progress" aria-label="Các bước lập kế hoạch"></nav>
+
                 </div>
 
                 <div id="timetable-step-ocr" class="timetable-grid">
@@ -997,7 +1000,7 @@
                                 <div class="dropzone-content">
                                     <span class="dropzone-icon" style="font-size: 2.5rem; display: block; margin-bottom: 8px;">🖼️</span>
                                     <p style="margin: 0 0 6px 0; font-weight: 600;">Kéo thả ảnh vào đây hoặc bấm để chọn tệp</p>
-                                    <small class="text-muted">Hỗ trợ PNG, JPEG, WebP (Tối đa 15MB). Ảnh lưu cục bộ. Huấn luyện cần gắn nhãn và phê duyệt riêng.</small>
+                                    <small class="text-muted">Hỗ trợ PNG, JPEG, WebP (Tối đa 15MB). Ảnh được lưu riêng khi dùng tài khoản. Huấn luyện cần gắn nhãn và phê duyệt riêng.</small>
                                 </div>
                             </div>
 
@@ -1084,7 +1087,7 @@
                             <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
                                 <div style="min-width: 0; flex: 1 1 180px;">
                                     <h3 style="margin: 0;">📋 Lịch học đã lưu</h3>
-                                    <p class="text-muted" style="margin: 2px 0 0 0; font-size: 0.78rem;">Lịch học được lưu trên máy này và giữ lại khi mở ứng dụng lần sau.</p>
+                                    <p class="text-muted" style="margin: 2px 0 0 0; font-size: 0.78rem;">Lịch đã lưu sẽ được giữ lại khi mở ứng dụng lần sau.</p>
                                 </div>
                                 <div style="display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap;">
                                     <button id="btn-toggle-manual" class="btn btn-sm btn-outline">＋ Nhập tay</button>
@@ -1173,9 +1176,12 @@
                                     <button type="submit" class="btn btn-sm btn-primary" style="background: #16a34a; border-color: #16a34a; flex: 0 0 auto;">📥 Tải tệp .ics</button>
                                     <label for="export-include-planner" style="width: 100%; display: flex; align-items: center; gap: 6px; font-size: 0.78rem; cursor: pointer; margin-top: 4px;">
                                         <input type="checkbox" id="export-include-planner" checked>
-                                        <span>Bao gồm cả lịch sinh hoạt cá nhân &amp; phiên tự học đã xác nhận</span>
+                                        <span>Bao gồm lịch cá nhân, buổi tự học đã xác nhận và deadline</span>
                                     </label>
+                                    <div><label for="export-reminder">Nhắc trước mỗi deadline</label><select id="export-reminder" class="form-input"><option value="15">15 phút</option><option value="60" selected>1 giờ</option><option value="1440">1 ngày</option><option value="0">Không nhắc</option></select></div>
                                 </form>
+                                <p>Giờ Việt Nam (UTC+7). Buổi tự học chỉ thuộc tuần đã chọn. Lớp học và lịch cá nhân lặp hằng tuần trong khoảng xuất.</p>
+                                <p>Sau khi nhập tệp, hãy kiểm tra lời nhắc và bật quyền thông báo trong ứng dụng lịch. Tệp .ics là bản sao tại thời điểm xuất; sửa trong ứng dụng này cần xuất lại. Việc hiển thị và phát thông báo do ứng dụng lịch quyết định.</p>
                                 <p id="export-status" style="margin: 6px 0 0 0; font-size: 0.8rem;"></p>
                             </div>
 
@@ -1197,7 +1203,7 @@
                     <div class="planner-section-header">
                         <div>
                             <span class="planner-badge-recurring">🔁 Lịch lặp lại hằng tuần</span>
-                            <h3 style="margin-top: 6px;">🏃 Bước 2: Lịch sinh hoạt hằng tuần, Giờ nghỉ ngơi &amp; Khung giờ có thể học</h3>
+                            <h3 style="margin-top: 6px;">Thời gian cá nhân</h3>
                             <p class="text-muted" style="font-size: 0.82rem; margin: 4px 0 0 0;">
                                 Khai báo các hoạt động cố định (tập gym, thể thao, đi chơi), thời gian nghỉ ngơi cần bảo vệ và các khung giờ cho phép xếp phiên tự học.
                             </p>
@@ -1248,8 +1254,9 @@
 
                     <!-- Giới hạn cá nhân & Sở thích học tập -->
                     <div class="planner-preferences-box" style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
-                        <h4 style="font-size: 0.92rem; margin: 0 0 10px 0;">⚙️ Giới hạn cá nhân &amp; Sở thích học tập cho Trợ lý AI</h4>
+                        <h4 style="font-size: 0.92rem; margin: 0 0 10px 0;">⚙️ Giới hạn cá nhân &amp; Sở thích học tập cho bộ xếp lịch</h4>
                         <form id="planner-preferences-form" class="planner-prefs-grid">
+                            <div><label for="pref-week-start">Tuần lập kế hoạch (chọn một ngày)</label><input id="pref-week-start" form="planner-preferences-form" type="date" class="form-input" required></div>
                             <div>
                                 <label for="pref-earliest-time">Giờ sớm nhất có thể học</label>
                                 <input type="time" id="pref-earliest-time" class="form-input" value="07:00" required>
@@ -1269,7 +1276,7 @@
                                 <small class="text-muted" style="font-size: 0.74rem;">Chia bài tập dài thành các phiên vừa sức</small>
                             </div>
                             <div class="planner-prefs-notes">
-                                <label for="pref-ai-notes">Yêu cầu hoặc sở thích dành cho Trợ lý AI (Tiếng Việt tự nhiên)</label>
+                                <label for="pref-ai-notes">Yêu cầu hoặc sở thích dành cho bộ xếp lịch (Tiếng Việt tự nhiên)</label>
                                 <input type="text" id="pref-ai-notes" class="form-input" placeholder="VD: Ưu tiên học buổi sáng, không học sau 21:30, nghỉ Chủ nhật...">
                             </div>
                             <div class="planner-prefs-actions">
@@ -1319,8 +1326,8 @@
                                 </select>
                             </div>
                             <div>
-                                <label for="task-deadline-date">Ngày cụ thể (tùy chọn)</label>
-                                <input type="date" id="task-deadline-date" class="form-input">
+                                <label for="task-deadline-date">Ngày hạn nộp</label>
+                                <input type="date" id="task-deadline-date" class="form-input" required>
                             </div>
                             <div>
                                 <label for="task-deadline-time">Giờ deadline *</label>
@@ -1373,12 +1380,12 @@
                 </div>
 
                 <!-- =========================================================================
-                     BƯỚC 4: TRỢ LÝ AI TẠO & DUYỆT KẾ HOẠCH HỌC TẬP CÁ NHÂN
+                     BƯỚC 4: BỘ XẾP LỊCH TẠO & DUYỆT KẾ HOẠCH HỌC TẬP CÁ NHÂN
                      ========================================================================= -->
                 <div id="planner-step-generate" class="timetable-card planner-section-card" style="margin-top: 20px;">
                     <div class="planner-section-header">
                         <div>
-                            <h3>🤖 Bước 4: Tạo Lịch Học Cá Nhân &amp; Duyệt Đề Xuất Của Trợ Lý AI</h3>
+                            <h3>🤖  Tạo Lịch Học Cá Nhân &amp; Duyệt Đề Xuất Của Bộ xếp lịch</h3>
                             <p class="text-muted" style="font-size: 0.82rem; margin: 4px 0 0 0;">
                                 Trợ lý kết hợp lịch học OCR đã xác nhận, lịch sinh hoạt, thời gian nghỉ được bảo vệ, khung giờ có thể học và deadline để đề xuất các phiên tự học. Bạn luôn được kiểm tra, chỉnh sửa và xác nhận trước khi lưu.
                             </p>
@@ -1395,9 +1402,9 @@
 
                     <p id="planner-generate-status" style="margin: 8px 0 0 0; font-size: 0.84rem;" role="status" aria-live="polite"></p>
 
-                    <!-- Giải thích của Trợ lý AI -->
+                    <!-- Giải thích của bộ xếp lịch -->
                     <div id="planner-explanation-box" class="planner-ai-explanation" style="display: none; margin-top: 12px;">
-                        <strong>🧠 Giải thích từ Trợ lý AI:</strong>
+                        <strong>🧠 Giải thích từ bộ xếp lịch:</strong>
                         <p id="planner-explanation-text" style="margin: 4px 0 0 0; font-size: 0.84rem; line-height: 1.55;"></p>
                     </div>
 
@@ -1412,7 +1419,7 @@
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;">
                             <div>
                                 <span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; border: 1px solid #fde68a;">
-                                    ĐỀ XUẤT CỦA TRỢ LÝ AI — XEM LẠI &amp; CHỈNH SỬA TRƯỚC KHI LƯU
+                                    ĐỀ XUẤT CỦA BỘ XẾP LỊCH — XEM LẠI &amp; CHỈNH SỬA TRƯỚC KHI LƯU
                                 </span>
                                 <h4 style="margin: 6px 0 0 0; font-size: 0.95rem;">Các phiên tự học được đề xuất</h4>
                             </div>
@@ -1451,7 +1458,7 @@
                 <div id="planner-step-master-schedule" class="timetable-card planner-section-card" style="margin-top: 20px;">
                     <div class="planner-section-header">
                         <div>
-                            <h3>🗓️ Bước 5: Lịch Tuần Tổng Hợp (Lớp học, Sinh hoạt, Nghỉ ngơi &amp; Phiên tự học)</h3>
+                            <h3>Bản nháp lịch tuần</h3>
                             <p class="text-muted" style="font-size: 0.82rem; margin: 4px 0 0 0;">
                                 Theo dõi toàn bộ lịch học trên trường (OCR), hoạt động cá nhân, giờ nghỉ ngơi và các phiên tự học. Đánh dấu hoàn thành, khóa giờ cố định hoặc yêu cầu sắp xếp lại bất cứ lúc nào.
                             </p>
@@ -1517,7 +1524,7 @@
                             <span class="sched-badge badge-class">🏫 Lớp học (OCR)</span>
                             <span class="sched-badge badge-routine">🏃 Sinh hoạt cá nhân</span>
                             <span class="sched-badge badge-rest">😴 Nghỉ ngơi (Bảo vệ)</span>
-                            <span class="sched-badge badge-study-ai">🤖 Tự học (Trợ lý AI)</span>
+                            <span class="sched-badge badge-study-ai">🤖 Tự học (bộ xếp lịch)</span>
                             <span class="sched-badge badge-study-done">✅ Đã hoàn thành</span>
                         </div>
                     </div>
@@ -2157,10 +2164,12 @@
         </div>
     </div>
 
+    <script src="/static/accounts.js?v=1"></script>
     <script src="/static/app.js?v=source-pages-20261028"></script>
     <script src="/static/document-lookup.js?v=qa-final-20261018"></script>
     <script src="/static/timetable.js?v=yc195-02"></script>
+    <script src="/static/planner-wizard.js?v=1"></script>
     <script src="/static/layout.js?v=yc195-02"></script>
-    <script src="/static/practice.js?v=app-audit-20261025"></script>
+    <script src="/static/practice.js?v=compact-review-20261108"></script>
 </body>
 </html>

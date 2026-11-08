@@ -327,3 +327,35 @@ def test_native_prefill_bounds_peak_memory_and_reports_phases(tmp_path, monkeypa
     assert timing['prompt_tokens_per_second'] == 20.0
     assert timing['generation_tokens_per_second'] == 5.0
     assert timing['peak_memory_gb'] == 5.4
+
+
+@pytest.mark.parametrize('mode', ['accepted', 'absent', 'wrong_path', 'ordinary_qa'])
+def test_native_worker_requires_acceptance_path_and_exact_scope(tmp_path, monkeypatch, mode):
+    from app import practice_adapter
+    from app.practice import practice_review_schema
+    module, calls, output = _worker(tmp_path, monkeypatch, max_tokens=1000, context=8192)
+    adapter = tmp_path / 'adapter'
+    adapter.mkdir()
+    (adapter / 'adapters.safetensors').write_bytes(b'synthetic fixture, never real model loaded')
+    request = json.loads(sys.stdin.getvalue())
+    item = dict(index=1, source='Synthetic source.', question='Synthetic question?', choices=dict(A='one', B='two', C='three', D='four'), proposed_answer='A', explanation='Synthetic explanation.', evidence_quote='Synthetic source.')
+    request.update(adapter_path=str(adapter), messages=[{'role': 'system', 'content': practice_adapter.SYSTEM_PROMPT}, {'role': 'user', 'content': practice_adapter.build_compact_review_prompt(item)}], response_schema=practice_review_schema(1, None))
+    accepted = {'path': str(adapter if mode != 'wrong_path' else tmp_path / 'another'), 'sha256': 'fixture', 'scope': 'single_question_practice_review'}
+    approvals = []
+    def load(model_path, require_active=True):
+        approvals.append(require_active)
+        return None if mode == 'absent' else accepted
+    monkeypatch.setattr(practice_adapter, 'load_practice_adapter', load)
+    if mode == 'ordinary_qa': request['messages'][1]['content'] = 'Ordinary QA'
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(request)))
+    monkeypatch.setitem(sys.modules, 'mlx_vlm.structured', types.SimpleNamespace(build_json_schema_logits_processor=lambda *args: object()))
+    if mode != 'accepted':
+        with pytest.raises(ValueError, match='nghiệm thu'): module.main()
+        assert calls['loads'] == []
+    else:
+        module.main()
+        result = json.loads(output.getvalue())
+        assert calls['loads'][0][1]['adapter_path'] == str(adapter)
+        assert result['adapter_sha256'] == 'fixture'
+        assert result['adapter_scope'] == 'single_question_practice_review'
+    assert approvals == [False]

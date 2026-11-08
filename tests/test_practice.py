@@ -98,6 +98,22 @@ def make_service(responses=None, passages=None, db_path=None):
     return service, searcher, ollama
 
 
+@pytest.mark.parametrize('count,difficulty,compact', [(1, None, True), (2, None, False), (1, 'medium', False)])
+def test_native_single_review_uses_compact_base_without_adapter(monkeypatch, count, difficulty, compact):
+    import app.model_resolver as resolver
+    import app.practice_adapter as profile
+    from app.model_resolver import DEFAULT_CHAT_MODEL
+    service, _, _ = make_service()
+    prompts = []
+    monkeypatch.setattr(resolver, 'is_mlx_model', lambda model: True)
+    monkeypatch.setattr(profile, 'active_practice_adapter', lambda model: None)
+    monkeypatch.setattr(service, '_chat_complete', lambda prompt, *args, **kwargs: prompts.append(prompt) or '{"checks": []}')
+    questions = [dict(QUESTION, source={'chunk_id': 17}) for _ in range(count)]
+    service._verify_questions(questions, {17: passage()}, DEFAULT_CHAT_MODEL, difficulty=difficulty)
+    assert len(prompts) == 1
+    assert ('Mỗi trường audit tối đa 30 từ' in prompts[0]) is compact
+
+
 def test_practice_rejects_page_with_unverified_visual_content_before_generation(monkeypatch):
     source = passage()
     source["page_quality"] = {
@@ -535,3 +551,81 @@ def test_practice_busy_error_is_reraised_immediately(monkeypatch):
     monkeypatch.setattr(service, "_generate_text", mock_generate)
     with pytest.raises(GPUBusyError, match="GPU đang bận"):
         service.generate_from_passages([passage()], count=3, model="test-model")
+
+
+def test_practice_generation_prompt_distinguishes_source_rules_and_forbids_explanation_overreach():
+    from app.practice import build_practice_generation_prompt
+    prompt = build_practice_generation_prompt([passage()], count=1)
+    assert "Phân biệt rạch ròi giữa quy tắc có trong passage với quy ước hoặc dữ kiện do câu hỏi tự đặt ra" in prompt
+    assert "Tuyệt đối không khẳng định trong explanation rằng passage/tài liệu nêu một quy ước, định nghĩa hay quy tắc khi passage không hề chứa quy tắc đó" in prompt
+
+
+def test_practice_review_prompt_guides_honest_input_and_explanation_audits():
+    from app.practice import build_practice_review_prompt
+    item = {"index": 1, "source": "Passage.", "question": "Question?", "choices": {"A": "1", "B": "2", "C": "3", "D": "4"}, "proposed_answer": "A", "explanation": "Expl.", "evidence_quote": "Passage."}
+    prompt = build_practice_review_prompt(item)
+    assert "Phân biệt dữ kiện câu hỏi với quy tắc nguồn: câu hỏi hỏi giá trị hàm/đạo hàm tại điểm số (như f'(-7))" in prompt
+    assert "Đọc chính xác explanation, không bịa ra thiếu sót mà explanation đã nêu rõ" in prompt
+
+
+def test_practice_verification_rejects_explanation_attributing_absent_rules_to_source():
+    syntax_only_passage = passage(
+        chunk_id=126,
+        text="Truy xuất phần tử của mảng.\nCú pháp:\n<Tên mảng>[<Chỉsố>]\n"
+    )
+    overreaching_question = {
+        "question": "Cho mảng int a[10], đề bài quy ước chỉ số bắt đầu từ 0. Cú pháp truy xuất phần tử thứ 5 là gì?",
+        "choices": {"A": "a[4]", "B": "a[5]", "C": "a(4)", "D": "a.5"},
+        "answer": "A",
+        "explanation": "Theo tài liệu, mảng đánh chỉ số từ 0 nên phần tử thứ 5 là a[4].",
+        "source": {"chunk_id": 126},
+        "evidence_quote": "<Tên mảng>[<Chỉsố>]",
+    }
+    # When explanation audit detects overreach (attributing absent zero-based indexing rule to passage with only syntax),
+    # explanation_supported must be False.
+    rejected_check = {
+        "index": 1,
+        "input_audit": "Đề bài cho mảng a[10], quy ước chỉ số từ 0 và hỏi phần tử thứ 5; đủ dữ kiện.",
+        "independent_solution": "Tài liệu chỉ nêu cú pháp <Tên mảng>[<Chỉsố>].",
+        "choice_comparison": "a[4] phù hợp với quy ước C, khớp A.",
+        "explanation_audit": "Explanation sai vì khẳng định tài liệu quy định chỉ số từ 0 trong khi tài liệu chỉ nêu cú pháp truy xuất.",
+        "supported": True,
+        "explanation_supported": False,
+        "unique_answer": True,
+        "qualifiers_preserved": True,
+        "verified_answer": "A",
+    }
+    service, _, _ = make_service([{"checks": [rejected_check]}])
+    verified = service._verify_questions([overreaching_question], {126: syntax_only_passage}, "test-model")
+    assert verified == []
+
+
+def test_practice_verification_accepts_honest_audit_for_constant_derivative():
+    derivative_passage = passage(
+        chunk_id=158,
+        text="1. f(x) = 2^2016\nSolution: the derivative is 0 since f is constant."
+    )
+    derivative_question = {
+        "question": "Cho f(x)=2^2016. Theo lời giải trong nguồn, giá trị f'(-7) là bao nhiêu?",
+        "choices": {"A": "2^2016", "B": "0", "C": "2016·2^2015", "D": "-7"},
+        "answer": "B",
+        "explanation": "f(x)=2^2016 là hàm hằng nên f'(x)=0 với mọi x, f'(-7)=0.",
+        "source": {"chunk_id": 158},
+        "evidence_quote": "the derivative is 0 since f is constant.",
+    }
+    honest_check = {
+        "index": 1,
+        "input_audit": "Question nêu rõ hàm f(x)=2^2016 và yêu cầu tính f'(-7); đủ dữ kiện.",
+        "independent_solution": "f là hàm hằng nên đạo hàm luôn bằng 0, f'(-7)=0.",
+        "choice_comparison": "Kết quả 0 khớp duy nhất với lựa chọn B.",
+        "explanation_audit": "Explanation giải đúng theo quy tắc đạo hàm hàm hằng của nguồn.",
+        "supported": True,
+        "explanation_supported": True,
+        "unique_answer": True,
+        "qualifiers_preserved": True,
+        "verified_answer": "B",
+    }
+    service, _, _ = make_service([{"checks": [honest_check]}])
+    verified = service._verify_questions([derivative_question], {158: derivative_passage}, "test-model")
+    assert len(verified) == 1
+    assert verified[0]["answer"] == "B"

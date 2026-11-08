@@ -1029,20 +1029,24 @@ class HybridSearcher:
 
         # If explicit document scope or disabled topic routing, bypass candidate routing
         if document_id is not None or document_ids is not None or not enable_topic_routing:
+            candidate_docs = (
+                [document_id]
+                if document_id is not None
+                else (sorted(list(set(document_ids))) if document_ids else [])
+            )
             self.last_topic_routing = {
                 "applied": False,
                 "explicit_scope": bool(document_id is not None or document_ids is not None),
                 "document_id": document_id,
-                "candidate_doc_ids": (
-                    [document_id]
-                    if document_id is not None
-                    else (sorted(list(set(document_ids))) if document_ids else [])
-                ),
+                "candidate_doc_ids": candidate_docs,
+                "candidate_chunk_count": 0,
+                "candidate_doc_count": 1 if document_id is not None else len(candidate_docs),
                 "matched_topics": [],
                 "parent_ids": [],
                 "parent_labels": [],
                 "fallback_to_global": False,
                 "fallback_reason": None,
+                "reason": "explicit_scope" if (document_id is not None or document_ids is not None) else "routing_disabled",
             }
             return self._execute_hybrid_search(
                 query_clean=query_clean,
@@ -1054,6 +1058,29 @@ class HybridSearcher:
                 document_ids=document_ids,
             )
 
+        # 1b. Use valid adjacent sidecar retrieval tree by default before legacy routing
+        sidecar_path = self.db_path.with_name("retrieval_tree.db")
+        if sidecar_path.is_file():
+            from app.retrieval_tree import TreeSearcher
+            try:
+                tree_searcher = TreeSearcher(sidecar_path, source_db=self.db_path)
+                results = tree_searcher.search_hybrid(
+                    query=query_clean,
+                    top_k=top_k,
+                    embed_model=embed_model,
+                    is_broad=is_broad,
+                    max_per_book=max_per_book,
+                    document_id=document_id,
+                    document_ids=document_ids,
+                    enable_topic_routing=enable_topic_routing,
+                )
+                self.last_topic_routing = tree_searcher.last_topic_routing
+                return results
+            except Exception as exc:
+                if isinstance(exc, (RuntimeError, TimeoutError, ConnectionError)):
+                    raise
+                logger.warning("Sidecar retrieval tree error (%s); falling back to legacy routing", exc)
+
         # Plan topic routing
         with closing(self.get_connection()) as conn:
             plan = self.topic_router.plan_routing(
@@ -1063,6 +1090,8 @@ class HybridSearcher:
                 document_id=document_id,
                 document_ids=document_ids,
             )
+            plan.setdefault("candidate_chunk_count", 0)
+            plan.setdefault("candidate_doc_count", len(plan.get("candidate_doc_ids", [])))
 
         if not plan["applied"]:
             # Unrecognized topic, empty candidates, or DB unavailable -> global fallback

@@ -65,6 +65,10 @@ def generate_ics(
     entries: List[Dict[str, Any]],
     start_date_str: str,
     end_date_str: str,
+    *,
+    deadlines=None,
+    reminder_minutes=60,
+    namespace="local",
 ) -> str:
     """Generate RFC 5545 .ics text for a list of timetable entries.
 
@@ -72,7 +76,10 @@ def generate_ics(
     - start_time and end_time must be HH:MM
     - Events recur weekly until end_date
     """
-    if not entries:
+    deadlines = deadlines or []
+    if isinstance(reminder_minutes, bool) or not isinstance(reminder_minutes, int) or not 0 <= reminder_minutes <= 10080:
+        raise ValueError("Thời gian nhắc phải từ 0 đến 10080 phút.")
+    if not entries and not deadlines:
         raise ValueError("Thời khóa biểu hiện chưa có môn học nào để xuất lịch.")
 
     start_date, end_date = validate_date_range(start_date_str, end_date_str)
@@ -165,7 +172,14 @@ def generate_ics(
         if first_event_date > end_date:
             continue
 
-        event_uid = f"{uuid.uuid4()}@agent-hoctap.local"
+        if entry.get("event_date"):
+            first_event_date = date.fromisoformat(entry["event_date"])
+            if first_event_date.isoweekday() != raw_weekday:
+                raise ValueError("Ngày và thứ của phiên học không khớp.")
+            if not start_date <= first_event_date <= end_date:
+                continue
+        identity = str(entry.get("uid") or f"{course}|{raw_weekday}|{start_time_str}|{end_time_str}|{entry.get('event_date', '')}")
+        event_uid = f"{uuid.uuid5(uuid.NAMESPACE_URL, namespace + ':' + identity)}@study-agent"
         dtstart = f"{first_event_date.strftime('%Y%m%d')}T{sh:02d}{sm:02d}00"
         dtend = f"{first_event_date.strftime('%Y%m%d')}T{eh:02d}{em:02d}00"
         local_end_dt = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=_get_vn_timezone())
@@ -185,13 +199,50 @@ def generate_ics(
             f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
             f"DTSTART;TZID=Asia/Ho_Chi_Minh:{dtstart}",
             f"DTEND;TZID=Asia/Ho_Chi_Minh:{dtend}",
-            f"RRULE:FREQ=WEEKLY;BYDAY={byday_map[raw_weekday]};UNTIL={until_str}",
+            *([] if entry.get("event_date") else [f"RRULE:FREQ=WEEKLY;BYDAY={byday_map[raw_weekday]};UNTIL={until_str}"]),
             f"SUMMARY:{_escape_text(course)}",
             f"LOCATION:{_escape_text(room)}",
             f"DESCRIPTION:{_escape_text(description)}",
             "STATUS:CONFIRMED",
             "END:VEVENT",
         ])
+        events_count += 1
+
+    for task in deadlines:
+        if task.get("completed"):
+            continue
+        if not task.get("deadline_date"):
+            raise ValueError(f"Hãy nhập ngày cụ thể cho deadline: {task.get('title', '')}")
+        due_date = date.fromisoformat(task["deadline_date"])
+        due_time = str(task.get("deadline_time") or "23:59")
+        if not clock_regex.fullmatch(due_time):
+            raise ValueError("Giờ deadline không hợp lệ.")
+        if not start_date <= due_date <= end_date:
+            continue
+        title = str(task.get("title") or "").strip()
+        if not title:
+            raise ValueError("Tên deadline không được để trống.")
+        identity = f"deadline:{task.get('id', title)}"
+        uid = uuid.uuid5(uuid.NAMESPACE_URL, namespace + ':' + identity)
+        description = f"Hạn nộp: {title}\nMôn: {task.get('course') or ''}"
+        lines.extend([
+            "BEGIN:VEVENT",
+            f"UID:{uid}@study-agent",
+            f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+            f"DTSTART;TZID=Asia/Ho_Chi_Minh:{due_date.strftime('%Y%m%d')}T{due_time.replace(':','')}00",
+            f"SUMMARY:{_escape_text('[Deadline] ' + title)}",
+            f"DESCRIPTION:{_escape_text(description)}",
+            "STATUS:CONFIRMED",
+            "TRANSP:TRANSPARENT",
+        ])
+        if reminder_minutes:
+            lines.extend([
+                "BEGIN:VALARM", "ACTION:DISPLAY",
+                f"TRIGGER:-PT{reminder_minutes}M",
+                f"DESCRIPTION:{_escape_text(description)}",
+                "END:VALARM",
+            ])
+        lines.append("END:VEVENT")
         events_count += 1
 
     if events_count == 0:

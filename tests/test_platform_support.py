@@ -27,8 +27,8 @@ native.LK_NBLCK = 2
 native.LK_UNLCK = 0
 sys.modules["msvcrt"] = native
 from app.server import app
-assert any(route.path == "/api/documents/search" for route in app.routes)
-assert any(route.path == "/api/chat" for route in app.routes)
+assert "/api/documents/search" in app.openapi()["paths"]
+assert "/api/chat" in app.openapi()["paths"]
 '''
     env = {**os.environ, "AGENT_DATA_DIR": str(tmp_path / "data")}
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env,

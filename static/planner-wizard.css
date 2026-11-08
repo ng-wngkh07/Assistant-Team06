@@ -1,0 +1,31 @@
+.planner-wizard-screen[hidden], .planner-wizard-footer [hidden] { display: none !important; }
+.planner-wizard-progress { display: flex; gap: .5rem; flex-wrap: wrap; margin: 1.2rem 0; }
+.planner-wizard-progress button { padding: .65rem .9rem; border: 1px solid var(--border); border-radius: 2rem; background: var(--bg-card); color: var(--text-primary); font: inherit; cursor: pointer; }
+.planner-wizard-progress button[aria-current="step"] { background: var(--accent, #2563eb); color: white; border-color: transparent; }
+.planner-wizard-progress button:disabled { opacity: .55; cursor: default; }
+.planner-step-hint { max-width: 72ch; color: var(--text-secondary); line-height: 1.6; margin-bottom: 1.2rem; }
+.planner-wizard-footer { position: sticky; bottom: 0; background: var(--bg-main); border-top: 1px solid var(--border); padding: 1rem 0; display: flex; align-items: center; gap: 1rem; z-index: 4; }
+.planner-wizard-footer p { flex: 1; margin: 0; }
+.planner-wizard-screen details { padding: .7rem 0; }
+.planner-wizard-screen summary { cursor: pointer; color: var(--text-secondary); }
+.account-toolbar { display: flex; justify-content: flex-end; gap: .6rem; align-items: center; padding: .65rem 1rem; flex-wrap: wrap; }
+.account-dialog { color: var(--text-primary); background: var(--bg-main); border: 1px solid var(--border); border-radius: 1rem; padding: 1.5rem; width: min(90vw, 420px); }
+.account-dialog::backdrop { background: #0009; }
+.account-dialog input { width: 100%; margin: .4rem 0 1rem; }
+.feature-guide { margin: .7rem auto; max-width: 900px; padding: 1rem; border: 1px solid var(--border); border-radius: .75rem; background: var(--bg-card); }
+.feature-guide p { line-height: 1.6; }
+@media (max-width: 600px) { .planner-wizard-progress { display: grid; grid-template-columns: 1fr 1fr; } .planner-wizard-footer { flex-wrap: wrap; } .planner-wizard-footer p { flex-basis: 100%; order: 3; } }
+body { display: flex; flex-direction: column; height: 100dvh; }
+body > .app-container { flex: 1; height: auto; min-height: 0; }
+body > .app-container .main-content { height: 100%; min-height: 0; }
+.account-toolbar, .feature-guide { flex: 0 0 auto; }
+.account-toolbar { position: relative; z-index: 5; }
+@media (max-width: 600px) { body > .app-container .main-content { height: 100%; } .feature-guide { margin: .3rem .7rem; max-height: 28vh; overflow: auto; } }
+
+.planner-wizard-footer p:empty { display: none; }
+@media (max-width: 600px) {
+    .chat-header { padding: 8px !important; gap: 6px; }
+    .chat-header .header-left { position: static !important; flex: 0 0 auto; }
+    .chat-header .mode-switch { max-width: 100% !important; min-width: 0; flex: 1; }
+    .chat-header .mode-button { flex: 1; min-width: 0; white-space: normal !important; padding: 6px 4px !important; font-size: 11px !important; }
+}

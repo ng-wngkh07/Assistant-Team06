@@ -1,8 +1,9 @@
 /**
  * Timetable vision extraction, editable draft review, manual entry, and ICS export.
- * Strict client-side privacy: images and personal schedule remain local to this device.
+ * Images and schedules are stored by the application server in the current account scope.
  */
 document.addEventListener("DOMContentLoaded", () => {
+    const storageScope = document.querySelector?.('meta[name="study-account-scope"]')?.content || "local";
     // Elements
     const dropzone = document.getElementById("timetable-dropzone");
     const fileInput = document.getElementById("timetable-file-input");
@@ -447,8 +448,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     room: tr.querySelector(".draft-room").value
                 });
             });
-            localStorage.setItem("timetable_active_draft_id", currentDraftId);
-            localStorage.setItem("timetable_active_draft_state", JSON.stringify(rows));
+            localStorage.setItem((storageScope === "local" ? "timetable_active_draft_id" : `timetable_active_draft_id-${storageScope}`), currentDraftId);
+            localStorage.setItem((storageScope === "local" ? "timetable_active_draft_state" : `timetable_active_draft_state-${storageScope}`), JSON.stringify(rows));
         } catch (e) {
             console.warn("Failed to persist draft state locally:", e);
         }
@@ -456,14 +457,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function clearDraftStateLocally() {
         try {
-            localStorage.removeItem("timetable_active_draft_id");
-            localStorage.removeItem("timetable_active_draft_state");
+            localStorage.removeItem((storageScope === "local" ? "timetable_active_draft_id" : `timetable_active_draft_id-${storageScope}`));
+            localStorage.removeItem((storageScope === "local" ? "timetable_active_draft_state" : `timetable_active_draft_state-${storageScope}`));
         } catch (e) {}
     }
 
     async function restoreDraftLocally() {
         try {
-            const localId = localStorage.getItem("timetable_active_draft_id");
+            const localId = localStorage.getItem((storageScope === "local" ? "timetable_active_draft_id" : `timetable_active_draft_id-${storageScope}`));
             const linkedId = new URLSearchParams(window.location.search).get("timetable_draft");
             const savedId = linkedId || localId;
             if (!savedId) return;
@@ -493,7 +494,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             // Prefer local user edits if available, otherwise original extracted entries
             let entriesToRender = data.entries || [];
-            const savedStateStr = localId === savedId ? localStorage.getItem("timetable_active_draft_state") : null;
+            const savedStateStr = localId === savedId ? localStorage.getItem((storageScope === "local" ? "timetable_active_draft_state" : `timetable_active_draft_state-${storageScope}`)) : null;
             if (savedStateStr) {
                 try {
                     const parsedState = JSON.parse(savedStateStr);
@@ -1022,7 +1023,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
 
-            if (confirmedEntriesCount === 0) {
+            if (confirmedEntriesCount === 0 && !exportIncludePlanner?.checked) {
                 exportStatus.textContent = "⚠️ Thời khóa biểu hiện chưa có môn học nào để xuất. Vui lòng thêm môn học thủ công hoặc tải ảnh thời khóa biểu trước.";
                 exportStatus.style.color = "#dc2626";
                 return;
@@ -1062,7 +1063,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             try {
                 const includePlanner = exportIncludePlanner && exportIncludePlanner.checked ? "true" : "false";
-                const url = `/api/timetable/export.ics?start_date=${encodeURIComponent(sParsed.isoDate)}&end_date=${encodeURIComponent(eParsed.isoDate)}&include_planner=${includePlanner}`;
+                const url = `/api/timetable/export.ics?start_date=${encodeURIComponent(sParsed.isoDate)}&end_date=${encodeURIComponent(eParsed.isoDate)}&include_planner=${includePlanner}&reminder_minutes=${encodeURIComponent(document.getElementById("export-reminder").value)}`;
                 const resp = await fetch(url);
                 if (!resp.ok) {
                     const errJson = await resp.json().catch(() => ({}));
@@ -1085,7 +1086,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 a.remove();
                 window.URL.revokeObjectURL(downloadUrl);
 
-                exportStatus.textContent = `✅ Đã tạo tệp lịch .ics thành công (${sParsed.formatted} - ${eParsed.formatted}). Bạn có thể mở và đồng bộ vào Google Calendar hoặc Apple Calendar.`;
+                exportStatus.textContent = `✅ Đã tạo tệp lịch .ics thành công (${sParsed.formatted} - ${eParsed.formatted}). Bạn có thể nhập vào ứng dụng lịch và kiểm tra lời nhắc.`;
                 exportStatus.style.color = "#16a34a";
             } catch (err) {
                 exportStatus.textContent = `❌ ${err.message}`;
@@ -1177,6 +1178,8 @@ document.addEventListener("DOMContentLoaded", () => {
             </td>
             <td>
                 <select class="form-input routine-type" style="padding: 4px;">
+                    <option value="work" ${actVal === "work" ? "selected" : ""}>💼 Đi làm</option>
+                    <option value="extra_class" ${actVal === "extra_class" ? "selected" : ""}>📒 Học thêm</option>
                     <option value="gym" ${actVal === "gym" ? "selected" : ""}>🏋️ Tập gym / thể dục</option>
                     <option value="sport" ${actVal === "sport" ? "selected" : ""}>⚽ Chơi thể thao</option>
                     <option value="personal" ${actVal === "personal" ? "selected" : ""}>🎉 Đi chơi / cá nhân</option>
@@ -1361,6 +1364,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function renderPreferencesForm(prefs) {
         if (!preferencesForm) return;
+        const weekInput = document.getElementById("pref-week-start");
+        if (weekInput && prefs.week_start_date) weekInput.value = prefs.week_start_date;
+        else if (weekInput && !weekInput.value) {
+            const now = new Date();
+            weekInput.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+        }
         if (prefEarliestTime && prefs.earliest_study_time) prefEarliestTime.value = prefs.earliest_study_time;
         if (prefLatestTime && prefs.latest_study_time) prefLatestTime.value = prefs.latest_study_time;
         if (prefMaxDailyMinutes && prefs.max_daily_study_minutes) {
@@ -1387,9 +1396,8 @@ document.addEventListener("DOMContentLoaded", () => {
         prefMaxDailyMinutes.addEventListener("input", updateDailyMinutesHint);
     }
 
-    if (preferencesForm) {
-        preferencesForm.addEventListener("submit", async (e) => {
-            e.preventDefault();
+    async function savePreferences() {
+            if (!preferencesForm.reportValidity()) return false;
             try {
                 const resp = await fetch("/api/timetable/planner/preferences", {
                     method: "PUT",
@@ -1399,24 +1407,36 @@ document.addEventListener("DOMContentLoaded", () => {
                         latest_study_time: prefLatestTime.value,
                         max_daily_study_minutes: parseInt(prefMaxDailyMinutes.value, 10),
                         preferred_session_minutes: parseInt(prefSessionMinutes.value, 10),
-                        ai_notes: prefAiNotes.value.trim()
+                        ai_notes: prefAiNotes.value.trim(),
+                        week_start_date: document.getElementById("pref-week-start").value
                     })
                 });
                 const data = await resp.json();
                 if (!resp.ok) {
                     prefSaveStatus.textContent = `❌ ${data.detail || "Không thể lưu giới hạn cá nhân"}`;
                     prefSaveStatus.style.color = "#dc2626";
-                    return;
+                    return false;
                 }
                 prefSaveStatus.textContent = "✅ Đã lưu giới hạn cá nhân & sở thích học tập!";
                 prefSaveStatus.style.color = "#16a34a";
-                await loadFullPlannerState();
+                return true;
             } catch (err) {
                 prefSaveStatus.textContent = `❌ Lỗi mạng: ${err.message}`;
                 prefSaveStatus.style.color = "#dc2626";
+                return false;
             }
-        });
     }
+    preferencesForm?.addEventListener("submit", async e => { e.preventDefault(); await savePreferences(); });
+    window.StudyPlanner = {
+        async savePersonal() {
+            if (!preferencesForm.reportValidity()) return false;
+            if (!await savePreferences()) return false;
+            return await saveRoutinesBulkFromDOM();
+        },
+        hasUnconfirmedDraft() {
+            return !!(currentDraftId && draftCard && draftCard.style.display !== "none" && draftTableBody.querySelectorAll("tr").length);
+        }
+    };
 
     // -------------------------------------------------------------
     // Step 3: Study Tasks & Deadlines
@@ -1635,8 +1655,8 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         plannerGenerateStatus.textContent = rescheduleOnly
-            ? "⏳ Trợ lý AI đang sắp xếp lại các phiên học chưa hoàn thành (giữ nguyên lịch cố định & đã khóa)..."
-            : "⏳ Trợ lý AI đang phân tích thời khóa biểu, lịch sinh hoạt, khung giờ học và deadline...";
+            ? "⏳ bộ xếp lịch đang sắp xếp lại các phiên học chưa hoàn thành (giữ nguyên lịch cố định & đã khóa)..."
+            : "⏳ bộ xếp lịch đang phân tích thời khóa biểu, lịch sinh hoạt, khung giờ học và deadline...";
         plannerGenerateStatus.style.color = "var(--text-secondary)";
 
         try {
