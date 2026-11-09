@@ -15,12 +15,20 @@ import re
 import shutil
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Generator, List, Optional
 
 from app.config import DATA_DIR
 from app.answer_format import clean_answer
+from app.db import (
+    atomic_transaction,
+    history_migrations,
+    open_sqlite,
+    secure_dir_permissions,
+    secure_file_permissions,
+)
 
 logger = logging.getLogger("psychology_agent.history")
 
@@ -80,71 +88,31 @@ class HistoryStore:
     def __init__(self, path: Path = DATA_DIR / "history.db", auto_init: bool = True):
         self.path = Path(path)
         if auto_init:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            secure_dir_permissions(self.path.parent)
             self._init_db()
-            try:
-                self.path.chmod(0o600)
-            except OSError:
-                pass
+            secure_file_permissions(self.path)
 
-    def _connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.path, timeout=10)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys = ON")
-        return db
+    @contextmanager
+    def _connect(self) -> Generator[sqlite3.Connection, None, None]:
+        conn = open_sqlite(
+            self.path,
+            timeout=10.0,
+            wal=True,
+            synchronous_full=True,
+            foreign_keys=True,
+        )
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
-        """Initialize database schema idempotently."""
+        """Initialize database schema idempotently with versioned migrations."""
         with self._connect() as db:
-            # 1. Legacy searches table (preserved exactly)
-            db.execute("""CREATE TABLE IF NOT EXISTS searches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-                question TEXT NOT NULL,
-                answer TEXT NOT NULL,
-                citations_json TEXT NOT NULL,
-                model TEXT NOT NULL
-            )""")
-
-            # 2. Multi-turn conversation sessions table
-            db.execute("""CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                title_mode TEXT NOT NULL DEFAULT 'auto',
-                summary TEXT,
-                summary_status TEXT NOT NULL DEFAULT 'none',
-                summarized_revision INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-                revision INTEGER NOT NULL DEFAULT 1,
-                is_legacy INTEGER NOT NULL DEFAULT 0
-            )""")
-
-            # 3. Ordered session turns table
-            db.execute("""CREATE TABLE IF NOT EXISTS session_turns (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                turn_index INTEGER NOT NULL,
-                question TEXT NOT NULL,
-                answer TEXT NOT NULL,
-                citations_json TEXT NOT NULL,
-                model TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-                request_id TEXT,
-                answer_mode TEXT NOT NULL DEFAULT 'quick',
-                search_scope_json TEXT NOT NULL DEFAULT '{}',
-                legacy_search_id INTEGER,
-                UNIQUE(session_id, turn_index),
-                UNIQUE(session_id, request_id)
-            )""")
-
-            # 4. Metadata table for idempotent migrations and settings
-            db.execute("""CREATE TABLE IF NOT EXISTS history_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )""")
-
-            # Ensure columns exist in case table was created with an older schema
+            history_migrations.apply(db)
+            # Ensure backwards compatibility for legacy column checks
             turn_cols = [c[1] for c in db.execute("PRAGMA table_info(session_turns)").fetchall()]
             if "legacy_search_id" not in turn_cols and "id" in turn_cols:
                 db.execute("ALTER TABLE session_turns ADD COLUMN legacy_search_id INTEGER")
@@ -182,52 +150,53 @@ class HistoryStore:
         q_clean = question.strip()
 
         with self._connect() as db:
-            # Check idempotency before inserting into ANY table
-            if session_id and request_id:
-                existing = db.execute(
-                    "SELECT id, legacy_search_id FROM session_turns WHERE session_id=? AND request_id=?",
-                    (session_id, request_id),
-                ).fetchone()
-                if existing:
-                    return existing["legacy_search_id"] if existing["legacy_search_id"] is not None else existing["id"]
+            with atomic_transaction(db):
+                # Check idempotency before inserting into ANY table
+                if session_id and request_id:
+                    existing = db.execute(
+                        "SELECT id, legacy_search_id FROM session_turns WHERE session_id=? AND request_id=?",
+                        (session_id, request_id),
+                    ).fetchone()
+                    if existing:
+                        return existing["legacy_search_id"] if existing["legacy_search_id"] is not None else existing["id"]
 
-            # Insert into legacy searches
-            cursor = db.execute(
-                "INSERT INTO searches(question, answer, citations_json, model) VALUES (?, ?, ?, ?)",
-                (q_clean, cleaned, cit_json, model),
-            )
-            legacy_id = cursor.lastrowid
+                # Insert into legacy searches
+                cursor = db.execute(
+                    "INSERT INTO searches(question, answer, citations_json, model) VALUES (?, ?, ?, ?)",
+                    (q_clean, cleaned, cit_json, model),
+                )
+                legacy_id = cursor.lastrowid
 
-            # If session_id provided, also save turn into session
-            if session_id:
-                now = _now_iso()
-                sess = db.execute("SELECT id, title_mode, revision FROM sessions WHERE id=?", (session_id,)).fetchone()
-                if sess:
-                    max_idx = db.execute(
-                        "SELECT COALESCE(MAX(turn_index), 0) FROM session_turns WHERE session_id=?", (session_id,)
-                    ).fetchone()[0]
-                    turn_idx = max_idx + 1
+                # If session_id provided, also save turn into session
+                if session_id:
+                    now = _now_iso()
+                    sess = db.execute("SELECT id, title_mode, revision FROM sessions WHERE id=?", (session_id,)).fetchone()
+                    if sess:
+                        max_idx = db.execute(
+                            "SELECT COALESCE(MAX(turn_index), 0) FROM session_turns WHERE session_id=?", (session_id,)
+                        ).fetchone()[0]
+                        turn_idx = max_idx + 1
 
-                    db.execute(
-                        """INSERT INTO session_turns(session_id, turn_index, question, answer, citations_json, model, created_at, request_id, legacy_search_id)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (session_id, turn_idx, q_clean, cleaned, cit_json, model, now, request_id, legacy_id),
-                    )
-
-                    new_title = None
-                    if sess["title_mode"] == "auto" and turn_idx == 1:
-                        new_title = generate_fallback_title(q_clean)
                         db.execute(
-                            "UPDATE sessions SET title=?, updated_at=?, revision=revision+1 WHERE id=?",
-                            (new_title, now, session_id),
-                        )
-                    else:
-                        db.execute(
-                            "UPDATE sessions SET updated_at=?, revision=revision+1 WHERE id=?",
-                            (now, session_id),
+                            """INSERT INTO session_turns(session_id, turn_index, question, answer, citations_json, model, created_at, request_id, legacy_search_id)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (session_id, turn_idx, q_clean, cleaned, cit_json, model, now, request_id, legacy_id),
                         )
 
-            return legacy_id
+                        new_title = None
+                        if sess["title_mode"] == "auto" and turn_idx == 1:
+                            new_title = generate_fallback_title(q_clean)
+                            db.execute(
+                                "UPDATE sessions SET title=?, updated_at=?, revision=revision+1 WHERE id=?",
+                                (new_title, now, session_id),
+                            )
+                        else:
+                            db.execute(
+                                "UPDATE sessions SET updated_at=?, revision=revision+1 WHERE id=?",
+                                (now, session_id),
+                            )
+
+                return legacy_id
 
     def list(self, limit: int = 100) -> list[dict]:
         """List legacy searches (ORDER BY id DESC)."""
@@ -280,11 +249,12 @@ class HistoryStore:
         now = _now_iso()
 
         with self._connect() as db:
-            db.execute(
-                """INSERT INTO sessions(id, title, title_mode, summary_status, created_at, updated_at, revision, is_legacy)
-                   VALUES (?, ?, ?, 'none', ?, ?, 1, ?)""",
-                (sid, stitle, mode, now, now, 1 if is_legacy else 0),
-            )
+            with atomic_transaction(db):
+                db.execute(
+                    """INSERT INTO sessions(id, title, title_mode, summary_status, created_at, updated_at, revision, is_legacy)
+                       VALUES (?, ?, ?, 'none', ?, ?, 1, ?)""",
+                    (sid, stitle, mode, now, now, 1 if is_legacy else 0),
+                )
 
         return {
             "id": sid,
@@ -465,62 +435,63 @@ class HistoryStore:
         now = _now_iso()
 
         with self._connect() as db:
-            # Verify session exists
-            sess = db.execute("SELECT id, title, title_mode, revision FROM sessions WHERE id=?", (session_id,)).fetchone()
-            if not sess:
-                raise KeyError(f"Session '{session_id}' not found")
+            with atomic_transaction(db):
+                # Verify session exists
+                sess = db.execute("SELECT id, title, title_mode, revision FROM sessions WHERE id=?", (session_id,)).fetchone()
+                if not sess:
+                    raise KeyError(f"Session '{session_id}' not found")
 
-            # Idempotency check before inserting into ANY table
-            if request_id:
-                existing = db.execute(
-                    "SELECT id, turn_index, created_at, legacy_search_id FROM session_turns WHERE session_id=? AND request_id=?",
-                    (session_id, request_id),
-                ).fetchone()
-                if existing:
-                    return {
-                        "id": existing["id"],
-                        "session_id": session_id,
-                        "turn_index": existing["turn_index"],
-                        "session_title": sess["title"],
-                        "created_at": existing["created_at"],
-                        "legacy_id": existing["legacy_search_id"] if existing["legacy_search_id"] is not None else existing["id"],
-                        "is_duplicate": True,
-                    }
+                # Idempotency check before inserting into ANY table
+                if request_id:
+                    existing = db.execute(
+                        "SELECT id, turn_index, created_at, legacy_search_id FROM session_turns WHERE session_id=? AND request_id=?",
+                        (session_id, request_id),
+                    ).fetchone()
+                    if existing:
+                        return {
+                            "id": existing["id"],
+                            "session_id": session_id,
+                            "turn_index": existing["turn_index"],
+                            "session_title": sess["title"],
+                            "created_at": existing["created_at"],
+                            "legacy_id": existing["legacy_search_id"] if existing["legacy_search_id"] is not None else existing["id"],
+                            "is_duplicate": True,
+                        }
 
-            # Next turn index
-            max_idx = db.execute(
-                "SELECT COALESCE(MAX(turn_index), 0) FROM session_turns WHERE session_id=?", (session_id,)
-            ).fetchone()[0]
-            turn_idx = max_idx + 1
+                # Next turn index
+                max_idx = db.execute(
+                    "SELECT COALESCE(MAX(turn_index), 0) FROM session_turns WHERE session_id=?", (session_id,)
+                ).fetchone()[0]
+                turn_idx = max_idx + 1
 
-            # Insert into legacy searches first for backward compatibility and ID mapping
-            leg_cur = db.execute(
-                "INSERT INTO searches(question, answer, citations_json, model) VALUES (?, ?, ?, ?)",
-                (q_clean, ans_clean, cit_json, model),
-            )
-            legacy_id = leg_cur.lastrowid
-
-            # Insert turn with legacy_search_id reference
-            cursor = db.execute(
-                """INSERT INTO session_turns(session_id, turn_index, question, answer, citations_json, model, created_at, request_id, answer_mode, search_scope_json, legacy_search_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (session_id, turn_idx, q_clean, ans_clean, cit_json, model, now, request_id, mode, scope_json, legacy_id),
-            )
-            turn_id = cursor.lastrowid
-
-            # Update session
-            current_title = sess["title"]
-            if sess["title_mode"] == "auto" and turn_idx == 1:
-                current_title = generate_fallback_title(q_clean)
-                db.execute(
-                    "UPDATE sessions SET title=?, updated_at=?, revision=revision+1 WHERE id=?",
-                    (current_title, now, session_id),
+                # Insert into legacy searches first for backward compatibility and ID mapping
+                leg_cur = db.execute(
+                    "INSERT INTO searches(question, answer, citations_json, model) VALUES (?, ?, ?, ?)",
+                    (q_clean, ans_clean, cit_json, model),
                 )
-            else:
-                db.execute(
-                    "UPDATE sessions SET updated_at=?, revision=revision+1 WHERE id=?",
-                    (now, session_id),
+                legacy_id = leg_cur.lastrowid
+
+                # Insert turn with legacy_search_id reference
+                cursor = db.execute(
+                    """INSERT INTO session_turns(session_id, turn_index, question, answer, citations_json, model, created_at, request_id, answer_mode, search_scope_json, legacy_search_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (session_id, turn_idx, q_clean, ans_clean, cit_json, model, now, request_id, mode, scope_json, legacy_id),
                 )
+                turn_id = cursor.lastrowid
+
+                # Update session
+                current_title = sess["title"]
+                if sess["title_mode"] == "auto" and turn_idx == 1:
+                    current_title = generate_fallback_title(q_clean)
+                    db.execute(
+                        "UPDATE sessions SET title=?, updated_at=?, revision=revision+1 WHERE id=?",
+                        (current_title, now, session_id),
+                    )
+                else:
+                    db.execute(
+                        "UPDATE sessions SET updated_at=?, revision=revision+1 WHERE id=?",
+                        (now, session_id),
+                    )
 
         return {
             "id": turn_id,

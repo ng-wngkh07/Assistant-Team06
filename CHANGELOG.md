@@ -28,6 +28,9 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Added
 
+- Add versioned migrations and private content-addressed upload storage for the single-host account service, with operator backup/restore and explicit legacy-account import tools. These do not establish public-service or multi-host readiness.
+- Document a staged native-backend website pilot, Vercel proxy limits and the runtime checks needed before moving the model into a Linux container.
+
 - Rename timetable import to study planning and split it into four guided screens: class import, personal time, editable plans and dated deadlines, and calendar export. Save first-use guidance per account and feature, with manual replay.
 - Export dated study sessions and deadline alarms in iCalendar files, with stable account-scoped event identifiers. Keep weekly class recurrence and reject undated legacy deadlines instead of guessing dates. Calendar applications control notification delivery.
 - Document private website deployment, current database limitations and the distinction between private hosting and permission to use source materials.
