@@ -169,7 +169,7 @@ def test_restore_rejects_tampered_manifest_or_file(tmp_path, monkeypatch):
     unpack_dir = tmp_path / "tamper_unpack"
     unpack_dir.mkdir()
     with tarfile.open(archive_path, "r:*") as tar:
-        tar.extractall(unpack_dir)
+        tar.extractall(unpack_dir, filter="data")
 
     # Corrupt accounts.db bytes
     auth_file = unpack_dir / "accounts.db"
@@ -277,7 +277,7 @@ def test_restore_fails_on_untracked_extra_file_in_archive(tmp_path, monkeypatch)
     unpack_dir = tmp_path / "unpack_extra"
     unpack_dir.mkdir()
     with tarfile.open(archive_path, "r:*") as tar:
-        tar.extractall(unpack_dir)
+        tar.extractall(unpack_dir, filter="data")
 
     (unpack_dir / "untracked_spy.txt").write_text("untracked payload")
 
@@ -456,7 +456,7 @@ def test_restore_invalid_archive_does_not_partially_publish(tmp_path, monkeypatc
     unpack_dir = tmp_path / "unpack_corrupt"
     unpack_dir.mkdir()
     with tarfile.open(archive_path, "r:*") as tar:
-        tar.extractall(unpack_dir)
+        tar.extractall(unpack_dir, filter="data")
 
     # Corrupt a file
     (unpack_dir / "accounts.db").write_bytes(b"CORRUPTED_DB_HEADER")

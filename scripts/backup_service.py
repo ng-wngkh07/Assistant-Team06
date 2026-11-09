@@ -347,7 +347,7 @@ def restore_backup(
                     if not (member.isreg() or member.isdir()):
                         raise ValueError(f"Archive contains special file '{member.name}', which is strictly forbidden.")
                     validate_relative_path(member.name, staging)
-                tar.extractall(staging)
+                tar.extractall(staging, filter="data")
         elif arc_path.is_dir():
             for root, dirs, files in os.walk(arc_path):
                 for d in dirs:
