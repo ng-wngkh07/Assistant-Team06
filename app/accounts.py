@@ -16,6 +16,14 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse, RedirectResponse
 from app.config import DATA_DIR
+from app.db import (
+    atomic_transaction,
+    open_sqlite,
+    secure_dir_permissions,
+    secure_file_permissions,
+    validate_path_containment,
+    auth_migrations,
+)
 
 account_id = ContextVar('study_account_id', default=None)
 COOKIE = 'study_session'
@@ -28,7 +36,10 @@ def required():
 
 
 def root_dir():
-    return Path(os.environ.get('STUDY_ACCOUNTS_DIR', str(DATA_DIR / 'accounts')))
+    p = Path(os.environ.get('STUDY_ACCOUNTS_DIR', str(DATA_DIR / 'accounts')))
+    p.mkdir(parents=True, exist_ok=True, mode=0o700)
+    secure_dir_permissions(p)
+    return p
 
 
 def private_dir():
@@ -37,29 +48,26 @@ def private_dir():
         return None
     if not re.fullmatch('[a-f0-9]{32}', identity):
         raise RuntimeError('Invalid account identity')
-    path = root_dir() / identity
-    path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return path
+    root = root_dir()
+    path = root / identity
+    if path.is_symlink():
+        raise ValueError(f"Account directory cannot be a symlink: '{path}'")
+    validated = validate_path_containment(path, root)
+    validated.mkdir(parents=True, exist_ok=True, mode=0o700)
+    secure_dir_permissions(validated)
+    return validated
 
 
 @contextmanager
 def connection():
     root = root_dir()
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = root / 'accounts.db'
-    db = sqlite3.connect(path, timeout=10)
-    db.row_factory = sqlite3.Row
+    validated = validate_path_containment(path, root)
+    db = open_sqlite(validated, timeout=10.0, wal=True, synchronous_full=True, foreign_keys=True)
     try:
-        db.executescript('''
-        CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, salt TEXT NOT NULL, password_hash TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, expires REAL NOT NULL);
-        CREATE TABLE IF NOT EXISTS feature_usage(account_id TEXT NOT NULL, feature TEXT NOT NULL, guided INTEGER NOT NULL DEFAULT 0, last_used REAL NOT NULL, PRIMARY KEY(account_id,feature));
-        CREATE TABLE IF NOT EXISTS auth_attempts(identity TEXT NOT NULL, attempted REAL NOT NULL);
-        CREATE INDEX IF NOT EXISTS auth_attempt_lookup ON auth_attempts(identity,attempted);
-        ''')
-        path.chmod(0o600)
-        yield db
-        db.commit()
+        auth_migrations.apply(db)
+        with atomic_transaction(db):
+            yield db
     finally:
         db.close()
 

@@ -1208,6 +1208,20 @@ class StudyMaterialManager:
         ingestion_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Store an extracted document (pages & metadata) without generating Quiz/Flashcards yet."""
+        record = self.build_extracted_document_record(extracted_result, ingestion_info)
+        with self._lock:
+            self._materials[record["id"]] = record
+            raw_b = getattr(extracted_result, "_raw_bytes", None)
+            if raw_b is not None:
+                self._raw_files[extracted_result.filename] = raw_b
+                self._raw_files[record["id"]] = raw_b
+        return record
+
+    @staticmethod
+    def build_extracted_document_record(
+        extracted_result: PDFExtractionResult,
+        ingestion_info: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         material_id = str(uuid.uuid4())
         pages_preview = [
             {
@@ -1238,12 +1252,6 @@ class StudyMaterialManager:
             "vectors_ready": info.get("vectors_ready", False),
             "embedding_status": info.get("embedding_status", "offline_keyword_only"),
         }
-        with self._lock:
-            self._materials[material_id] = record
-            raw_b = getattr(extracted_result, "_raw_bytes", None)
-            if raw_b is not None:
-                self._raw_files[extracted_result.filename] = raw_b
-                self._raw_files[material_id] = raw_b
         return record
 
     @staticmethod

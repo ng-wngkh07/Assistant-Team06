@@ -15,6 +15,14 @@ from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 from app.config import BASE_DIR, DATA_DIR
+from app.db import (
+    atomic_transaction,
+    open_sqlite,
+    secure_dir_permissions,
+    secure_file_permissions,
+    timetable_migrations,
+    validate_path_containment,
+)
 
 TIME_REGEX = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
@@ -24,14 +32,17 @@ def get_db_path() -> Path:
     from app.accounts import private_dir
     scoped = private_dir()
     if scoped is not None:
-        return scoped / "timetable.db"
+        p = scoped / "timetable.db"
+        return validate_path_containment(p, scoped)
     env_path = os.environ.get("TIMETABLE_DB_PATH")
     if env_path:
         p = Path(env_path)
-        p.parent.mkdir(parents=True, exist_ok=True)
+        p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        secure_dir_permissions(p.parent)
         return p
     default_p = DATA_DIR / "timetable.db"
-    default_p.parent.mkdir(parents=True, exist_ok=True)
+    default_p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    secure_dir_permissions(default_p.parent)
     return default_p
 
 
@@ -41,14 +52,17 @@ def get_images_dir() -> Path:
     scoped = private_dir()
     if scoped is not None:
         p = scoped / "timetable_images"
-        p.mkdir(parents=True, exist_ok=True)
-        return p
+        validated = validate_path_containment(p, scoped)
+        validated.mkdir(parents=True, exist_ok=True, mode=0o700)
+        secure_dir_permissions(validated)
+        return validated
     env_img = os.environ.get("TIMETABLE_IMAGES_DIR")
     if env_img:
         p = Path(env_img)
     else:
         p = DATA_DIR / "timetable_images"
-    p.mkdir(parents=True, exist_ok=True)
+    p.mkdir(parents=True, exist_ok=True, mode=0o700)
+    secure_dir_permissions(p)
     return p
 
 
@@ -56,10 +70,25 @@ def save_timetable_image(image_bytes: bytes, image_hash: str) -> Path:
     """Save raw image bytes keyed strictly by its sha256 hex digest."""
     if not re.match(r"^[a-f0-9]{64}$", image_hash):
         raise ValueError("Invalid image hash")
-    target_path = get_images_dir() / f"{image_hash}.png"
+    images_dir = get_images_dir()
+    target_path = images_dir / f"{image_hash}.png"
+    validate_path_containment(target_path, images_dir)
     if not target_path.exists():
-        with open(target_path, "wb") as f:
-            f.write(image_bytes)
+        tmp_path = images_dir / f".tmp_{uuid.uuid4().hex}"
+        try:
+            with open(tmp_path, "wb") as f:
+                f.write(image_bytes)
+                f.flush()
+                os.fsync(f.fileno())
+            tmp_path.rename(target_path)
+            secure_file_permissions(target_path)
+        except Exception:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+            raise
     return target_path
 
 
@@ -218,16 +247,27 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
 @contextmanager
 def get_connection() -> Generator[sqlite3.Connection, None, None]:
-    """Open a SQLite connection with guaranteed cleanup and transaction safety."""
+    """Open a SQLite connection with guaranteed cleanup, versioned migrations, and transaction safety."""
     db_path = get_db_path()
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
+    conn = open_sqlite(
+        db_path,
+        timeout=10.0,
+        wal=True,
+        synchronous_full=True,
+        foreign_keys=True,
+    )
     try:
+        timetable_migrations.apply(conn)
         init_schema(conn)
         yield conn
-        conn.commit()
+        if conn.in_transaction:
+            conn.commit()
     except Exception:
-        conn.rollback()
+        if conn.in_transaction:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         raise
     finally:
         conn.close()
