@@ -1,0 +1,517 @@
+/* ==========================================================================
+   ARYM — Monochrome Black & Apple Liquid Glass Design System
+   --------------------------------------------------------------------------
+   References & Design Foundations:
+   1. Apple Human Interface Guidelines (WWDC25 / macOS Tahoe 26 / iOS 26):
+      - Translucent Liquid Glass optical material, specular rim highlights,
+        adaptive refraction, pill-shaped floating controls, concentric radii.
+   2. Open-Source Liquid Glass Implementations (GitHub):
+      - deepika-builds/liquid-glass (inset specular border + backdrop-filter)
+      - nikdelvin/liquid-glass & Mael-667/Liquid-Glass-CSS (SVG displacement
+        and specular lighting lens filters)
+   3. Minimalist Monochrome Dark Web Workspace Architectures (GitHub):
+      - open-webui/open-webui & lobehub/lobe-chat (collapsible rail, centered
+        focused stage, floating composer capsule, clean header actions)
+      - shadcn-ui/ui & Vercel Geist Dark (pure black #000000 canvas, neutral
+        zinc/white hierarchy without decorative color noise)
+   ========================================================================== */
+
+:root,
+html[data-theme="dark"] {
+    --lg-canvas: #000000;
+    --lg-surface-1: #060608;
+    --lg-surface-2: #0c0c0f;
+    --lg-surface-3: #141418;
+    --lg-glass-bg: rgba(18, 18, 22, 0.64);
+    --lg-glass-elevated: rgba(26, 26, 32, 0.72);
+    --lg-glass-pill: rgba(255, 255, 255, 0.055);
+    --lg-glass-pill-hover: rgba(255, 255, 255, 0.11);
+    --lg-glass-active: #ffffff;
+    --lg-glass-active-text: #050507;
+    --lg-border-subtle: rgba(255, 255, 255, 0.08);
+    --lg-border-specular: rgba(255, 255, 255, 0.22);
+    --lg-border-strong: rgba(255, 255, 255, 0.34);
+    --lg-text-primary: #f8fafc;
+    --lg-text-secondary: #a1a1aa;
+    --lg-text-muted: #71717a;
+    --lg-shadow-panel:
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.22),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+        inset 0 -1px 0 0 rgba(255, 255, 255, 0.03),
+        0 20px 48px -12px rgba(0, 0, 0, 0.88);
+    --lg-shadow-card:
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.18),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.07),
+        0 12px 32px -8px rgba(0, 0, 0, 0.75);
+    --lg-shadow-pill:
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.20),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+        0 4px 14px rgba(0, 0, 0, 0.5);
+    --lg-shadow-active:
+        inset 0 1px 1px rgba(255, 255, 255, 0.9),
+        0 0 24px rgba(255, 255, 255, 0.18),
+        0 6px 18px rgba(0, 0, 0, 0.6);
+    --lg-blur: blur(28px) saturate(180%);
+    --lg-radius-xl: 22px;
+    --lg-radius-lg: 16px;
+    --lg-radius-md: 12px;
+    --lg-radius-pill: 9999px;
+
+    /* Override legacy theme tokens into pure monochrome black */
+    --bg-main: #000000;
+    --bg-sidebar: rgba(10, 10, 13, 0.78);
+    --bg-card: rgba(18, 18, 22, 0.64);
+    --bg-subtle: rgba(255, 255, 255, 0.04);
+    --bg-input: rgba(255, 255, 255, 0.045);
+    --border: rgba(255, 255, 255, 0.09);
+    --text-primary: #fafafa;
+    --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
+    --primary: #ffffff;
+    --primary-hover: #e4e4e7;
+}
+
+/* 1. Pure Black Monochrome Canvas — No decorative color blobs */
+html,
+body {
+    background-color: #000000 !important;
+    background-image: none !important;
+    color: var(--lg-text-primary) !important;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif !important;
+    letter-spacing: -0.011em;
+    -webkit-font-smoothing: antialiased;
+}
+
+.ambient-glow {
+    display: none !important;
+}
+
+/* 2. Core Apple Liquid Glass Surface Primitives */
+.liquid-glass-surface,
+.sidebar,
+.chat-header,
+.chat-form,
+.learning-topic-card,
+.timetable-card,
+.modal-content,
+.study-dialog,
+.account-dialog,
+.session-bar,
+.advanced-source-selection {
+    background: var(--lg-glass-bg) !important;
+    backdrop-filter: var(--lg-blur) !important;
+    -webkit-backdrop-filter: var(--lg-blur) !important;
+    border: 1px solid var(--lg-border-subtle) !important;
+    box-shadow: var(--lg-shadow-card) !important;
+}
+
+/* Subtle top specular reflection highlight on Liquid Glass cards */
+.learning-topic-card,
+.timetable-card,
+.chat-form,
+.modal-content,
+.study-dialog,
+.account-dialog {
+    position: relative;
+    border-radius: var(--lg-radius-lg) !important;
+}
+
+/* 3. Reorganized App Shell (Sidebar + Main Stage) */
+.app-container {
+    display: flex !important;
+    height: 100vh !important;
+    width: 100vw !important;
+    background: #000000 !important;
+    overflow: hidden !important;
+}
+
+.sidebar {
+    width: 276px !important;
+    background: rgba(8, 8, 10, 0.82) !important;
+    border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+    box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.05), 12px 0 36px rgba(0, 0, 0, 0.8) !important;
+    padding: 16px 14px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 12px !important;
+}
+
+/* 4. ARYM Brand Identity (No "AI", with Adaptive Revision Yields Mastery) */
+.brand {
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+}
+
+.brand-emblem {
+    width: 38px !important;
+    height: 38px !important;
+    border-radius: 11px !important;
+    background: rgba(255, 255, 255, 0.08) !important;
+    border: 1px solid rgba(255, 255, 255, 0.24) !important;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.35),
+        0 4px 14px rgba(0, 0, 0, 0.6) !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-weight: 800 !important;
+    font-size: 1.05rem !important;
+    letter-spacing: 0.04em !important;
+    color: #ffffff !important;
+    flex-shrink: 0 !important;
+}
+
+.brand-text {
+    display: flex !important;
+    flex-direction: column !important;
+    min-width: 0 !important;
+}
+
+.brand-text h2 {
+    font-size: 1.08rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.08em !important;
+    color: #ffffff !important;
+    margin: 0 !important;
+    line-height: 1.15 !important;
+}
+
+.brand-tagline {
+    font-size: 0.68rem !important;
+    font-weight: 500 !important;
+    color: #a1a1aa !important;
+    letter-spacing: 0.01em !important;
+    margin-top: 2px !important;
+    line-height: 1.25 !important;
+}
+
+/* 5. Top Floating Liquid Glass Header & Mode Switcher */
+.chat-header {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    padding: 10px 20px !important;
+    min-height: 62px !important;
+    background: rgba(8, 8, 10, 0.72) !important;
+    backdrop-filter: var(--lg-blur) !important;
+    -webkit-backdrop-filter: var(--lg-blur) !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.6) !important;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 30 !important;
+    gap: 12px !important;
+}
+
+.chat-header .header-left {
+    position: static !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    flex-shrink: 0 !important;
+}
+
+.chat-header .mode-switch {
+    margin: 0 auto !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 4px !important;
+    max-width: 540px !important;
+    width: 100% !important;
+    padding: 4px !important;
+    background: rgba(255, 255, 255, 0.04) !important;
+    border: 1px solid rgba(255, 255, 255, 0.10) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 8px 20px rgba(0, 0, 0, 0.55) !important;
+    border-radius: var(--lg-radius-pill) !important;
+}
+
+.chat-header .header-right {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    flex-shrink: 0 !important;
+}
+
+.mode-button {
+    flex: 1 1 0 !important;
+    text-align: center !important;
+    justify-content: center !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    border-radius: var(--lg-radius-pill) !important;
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    padding: 7px 14px !important;
+    white-space: nowrap !important;
+    transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1) !important;
+    border: 1px solid transparent !important;
+}
+
+.mode-button:not(.active) {
+    background: transparent !important;
+    color: #a1a1aa !important;
+}
+
+.mode-button:not(.active):hover {
+    background: rgba(255, 255, 255, 0.07) !important;
+    color: #ffffff !important;
+}
+
+.mode-button.active,
+#mode-qa.active,
+#mode-tools.active,
+#mode-timetable.active {
+    background: #ffffff !important;
+    color: #050507 !important;
+    border: 1px solid rgba(255, 255, 255, 0.9) !important;
+    font-weight: 600 !important;
+    box-shadow: var(--lg-shadow-active) !important;
+}
+
+/* 6. Buttons — Monochrome Apple Liquid Glass Pills & Controls */
+.btn,
+.new-chat-btn,
+.icon-btn,
+.tool-tile,
+.tool-tab-button {
+    border-radius: 12px !important;
+    transition: all 0.18s cubic-bezier(0.22, 1, 0.36, 1) !important;
+    font-weight: 500 !important;
+}
+
+.btn-primary,
+.new-chat-btn,
+.btn-send {
+    background: #ffffff !important;
+    color: #050507 !important;
+    border: 1px solid rgba(255, 255, 255, 0.92) !important;
+    box-shadow: var(--lg-shadow-active) !important;
+    font-weight: 600 !important;
+}
+
+.btn-primary:hover:not(:disabled),
+.new-chat-btn:hover:not(:disabled),
+.btn-send:hover:not(:disabled) {
+    background: #e4e4e7 !important;
+    color: #000000 !important;
+    transform: translateY(-1px) !important;
+    filter: none !important;
+}
+
+.btn-secondary,
+.btn-outline,
+.icon-btn,
+.tool-tile,
+.header-pill-btn {
+    background: var(--lg-glass-pill) !important;
+    color: #f4f4f5 !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    box-shadow: var(--lg-shadow-pill) !important;
+    backdrop-filter: var(--lg-blur) !important;
+    -webkit-backdrop-filter: var(--lg-blur) !important;
+}
+
+.btn-secondary:hover:not(:disabled),
+.btn-outline:hover:not(:disabled),
+.icon-btn:hover:not(:disabled),
+.tool-tile:hover:not(:disabled),
+.header-pill-btn:hover:not(:disabled) {
+    background: var(--lg-glass-pill-hover) !important;
+    border-color: var(--lg-border-specular) !important;
+    color: #ffffff !important;
+}
+
+.header-pill-btn {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    padding: 6px 12px !important;
+    border-radius: var(--lg-radius-pill) !important;
+    font-size: 0.78rem !important;
+    cursor: pointer !important;
+}
+
+/* 7. Welcome Card & QA Stage — Minimalist Centered Focus */
+.welcome-card {
+    background: rgba(18, 18, 22, 0.55) !important;
+    backdrop-filter: var(--lg-blur) !important;
+    -webkit-backdrop-filter: var(--lg-blur) !important;
+    border: 1px solid rgba(255, 255, 255, 0.10) !important;
+    box-shadow: var(--lg-shadow-panel) !important;
+    border-radius: 24px !important;
+    padding: 28px 32px !important;
+    text-align: center !important;
+    max-width: 560px !important;
+    margin: 0 auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    gap: 10px !important;
+}
+
+.welcome-brand-badge {
+    width: 52px !important;
+    height: 52px !important;
+    border-radius: 16px !important;
+    background: rgba(255, 255, 255, 0.07) !important;
+    border: 1px solid rgba(255, 255, 255, 0.24) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 8px 24px rgba(0, 0, 0, 0.65) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 1.35rem !important;
+    font-weight: 800 !important;
+    color: #ffffff !important;
+    margin-bottom: 4px !important;
+}
+
+.welcome-card h3 {
+    font-size: 1.35rem !important;
+    font-weight: 700 !important;
+    color: #ffffff !important;
+    margin: 0 !important;
+    letter-spacing: -0.02em !important;
+}
+
+.welcome-subtitle {
+    font-size: 0.82rem !important;
+    color: #a1a1aa !important;
+    margin: 2px 0 0 0 !important;
+    letter-spacing: 0.02em !important;
+}
+
+/* 8. Floating Liquid Glass Composer Capsule */
+.input-area {
+    max-width: 760px !important;
+    width: 100% !important;
+    margin: 0 auto !important;
+    padding: 0 20px 24px 20px !important;
+}
+
+.chat-form {
+    background: rgba(16, 16, 20, 0.76) !important;
+    backdrop-filter: var(--lg-blur) !important;
+    -webkit-backdrop-filter: var(--lg-blur) !important;
+    border: 1px solid rgba(255, 255, 255, 0.14) !important;
+    box-shadow: var(--lg-shadow-panel) !important;
+    border-radius: 22px !important;
+    padding: 12px 14px !important;
+}
+
+.chat-form:focus-within {
+    border-color: rgba(255, 255, 255, 0.28) !important;
+    box-shadow:
+        inset 0 1px 0 0 rgba(255, 255, 255, 0.30),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+        0 20px 50px rgba(0, 0, 0, 0.9) !important;
+}
+
+.processing-level-pill,
+.scope-pill {
+    background: rgba(255, 255, 255, 0.06) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: var(--lg-radius-pill) !important;
+    color: #e4e4e7 !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12) !important;
+}
+
+/* 9. Inputs, Selects & Tables in Liquid Glass */
+.form-input,
+.form-select {
+    background: rgba(255, 255, 255, 0.045) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 10px !important;
+    color: #fafafa !important;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+.form-input:focus,
+.form-select:focus {
+    border-color: rgba(255, 255, 255, 0.35) !important;
+    background: rgba(255, 255, 255, 0.07) !important;
+    outline: none !important;
+}
+
+.kb-table {
+    border-collapse: separate !important;
+    border-spacing: 0 !important;
+    width: 100% !important;
+}
+
+.kb-table th {
+    background: rgba(255, 255, 255, 0.05) !important;
+    color: #d4d4d8 !important;
+    font-weight: 600 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.10) !important;
+}
+
+.kb-table td {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+    color: #f4f4f5 !important;
+}
+
+/* 10. Learning Tools & Timetable Workspace Layout */
+.learning-tools-panel:not([hidden]),
+.timetable-panel:not([hidden]) {
+    max-width: 1060px !important;
+    width: 100% !important;
+    margin: 0 auto !important;
+    padding: 20px 24px 48px 24px !important;
+    overflow-y: auto !important;
+    box-sizing: border-box !important;
+}
+
+.tool-tabs,
+.planner-wizard-progress {
+    display: inline-flex !important;
+    gap: 6px !important;
+    padding: 4px !important;
+    background: rgba(255, 255, 255, 0.04) !important;
+    border: 1px solid rgba(255, 255, 255, 0.10) !important;
+    border-radius: var(--lg-radius-pill) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14) !important;
+    margin-bottom: 18px !important;
+    flex-wrap: wrap !important;
+}
+
+.tool-tab-button,
+.planner-wizard-progress button {
+    border-radius: var(--lg-radius-pill) !important;
+    padding: 7px 16px !important;
+    font-size: 0.83rem !important;
+    border: 1px solid transparent !important;
+    background: transparent !important;
+    color: #a1a1aa !important;
+    cursor: pointer !important;
+}
+
+.tool-tab-button.active,
+.planner-wizard-progress button[aria-current="step"] {
+    background: #ffffff !important;
+    color: #050507 !important;
+    font-weight: 600 !important;
+    box-shadow: var(--lg-shadow-active) !important;
+}
+
+/* Session item active in sidebar */
+.session-item.active {
+    background: rgba(255, 255, 255, 0.10) !important;
+    border-left: 3px solid #ffffff !important;
+    color: #ffffff !important;
+}
+
+/* Clean Account Dialog */
+.account-dialog {
+    max-width: 400px !important;
+    width: calc(100vw - 32px) !important;
+    padding: 24px !important;
+    color: #fafafa !important;
+}
+
+.account-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.72) !important;
+    backdrop-filter: blur(8px) !important;
+}

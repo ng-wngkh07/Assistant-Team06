@@ -5,7 +5,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from app import study_planner
@@ -307,6 +307,8 @@ async def export_timetable_ics(
                     "end_time": s["end_time"],
                     "room": s.get("source_label") or "",
                     "notes": s.get("notes") or "",
+                    "classified_topic": s.get("classified_topic") or "",
+                    "pdf_url": s.get("pdf_url") or "",
                 })
             deadlines = await run_in_threadpool(study_planner.get_tasks)
         if not entries and not deadlines:
@@ -639,3 +641,179 @@ async def delete_planner_session(session_id: int):
         raise HTTPException(status_code=404, detail="Không tìm thấy phiên học")
     return {"status": "ok"}
 
+
+# ==============================================================================
+# Weekly Lessons Topic Classifier, 1h30p (1 Subject/Day) Auto-Scheduler & PDF Bundle
+# ==============================================================================
+
+
+class WeeklyLessonCreatePayload(BaseModel):
+    course: str = Field(..., min_length=1, max_length=160)
+    lesson_title: str = Field(..., min_length=1, max_length=240)
+    status: str = Field(default="upcoming", max_length=24)
+    question_count: int = Field(default=4, ge=1, le=10)
+
+
+class AutoSchedule90mPayload(BaseModel):
+    session_minutes: int = Field(default=90, ge=90, le=90)
+
+
+@router.get("/api/timetable/planner/weekly-lessons")
+async def get_weekly_lessons_endpoint():
+    from app.planner_topic_bridge import list_weekly_lessons
+
+    lessons = await run_in_threadpool(list_weekly_lessons, None)
+    return {"lessons": lessons}
+
+
+@router.post("/api/timetable/planner/weekly-lessons")
+async def create_weekly_lesson_endpoint(payload: WeeklyLessonCreatePayload):
+    from app import server as _srv
+    from app.planner_topic_bridge import add_weekly_lesson
+
+    try:
+        lesson = await run_in_threadpool(
+            add_weekly_lesson,
+            None,
+            course=payload.course,
+            lesson_title=payload.lesson_title,
+            status=payload.status,
+            question_count=payload.question_count,
+            learning_service=getattr(_srv, "learning_service", None),
+            document_lookup=getattr(_srv, "document_lookup", None),
+        )
+        return {"status": "ok", "lesson": lesson}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.delete("/api/timetable/planner/weekly-lessons/{lesson_id}")
+async def remove_weekly_lesson_endpoint(lesson_id: int):
+    from app.planner_topic_bridge import delete_weekly_lesson
+
+    ok = await run_in_threadpool(delete_weekly_lesson, None, lesson_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bài học tuần.")
+    return {"status": "ok"}
+
+
+@router.post("/api/timetable/planner/auto-schedule-courses")
+async def auto_schedule_courses_90m_endpoint(payload: Optional[AutoSchedule90mPayload] = None):
+    from app import server as _srv
+    from app.planner_topic_bridge import auto_schedule_90m_one_subject_per_day
+
+    req = payload or AutoSchedule90mPayload()
+    try:
+        result = await run_in_threadpool(
+            auto_schedule_90m_one_subject_per_day,
+            None,
+            learning_service=getattr(_srv, "learning_service", None),
+            document_lookup=getattr(_srv, "document_lookup", None),
+            session_minutes=req.session_minutes,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/api/timetable/worksheets/{worksheet_id}.pdf")
+async def download_planner_worksheet_pdf(worksheet_id: str):
+    from app.planner_topic_bridge import get_worksheet_pdf
+
+    if not re.match(r"^ws_[a-f0-9]{8,24}$", worksheet_id.strip()):
+        raise HTTPException(status_code=400, detail="Mã bài tập PDF không hợp lệ.")
+    record = await run_in_threadpool(get_worksheet_pdf, None, worksheet_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Không tìm thấy file PDF bài tập đính kèm.")
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", (record.get("topic") or "bai-tap").lower()).strip("-") or "bai-tap"
+    filename = f"arym-bai-tap-{slug[:36]}-{worksheet_id}.pdf"
+    return Response(
+        content=record["pdf_bytes"],
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/api/timetable/export-bundle.zip")
+async def export_timetable_bundle_zip(
+    start_date: str = Query(..., description="Start date of semester in YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date of semester in YYYY-MM-DD"),
+    reminder_minutes: int = Query(60, ge=0, le=10080),
+):
+    from datetime import date, timedelta
+    from app import server as _srv
+    from app.accounts import account_id
+    from app.planner_topic_bridge import build_calendar_bundle_zip
+
+    try:
+        entries = list(await run_in_threadpool(_srv.timetable_store.get_confirmed_entries))
+        for entry in entries:
+            if entry.get("id") is not None:
+                entry["uid"] = f"class:{entry['id']}"
+
+        preferences = await run_in_threadpool(study_planner.get_preferences)
+        tasks = await run_in_threadpool(study_planner.get_tasks)
+        week_start = study_planner._infer_week_monday(preferences, tasks) or date.fromisoformat(start_date)
+        routines = await run_in_threadpool(study_planner.get_routines)
+        for r in routines:
+            if r["flexibility"] != "study_window":
+                entries.append({
+                    "uid": f"routine:{r['id']}",
+                    "event_date": None if r.get("is_recurring", True) else (week_start + timedelta(days=r["weekday"] - 1)).isoformat(),
+                    "course": f"[Cá nhân] {r['title']}",
+                    "weekday": r["weekday"],
+                    "start_time": r["start_time"],
+                    "end_time": r["end_time"],
+                    "room": r.get("activity_type_label") or "",
+                    "notes": r.get("flexibility_label") or "",
+                })
+
+        sessions = await run_in_threadpool(study_planner.get_study_sessions)
+        for s in sessions:
+            entries.append({
+                "uid": f"study:{s['id']}",
+                "event_date": (week_start + timedelta(days=s["weekday"] - 1)).isoformat(),
+                "course": f"[Tự học - {s['course']}] {s['title']}",
+                "weekday": s["weekday"],
+                "start_time": s["start_time"],
+                "end_time": s["end_time"],
+                "room": s.get("source_label") or "",
+                "notes": s.get("notes") or "",
+                "classified_topic": s.get("classified_topic") or "",
+                "pdf_url": s.get("pdf_url") or "",
+            })
+        deadlines = [t for t in tasks if t.get("deadline_date") and not t.get("completed")]
+
+        if not entries and not deadlines:
+            raise HTTPException(
+                status_code=400,
+                detail="Chưa có lịch học hoặc buổi tự học nào để xuất gói .zip.",
+            )
+
+        ics_text = _srv.timetable_ics.generate_ics(
+            entries,
+            start_date,
+            end_date,
+            deadlines=deadlines,
+            reminder_minutes=reminder_minutes,
+            namespace=account_id.get() or "local",
+        )
+        zip_bytes = await run_in_threadpool(
+            build_calendar_bundle_zip,
+            None,
+            ics_bytes=ics_text.encode("utf-8"),
+        )
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="arym-lich-hoc-va-bai-tap-pdf-{start_date}.zip"'
+            },
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Lỗi xuất gói lịch .zip kèm PDF bài tập")
+        raise HTTPException(status_code=500, detail="Không thể tạo gói lịch .zip lúc này.") from exc

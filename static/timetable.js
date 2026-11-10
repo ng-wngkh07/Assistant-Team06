@@ -2125,11 +2125,15 @@ document.addEventListener("DOMContentLoaded", () => {
                 statusText = parts.join(" · ");
             }
 
+            const pdfBadgeHtml = item.pdf_url
+                ? `<div style="margin-top: 5px;"><a href="${escapeHtml(item.pdf_url)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline" style="padding: 2px 10px; min-height: 24px; font-size: 11px;">📄 Tải PDF Bài tập + Đáp án cuối trang${item.classified_topic ? ` (${escapeHtml(item.classified_topic)})` : ""}</a></div>`
+                : "";
+
             tr.innerHTML = `
                 <td><strong>${escapeHtml(item.weekday_label)}</strong></td>
                 <td><code>${escapeHtml(item.start_time)} - ${escapeHtml(item.end_time)}</code><br><small class="text-muted">${item.duration_minutes} phút</small></td>
                 <td>${badgeHtml}</td>
-                <td><strong class="master-item-title">${escapeHtml(item.title)}</strong>${item.notes ? `<br><small class="text-muted">${escapeHtml(item.notes)}</small>` : ""}</td>
+                <td><strong class="master-item-title">${escapeHtml(item.title)}</strong>${item.notes ? `<br><small class="text-muted">${escapeHtml(item.notes)}</small>` : ""}${pdfBadgeHtml}</td>
                 <td>${courseOrRoom}</td>
                 <td><small>${escapeHtml(statusText)}</small></td>
                 <td class="master-actions-cell" style="text-align: center; white-space: nowrap;"></td>
@@ -2240,4 +2244,8 @@ document.addEventListener("DOMContentLoaded", () => {
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#039;");
     }
+
+    window.addEventListener("arym:planner-refresh", () => {
+        loadFullPlannerState();
+    });
 });
