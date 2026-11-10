@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_branding_arym_and_liquid_glass_structure():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     liquid_css = (ROOT / "static" / "liquid-glass.css").read_text(encoding="utf-8")
+    spatial_css = (ROOT / "static" / "spatial-layout.css").read_text(encoding="utf-8")
     accounts_js = (ROOT / "static" / "accounts.js").read_text(encoding="utf-8")
 
     # 1. Branding: ARYM without "AI", with "Adaptive Revision Yields Mastery" subtitle
@@ -35,10 +36,12 @@ def test_branding_arym_and_liquid_glass_structure():
     assert "Adaptive Revision Yields Mastery" in html
     assert "<h2>ARYM AI</h2>" not in html
 
-    # 2. Pure black + Apple Liquid Glass optical filter, stylesheet & Spatial Bento layout
+    # 2. Pure black + Apple Liquid Glass optical filter, stylesheet & Fixed Layout 3 (Bottom Dock + Bento Spatial Hub)
     assert '/static/liquid-glass.css' in html
     assert '/static/spatial-layout.css' in html
     assert '/static/spatial-layout.js' in html
+    assert 'data-spatial-layout="bottom-dock"' in html
+    assert 'id="btn-spatial-layout-cycle"' not in html
     assert 'id="apple-liquid-glass-lens"' in html
     assert "<feTurbulence" in html
     assert "<feDisplacementMap" in html
@@ -48,7 +51,7 @@ def test_branding_arym_and_liquid_glass_structure():
     assert "--lg-surface:" in liquid_css
     assert "arym-bento-grid" in html
     assert "arym-bento-card" in html
-    assert 'id="btn-spatial-layout-cycle"' in html
+    assert "bottom: 16px !important;" in spatial_css
 
     # 3. No unrequested clutter text ("Chế độ cục bộ · đăng nhập để lưu theo tài khoản")
     assert "Chế độ cục bộ" not in html

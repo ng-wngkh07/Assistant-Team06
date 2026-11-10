@@ -31,7 +31,13 @@
       description: 'Tải ảnh/nhập lịch học, tự động tìm giờ trống xếp lịch tự học 1 tiếng 30 phút (1 môn/ngày), phân loại bài học tuần và đính kèm PDF bài tập.',
     },
     {
-      selector: '#btn-new-chat-sidebar',
+      selector: '#btn-open-sidebar',
+      badge: 'Ngăn Kính Nổi',
+      title: 'Mở Ngăn Kính Lịch Sử & Thư Viện',
+      description: 'Mở tấm kính lỏng trượt nổi bên trái để quản lý các phiên trò chuyện, xem thư viện tài liệu cá nhân và kiểm tra trạng thái mô hình.',
+    },
+    {
+      selector: '#btn-clear-chat',
       badge: 'Phiên mới',
       title: 'Tạo cuộc trò chuyện mới',
       description: 'Khởi tạo một phiên hỏi đáp độc lập để lưu lịch sử trao đổi theo từng môn học hoặc chủ đề ôn tập.',
@@ -171,8 +177,15 @@
     let arrowEndX = calloutLeft - 6;
     let arrowEndY = calloutTop + 36;
 
-    // Prefer placing below if button is near top/center or right side
-    if (calloutLeft + calloutWidth > vw - 16) {
+    // When button is in the Bottom Floating Dock or lower third of screen, place callout frame ABOVE the button
+    if (bannerTop > vh * 0.60) {
+      calloutLeft = Math.min(Math.max(16, bannerLeft + bannerWidth / 2 - calloutWidth / 2), vw - calloutWidth - 16);
+      calloutTop = Math.max(16, bannerTop - calloutHeight - 52);
+      arrowStartX = bannerLeft + bannerWidth / 2;
+      arrowStartY = bannerTop - 2;
+      arrowEndX = Math.min(Math.max(calloutLeft + 44, arrowStartX + 18), calloutLeft + calloutWidth - 44);
+      arrowEndY = calloutTop + calloutHeight + 6;
+    } else if (calloutLeft + calloutWidth > vw - 16) {
       calloutLeft = Math.min(Math.max(14, bannerLeft), vw - calloutWidth - 14);
       if (bannerTop + bannerHeight + calloutHeight + 54 < vh) {
         calloutTop = bannerTop + bannerHeight + 44;

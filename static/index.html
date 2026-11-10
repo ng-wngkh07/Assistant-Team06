@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="vi" data-theme="dark" data-spatial-layout="bottom-dock">
 <head>
     <link rel="icon" href="/static/logo.jpg">
     <meta charset="UTF-8">
@@ -7,9 +7,10 @@
     <meta name="description" content="ARYM — Adaptive Revision Yields Mastery · Trợ Lý Học Tập Đa Lĩnh Vực">
     <title>ARYM — Adaptive Revision Yields Mastery</title>
     <script>
-        /* Giao diện tối cố định (Pure Black & Apple Liquid Glass) */
+        /* Giao diện tối cố định (Pure Black & Apple Liquid Glass) · Bố cục cố định 3 (Dock Đáy + Bento Không Gian) */
         (function () {
             document.documentElement.setAttribute("data-theme", "dark");
+            document.documentElement.setAttribute("data-spatial-layout", "bottom-dock");
             try { localStorage.setItem("theme", "dark"); } catch (e) {}
         })();
     </script>
@@ -152,7 +153,6 @@
                     <button id="mode-timetable" class="mode-button" aria-pressed="false" aria-controls="timetable-panel">📅 Lập kế hoạch học tập</button>
                 </nav>
                 <div class="header-right">
-                    <button type="button" id="btn-spatial-layout-cycle" class="header-pill-btn" title="Chuyển đổi bố cục không gian (Đảo nổi Bento / Split Studio / Dock Đáy)">⊞ Đảo nổi Bento</button>
                     <button type="button" id="btn-replay-tour" class="header-pill-btn" title="Xem hướng dẫn các nút trên giao diện">? Hướng dẫn</button>
                     <button type="button" id="btn-account-trigger" class="header-pill-btn" data-authenticated="false" title="Đăng nhập hoặc tạo tài khoản">Đăng nhập</button>
                 </div>

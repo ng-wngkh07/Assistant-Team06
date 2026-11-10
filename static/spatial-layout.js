@@ -1,47 +1,13 @@
 /**
- * ARYM — Spatial Layout Controller & Bento Quick-Actions Module (`static/spatial-layout.js`)
+ * ARYM — Fixed Bottom-Dock Spatial Controller & Bento Quick-Actions Module (`static/spatial-layout.js`)
  *
  * Single-responsibility module managing:
- * 1. Switching between the 3 spatial layouts (`island-bento`, `split-studio`, `bottom-dock`)
- * 2. Floating Liquid Glass Drawer (`#sidebar`) open/close state
- * 3. Bento Hub quick-action chips in `#qa-panel`
+ * 1. Enforcing the fixed `bottom-dock` spatial layout (Layout 3: Bottom Floating Liquid Glass Launcher)
+ * 2. Floating Liquid Glass Slide-over Drawer (`#sidebar`) open/close state
+ * 3. Bento Hub quick-action chips in `#qa-panel` and free step navigation in `#timetable-panel`
  */
 (function () {
   'use strict';
-
-  const LAYOUTS = [
-    { id: 'island-bento', label: '⊞ Đảo nổi Bento' },
-    { id: 'split-studio', label: '◫ Split Studio' },
-    { id: 'bottom-dock', label: '⬒ Dock Đáy' },
-  ];
-
-  function getSavedLayout() {
-    try {
-      const saved = localStorage.getItem('arym_spatial_layout');
-      if (LAYOUTS.some((l) => l.id === saved)) return saved;
-    } catch (_e) {}
-    return 'island-bento';
-  }
-
-  function applySpatialLayout(layoutId) {
-    const valid = LAYOUTS.find((l) => l.id === layoutId) || LAYOUTS[0];
-    document.documentElement.setAttribute('data-spatial-layout', valid.id);
-    try {
-      localStorage.setItem('arym_spatial_layout', valid.id);
-    } catch (_e) {}
-    const btn = document.getElementById('btn-spatial-layout-cycle');
-    if (btn) {
-      btn.textContent = valid.label;
-      btn.setAttribute('data-layout', valid.id);
-    }
-  }
-
-  function cycleSpatialLayout() {
-    const current = document.documentElement.getAttribute('data-spatial-layout') || 'island-bento';
-    const idx = LAYOUTS.findIndex((l) => l.id === current);
-    const next = LAYOUTS[(idx + 1) % LAYOUTS.length];
-    applySpatialLayout(next.id);
-  }
 
   function toggleGlassDrawer(forceOpen) {
     const sidebar = document.getElementById('sidebar');
@@ -76,9 +42,7 @@
   }
 
   function init() {
-    applySpatialLayout(getSavedLayout());
-
-    document.getElementById('btn-spatial-layout-cycle')?.addEventListener('click', cycleSpatialLayout);
+    document.documentElement.setAttribute('data-spatial-layout', 'bottom-dock');
 
     const openBtn = document.getElementById('btn-open-sidebar');
     const collapseBtn = document.getElementById('btn-collapse-sidebar');
@@ -112,8 +76,6 @@
   }
 
   window.ARYMSpatialLayout = {
-    applySpatialLayout,
-    cycleSpatialLayout,
     toggleGlassDrawer,
   };
 

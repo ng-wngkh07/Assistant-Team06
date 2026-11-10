@@ -1,11 +1,11 @@
 /**
- * ARYM — Spatial Bento & Floating Liquid Glass Architecture (`static/spatial-layout.css`)
+ * ARYM — Fixed Spatial Layout Architecture (`static/spatial-layout.css`)
  *
- * Completely restructures the application layout away from the legacy docked-sidebar + top-bar
- * into 3 selectable Apple WWDC25 / GitHub-referenced spatial architectures:
- * 1. `island-bento` (Default): Floating Top Liquid Glass Island + Slide-over Glass Drawer + Bento Grid Hub & 2-Column Split Studios
- * 2. `split-studio`: Detached Dual-Pane Floating Liquid Glass Studio (`LobeChat` / `Arc` spatial split panes)
- * 3. `bottom-dock`: Apple `visionOS` / `iPadOS 26` Bottom Floating Glass Launcher + Full-Height Bento Canvas
+ * Implements the selected Layout 3 architecture permanently:
+ * - Bottom Floating Liquid Glass Launcher Dock (`.chat-header` anchored at bottom center)
+ * - Slide-over Floating Liquid Glass Drawer (`#sidebar` hovering at top-left above the dock)
+ * - Full-Height Bento Spatial Hub (`#qa-panel`), 2-Column Bento Studio (`#learning-tools-panel`),
+ *   and 2-Column Split Command Dashboard (`#timetable-panel`).
  */
 
 /* ============================================================================
@@ -42,11 +42,15 @@
 }
 
 /* ============================================================================
-   2. FLOATING LIQUID GLASS NAVIGATION ISLAND (`.chat-header`)
+   2. BOTTOM FLOATING LIQUID GLASS LAUNCHER DOCK (`.chat-header`)
    ============================================================================ */
 .chat-header {
-  width: min(1320px, calc(100% - 32px)) !important;
-  margin: 14px auto 0 auto !important;
+  position: fixed !important;
+  bottom: 16px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  width: min(1260px, calc(100vw - 32px)) !important;
+  margin: 0 !important;
   padding: 10px 18px !important;
   min-height: 62px !important;
   border-radius: 9999px !important;
@@ -56,7 +60,7 @@
   gap: 12px !important;
   box-sizing: border-box !important;
   flex-shrink: 0 !important;
-  z-index: 45 !important;
+  z-index: 55 !important;
   box-shadow: var(--lg-shadow-island) !important;
 }
 
@@ -86,7 +90,7 @@
   flex: 0 1 auto !important;
 }
 
-/* Compact Brand Pill inside the Floating Navigation Island */
+/* Compact Brand Pill inside the Bottom Floating Liquid Glass Dock */
 .header-brand-pill {
   display: inline-flex;
   align-items: center;
@@ -133,13 +137,13 @@
 }
 
 /* ============================================================================
-   3. LAYOUT MODE 1 (DEFAULT): `island-bento` — FLOATING GLASS DRAWER + BENTO STAGE
+   3. FLOATING LIQUID GLASS SLIDE-OVER DRAWER (`#sidebar`)
    ============================================================================ */
-html:not([data-spatial-layout="split-studio"]) .sidebar {
+.sidebar {
   position: fixed !important;
-  top: 88px !important;
+  top: 18px !important;
   left: 18px !important;
-  bottom: 18px !important;
+  bottom: 92px !important;
   width: 320px !important;
   height: auto !important;
   border-radius: 28px !important;
@@ -151,67 +155,15 @@ html:not([data-spatial-layout="split-studio"]) .sidebar {
   transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.24s ease !important;
 }
 
-html:not([data-spatial-layout="split-studio"]) .sidebar.drawer-open,
-html:not([data-spatial-layout="split-studio"]) .sidebar.open {
+.sidebar.drawer-open,
+.sidebar.open {
   transform: translateX(0) !important;
   opacity: 1 !important;
   pointer-events: auto !important;
 }
 
 /* ============================================================================
-   4. LAYOUT MODE 2: `split-studio` — DETACHED DUAL-PANE LIQUID GLASS STUDIO
-   ============================================================================ */
-html[data-spatial-layout="split-studio"] .app-container {
-  padding: 14px !important;
-  gap: 14px !important;
-}
-
-html[data-spatial-layout="split-studio"] .sidebar {
-  position: relative !important;
-  top: auto !important;
-  left: auto !important;
-  bottom: auto !important;
-  width: 300px !important;
-  height: 100% !important;
-  border-radius: 28px !important;
-  padding: 18px !important;
-  transform: none !important;
-  opacity: 1 !important;
-  pointer-events: auto !important;
-  flex-shrink: 0 !important;
-}
-
-html[data-spatial-layout="split-studio"] .chat-header {
-  width: 100% !important;
-  margin: 0 0 10px 0 !important;
-}
-
-/* ============================================================================
-   5. LAYOUT MODE 3: `bottom-dock` — APPLE visionOS BOTTOM FLOATING LAUNCHER
-   ============================================================================ */
-html[data-spatial-layout="bottom-dock"] .chat-header {
-  position: fixed !important;
-  bottom: 16px !important;
-  left: 50% !important;
-  transform: translateX(-50%) !important;
-  margin: 0 !important;
-  width: min(1280px, calc(100vw - 32px)) !important;
-  z-index: 55 !important;
-}
-
-html[data-spatial-layout="bottom-dock"] .qa-panel:not([hidden]),
-html[data-spatial-layout="bottom-dock"] .learning-tools-panel:not([hidden]),
-html[data-spatial-layout="bottom-dock"] .timetable-panel:not([hidden]) {
-  padding-bottom: 96px !important;
-}
-
-html[data-spatial-layout="bottom-dock"] .sidebar {
-  top: 18px !important;
-  bottom: 92px !important;
-}
-
-/* ============================================================================
-   6. RESTRUCTURED QA WORKSPACE: BENTO SPATIAL HUB + FLOATING GLASS COMPOSER
+   4. RESTRUCTURED QA WORKSPACE: BENTO SPATIAL HUB + FLOATING GLASS COMPOSER
    ============================================================================ */
 .qa-panel:not([hidden]) {
   display: flex !important;
@@ -223,9 +175,9 @@ html[data-spatial-layout="bottom-dock"] .sidebar {
   width: 100% !important;
   max-width: 1280px !important;
   margin: 0 auto !important;
-  padding: 14px 24px 18px 24px !important;
+  padding: 20px 24px 96px 24px !important;
   box-sizing: border-box !important;
-  gap: 12px !important;
+  gap: 14px !important;
 }
 
 .messages-container {
@@ -333,7 +285,6 @@ html[data-spatial-layout="bottom-dock"] .sidebar {
   transform: translateY(-3px);
 }
 
-/* Internal diagonal glass refraction sheen inside each Bento card */
 .arym-bento-card::after {
   content: "";
   position: absolute;
@@ -498,7 +449,7 @@ html[data-spatial-layout="bottom-dock"] .sidebar {
 }
 
 /* ============================================================================
-   7. RESTRUCTURED LEARNING TOOLS WORKSPACE: 2-COLUMN BENTO STUDIO
+   5. RESTRUCTURED LEARNING TOOLS WORKSPACE: 2-COLUMN BENTO STUDIO
    ============================================================================ */
 .learning-tools-panel:not([hidden]) {
   display: flex !important;
@@ -509,7 +460,7 @@ html[data-spatial-layout="bottom-dock"] .sidebar {
   width: 100% !important;
   max-width: 1320px !important;
   margin: 0 auto !important;
-  padding: 16px 24px 36px 24px !important;
+  padding: 20px 24px 98px 24px !important;
   box-sizing: border-box !important;
   gap: 16px !important;
 }
@@ -612,7 +563,7 @@ html[data-spatial-layout="bottom-dock"] .sidebar {
 }
 
 /* ============================================================================
-   8. RESTRUCTURED TIMETABLE WORKSPACE: 2-COLUMN SPLIT COMMAND DASHBOARD
+   6. RESTRUCTURED TIMETABLE WORKSPACE: 2-COLUMN SPLIT COMMAND DASHBOARD
    ============================================================================ */
 .timetable-panel:not([hidden]) {
   display: grid !important;
@@ -625,7 +576,7 @@ html[data-spatial-layout="bottom-dock"] .sidebar {
   width: 100% !important;
   max-width: 1380px !important;
   margin: 0 auto !important;
-  padding: 16px 24px 36px 24px !important;
+  padding: 20px 24px 98px 24px !important;
   box-sizing: border-box !important;
 }
 
