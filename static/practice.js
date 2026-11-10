@@ -35,12 +35,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const learningExerciseResults = document.getElementById("learning-exercise-results");
     let selectedScope = null;
     let practiceSession = null;
+    let lastExerciseItems = [];
     let questionIndex = 0;
     let quizResults = [];
     let requestPending = false;
     let reviewItems = readProgress();
     let documentsById = new Map();
     let examplesRevision = 0;
+
+    if (typeof window !== "undefined") {
+        window.ARYMPracticeState = {
+            getSession: () => practiceSession,
+            getLastExercises: () => lastExerciseItems,
+        };
+    }
 
     document.addEventListener("app-source-selected", event => {
         const detail = event.detail || {};
@@ -743,6 +751,7 @@ document.addEventListener("DOMContentLoaded", () => {
             };
             const data = await postJson("/api/learning/exercises", body);
             const items = data.items || [];
+            lastExerciseItems = items;
             if (!items.length) {
                 if (learningExerciseStatus) learningExerciseStatus.textContent = `Không tìm thấy bài tập nào cho chủ đề «${topic}» trong thư viện tài liệu.`;
             } else {

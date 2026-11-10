@@ -745,18 +745,28 @@ def _enrich_session(row_dict: Dict[str, Any]) -> Dict[str, Any]:
     d["priority_label"] = PRIORITY_LABELS.get(d.get("priority") or "medium", "Trung bình")
     d["completed"] = bool(d.get("completed", 0))
     d["locked"] = bool(d.get("locked", 0))
-    d["source_label"] = (
-        "Bộ xếp lịch đề xuất" if d.get("source") == "ai_assistant" else "Người dùng tự xếp"
-    )
+    src = d.get("source") or "ai_assistant"
+    if src == "ai_auto_90m":
+        d["source_label"] = "Tự động 1h30p · 1 môn/ngày"
+    elif src == "ai_assistant":
+        d["source_label"] = "Bộ xếp lịch đề xuất"
+    else:
+        d["source_label"] = "Người dùng tự xếp"
+    ws_id = (d.get("worksheet_id") or "").strip()
+    d["classified_topic"] = (d.get("classified_topic") or "").strip()
+    d["worksheet_id"] = ws_id
+    d["pdf_url"] = f"/api/timetable/worksheets/{ws_id}.pdf" if ws_id else None
     return d
 
 
 def get_study_sessions() -> List[Dict[str, Any]]:
     with timetable_store.get_connection() as conn:
-        rows = conn.execute("""
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
+        extra_cols = ", classified_topic, worksheet_id" if "worksheet_id" in cols else ""
+        rows = conn.execute(f"""
             SELECT id, plan_id, task_id, title, course, weekday, start_time, end_time,
                    duration_minutes, priority, source, completed, locked,
-                   session_index, total_sessions, notes, created_at
+                   session_index, total_sessions, notes, created_at{extra_cols}
             FROM study_sessions
             ORDER BY weekday ASC, start_time ASC, id ASC
         """).fetchall()
@@ -1945,7 +1955,7 @@ def get_combined_weekly_schedule() -> Dict[str, Any]:
             "task_id": s.get("task_id"),
             "category": "study_session",
             "category_label": "Phiên tự học",
-            "source_badge": "Bộ xếp lịch đề xuất" if s.get("source") == "ai_assistant" else "Người dùng tự xếp",
+            "source_badge": s.get("source_label") or ("Bộ xếp lịch đề xuất" if s.get("source") == "ai_assistant" else "Người dùng tự xếp"),
             "weekday": w,
             "weekday_label": WEEKDAY_NAMES.get(w, f"Thứ {w}"),
             "start_time": s["start_time"],
@@ -1953,6 +1963,9 @@ def get_combined_weekly_schedule() -> Dict[str, Any]:
             "duration_minutes": s["duration_minutes"],
             "title": s["title"],
             "course": s["course"],
+            "classified_topic": s.get("classified_topic") or "",
+            "worksheet_id": s.get("worksheet_id") or "",
+            "pdf_url": s.get("pdf_url"),
             "priority": s.get("priority", "medium"),
             "priority_label": s.get("priority_label", "Trung bình"),
             "flexibility": "locked" if s.get("locked") else "scheduled",

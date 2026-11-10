@@ -1,0 +1,511 @@
+/**
+ * ARYM — Authentic Apple WWDC25 Liquid Glass & Pure Black Monochrome Optical Engine (`static/liquid-glass.css`)
+ *
+ * Referenced from open-source Apple Liquid Glass implementations:
+ * 1. `deepika-builds/liquid-glass` & `nikdelvin/liquid-glass` — SVG `<feTurbulence>` + `<feDisplacementMap>`
+ *    + `<feSpecularLighting>` optical lens refraction (`#apple-liquid-glass-lens`).
+ * 2. `rdev/liquid-glass-react` & `Mael-667/Liquid-Glass-CSS` — 4-layer curved glass recipe:
+ *    - Layer 1: Monochrome silver studio light field & perspective grid on `#000000` so glass visibly refracts light
+ *    - Layer 2: `backdrop-filter: blur(24px) saturate(190%) brightness(1.12)`
+ *    - Layer 3: Curved diagonal glass sheen (`linear-gradient(135deg, rgba(255,255,255,0.22) 0%, ...)`)
+ *    - Layer 4: 3D asymmetric specular rim borders + multi-layer inner meniscus `box-shadow`
+ */
+
+:root,
+html,
+html[data-theme="dark"],
+html[data-theme="light"] {
+  --bg-main: #000000;
+  --bg-card: rgba(18, 18, 22, 0.44);
+  --bg-sidebar: rgba(14, 14, 18, 0.50);
+  --bg-input: rgba(255, 255, 255, 0.06);
+  --bg-hover: rgba(255, 255, 255, 0.12);
+  --bg-subtle: rgba(255, 255, 255, 0.05);
+
+  /* Liquid Glass Optical Tokens */
+  --lg-surface: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.20) 0%,
+    rgba(255, 255, 255, 0.06) 32%,
+    rgba(255, 255, 255, 0.015) 58%,
+    rgba(255, 255, 255, 0.12) 100%
+  );
+  --lg-surface-elevated: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.28) 0%,
+    rgba(255, 255, 255, 0.09) 35%,
+    rgba(255, 255, 255, 0.03) 62%,
+    rgba(255, 255, 255, 0.18) 100%
+  );
+  --lg-pill-active: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.96) 0%,
+    rgba(232, 232, 237, 0.90) 100%
+  );
+  --lg-border-top: rgba(255, 255, 255, 0.62);
+  --lg-border-left: rgba(255, 255, 255, 0.42);
+  --lg-border-right: rgba(255, 255, 255, 0.18);
+  --lg-border-bottom: rgba(255, 255, 255, 0.32);
+
+  --lg-shadow-card:
+    0 26px 64px rgba(0, 0, 0, 0.92),
+    0 4px 24px rgba(255, 255, 255, 0.045),
+    inset 0 2px 2px rgba(255, 255, 255, 0.58),
+    inset 0 -2px 6px rgba(255, 255, 255, 0.18),
+    inset 2px 0 4px rgba(255, 255, 255, 0.24),
+    inset -2px 0 4px rgba(255, 255, 255, 0.14);
+
+  --lg-shadow-island:
+    0 28px 72px rgba(0, 0, 0, 0.95),
+    0 0 36px rgba(255, 255, 255, 0.07),
+    inset 0 2px 3px rgba(255, 255, 255, 0.72),
+    inset 0 -2px 6px rgba(255, 255, 255, 0.24),
+    inset 2px 0 5px rgba(255, 255, 255, 0.32),
+    inset -2px 0 5px rgba(255, 255, 255, 0.20);
+
+  --lg-blur: blur(26px) saturate(190%) brightness(1.12);
+
+  /* Pure Monochrome Typography */
+  --text-primary: #ffffff;
+  --text-secondary: #d4d4d8;
+  --text-muted: #9ca3af;
+  --accent: #ffffff;
+  --accent-light: #f4f4f5;
+  --border: rgba(255, 255, 255, 0.20);
+}
+
+/* Hide legacy color blobs & zero-size the SVG filter definitions */
+.ambient-glow {
+  display: none !important;
+}
+
+.liquid-glass-svg-defs {
+  position: absolute !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
+/* ============================================================================
+   1. PURE BLACK CANVAS + MONOCHROME SILVER OPTICAL LIGHT FIELD
+   (Provides pure white/silver studio light beams & fine architectural grid
+   so translucent Liquid Glass visibly refracts and bends light over #000000)
+   ============================================================================ */
+html,
+body {
+  background-color: #000000 !important;
+  color: var(--text-primary) !important;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* Pure monochrome white/silver studio spotlights + subtle architectural grid */
+  background:
+    radial-gradient(540px 260px at 50% 6%, rgba(255, 255, 255, 0.15) 0%, rgba(255, 255, 255, 0.03) 52%, transparent 100%),
+    radial-gradient(480px 320px at 22% 46%, rgba(255, 255, 255, 0.09) 0%, transparent 72%),
+    radial-gradient(520px 340px at 78% 52%, rgba(255, 255, 255, 0.09) 0%, transparent 72%),
+    radial-gradient(620px 240px at 50% 92%, rgba(255, 255, 255, 0.12) 0%, transparent 75%),
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 44px 44px, 44px 44px;
+  background-position: center center;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  top: 12%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(980px, 88vw);
+  height: 420px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 0 120px rgba(255, 255, 255, 0.04);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ============================================================================
+   2. CORE APPLE LIQUID GLASS SURFACE MIXIN CLASSES
+   ============================================================================ */
+.chat-header,
+.sidebar,
+.arym-bento-card,
+.chat-form,
+.learning-topic-card,
+.learning-review-generator,
+.learning-exercise-search,
+.timetable-card,
+.source-exercise-card,
+.modal-content,
+.practice-dialog,
+.account-dialog,
+.session-bar,
+.tool-tabs {
+  background: var(--lg-surface) !important;
+  background-color: rgba(16, 16, 20, 0.44) !important;
+  backdrop-filter: var(--lg-blur) !important;
+  -webkit-backdrop-filter: var(--lg-blur) !important;
+  border-top: 1.5px solid var(--lg-border-top) !important;
+  border-left: 1.5px solid var(--lg-border-left) !important;
+  border-right: 1px solid var(--lg-border-right) !important;
+  border-bottom: 1.5px solid var(--lg-border-bottom) !important;
+  box-shadow: var(--lg-shadow-card) !important;
+  position: relative;
+}
+
+/* Curved top specular meniscus glint on primary Liquid Glass containers */
+.chat-header::before,
+.arym-bento-card::before,
+.chat-form::before,
+.learning-topic-card::before,
+.timetable-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 8%;
+  right: 8%;
+  height: 1.5px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.78) 35%,
+    #ffffff 50%,
+    rgba(255, 255, 255, 0.78) 65%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* ============================================================================
+   3. MONOCHROME LIQUID GLASS BRANDING & BUTTONS
+   ============================================================================ */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.brand-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 13px !important;
+  background: var(--lg-surface-elevated) !important;
+  background-color: rgba(255, 255, 255, 0.10) !important;
+  border-top: 1.5px solid rgba(255, 255, 255, 0.75) !important;
+  border-left: 1.5px solid rgba(255, 255, 255, 0.50) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.22) !important;
+  border-bottom: 1.5px solid rgba(255, 255, 255, 0.36) !important;
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.8),
+    inset 0 2px 3px rgba(255, 255, 255, 0.72),
+    inset 0 -2px 4px rgba(255, 255, 255, 0.22) !important;
+  color: #ffffff !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.brand-icon::before,
+.brand-icon::after {
+  display: none !important;
+}
+
+.brand-text h2 {
+  font-size: 16px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.14em !important;
+  color: #ffffff !important;
+  margin: 0 !important;
+  line-height: 1.15 !important;
+}
+
+.brand-subtitle {
+  display: block;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  color: #cbd5e1 !important;
+  letter-spacing: 0.02em !important;
+  margin-top: 2px !important;
+}
+
+/* Segmented Mode Switch Pill inside Floating Island */
+.chat-header .mode-switch {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 5px !important;
+  border-radius: 9999px !important;
+  background: rgba(0, 0, 0, 0.42) !important;
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.75),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.16) !important;
+}
+
+.mode-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  padding: 8px 16px !important;
+  border-radius: 9999px !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: #d4d4d8 !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  cursor: pointer !important;
+  transition: all 0.22s cubic-bezier(0.22, 1, 0.36, 1) !important;
+  white-space: nowrap !important;
+}
+
+.mode-button:hover:not(.active) {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+
+.mode-button.active {
+  background: var(--lg-pill-active) !important;
+  color: #000000 !important;
+  font-weight: 700 !important;
+  border: 1px solid #ffffff !important;
+  box-shadow:
+    0 6px 20px rgba(255, 255, 255, 0.25),
+    inset 0 1px 1px #ffffff !important;
+}
+
+/* Header Action Pills & Icon Buttons */
+.header-pill-btn,
+.icon-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  padding: 7px 14px !important;
+  min-height: 36px !important;
+  border-radius: 9999px !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  color: #f4f4f5 !important;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(255, 255, 255, 0.06) 100%
+  ) !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.58) !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.38) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.18) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.28) !important;
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.65),
+    inset 0 1px 1px rgba(255, 255, 255, 0.52) !important;
+  backdrop-filter: blur(18px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(180%) !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+  white-space: nowrap !important;
+}
+
+.icon-btn {
+  padding: 7px 12px !important;
+}
+
+.header-pill-btn:hover,
+.icon-btn:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.32) 0%,
+    rgba(255, 255, 255, 0.12) 100%
+  ) !important;
+  border-color: rgba(255, 255, 255, 0.78) !important;
+  color: #ffffff !important;
+}
+
+#btn-account-trigger[data-authenticated="true"] {
+  background: var(--lg-pill-active) !important;
+  color: #000000 !important;
+  border-color: #ffffff !important;
+}
+
+/* Primary & Outline Buttons across all workspaces */
+.btn,
+.new-chat-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  padding: 9px 18px !important;
+  min-height: 40px !important;
+  border-radius: 9999px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1) !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+}
+
+.btn-sm,
+.btn.btn-sm {
+  padding: 6px 14px !important;
+  min-height: 33px !important;
+  font-size: 12px !important;
+}
+
+.btn-primary,
+.new-chat-btn,
+.btn-send {
+  background: var(--lg-pill-active) !important;
+  color: #000000 !important;
+  border: 1.5px solid #ffffff !important;
+  box-shadow:
+    0 10px 26px rgba(255, 255, 255, 0.20),
+    inset 0 2px 2px #ffffff !important;
+}
+
+.btn-primary:hover:not(:disabled),
+.new-chat-btn:hover:not(:disabled),
+.btn-send:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.01);
+  background: #ffffff !important;
+  box-shadow:
+    0 14px 32px rgba(255, 255, 255, 0.30),
+    inset 0 2px 2px #ffffff !important;
+}
+
+.btn-outline,
+.btn-secondary,
+.tool-tile,
+.processing-level-select,
+.chat-form button:not(.btn-send) {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.16) 0%,
+    rgba(255, 255, 255, 0.04) 100%
+  ) !important;
+  color: #f4f4f5 !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.50) !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.34) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.26) !important;
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.65),
+    inset 0 1px 1px rgba(255, 255, 255, 0.42) !important;
+  backdrop-filter: blur(18px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(180%) !important;
+}
+
+.btn-outline:hover:not(:disabled),
+.btn-secondary:hover:not(:disabled),
+.tool-tile:hover:not(:disabled) {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.26) 0%,
+    rgba(255, 255, 255, 0.09) 100%
+  ) !important;
+  border-color: rgba(255, 255, 255, 0.72) !important;
+  color: #ffffff !important;
+  transform: translateY(-1px);
+}
+
+/* Inputs & Selects — Recessed Liquid Glass Wells */
+.form-input,
+.form-select,
+.chat-form textarea {
+  background: rgba(0, 0, 0, 0.45) !important;
+  color: #ffffff !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.22) !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.18) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.32) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.38) !important;
+  border-radius: 14px !important;
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.8),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.18) !important;
+}
+
+.chat-form textarea {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.form-input:focus,
+.form-select:focus {
+  border-color: rgba(255, 255, 255, 0.75) !important;
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.14),
+    inset 0 2px 6px rgba(0, 0, 0, 0.8) !important;
+  outline: none !important;
+}
+
+/* Monochrome badges & tables */
+.sched-badge,
+.planner-badge-recurring {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px !important;
+  border-radius: 9999px !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0.06)) !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(255, 255, 255, 0.38) !important;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.45) !important;
+}
+
+.kb-table {
+  width: 100%;
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  border-radius: 16px !important;
+  overflow: hidden !important;
+  border: 1px solid rgba(255, 255, 255, 0.20) !important;
+  background: rgba(0, 0, 0, 0.38) !important;
+}
+
+.kb-table th {
+  background: rgba(255, 255, 255, 0.09) !important;
+  color: #e4e4e7 !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  padding: 11px 14px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18) !important;
+  text-align: left !important;
+}
+
+.kb-table td {
+  padding: 11px 14px !important;
+  color: #f4f4f5 !important;
+  font-size: 13px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.disclaimer-mini,
+.study-material-integrated-box [style*="#0284c7"],
+.study-material-integrated-box [style*="rgba(14, 165, 233"] {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+  color: #e4e4e7 !important;
+  border-radius: 14px !important;
+}

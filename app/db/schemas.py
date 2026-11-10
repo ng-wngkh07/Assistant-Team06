@@ -347,11 +347,44 @@ def _migrate_timetable_v2(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_timetable_drafts_image_hash ON timetable_drafts(image_hash)")
 
 
+def _migrate_timetable_v3(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS weekly_lessons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            course TEXT NOT NULL,
+            lesson_title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'upcoming',
+            classified_topic TEXT NOT NULL,
+            domain_label TEXT DEFAULT '',
+            question_count INTEGER NOT NULL DEFAULT 4,
+            worksheet_id TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS planner_worksheets (
+            worksheet_id TEXT PRIMARY KEY,
+            course TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            lesson_title TEXT DEFAULT '',
+            questions_json TEXT NOT NULL,
+            pdf_blob BLOB NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    session_cols = {row[1] for row in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
+    if "classified_topic" not in session_cols and "id" in session_cols:
+        conn.execute("ALTER TABLE study_sessions ADD COLUMN classified_topic TEXT DEFAULT ''")
+    if "worksheet_id" not in session_cols and "id" in session_cols:
+        conn.execute("ALTER TABLE study_sessions ADD COLUMN worksheet_id TEXT DEFAULT ''")
+
+
 timetable_migrations = MigrationManager(
     store_name="timetable",
     migrations=[
         Migration(1, "001_baseline_timetable", _migrate_timetable_v1),
         Migration(2, "002_timetable_indexes", _migrate_timetable_v2),
+        Migration(3, "003_weekly_lessons_and_worksheets", _migrate_timetable_v3),
     ],
 )
 

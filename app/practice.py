@@ -766,6 +766,16 @@ class PracticeService:
             if now - self._sessions[practice_id]["created_at"] > self.SESSION_TTL_SECONDS:
                 self._sessions.pop(practice_id, None)
 
+    def get_session_questions_with_answers(self, practice_id: str) -> list[dict[str, Any]]:
+        """Return full question objects (including answer, explanation, and source quote) for PDF export."""
+        with self._lock:
+            self._expire_sessions()
+            session = self._sessions.get(practice_id)
+            if not session:
+                raise PracticeSessionNotFound("Phiên luyện tập đã hết hạn. Hãy tạo bộ câu hỏi mới.")
+            self._sessions.move_to_end(practice_id)
+            return [dict(q) for q in session.get("questions", [])]
+
     def answer(self, practice_id: str, question_id: str, answer: Optional[str]) -> dict[str, Any]:
         with self._lock:
             self._expire_sessions()

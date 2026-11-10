@@ -1,13 +1,16 @@
 """Practice & Topic-Based Learning API Routes (Single Responsibility Module)."""
 
 import logging
-from typing import Literal, Optional
+import re
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from app.dialogue import DialogueBusyError
+from app.exercise_pdf import generate_exercise_worksheet_pdf
 from app.gpu_lock import GPUBusyError
 from app.input_policy import validate_topic_input
 from app.practice import PracticeGenerationError, PracticeSessionNotFound
@@ -208,3 +211,109 @@ async def list_learning_exercises(req: LearningExercisesRequest):
     except Exception as exc:
         logger.exception("Không trích xuất được bài tập theo chủ đề")
         raise HTTPException(status_code=502, detail="Không trích xuất được bài tập lúc này. Hãy thử lại sau.") from exc
+
+
+class LearningExportPdfRequest(BaseModel):
+    topic: str = Field(default="Chủ đề luyện tập", max_length=160)
+    course: str = Field(default="", max_length=160)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+    practice_id: Optional[str] = Field(default=None, max_length=64)
+    questions: Optional[list[dict[str, Any]]] = None
+
+
+def _safe_pdf_filename(topic: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", topic.strip().lower()).strip("-")
+    if not slug:
+        slug = "chude"
+    return f"arym-bai-tap-{slug[:40]}.pdf"
+
+
+@router.get("/api/learning/export-pdf/{practice_id}")
+async def export_practice_session_pdf(
+    practice_id: str,
+    topic: str = Query("Chủ đề luyện tập", max_length=160),
+    course: str = Query("", max_length=160),
+    difficulty: str = Query("medium", max_length=20),
+):
+    from app import server as _srv
+    try:
+        questions = _srv.practice_service.get_session_questions_with_answers(practice_id)
+    except PracticeSessionNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    try:
+        pdf_bytes = await run_in_threadpool(
+            generate_exercise_worksheet_pdf,
+            topic=topic,
+            course=course,
+            difficulty=difficulty,
+            questions=questions,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    filename = _safe_pdf_filename(topic)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+@router.post("/api/learning/export-pdf")
+async def export_topic_exercises_pdf(req: LearningExportPdfRequest):
+    from app import server as _srv
+
+    questions: list[dict[str, Any]] = []
+    if req.practice_id:
+        try:
+            questions = _srv.practice_service.get_session_questions_with_answers(req.practice_id)
+        except PracticeSessionNotFound:
+            questions = []
+
+    if not questions and req.questions:
+        questions = [dict(item) for item in req.questions if isinstance(item, dict)]
+
+    if not questions:
+        clean_topic = validate_topic_input(req.topic)
+        ex_res = await run_in_threadpool(
+            _srv.learning_service.exercises,
+            topic=clean_topic,
+            limit=6,
+            solve_missing=False,
+            model=_srv.DEFAULT_CHAT_MODEL,
+        )
+        items = ex_res.get("items") or ex_res.get("exercises") or []
+        for idx, item in enumerate(items, start=1):
+            questions.append(
+                {
+                    "question": item.get("text") or f"Bài tập {idx} ({clean_topic})",
+                    "answer": item.get("solution_summary") or "Đối chiếu giải thích & nguồn trích dẫn cuối trang",
+                    "explanation": (
+                        item.get("solution")
+                        or f"Đối chiếu nội dung bài tập gốc tại {item.get('title', 'Tài liệu')} (trang {item.get('page_num', 1)})."
+                    ),
+                    "source": {
+                        "title": item.get("title") or item.get("book_title") or item.get("filename") or "Tài liệu học tập",
+                        "page_num": item.get("page_num") or 1,
+                        "snippet": (item.get("text") or "")[:360],
+                    },
+                }
+            )
+
+    if not questions:
+        raise HTTPException(
+            status_code=422,
+            detail="Chưa tìm thấy câu hỏi hoặc bài tập phù hợp cho chủ đề này để xuất PDF.",
+        )
+
+    pdf_bytes = await run_in_threadpool(
+        generate_exercise_worksheet_pdf,
+        topic=req.topic,
+        course=req.course,
+        difficulty=req.difficulty,
+        questions=questions,
+    )
+    filename = _safe_pdf_filename(req.topic)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

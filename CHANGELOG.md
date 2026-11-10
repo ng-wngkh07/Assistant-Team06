@@ -28,6 +28,10 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Added
 
+- Redesign the web interface around a pure black monochrome palette with Apple Liquid Glass refraction and specular edge lighting (`static/liquid-glass.css`, `static/spatial-layout.css`, `static/spatial-layout.js`, `static/index.html`), restructure the workspace into a fixed bottom floating Liquid Glass launcher dock (`bottom-dock`), slide-over glass drawer, Bento spatial hub, and two-column split studios, update branding to `ARYM` (`Adaptive Revision Yields Mastery`), and replace the top account status banner with a dock account pill and a per-account one-time button-spotlight onboarding tour (`static/onboarding-tour.js`, `static/onboarding-tour.css`, `static/accounts.js`).
+- Add PDF export for topic-based practice questions and extracted exercises with a separate answer key and source citations placed on the final page(s) (`app/exercise_pdf.py`, `app/practice.py`, `app/routes/learning_routes.py`, `static/practice-pdf.js`).
+- Add weekly lesson topic classification, automatic 90-minute (`1 subject/day`) self-study session allocation in free timetable slots with attached PDF worksheets, and a `.zip` calendar bundle export (`app/planner_topic_bridge.py`, `app/timetable_ics.py`, `app/routes/timetable_routes.py`, `static/planner-assistant.js`).
+
 - Add versioned migrations and private content-addressed upload storage for the single-host account service, with operator backup/restore and explicit legacy-account import tools. These do not establish public-service or multi-host readiness.
 - Document a staged native-backend website pilot, Vercel proxy limits and the runtime checks needed before moving the model into a Linux container.
 
