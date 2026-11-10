@@ -35,14 +35,20 @@ def test_branding_arym_and_liquid_glass_structure():
     assert "Adaptive Revision Yields Mastery" in html
     assert "<h2>ARYM AI</h2>" not in html
 
-    # 2. Pure black + Apple Liquid Glass optical filter & stylesheet
+    # 2. Pure black + Apple Liquid Glass optical filter, stylesheet & Spatial Bento layout
     assert '/static/liquid-glass.css' in html
+    assert '/static/spatial-layout.css' in html
+    assert '/static/spatial-layout.js' in html
     assert 'id="apple-liquid-glass-lens"' in html
     assert "<feTurbulence" in html
     assert "<feDisplacementMap" in html
     assert "<feSpecularLighting" in html
     assert "#000000" in liquid_css
-    assert "backdrop-filter: blur(" in liquid_css
+    assert "backdrop-filter:" in liquid_css
+    assert "--lg-surface:" in liquid_css
+    assert "arym-bento-grid" in html
+    assert "arym-bento-card" in html
+    assert 'id="btn-spatial-layout-cycle"' in html
 
     # 3. No unrequested clutter text ("Chế độ cục bộ · đăng nhập để lưu theo tài khoản")
     assert "Chế độ cục bộ" not in html

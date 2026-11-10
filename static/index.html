@@ -17,669 +17,7 @@
     <link rel="stylesheet" href="/static/theme.css?v=3-contrast-fix">
     <link rel="stylesheet" href="/static/liquid-glass.css?v=1">
     <link rel="stylesheet" href="/static/onboarding-tour.css?v=1">
-    <style>
-        /* Pure Black Monochrome Canvas — No decorative color blobs */
-        .ambient-glow {
-            display: none !important;
-        }
-        .liquid-glass-svg-defs {
-            position: absolute !important;
-            width: 0 !important;
-            height: 0 !important;
-            overflow: hidden !important;
-            pointer-events: none !important;
-        }
-        body {
-            background-color: #000000 !important;
-            background-image: none !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-        .brand-icon {
-            background: rgba(255, 255, 255, 0.08) !important;
-            border: 1px solid rgba(255, 255, 255, 0.24) !important;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.72), inset 0 1px 0 rgba(255, 255, 255, 0.35) !important;
-            color: #ffffff !important;
-        }
-        .brand-icon::before,
-        .brand-icon::after {
-            display: none !important;
-            background: none !important;
-            box-shadow: none !important;
-        }
-        .disclaimer-mini,
-        .study-material-integrated-box [style*="#0284c7"],
-        .study-material-integrated-box [style*="rgba(14, 165, 233"] {
-            background: rgba(255, 255, 255, 0.04) !important;
-            border: 1px solid rgba(255, 255, 255, 0.14) !important;
-            color: #d4d4d8 !important;
-        }
-        #ollama-status {
-            color: #a1a1aa !important;
-        }
-
-        /* Ensure containers are transparent over pure black canvas */
-        .app-container,
-        .main-content,
-        .messages-container,
-        .qa-panel,
-        .input-area {
-            background: transparent !important;
-        }
-
-        /* Apple Liquid Glass Top Header */
-        .chat-header {
-            display: flex !important;
-            justify-content: center !important;
-            align-items: center !important;
-            padding: 10px 24px !important;
-            position: relative !important;
-            min-height: 60px !important;
-            background: rgba(8, 8, 10, 0.72) !important;
-            backdrop-filter: blur(28px) saturate(180%) !important;
-            -webkit-backdrop-filter: blur(28px) saturate(180%) !important;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
-        }
-        .chat-header .header-left {
-            position: absolute !important;
-            left: 20px !important;
-            display: flex !important;
-            align-items: center !important;
-            gap: 8px !important;
-        }
-        .chat-header .header-right {
-            position: absolute !important;
-            right: 20px !important;
-            display: flex !important;
-            align-items: center !important;
-            gap: 8px !important;
-        }
-        .chat-header .mode-switch {
-            margin: 0 auto !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: space-between !important;
-            gap: 6px !important;
-            max-width: 560px !important;
-            width: 100% !important;
-            padding: 4px 6px !important;
-            background: rgba(255, 255, 255, 0.05) !important;
-            border: 1px solid rgba(255, 255, 255, 0.14) !important;
-            border-radius: 9999px !important;
-        }
-
-        /* Apple Liquid Glass Sidebar */
-        .sidebar {
-            background: rgba(8, 8, 11, 0.78) !important;
-            backdrop-filter: blur(32px) saturate(180%) !important;
-            -webkit-backdrop-filter: blur(32px) saturate(180%) !important;
-            border-right: 1px solid rgba(255, 255, 255, 0.1) !important;
-        }
-
-        /* Mode buttons in top header — Apple Liquid Glass segmented pill */
-        .mode-button {
-            flex: 1 1 0 !important;
-            text-align: center !important;
-            justify-content: center !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            border-radius: 9999px !important;
-            font-size: 13px !important;
-            font-weight: 500 !important;
-            padding: 7px 12px !important;
-            white-space: nowrap !important;
-            transition: all 0.22s ease !important;
-        }
-        .mode-button:not(.active) {
-            background: transparent !important;
-            border: 1px solid transparent !important;
-            color: #a1a1aa !important;
-        }
-        .mode-button:not(.active):hover {
-            background: rgba(255, 255, 255, 0.06) !important;
-            color: #f5f5f7 !important;
-        }
-        .mode-button.active, #mode-qa.active {
-            background: rgba(255, 255, 255, 0.15) !important;
-            border: 1px solid rgba(255, 255, 255, 0.34) !important;
-            color: #ffffff !important;
-            font-weight: 600 !important;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.42) !important;
-        }
-
-        /* Send button monochrome Liquid Glass */
-        .btn-send {
-            background: #ffffff !important;
-            border: 1px solid #ffffff !important;
-            color: #000000 !important;
-            box-shadow: 0 4px 16px rgba(255, 255, 255, 0.18) !important;
-        }
-        .btn-send:hover:not(:disabled) {
-            background: #e5e5ea !important;
-            transform: scale(1.04) !important;
-        }
-
-        /* Primary button monochrome Liquid Glass */
-        .btn-primary {
-            background: rgba(255, 255, 255, 0.94) !important;
-            color: #000000 !important;
-            border: 1px solid #ffffff !important;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
-        }
-        .btn-primary:hover {
-            background: #ffffff !important;
-        }
-
-        /* Sidebar active session item */
-        .session-item.active {
-            background: rgba(255, 255, 255, 0.1) !important;
-            border-left: 3px solid #ffffff !important;
-        }
-
-        /* Chat input container liquid glass */
-        .input-area {
-            background: transparent !important;
-            border-top: none !important;
-            padding: 0 24px 32px 24px !important;
-            max-width: 760px !important;
-            width: 100% !important;
-            margin: 0 auto !important;
-        }
-        .chat-form {
-            background: rgba(18, 22, 32, 0.82) !important;
-            backdrop-filter: blur(24px) !important;
-            -webkit-backdrop-filter: blur(24px) !important;
-            border: 1px solid rgba(255, 255, 255, 0.08) !important;
-            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5) !important;
-            border-radius: 20px !important;
-            padding: 8px 12px !important;
-        }
-        .chat-form textarea {
-            flex: 0 0 auto !important;
-            width: 100% !important;
-            background: transparent !important;
-            color: #ffffff !important;
-            font-size: 14.5px !important;
-            line-height: 1.5 !important;
-            border: none !important;
-            outline: none !important;
-            resize: none !important;
-            min-height: 28px !important;
-            max-height: 96px !important;
-        }
-        .chat-form textarea::placeholder {
-            color: #64748b !important;
-        }
-
-        /* ================= Mode Panels Visibility ================= */
-        [hidden],
-        .qa-panel[hidden],
-        .learning-tools-panel[hidden],
-        .timetable-panel[hidden],
-        .tool-tab-panel[hidden] {
-            display: none !important;
-        }
-
-        /* QA Panel layout - centered hero in welcome mode & symmetrical stretch in chat mode */
-        .qa-panel:not([hidden]) {
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: center !important;
-            flex: 1 1 0% !important;
-            min-height: 0 !important;
-            height: 100% !important;
-            position: relative !important;
-            gap: 8px !important;
-            padding: 12px 20px !important;
-            box-sizing: border-box !important;
-        }
-
-        .qa-panel.welcome-mode:not([hidden]) {
-            justify-content: center !important;
-        }
-
-        .qa-panel:not(.welcome-mode):not([hidden]) {
-            justify-content: flex-start !important;
-        }
-
-        /* Active Session Bar - stretched evenly across the interface */
-        #session-bar.session-bar,
-        .session-bar {
-            width: 100% !important;
-            max-width: 900px !important;
-            margin: 0 auto !important;
-            padding: 12px 20px !important;
-            background: rgba(255, 255, 255, 0.03) !important;
-            border: 1px solid rgba(255, 255, 255, 0.08) !important;
-            border-radius: 14px !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: space-between !important;
-            gap: 16px !important;
-            box-sizing: border-box !important;
-            flex-shrink: 0 !important;
-        }
-
-        #session-bar[style*="display: none"] {
-            display: none !important;
-        }
-
-        #session-bar .session-title-wrapper {
-            display: flex !important;
-            align-items: center !important;
-            gap: 10px !important;
-            flex: 1 1 auto !important;
-            min-width: 0 !important;
-        }
-
-        #session-bar .session-title-wrapper strong {
-            white-space: nowrap !important;
-            overflow: hidden !important;
-            text-overflow: ellipsis !important;
-            max-width: none !important;
-            font-size: 0.95rem !important;
-            color: var(--text-primary) !important;
-        }
-
-        #session-bar .session-controls {
-            display: flex !important;
-            align-items: center !important;
-            gap: 10px !important;
-            flex-shrink: 0 !important;
-        }
-
-        #session-summary-box.session-summary-box,
-        .session-summary-box,
-        #training-banner.training-banner,
-        .training-banner {
-            width: 100% !important;
-            max-width: 900px !important;
-            margin: 0 auto !important;
-            box-sizing: border-box !important;
-            flex-shrink: 0 !important;
-        }
-
-        .qa-panel:not([hidden]) .messages-container:not(.has-chat) {
-            flex: 0 0 auto !important;
-            overflow: visible !important;
-            padding: 0 !important;
-            width: 100% !important;
-            max-width: 900px !important;
-            margin: 0 auto !important;
-        }
-
-        .qa-panel:not([hidden]) .messages-container.has-chat {
-            flex: 1 1 auto !important;
-            width: 100% !important;
-            max-width: 900px !important;
-            margin: 0 auto !important;
-            max-height: none !important;
-            min-height: 0 !important;
-            overflow-y: auto !important;
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: center !important;
-            gap: 16px !important;
-            padding: 6px 0 !important;
-        }
-
-        .messages-container.has-chat > .message:not(.welcome-card) {
-            flex-shrink: 0 !important;
-            width: 100% !important;
-            max-width: 900px !important;
-            margin: 0 auto !important;
-            box-sizing: border-box !important;
-        }
-
-        /* Centered welcome greeting hero card */
-        .welcome-card {
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: center !important;
-            text-align: center !important;
-            background: transparent !important;
-            border: none !important;
-            box-shadow: none !important;
-            padding: 0 !important;
-            margin: 0 auto 12px auto !important;
-        }
-        .messages-container.has-chat .welcome-card {
-            display: none !important;
-        }
-        .welcome-card .message-avatar {
-            margin: 0 auto 16px auto !important;
-            display: flex !important;
-            justify-content: center !important;
-            align-items: center !important;
-        }
-        .welcome-card .hero-avatar-img {
-            width: 72px !important;
-            height: 72px !important;
-            border-radius: 20px !important;
-            border: 1px solid rgba(255, 255, 255, 0.24) !important;
-            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.35) !important;
-            filter: grayscale(100%) contrast(1.08);
-        }
-        .welcome-card .message-body {
-            display: flex !important;
-            flex-direction: column !important;
-            align-items: center !important;
-            text-align: center !important;
-            background: transparent !important;
-            border: none !important;
-            box-shadow: none !important;
-            padding: 0 !important;
-            width: 100% !important;
-        }
-        .welcome-card h3 {
-            font-size: 28px !important;
-            font-weight: 700 !important;
-            color: #ffffff !important;
-            margin: 0 !important;
-            letter-spacing: -0.01em !important;
-        }
-
-        .qa-panel:not([hidden]) .input-area {
-            padding: 0 !important;
-            margin: 0 auto !important;
-            max-width: 900px !important;
-            width: 100% !important;
-            transform: none !important;
-            border-top: none !important;
-            flex-shrink: 0 !important;
-            box-sizing: border-box !important;
-        }
-
-        .qa-panel:not([hidden]) .chat-form {
-            max-width: 760px !important;
-            width: 100% !important;
-            margin: 0 auto !important;
-            gap: 4px !important;
-            box-sizing: border-box !important;
-        }
-
-        .qa-panel .input-area #chat-request-status {
-            font-size: 12px;
-            line-height: 1.35;
-            max-height: 34px;
-            overflow-y: auto;
-            margin-top: 4px;
-        }
-        @media (max-width: 640px), (max-height: 560px) {
-            .qa-panel:not([hidden]) { padding: 8px !important; gap: 6px !important; }
-            .qa-panel .chat-form-bottom { padding-top: 4px; margin-top: 0; }
-            .qa-panel .scope-pill { display: none; }
-            #session-summary-box { max-height: 64px; overflow-y: auto; }
-        }
-
-        /* ================= Learning Tools & Timetable Panels ================= */
-        .learning-tools-panel:not([hidden]) {
-            display: flex !important;
-            flex-direction: column !important;
-            flex: 1 1 0% !important;
-            min-height: 0 !important;
-            height: 100% !important;
-            overflow-y: auto !important;
-            padding: 24px max(24px, calc((100% - 1100px) / 2)) 40px !important;
-            background: transparent !important;
-        }
-
-        .timetable-panel:not([hidden]) {
-            display: block !important;
-            flex: 1 1 0% !important;
-            min-height: 0 !important;
-            height: 100% !important;
-            overflow-y: auto !important;
-            padding: 24px max(24px, calc((100% - 1180px) / 2)) 40px !important;
-            background: transparent !important;
-        }
-
-        /* Tool Tabs Header (Sub-navigation) */
-        .tool-tabs {
-            display: flex !important;
-            gap: 8px !important;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
-            margin: 0 0 22px 0 !important;
-            padding-bottom: 10px !important;
-            flex-wrap: wrap !important;
-        }
-        .tool-tab-button {
-            border: 1px solid rgba(255, 255, 255, 0.08) !important;
-            border-radius: 9999px !important;
-            background: rgba(255, 255, 255, 0.04) !important;
-            color: #94a3b8 !important;
-            padding: 8px 18px !important;
-            font-size: 13px !important;
-            font-weight: 500 !important;
-            cursor: pointer !important;
-            transition: all 0.2s ease !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            gap: 6px !important;
-        }
-        .tool-tab-button:hover:not(.active) {
-            background: rgba(255, 255, 255, 0.09) !important;
-            color: #f1f5f9 !important;
-        }
-        .tool-tab-button.active {
-            background: rgba(255, 255, 255, 0.14) !important;
-            color: #ffffff !important;
-            font-weight: 600 !important;
-            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.36) !important;
-            border-color: rgba(255, 255, 255, 0.3) !important;
-        }
-        .tool-tab-button span {
-            background: rgba(255, 255, 255, 0.2) !important;
-            color: #ffffff !important;
-            border-radius: 9999px !important;
-            padding: 1px 7px !important;
-            font-size: 11px !important;
-        }
-
-        /* Learning Tools Cards & Forms */
-        .learning-topic-card,
-        .learning-review-generator,
-        .learning-exercise-search,
-        .timetable-card,
-        .source-exercise-card {
-            background: rgba(14, 14, 18, 0.68) !important;
-            border: 1px solid rgba(255, 255, 255, 0.13) !important;
-            border-radius: 20px !important;
-            padding: 22px 24px !important;
-            backdrop-filter: blur(28px) saturate(180%) !important;
-            -webkit-backdrop-filter: blur(28px) saturate(180%) !important;
-            margin-bottom: 20px !important;
-            box-shadow: 0 18px 44px rgba(0, 0, 0, 0.72), inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
-        }
-        .timetable-card h3,
-        .learning-topic-card h2,
-        .learning-review-generator h2,
-        .learning-exercise-search h2 {
-            font-size: 18px !important;
-            font-weight: 700 !important;
-            color: #ffffff !important;
-            margin: 0 0 6px 0 !important;
-            letter-spacing: -0.01em !important;
-        }
-
-        /* Form Row Layout in Learning Tools */
-        .learning-tools-panel .form-row {
-            display: flex !important;
-            gap: 14px !important;
-            align-items: flex-end !important;
-            flex-wrap: wrap !important;
-            margin-bottom: 14px !important;
-        }
-        .learning-tools-panel .form-group {
-            display: flex !important;
-            flex-direction: column !important;
-            min-width: 0 !important;
-            gap: 6px !important;
-        }
-        .learning-tools-panel .form-group.flex-2 {
-            flex: 2 1 240px !important;
-        }
-        .learning-tools-panel .form-group.flex-1 {
-            flex: 1 1 120px !important;
-        }
-        .learning-tools-panel .form-group.form-actions {
-            flex: 0 0 auto !important;
-            flex-direction: row !important;
-            align-items: center !important;
-            gap: 8px !important;
-        }
-        .learning-tools-panel .form-group label,
-        .timetable-panel label {
-            font-size: 12.5px !important;
-            font-weight: 500 !important;
-            color: #a1a1aa !important;
-        }
-        .learning-tools-panel .form-input,
-        .learning-tools-panel .form-select,
-        .timetable-panel .form-input,
-        .timetable-panel .form-select {
-            background: rgba(255, 255, 255, 0.04) !important;
-            border: 1px solid rgba(255, 255, 255, 0.14) !important;
-            color: #f5f5f7 !important;
-            border-radius: 12px !important;
-            padding: 8px 14px !important;
-            min-height: 42px !important;
-            font-size: 13.5px !important;
-            outline: none !important;
-            box-sizing: border-box !important;
-            transition: border-color 0.2s, box-shadow 0.2s !important;
-        }
-        .learning-tools-panel .form-input:focus,
-        .learning-tools-panel .form-select:focus,
-        .timetable-panel .form-input:focus,
-        .timetable-panel .form-select:focus {
-            border-color: rgba(255, 255, 255, 0.42) !important;
-            box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1) !important;
-        }
-
-        /* Buttons in Learning Tools and Timetable */
-        .btn {
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            padding: 9px 20px !important;
-            min-height: 42px !important;
-            font-size: 13.5px !important;
-            font-weight: 600 !important;
-            border-radius: 12px !important;
-            white-space: nowrap !important;
-            transition: all 0.22s ease !important;
-            cursor: pointer !important;
-            text-decoration: none !important;
-        }
-        .btn-sm, .btn.btn-sm {
-            padding: 6px 14px !important;
-            min-height: 32px !important;
-            font-size: 12px !important;
-            border-radius: 10px !important;
-        }
-        .btn-mini, .btn.btn-mini {
-            padding: 3px 9px !important;
-            min-height: 24px !important;
-            font-size: 11px !important;
-            border-radius: 8px !important;
-        }
-        .btn-primary {
-            background: rgba(255, 255, 255, 0.94) !important;
-            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55), inset 0 1px 0 #ffffff !important;
-            color: #000000 !important;
-            border: 1px solid #ffffff !important;
-        }
-        .btn-primary:hover:not(:disabled) {
-            background: #ffffff !important;
-            transform: translateY(-1px) !important;
-        }
-        .btn-secondary {
-            background: rgba(255, 255, 255, 0.08) !important;
-            border: 1px solid rgba(255, 255, 255, 0.16) !important;
-            color: #f5f5f7 !important;
-        }
-        .btn-secondary:hover:not(:disabled) {
-            background: rgba(255, 255, 255, 0.14) !important;
-            color: #ffffff !important;
-        }
-        .btn-outline {
-            background: rgba(255, 255, 255, 0.03) !important;
-            border: 1px solid rgba(255, 255, 255, 0.18) !important;
-            color: #e4e4e7 !important;
-        }
-        .btn-outline:hover:not(:disabled) {
-            background: rgba(255, 255, 255, 0.1) !important;
-            border-color: rgba(255, 255, 255, 0.34) !important;
-            color: #ffffff !important;
-        }
-
-        /* Details collapsible */
-        details.advanced-source-selection {
-            background: rgba(14, 14, 18, 0.6) !important;
-            border: 1px solid rgba(255, 255, 255, 0.12) !important;
-            border-radius: 16px !important;
-            padding: 14px 18px !important;
-            margin-top: 16px !important;
-        }
-        details.advanced-source-selection > summary {
-            cursor: pointer !important;
-            font-weight: 600 !important;
-            color: #f5f5f7 !important;
-            outline: none !important;
-        }
-
-        /* Timetable Specific Enhancements */
-        .timetable-dropzone {
-            border: 1.5px dashed rgba(255, 255, 255, 0.25) !important;
-            border-radius: 16px !important;
-            padding: 28px 16px !important;
-            text-align: center !important;
-            background: rgba(255, 255, 255, 0.03) !important;
-            cursor: pointer !important;
-            transition: all 0.2s ease !important;
-        }
-        .timetable-dropzone:hover, .timetable-dropzone.drag-over {
-            border-color: rgba(255, 255, 255, 0.55) !important;
-            background: rgba(255, 255, 255, 0.07) !important;
-        }
-        .timetable-panel .table-responsive {
-            border-radius: 14px !important;
-            border: 1px solid rgba(255, 255, 255, 0.12) !important;
-            background: rgba(10, 10, 14, 0.72) !important;
-        }
-        .timetable-panel .kb-table {
-            width: 100% !important;
-            border-collapse: collapse !important;
-        }
-        .timetable-panel .kb-table th {
-            background: rgba(255, 255, 255, 0.04) !important;
-            color: #a1a1aa !important;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
-            padding: 10px 12px !important;
-            font-size: 12.5px !important;
-            text-align: left !important;
-        }
-        .timetable-panel .kb-table td {
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
-            padding: 9px 12px !important;
-            color: #f5f5f7 !important;
-            font-size: 13px !important;
-        }
-        .timetable-card [style*="#fef3c7"],
-        #timetable-draft-card span[style*="#fef3c7"] {
-            background: rgba(255, 255, 255, 0.08) !important;
-            color: #e4e4e7 !important;
-            border: 1px solid rgba(255, 255, 255, 0.22) !important;
-            padding: 3px 10px !important;
-            border-radius: 6px !important;
-        }
-        .timetable-export-card {
-            background: rgba(14, 14, 18, 0.65) !important;
-            border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            border-radius: 14px !important;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/spatial-layout.css?v=1">
     <link rel="stylesheet" href="/static/planner-wizard.css?v=1">
 </head>
 <body>
@@ -798,8 +136,15 @@
         <main class="main-content">
             <header class="chat-header">
                 <div class="header-left">
-                    <button type="button" id="btn-open-sidebar" class="icon-btn" title="Mở thanh bên" aria-label="Mở thanh bên">☰</button>
-                    <button type="button" id="btn-clear-chat" class="icon-btn" title="Bắt đầu cuộc trò chuyện mới" aria-label="Bắt đầu cuộc trò chuyện mới">➕</button>
+                    <button type="button" id="btn-open-sidebar" class="icon-btn" title="Mở ngăn kính Lịch sử &amp; Thư viện" aria-label="Mở thanh bên">☰ Phiên &amp; Thư viện</button>
+                    <button type="button" id="btn-clear-chat" class="icon-btn" title="Bắt đầu cuộc trò chuyện mới" aria-label="Bắt đầu cuộc trò chuyện mới">＋ Mới</button>
+                    <div class="header-brand-pill" aria-hidden="true">
+                        <span class="header-brand-monogram">A</span>
+                        <div class="header-brand-copy">
+                            <span class="header-brand-title">ARYM</span>
+                            <span class="header-brand-sub">Adaptive Revision Yields Mastery</span>
+                        </div>
+                    </div>
                 </div>
                 <nav class="mode-switch" aria-label="Chế độ ứng dụng">
                     <button id="mode-qa" class="mode-button active" aria-pressed="true" aria-controls="qa-panel">💬 Hỏi đáp tài liệu</button>
@@ -807,6 +152,7 @@
                     <button id="mode-timetable" class="mode-button" aria-pressed="false" aria-controls="timetable-panel">📅 Lập kế hoạch học tập</button>
                 </nav>
                 <div class="header-right">
+                    <button type="button" id="btn-spatial-layout-cycle" class="header-pill-btn" title="Chuyển đổi bố cục không gian (Đảo nổi Bento / Split Studio / Dock Đáy)">⊞ Đảo nổi Bento</button>
                     <button type="button" id="btn-replay-tour" class="header-pill-btn" title="Xem hướng dẫn các nút trên giao diện">? Hướng dẫn</button>
                     <button type="button" id="btn-account-trigger" class="header-pill-btn" data-authenticated="false" title="Đăng nhập hoặc tạo tài khoản">Đăng nhập</button>
                 </div>
@@ -1758,19 +1104,64 @@
 
             <!-- Chat messages container -->
             <div class="messages-container" id="messages-container">
-                <!-- Welcome greeting -->
+                <!-- Spatial Bento Welcome Hub -->
                 <div class="message assistant welcome-card">
-                    <div class="message-avatar">
-                        <div class="brand-icon" style="width: 64px; height: 64px; border-radius: 18px;" aria-hidden="true">
-                            <svg class="arym-monogram-svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M12 2.5L3.5 20.5h3.6l1.8-4h6.2l1.8 4h3.6L12 2.5z" />
-                                <path d="M9.8 13.5L12 8.2l2.2 5.3H9.8z" />
-                            </svg>
+                    <div class="arym-spatial-hero">
+                        <div class="arym-hero-lens-badge">
+                            <span>ARYM</span>
+                            <span>·</span>
+                            <span>Adaptive Revision Yields Mastery</span>
                         </div>
+                        <h3>Không gian Học Tập &amp; Ôn Luyện Chủ Động</h3>
+                        <p>Chọn nhanh một trạm làm việc bên dưới hoặc đặt câu hỏi trực tiếp vào thanh kính lỏng phía dưới.</p>
                     </div>
-                    <div class="message-body">
-                        <div class="welcome-brand-kicker">ARYM · Adaptive Revision Yields Mastery</div>
-                        <h3>Xin chào! Bạn muốn học gì hôm nay?</h3>
+
+                    <div class="arym-bento-grid">
+                        <!-- Bento Card 1: Grounded QA -->
+                        <article class="arym-bento-card">
+                            <div>
+                                <div class="bento-card-top">
+                                    <span class="bento-step-pill">01 · Hỏi đáp giáo trình</span>
+                                    <span class="bento-icon-orb" aria-hidden="true">💬</span>
+                                </div>
+                                <h4>Tra cứu &amp; Giải thích có Trích dẫn Nguồn</h4>
+                                <p>Mọi câu trả lời đều đối chiếu trực tiếp từ giáo trình đã nạp kèm số trang, đoạn trích nguyên văn và mở xem trang PDF/Slide gốc.</p>
+                            </div>
+                            <div class="bento-card-actions">
+                                <button type="button" class="bento-chip-btn" data-bento-action="prompt" data-prompt="Tóm tắt các khái niệm cốt lõi và định lý quan trọng kèm trích dẫn trang nguồn.">✨ Tóm tắt khái niệm cốt lõi</button>
+                                <button type="button" class="bento-chip-btn" data-bento-action="open-drawer">📚 Mở Thư viện &amp; Lịch sử</button>
+                            </div>
+                        </article>
+
+                        <!-- Bento Card 2: Topic Practice & PDF Export -->
+                        <article class="arym-bento-card">
+                            <div>
+                                <div class="bento-card-top">
+                                    <span class="bento-step-pill">02 · Luyện tập &amp; Xuất PDF</span>
+                                    <span class="bento-icon-orb" aria-hidden="true">📄</span>
+                                </div>
+                                <h4>Tạo Đề Theo Chủ Đề &amp; Đáp Án Cuối Trang</h4>
+                                <p>Sinh câu hỏi trắc nghiệm kiểm định 2 bước theo chủ đề, xuất ngay file PDF có đề bài ở trang đầu và bảng đáp án riêng ở cuối trang.</p>
+                            </div>
+                            <div class="bento-card-actions">
+                                <button type="button" class="bento-chip-btn" data-bento-action="open-tools">🧰 Mở Trạm Tạo Câu Hỏi &amp; PDF →</button>
+                            </div>
+                        </article>
+
+                        <!-- Bento Card 3: 1h30p Auto-Scheduler & Weekly Lessons -->
+                        <article class="arym-bento-card">
+                            <div>
+                                <div class="bento-card-top">
+                                    <span class="bento-step-pill">03 · Lịch tự học 1h30p</span>
+                                    <span class="bento-icon-orb" aria-hidden="true">📅</span>
+                                </div>
+                                <h4>Phân Bổ 1 Tiếng 30 Phút · 1 Môn/Ngày</h4>
+                                <p>Tự động quét giờ trống trong thời khóa biểu, phân loại chủ đề bài học trong tuần và đính kèm phiếu bài tập PDF vào lịch (.ics / .zip).</p>
+                            </div>
+                            <div class="bento-card-actions">
+                                <button type="button" class="bento-chip-btn" data-bento-action="open-timetable">📅 Mở Lịch Tự Học 1h30p →</button>
+                            </div>
+                        </article>
                     </div>
                 </div>
             </div>
@@ -2286,6 +1677,7 @@
         </div>
     </div>
 
+    <script src="/static/spatial-layout.js?v=1"></script>
     <script src="/static/onboarding-tour.js?v=1"></script>
     <script src="/static/accounts.js?v=2"></script>
     <script src="/static/app.js?v=liquid-glass-20261110"></script>

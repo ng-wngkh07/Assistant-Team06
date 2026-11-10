@@ -1166,10 +1166,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (messagesContainer) {
             messagesContainer.innerHTML = initialWelcomeHTML || `
                 <div class="message assistant welcome-card">
-                    <div class="message-avatar">
-                        <img src="/static/logo.jpg" alt="ARYM AI" class="hero-avatar-img">
-                    </div>
-                    <div class="message-body">
+                    <div class="arym-spatial-hero">
+                        <div class="arym-hero-lens-badge">ARYM · Adaptive Revision Yields Mastery</div>
                         <h3>Xin chào! Bạn muốn học gì hôm nay?</h3>
                     </div>
                 </div>
