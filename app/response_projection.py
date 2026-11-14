@@ -17,6 +17,16 @@ INTERNAL_PATH_KEYS = frozenset(
     }
 )
 
+ERROR_TEXT_KEYS = frozenset(
+    {
+        "error",
+        "detail",
+        "failure_reason",
+        "vector_error",
+        "message",
+    }
+)
+
 _DEFAULT_ERROR_MESSAGE = "Hệ thống AI cục bộ đang tạm thời không khả dụng. Vui lòng thử lại sau."
 _MODEL_CONFIG_ERROR_MESSAGE = (
     "Mô hình AI cục bộ chưa sẵn sàng hoặc thiếu cấu hình hợp lệ. "
@@ -58,6 +68,9 @@ def project_public_response(value: Any) -> Any:
             if key_lower in INTERNAL_PATH_KEYS:
                 continue
             if key_lower == "src_path" and isinstance(item, str) and is_absolute_host_path(item):
+                continue
+            if key_lower in ERROR_TEXT_KEYS and isinstance(item, str):
+                projected[key] = sanitize_error_detail(item)
                 continue
             projected[key] = project_public_response(item)
         return projected
