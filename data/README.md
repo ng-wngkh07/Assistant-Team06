@@ -10,6 +10,8 @@ This directory holds runtime state. Keep private content out of Git. The documen
 | Translation cache | Locally generated translations | `app/bilingual.py` |
 | OCR cache | Source-bound recognition output | `app/vision_ocr.py` |
 | Runtime locks | Coordination of model and indexing operations | `app/gpu_lock.py`, `app/dialogue.py` |
+| Account stores | Authentication plus isolated uploads, originals, history and planner data | `app/accounts.py`, `app/account_services.py`, `app/db/` |
+| Source watcher state | Private incremental shared-source status; not a training queue | `app/src_watcher.py`, `app/source_freshness.py` |
 | Demo data | An isolated index built from public test fixtures | `scripts/dev.py` |
 
 Paths are configurable; see [configuration](../docs/configuration.md). Use one writer for the canonical index. Do not merge databases between branches or use serving data as a test fixture. Back up persistent state consistently before migration.

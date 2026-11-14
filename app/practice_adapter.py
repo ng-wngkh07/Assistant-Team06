@@ -15,6 +15,8 @@ REGISTRY_FILE = DATA_DIR / 'adapters' / 'practice-9b.json'
 SYSTEM_PROMPT = 'Bạn là trợ lý học tập bám sát tài liệu. Hãy tuân thủ định dạng dữ liệu được yêu cầu.'
 CORE_FIELDS = ('index', 'supported', 'explanation_supported', 'unique_answer', 'qualifiers_preserved', 'verified_answer')
 AUDIT_FIELDS = ('input_audit', 'independent_solution', 'choice_comparison', 'explanation_audit')
+GROUNDED_REVIEW_PROFILE = 'grounded_review_v2'
+COMPACT_REVIEW_PROFILE = 'compact_review_v1'
 
 
 def _require(condition, message):
@@ -42,7 +44,7 @@ def _load_lines(binding):
     return [json.loads(line) for line in _bound_file(binding).read_text(encoding='utf-8').splitlines()]
 
 
-def _score_evidence(evidence, arms, count):
+def _score_evidence(evidence, arms, count, strict_contract=False):
     suite_rows = _load_lines(evidence['suite'])
     suite = {row['id']: row for row in suite_rows}
     raw = _load_lines(evidence['results'])
@@ -71,13 +73,23 @@ def _score_evidence(evidence, arms, count):
             check = checks[0] if len(checks) == 1 else {}
         except (ValueError, KeyError, TypeError, IndexError):
             check = {}
-        complete = isinstance(check, dict) and set(check) == set(CORE_FIELDS + AUDIT_FIELDS)
+        fields = set(CORE_FIELDS + AUDIT_FIELDS)
+        if strict_contract:
+            fields.update(('source_basis', 'matching_choices'))
+        complete = isinstance(check, dict) and set(check) == fields
         complete = complete and all(isinstance(check.get(k), str) and 0 < len(check[k].strip()) <= 1000 for k in AUDIT_FIELDS)
+        if complete and strict_contract:
+            from app.practice_proof import native_review_witness_is_consistent
+            complete = native_review_witness_is_consistent(check, case['payload']['evidence_quote'])
+            if check.get('supported') is True:
+                complete = complete and bool(check.get('source_basis'))
         expected = case['expected_core']
         keys = [key for key in CORE_FIELDS if key != 'qualifiers_preserved'] if case['task'] in ('independent_false_explanation', 'missing_required_input') else CORE_FIELDS
         correct = complete and all(type(check.get(key)) is type(expected[key]) and check[key] == expected[key] for key in keys) and row['finish_reason'] == 'stop'
         unsafe = not expected['explanation_supported'] and all(check.get(key) is True for key in ('supported', 'explanation_supported', 'unique_answer', 'qualifiers_preserved')) and check.get('verified_answer') == case['payload']['proposed_answer']
         strict = complete and all(type(check.get(key)) is type(expected[key]) and check[key] == expected[key] for key in CORE_FIELDS) and row['finish_reason'] == 'stop'
+        if strict_contract:
+            correct = strict
         scored[row['arm']][row['id']] = {'strict_core': strict, 'core': correct, 'source': correct and review['status'] == 'PASS', 'unsafe': unsafe, 'missing': case['task'] == 'missing_required_input', 'loop': review['repetition_loop'], 'truncated': row['finish_reason'] != 'stop', 'seconds': seconds}
     _require(all(set(rows) == set(suite) for rows in scored.values()), 'case/arm coverage mismatch')
     return suite, scored
@@ -88,25 +100,43 @@ def _ratio(scored, first, second):
     return len(pairs), statistics.median(pairs) if pairs else math.inf
 
 
-def _validate_primary(evidence):
+def _validate_primary(evidence, profile=COMPACT_REVIEW_PROFILE):
     contract_review = _load_json(evidence['refusal_contract_review'])
     strict_summary = _load_json(evidence['strict_summary'])
     _require(contract_review['schema'] == 'practice-refusal-contract-review-v1' and contract_review['status'] == 'REVIEWED_APPLICATION_CONTRACT', 'missing application contract review')
     _require(contract_review['primary_strict_summary_sha256'] == evidence['strict_summary']['sha256'] and contract_review['original_strict_decision'] == strict_summary['decision'], 'strict study outcome not preserved')
     protocol = _load_json(evidence['protocol'])
+    grounded = profile == GROUNDED_REVIEW_PROFILE
+    if grounded:
+        _require(protocol.get('review_profile') == profile, 'evaluation profile differs from adapter')
     _require(protocol['frozen_before_any_fresh_output'] is True and protocol['activation'] is False, 'evaluation was not frozen')
     for name, key in [('suite', 'fresh_eval_sha256'), ('results', None), ('content_review', None), ('source_review', 'source_review_sha256')]:
         _bound_file(evidence[name])
         if key:
             _require(evidence[name]['sha256'] == protocol[key], 'protocol evidence binding mismatch')
-    _require(protocol['generation'] == {'temperature': 0, 'seed': 42, 'max_tokens': 1000, 'context': 8192, 'thinking': False, 'prefill': 128, 'presence_penalty': 0, 'schema': 'practice_review_schema(1,None)'}, 'evaluation profile changed')
+    schema_name = 'native_grounded_review_schema(1,None)' if grounded else 'practice_review_schema(1,None)'
+    _require(protocol['generation'] == {'temperature': 0, 'seed': 42, 'max_tokens': 1000, 'context': 8192, 'thinking': False, 'prefill': 128, 'presence_penalty': 0, 'schema': schema_name}, 'evaluation profile changed')
     source_review = _load_json(evidence['source_review'])
     _require(source_review['status'] == 'PASS', 'sources not accepted')
-    suite, scored = _score_evidence(evidence, ('base', 'compact_base', 'adapter'), 14)
+    suite, scored = _score_evidence(evidence, ('base', 'compact_base', 'adapter'), 14, strict_contract=grounded)
     from app.practice import practice_review_schema
     for case in suite.values():
-        expected_messages = [{'role': 'system', 'content': SYSTEM_PROMPT}, {'role': 'user', 'content': build_compact_review_prompt(case['payload'])}]
-        _require(case['compact_messages'] == expected_messages and json.dumps(case['response_schema']) == json.dumps(practice_review_schema(1, None)), 'runtime prompt or schema differs from evaluation')
+        if grounded:
+            from app.practice import PracticeService, build_practice_review_item
+            from app.practice_proof import native_grounded_review_prompt, native_grounded_review_schema
+            payload = case['payload']
+            quote = payload['evidence_quote']
+            support = PracticeService.extract_supporting_evidence(payload['source'], quote)
+            _require(bool(support), 'evaluation citation is unbound')
+            context = PracticeService.extract_surrounding_context(payload['source'], quote)
+            item = build_practice_review_item(payload, support, context_text=context if context != support else None)
+            prompt = native_grounded_review_prompt(item)
+            expected_schema = native_grounded_review_schema(1, None)
+        else:
+            prompt = build_compact_review_prompt(case['payload'])
+            expected_schema = practice_review_schema(1, None)
+        expected_messages = [{'role': 'system', 'content': SYSTEM_PROMPT}, {'role': 'user', 'content': prompt}]
+        _require(case['compact_messages'] == expected_messages and json.dumps(case['response_schema']) == json.dumps(expected_schema), 'runtime prompt or schema differs from evaluation')
     reviewed_sources = {row['source']['passage_sha256'] for row in source_review['source_spans']}
     _require(all(row['source']['passage_sha256'] in reviewed_sources for row in suite.values() if row['task'] != 'missing_required_input'), 'source absent from source review')
     _require(len({row['source_group'] for row in suite.values() if row['task'] != 'missing_required_input'}) >= 3, 'missing held-out source families')
@@ -114,6 +144,8 @@ def _validate_primary(evidence):
     candidate = scored['adapter']
     _require(counts['adapter']['source'] > counts['base']['source'], 'source accuracy did not improve')
     _require(counts['adapter']['source'] >= counts['compact_base']['source'], 'adapter source regression')
+    if grounded:
+        _require(counts['adapter']['source'] > counts['compact_base']['source'], 'grounded adapter does not improve current base source accuracy')
     _require(counts['adapter']['core'] >= max(counts['base']['core'], counts['compact_base']['core']), 'core accuracy regression')
     _require(not any(row['unsafe'] or row['loop'] or row['truncated'] for row in candidate.values()), 'unsafe acceptance, loop or truncation')
     missing = [row for row in candidate.values() if row['missing']]
@@ -126,8 +158,8 @@ def _validate_primary(evidence):
     return {'source_correct': {arm: counts[arm]['source'] for arm in counts}, 'cases': 14, 'strict_core_correct': {arm: counts[arm]['strict_core'] for arm in counts}, 'original_strict_decision': strict_summary['decision'], 'refusal_contract_review_sha256': evidence['refusal_contract_review']['sha256'], 'paired_ratio': ratio, 'adapter_incremental_ratio': incremental}
 
 
-def _validate_application(evidence, adapter_sha256):
-    suite, scored = _score_evidence(evidence, ('base', 'adapter'), 3)
+def _validate_application(evidence, adapter_sha256, profile=COMPACT_REVIEW_PROFILE):
+    suite, scored = _score_evidence(evidence, ('base', 'adapter'), 3, strict_contract=profile == GROUNDED_REVIEW_PROFILE)
     for row in _load_lines(evidence['results']):
         worker = row['native_worker']
         _require(worker['context_limit'] == 8192 and worker['generation_profile']['presence_penalty'] == 0, 'native profile changed')
@@ -145,7 +177,10 @@ def load_practice_adapter(model_dir, require_active=True):
     if not REGISTRY_FILE.is_file():
         return None
     manifest = json.loads(REGISTRY_FILE.read_text(encoding='utf-8'))
-    _require(manifest['schema'] == 'study-practice-9b-v1', 'unsupported acceptance schema')
+    schema = manifest['schema']
+    profile = manifest.get('review_profile', COMPACT_REVIEW_PROFILE)
+    _require((schema == 'study-practice-9b-v1' and profile == COMPACT_REVIEW_PROFILE)
+             or (schema == 'study-practice-9b-v2' and profile == GROUNDED_REVIEW_PROFILE), 'unsupported acceptance schema or profile')
     _require(manifest['stage'] in ('native_qualified', 'application_accepted'), 'unsupported stage')
     if require_active and manifest['stage'] != 'application_accepted':
         return None
@@ -167,11 +202,11 @@ def load_practice_adapter(model_dir, require_active=True):
     protocol = _load_json(manifest['primary']['protocol'])
     _require(protocol['selected_adapter_sha256'] == receipt['adapter_sha256'], 'evaluation concerns another adapter')
     _require(protocol['adapter_config_sha256'] == manifest['adapter_config']['sha256'], 'evaluated adapter configuration changed')
-    primary = _validate_primary(manifest['primary'])
+    primary = _validate_primary(manifest['primary'], profile)
     application = None
     if manifest['stage'] == 'application_accepted':
-        application = _validate_application(manifest['application'], receipt['adapter_sha256'])
-    return {'path': str(weights.parent), 'sha256': receipt['adapter_sha256'], 'scope': 'single_question_practice_review', 'stage': manifest['stage'], 'primary': primary, 'application': application}
+        application = _validate_application(manifest['application'], receipt['adapter_sha256'], profile)
+    return {'path': str(weights.parent), 'sha256': receipt['adapter_sha256'], 'scope': 'single_question_practice_review', 'review_profile': profile, 'stage': manifest['stage'], 'primary': primary, 'application': application}
 
 
 def request_matches_scope(request):
@@ -197,6 +232,62 @@ def request_matches_scope(request):
             return False
         return content == build_compact_review_prompt(review)
     except (ValueError, IndexError, TypeError, AttributeError):
+        return False
+
+
+def request_matches_grounded_review(request):
+    """Detect grounded_review_v2 requests (1..3 candidates grounded review profile).
+
+    Defaults to base model (adapter is not loaded), ensuring accurate metadata
+    and preventing silent qualification under old accepted evidence.
+    """
+    if not isinstance(request, dict):
+        return False
+    messages = request.get('messages')
+    if not isinstance(messages, list) or len(messages) != 2:
+        return False
+    user_msg = messages[1]
+    if not isinstance(user_msg, dict) or user_msg.get('role') != 'user':
+        return False
+    content = user_msg.get('content', '')
+    if "Kiểm định độc lập từng câu từ source và question" in content and "Dữ liệu cần kiểm định:\n" in content:
+        return True
+    return False
+
+
+def request_matches_grounded_adapter_scope(request):
+    from app.practice_proof import native_grounded_review_prompt, native_grounded_review_schema
+    if not isinstance(request, dict):
+        return False
+    if (request.get('max_tokens') != 1000 or request.get('num_ctx') != 8192
+            or request.get('temperature') != 0 or request.get('seed') not in (None, 42)
+            or json.dumps(request.get('response_schema')) != json.dumps(native_grounded_review_schema(1, None))):
+        return False
+    messages = request.get('messages')
+    if (not isinstance(messages, list) or len(messages) != 2
+            or messages[0] != {'role': 'system', 'content': SYSTEM_PROMPT}
+            or not isinstance(messages[1], dict) or messages[1].get('role') != 'user'):
+        return False
+    content = messages[1].get('content', '')
+    try:
+        review = json.loads(content.rsplit('Dữ liệu cần kiểm định:\n', 1)[1])
+        if not isinstance(review, list) or len(review) != 1 or not isinstance(review[0], dict):
+            return False
+        item = review[0]
+        required = {'index', 'source', 'question', 'choices', 'explanation', 'evidence_quote'}
+        if (set(item) not in (required, required | {'context'})
+                or type(item['index']) is not int or item['index'] != 1
+                or not isinstance(item['choices'], dict) or list(item['choices']) != list('ABCD')):
+            return False
+        if not all(isinstance(item[key], str) and item[key].strip()
+                   for key in ('source', 'question', 'explanation', 'evidence_quote')):
+            return False
+        if not all(isinstance(value, str) and value.strip() for value in item['choices'].values()):
+            return False
+        if 'context' in item and not isinstance(item['context'], str):
+            return False
+        return content == native_grounded_review_prompt(review)
+    except (ValueError, IndexError, TypeError, AttributeError, KeyError):
         return False
 
 
@@ -257,8 +348,14 @@ def build_compact_review_prompt(review):
     return instructions + json.dumps(review, ensure_ascii=False)
 
 
-def active_practice_adapter(model_dir):
+def active_practice_adapter(model_dir, profile=COMPACT_REVIEW_PROFILE):
     try:
-        return load_practice_adapter(model_dir)
+        if not REGISTRY_FILE.is_file():
+            return None
+        manifest = json.loads(REGISTRY_FILE.read_text(encoding='utf-8'))
+        if manifest.get('review_profile', COMPACT_REVIEW_PROFILE) != profile:
+            return None
+        accepted = load_practice_adapter(model_dir)
+        return accepted if accepted and accepted['review_profile'] == profile else None
     except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError):
         return None

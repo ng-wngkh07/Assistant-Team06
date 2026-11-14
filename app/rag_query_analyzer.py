@@ -28,6 +28,7 @@ _BASE_DIRECTIVE_STOPWORDS = {
     "một", "mấy", "tài", "liệu", "chất", "sách", "chương", "cuốn", "trang",
     "từng", "bước", "thật", "rõ", "ràng", "tóm", "tắt", "ngắn", "gọn",
     "chi", "tiết", "cụ", "thể", "so", "sánh", "đối", "chiếu", "phân", "biệt",
+    "thao", "tác", "tên", "gọi",
 }
 DIRECTIVE_STOPWORDS = _BASE_DIRECTIVE_STOPWORDS | {
     _normalize_stopword(w) for w in _BASE_DIRECTIVE_STOPWORDS if _normalize_stopword(w)

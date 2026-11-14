@@ -1347,6 +1347,16 @@ body {
     font-size: 1rem;
     line-height: 1.5;
 }
+.exercise-source-context {
+    font-size: 0.85rem;
+    color: var(--text-secondary, #475569);
+    background: rgba(100, 116, 139, 0.08);
+    border-left: 3px solid var(--accent, #3b82f6);
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    border-radius: 4px;
+    line-height: 1.45;
+}
 .exercise-answer-section {
     margin-top: 12px;
     padding-top: 10px;
@@ -1368,14 +1378,31 @@ body {
         gap: 8px;
     }
     .form-group.flex-1,
-    .form-group.flex-2,
-    .form-group.form-actions {
-        flex: 1 1 100%;
+    .form-group.flex-2 {
+        flex: 0 0 auto;
         width: 100%;
         min-width: 0;
+        box-sizing: border-box;
     }
-    .form-group.form-actions button {
+    .form-group.form-actions {
+        flex: 0 0 auto;
         width: 100%;
+        min-width: 0;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        box-sizing: border-box;
+    }
+    .form-group.form-actions button,
+    .form-group.form-actions .btn {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        white-space: normal;
+        word-break: break-word;
+        text-align: center;
+        justify-content: center;
     }
     .learning-tools-panel {
         padding: 10px 8px 16px;
@@ -2789,6 +2816,44 @@ body.sidebar-collapsed #btn-open-sidebar { display: inline-flex; }
     background: #ef4444 !important;
     color: #ffffff !important;
     border-color: #ef4444 !important;
+}
+
+/* Unverified Proposed Answer Match/Difference States (Truthful non-authoritative grading) */
+.quiz-choice-btn.proposed-match {
+    background: rgba(14, 165, 233, 0.16) !important;
+    border-color: rgba(56, 189, 248, 0.5) !important;
+    color: #ffffff !important;
+    box-shadow: 0 0 14px rgba(14, 165, 233, 0.2) !important;
+}
+
+.quiz-choice-btn.proposed-match .quiz-choice-key {
+    background: #0ea5e9 !important;
+    color: #ffffff !important;
+    border-color: #0ea5e9 !important;
+}
+
+.quiz-choice-btn.proposed-diff {
+    background: rgba(245, 158, 11, 0.16) !important;
+    border-color: rgba(245, 158, 11, 0.5) !important;
+    color: #fde68a !important;
+}
+
+.quiz-choice-btn.proposed-diff .quiz-choice-key {
+    background: #f59e0b !important;
+    color: #ffffff !important;
+    border-color: #f59e0b !important;
+}
+
+.quiz-bubble.proposed-match {
+    background: #0ea5e9 !important;
+    border-color: #38bdf8 !important;
+    color: #ffffff !important;
+}
+
+.quiz-bubble.proposed-diff {
+    background: #f59e0b !important;
+    border-color: #fbbf24 !important;
+    color: #ffffff !important;
 }
 
 /* Quiz Feedback & Grounding Citation Box */

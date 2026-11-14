@@ -1,6 +1,6 @@
 # Timetable recognition, review and calendar export
 
-A recognized timetable is an editable draft. Export uses only the confirmed schedule in the local timetable store. OCR or VLM output never becomes a confirmed timetable automatically.
+A recognized timetable is an editable draft. Export uses only the confirmed schedule in the active account planner store or local guest timetable store. OCR or VLM output never becomes a confirmed timetable automatically.
 
 ## User workflow
 
@@ -23,9 +23,9 @@ Training candidates must retain their image hash, observed fields, explicit miss
 
 ## Processing and boundaries
 
-The dense registered-table path reads literal OCR cell positions on supported hosts. On Mac, other layouts use locally loaded MLX vision weights; text-only inference cannot read an image. Both paths retain the review step. The native image worker must bound image size and prefill work to avoid exhausting the GPU, and reject truncated responses. No hosted model service is permitted. The extracted subject must come from its own row/cell, rather than a schema example or the previous semester. Neither a successful JSON response nor a cache hit proves that all subjects were recognized.
+The dense registered-table path reads literal OCR cell positions on supported hosts. On Mac, other layouts use locally loaded MLX vision weights; text-only inference cannot read an image. Both paths retain the review step. The native image worker must bound image size and prefill work to avoid exhausting the GPU, and reject truncated responses. External model APIs and cloud fallback are prohibited; a hosted website still executes the selected models locally on its configured backend host. The extracted subject must come from its own row/cell, rather than a schema example or the previous semester. Neither a successful JSON response nor a cache hit proves that all subjects were recognized.
 
-The backend validates confirmation data and rejects conflicting or incomplete entries. Export rejects invalid rows as a whole rather than silently dropping subjects or assigning an absent weekday to Monday. It uses the confirmed course names, clock times, rooms and ISO weekday (1=Monday, 7=Sunday). For Vietnamese labels, Thứ 2 is ISO Monday; an unlabelled model integer is insufficient evidence for that conversion.
+The backend validates confirmation data and rejects conflicting, stale, or incomplete entries. For dated study plans, newly scheduled or user-edited study sessions must begin at or after the current `Asia/Ho_Chi_Minh` ceiling minute (HTTP `409` on confirmation otherwise), while existing stored `completed`, `locked`, and `manual` sessions remain preserved and isolated explicit `db_path` operations do not write to the default database. Export rejects invalid rows as a whole rather than silently dropping subjects or assigning an absent weekday to Monday. It uses the confirmed course names, clock times, rooms and ISO weekday (1=Monday, 7=Sunday). For Vietnamese labels, Thứ 2 is ISO Monday; an unlabelled model integer is insufficient evidence for that conversion.
 
 The calendar follows [RFC 5545](https://www.rfc-editor.org/rfc/rfc5545): local DTSTART/DTEND use Asia/Ho_Chi_Minh, recurring UNTIL is expressed in UTC, and the semester's final local day is included without admitting the following day. Text is escaped and long UTF-8 lines are folded. The exporter emits weekly event definitions, so 14 course/meeting rows across two complete weeks produce 14 VEVENT definitions and 28 occurrences. Unusual rotating weeks, cancellations and individual date exceptions require explicit support and review; they must not be guessed from a weekly image.
 

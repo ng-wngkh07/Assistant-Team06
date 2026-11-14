@@ -5,7 +5,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from app import study_planner
@@ -307,6 +307,8 @@ async def export_timetable_ics(
                     "end_time": s["end_time"],
                     "room": s.get("source_label") or "",
                     "notes": s.get("notes") or "",
+                    "classified_topic": s.get("classified_topic") or "",
+                    "pdf_url": s.get("pdf_url") or "",
                 })
             deadlines = await run_in_threadpool(study_planner.get_tasks)
         if not entries and not deadlines:
@@ -583,7 +585,12 @@ async def confirm_planner_draft_endpoint(payload: StudyPlanConfirmPayload):
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         msg = str(e)
-        if "trùng giờ" in msg or "xâm phạm" in msg:
+        if any(kw in msg for kw in (
+            "trùng giờ", "xâm phạm", "lỗi thời", "xung đột", "không còn hợp lệ",
+            "giới hạn", "vượt quá", "ngoài khung giờ", "hạn nộp", "bắt đầu trước",
+            "kết thúc sau", "khung giờ đêm", "thiết lập", "hoàn thành",
+            "không tồn tại", "đã bị xóa", "không còn tồn tại",
+        )):
             raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=422, detail=msg)
 
@@ -612,7 +619,12 @@ async def add_planner_session(payload: StudySessionPayload):
         return {"status": "ok", "session": session}
     except ValueError as e:
         msg = str(e)
-        if "trùng giờ" in msg or "xâm phạm" in msg:
+        if any(kw in msg for kw in (
+            "trùng giờ", "xâm phạm", "lỗi thời", "xung đột", "không còn hợp lệ",
+            "giới hạn", "vượt quá", "ngoài khung giờ", "hạn nộp", "bắt đầu trước",
+            "kết thúc sau", "khung giờ đêm", "thiết lập", "hoàn thành",
+            "không tồn tại", "đã bị xóa", "không còn tồn tại",
+        )):
             raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=422, detail=msg)
 
@@ -627,7 +639,12 @@ async def update_planner_session(session_id: int, payload: StudySessionUpdatePay
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         msg = str(e)
-        if "trùng giờ" in msg or "xâm phạm" in msg:
+        if any(kw in msg for kw in (
+            "trùng giờ", "xâm phạm", "lỗi thời", "xung đột", "không còn hợp lệ",
+            "giới hạn", "vượt quá", "ngoài khung giờ", "hạn nộp", "bắt đầu trước",
+            "kết thúc sau", "khung giờ đêm", "thiết lập", "hoàn thành",
+            "không tồn tại", "đã bị xóa", "không còn tồn tại",
+        )):
             raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=422, detail=msg)
 
@@ -639,3 +656,407 @@ async def delete_planner_session(session_id: int):
         raise HTTPException(status_code=404, detail="Không tìm thấy phiên học")
     return {"status": "ok"}
 
+
+# ==============================================================================
+# Weekly Lessons Topic Classifier, 1h30p (1 Subject/Day) Auto-Scheduler & PDF Bundle
+# ==============================================================================
+
+
+class WeeklyLessonCreatePayload(BaseModel):
+    course: str = Field(..., min_length=1, max_length=160)
+    lesson_title: str = Field(..., min_length=1, max_length=240)
+    status: str = Field(default="upcoming", max_length=24)
+    question_count: int = Field(default=4, ge=1, le=10)
+
+
+class AutoSchedule90mPayload(BaseModel):
+    session_minutes: int = Field(default=90, ge=15, le=240)
+    propose_only: bool = Field(default=False)
+
+
+@router.get("/api/timetable/planner/weekly-lessons")
+async def get_weekly_lessons_endpoint():
+    from app.planner_topic_bridge import list_weekly_lessons
+
+    lessons = await run_in_threadpool(list_weekly_lessons, None)
+    return {"lessons": lessons}
+
+
+@router.post("/api/timetable/planner/weekly-lessons")
+async def create_weekly_lesson_endpoint(payload: WeeklyLessonCreatePayload):
+    from app import server as _srv
+    from app.planner_topic_bridge import add_weekly_lesson
+
+    try:
+        lesson = await run_in_threadpool(
+            add_weekly_lesson,
+            None,
+            course=payload.course,
+            lesson_title=payload.lesson_title,
+            status=payload.status,
+            question_count=payload.question_count,
+            learning_service=getattr(_srv, "learning_service", None),
+            document_lookup=getattr(_srv, "document_lookup", None),
+        )
+        return {"status": "ok", "lesson": lesson}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.delete("/api/timetable/planner/weekly-lessons/{lesson_id}")
+async def remove_weekly_lesson_endpoint(lesson_id: int):
+    from app.planner_topic_bridge import delete_weekly_lesson
+
+    ok = await run_in_threadpool(delete_weekly_lesson, None, lesson_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bài học tuần.")
+    return {"status": "ok"}
+
+
+@router.post("/api/timetable/planner/auto-schedule-courses")
+async def auto_schedule_courses_90m_endpoint(payload: Optional[AutoSchedule90mPayload] = None):
+    from app import server as _srv
+    from app.planner_topic_bridge import auto_schedule_90m_one_subject_per_day
+
+    req = payload or AutoSchedule90mPayload()
+    try:
+        result = await run_in_threadpool(
+            auto_schedule_90m_one_subject_per_day,
+            None,
+            learning_service=getattr(_srv, "learning_service", None),
+            document_lookup=getattr(_srv, "document_lookup", None),
+            session_minutes=req.session_minutes,
+            propose_only=req.propose_only,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/api/timetable/planner/sessions/{session_id}/exercise")
+async def get_session_exercise_endpoint(session_id: int):
+    session = await run_in_threadpool(study_planner.get_session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phiên học.")
+    p_id = session.get("practice_id")
+    ws_id = session.get("worksheet_id")
+    return {
+        "session_id": session_id,
+        "course": session.get("course"),
+        "classified_topic": session.get("classified_topic"),
+        "practice_id": p_id,
+        "worksheet_id": ws_id,
+        "exercise_status": session.get("exercise_status") or ("available" if (p_id or ws_id) else "not_generated"),
+        "pdf_url": session.get("pdf_url"),
+    }
+
+
+@router.post("/api/timetable/planner/sessions/{session_id}/exercise/generate")
+async def generate_session_exercise_endpoint(session_id: int):
+    from app import server as _srv
+    from app.dialogue import DialogueBusyError, acquire_inference
+    from app.gpu_lock import GPUBusyError
+    from app.learning import PracticeGenerationError
+    from app.practice import PracticeSessionNotFound, is_valid_practice_session
+    from app.planner_topic_bridge import _connect
+
+    session = await run_in_threadpool(study_planner.get_session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phiên học.")
+
+    # Reuse existing practice session if already available
+    existing_pid = (session.get("practice_id") or "").strip()
+    if existing_pid and is_valid_practice_session(existing_pid):
+        try:
+            existing_practice = await run_in_threadpool(_srv.practice_service.get_session, existing_pid)
+            return {
+                "status": "ok",
+                "session": session,
+                "practice": existing_practice,
+            }
+        except PracticeSessionNotFound:
+            pass
+
+    # Check if linked to a weekly lesson that already has an available practice session
+    w_lesson_id = session.get("weekly_lesson_id")
+    if w_lesson_id:
+        from app.planner_topic_bridge import list_weekly_lessons
+        lessons = await run_in_threadpool(list_weekly_lessons, None)
+        linked_l = next((l for l in lessons if int(l["id"]) == int(w_lesson_id)), None)
+        if linked_l and linked_l.get("practice_id") and is_valid_practice_session(linked_l["practice_id"]):
+            pid = linked_l["practice_id"]
+            await run_in_threadpool(study_planner.update_session_practice, session_id, pid, exercise_status="available")
+            updated = await run_in_threadpool(study_planner.get_session, session_id)
+            practice = await run_in_threadpool(_srv.practice_service.get_session, pid)
+            return {"status": "ok", "session": updated, "practice": practice}
+
+    raw_title = str(session.get("title") or "")
+    if raw_title.startswith("Tự học:"):
+        raw_title = raw_title.replace("Tự học:", "", 1).strip()
+    topic = (raw_title or session.get("classified_topic") or session.get("course") or "").strip()
+    if not topic:
+        raise HTTPException(status_code=422, detail="Phiên học chưa có chủ đề hoặc môn học để tạo bài tập.")
+
+    learning_svc = getattr(_srv, "learning_service", None)
+    if not learning_svc:
+        raise HTTPException(status_code=503, detail="Dịch vụ học tập chưa sẵn sàng.")
+
+    requested_count = 3
+    if w_lesson_id:
+        from app.planner_topic_bridge import list_weekly_lessons
+        lessons = await run_in_threadpool(list_weekly_lessons, None)
+        linked_l = next((l for l in lessons if int(l["id"]) == int(w_lesson_id)), None)
+        if linked_l and linked_l.get("question_count"):
+            requested_count = max(1, min(10, int(linked_l["question_count"])))
+
+    def run_generation():
+        with acquire_inference(_srv.dialogue_gate), _srv.gpu_coordinator.acquire_for_inference():
+            return learning_svc.generate(
+                topic=topic,
+                count=requested_count,
+                difficulty="medium",
+                purpose="practice",
+                model=getattr(_srv, "DEFAULT_CHAT_MODEL", None),
+            )
+
+    try:
+        gen_result = await run_in_threadpool(run_generation)
+        practice_id = gen_result.get("practice_id")
+        actual_count = len(gen_result.get("questions") or [])
+        if practice_id:
+            await run_in_threadpool(
+                study_planner.update_session_practice,
+                session_id,
+                practice_id,
+                exercise_status="available",
+            )
+            if w_lesson_id:
+                def _update_weekly():
+                    with _connect(None) as conn:
+                        cols = {r[1] for r in conn.execute("PRAGMA table_info(weekly_lessons)").fetchall()}
+                        if "practice_id" in cols:
+                            conn.execute(
+                                "UPDATE weekly_lessons SET practice_id = ?, exercise_status = 'available', question_count = ? WHERE id = ?",
+                                (practice_id, actual_count, w_lesson_id),
+                            )
+                            conn.commit()
+                await run_in_threadpool(_update_weekly)
+
+        updated_session = await run_in_threadpool(study_planner.get_session, session_id)
+        return {
+            "status": "ok",
+            "session": updated_session,
+            "practice": gen_result,
+        }
+    except DialogueBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
+    except GPUBusyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
+    except PracticeGenerationError as exc:
+        await run_in_threadpool(
+            study_planner.update_session_practice,
+            session_id,
+            "",
+            exercise_status="unavailable",
+        )
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/api/timetable/planner/weekly-lessons/{lesson_id}/exercise/generate")
+async def generate_weekly_lesson_exercise_endpoint(lesson_id: int):
+    from app import server as _srv
+    from app.dialogue import DialogueBusyError, acquire_inference
+    from app.gpu_lock import GPUBusyError
+    from app.learning import PracticeGenerationError
+    from app.planner_topic_bridge import list_weekly_lessons, _connect
+    from app.practice import PracticeSessionNotFound, is_valid_practice_session
+
+    lessons = await run_in_threadpool(list_weekly_lessons, None)
+    target_lesson = next((l for l in lessons if int(l["id"]) == int(lesson_id)), None)
+    if not target_lesson:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bài học tuần.")
+
+    # Reuse existing practice session if already available
+    existing_pid = (target_lesson.get("practice_id") or "").strip()
+    if existing_pid and is_valid_practice_session(existing_pid):
+        try:
+            existing_practice = await run_in_threadpool(_srv.practice_service.get_session, existing_pid)
+            return {
+                "status": "ok",
+                "lesson_id": lesson_id,
+                "practice_id": existing_pid,
+                "exercise_status": "available",
+                "practice": existing_practice,
+            }
+        except PracticeSessionNotFound:
+            pass
+
+    # Preserve lesson title / intent over broad classified fallback
+    topic = (target_lesson.get("lesson_title") or target_lesson.get("classified_topic") or target_lesson.get("course") or "").strip()
+    if not topic:
+        raise HTTPException(status_code=422, detail="Bài học chưa có chủ đề hoặc môn học để tạo bài tập.")
+
+    learning_svc = getattr(_srv, "learning_service", None)
+    if not learning_svc:
+        raise HTTPException(status_code=503, detail="Dịch vụ học tập chưa sẵn sàng.")
+
+    requested_count = max(1, min(10, int(target_lesson.get("question_count") or 3)))
+
+    def run_generation():
+        with acquire_inference(_srv.dialogue_gate), _srv.gpu_coordinator.acquire_for_inference():
+            return learning_svc.generate(
+                topic=topic,
+                count=requested_count,
+                difficulty="medium",
+                purpose="practice",
+                model=getattr(_srv, "DEFAULT_CHAT_MODEL", None),
+            )
+
+    try:
+        gen_result = await run_in_threadpool(run_generation)
+        practice_id = gen_result.get("practice_id")
+        actual_count = len(gen_result.get("questions") or [])
+        if practice_id:
+            def _update_lesson_and_sessions():
+                with _connect(None) as conn:
+                    cols = {r[1] for r in conn.execute("PRAGMA table_info(weekly_lessons)").fetchall()}
+                    if "practice_id" in cols:
+                        conn.execute(
+                            "UPDATE weekly_lessons SET practice_id = ?, exercise_status = 'available', question_count = ? WHERE id = ?",
+                            (practice_id, actual_count, lesson_id),
+                        )
+                    # Also link matching planned sessions in study_sessions
+                    s_cols = {r[1] for r in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
+                    if "weekly_lesson_id" in s_cols:
+                        conn.execute(
+                            "UPDATE study_sessions SET practice_id = ?, exercise_status = 'available' WHERE weekly_lesson_id = ?",
+                            (practice_id, lesson_id),
+                        )
+                    conn.commit()
+            await run_in_threadpool(_update_lesson_and_sessions)
+        return {
+            "status": "ok",
+            "lesson_id": lesson_id,
+            "practice_id": practice_id,
+            "exercise_status": "available",
+            "practice": gen_result,
+        }
+    except DialogueBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
+    except GPUBusyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
+    except PracticeGenerationError as exc:
+        def _mark_unavailable():
+            with _connect(None) as conn:
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(weekly_lessons)").fetchall()}
+                if "exercise_status" in cols:
+                    conn.execute(
+                        "UPDATE weekly_lessons SET exercise_status = 'unavailable' WHERE id = ?",
+                        (lesson_id,),
+                    )
+                    conn.commit()
+        await run_in_threadpool(_mark_unavailable)
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/api/timetable/worksheets/{worksheet_id}.pdf")
+async def download_planner_worksheet_pdf(worksheet_id: str):
+    from app.planner_topic_bridge import get_worksheet_pdf
+
+    if not re.match(r"^ws_[a-f0-9]{8,24}$", worksheet_id.strip()):
+        raise HTTPException(status_code=400, detail="Mã bài tập PDF không hợp lệ.")
+    record = await run_in_threadpool(get_worksheet_pdf, None, worksheet_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Không tìm thấy file PDF bài tập đính kèm.")
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", (record.get("topic") or "bai-tap").lower()).strip("-") or "bai-tap"
+    filename = f"arym-bai-tap-{slug[:36]}-{worksheet_id}.pdf"
+    return Response(
+        content=record["pdf_bytes"],
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/api/timetable/export-bundle.zip")
+async def export_timetable_bundle_zip(
+    start_date: str = Query(..., description="Start date of semester in YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date of semester in YYYY-MM-DD"),
+    reminder_minutes: int = Query(60, ge=0, le=10080),
+):
+    from datetime import date, timedelta
+    from app import server as _srv
+    from app.accounts import account_id
+    from app.planner_topic_bridge import build_calendar_bundle_zip
+
+    try:
+        entries = list(await run_in_threadpool(_srv.timetable_store.get_confirmed_entries))
+        for entry in entries:
+            if entry.get("id") is not None:
+                entry["uid"] = f"class:{entry['id']}"
+
+        preferences = await run_in_threadpool(study_planner.get_preferences)
+        tasks = await run_in_threadpool(study_planner.get_tasks)
+        week_start = study_planner._infer_week_monday(preferences, tasks) or date.fromisoformat(start_date)
+        routines = await run_in_threadpool(study_planner.get_routines)
+        for r in routines:
+            if r["flexibility"] != "study_window":
+                entries.append({
+                    "uid": f"routine:{r['id']}",
+                    "event_date": None if r.get("is_recurring", True) else (week_start + timedelta(days=r["weekday"] - 1)).isoformat(),
+                    "course": f"[Cá nhân] {r['title']}",
+                    "weekday": r["weekday"],
+                    "start_time": r["start_time"],
+                    "end_time": r["end_time"],
+                    "room": r.get("activity_type_label") or "",
+                    "notes": r.get("flexibility_label") or "",
+                })
+
+        sessions = await run_in_threadpool(study_planner.get_study_sessions)
+        for s in sessions:
+            entries.append({
+                "uid": f"study:{s['id']}",
+                "event_date": (week_start + timedelta(days=s["weekday"] - 1)).isoformat(),
+                "course": f"[Tự học - {s['course']}] {s['title']}",
+                "weekday": s["weekday"],
+                "start_time": s["start_time"],
+                "end_time": s["end_time"],
+                "room": s.get("source_label") or "",
+                "notes": s.get("notes") or "",
+                "classified_topic": s.get("classified_topic") or "",
+                "pdf_url": s.get("pdf_url") or "",
+            })
+        deadlines = [t for t in tasks if t.get("deadline_date") and not t.get("completed")]
+
+        if not entries and not deadlines:
+            raise HTTPException(
+                status_code=400,
+                detail="Chưa có lịch học hoặc buổi tự học nào để xuất gói .zip.",
+            )
+
+        ics_text = _srv.timetable_ics.generate_ics(
+            entries,
+            start_date,
+            end_date,
+            deadlines=deadlines,
+            reminder_minutes=reminder_minutes,
+            namespace=account_id.get() or "local",
+        )
+        zip_bytes = await run_in_threadpool(
+            build_calendar_bundle_zip,
+            None,
+            ics_bytes=ics_text.encode("utf-8"),
+        )
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="arym-lich-hoc-va-bai-tap-pdf-{start_date}.zip"'
+            },
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Lỗi xuất gói lịch .zip kèm PDF bài tập")
+        raise HTTPException(status_code=500, detail="Không thể tạo gói lịch .zip lúc này.") from exc

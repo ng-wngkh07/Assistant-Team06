@@ -6,19 +6,21 @@ strict training dataset gating blocking unverified OCR transcripts,
 and uses the configured local Qwen3.5 9B model for auxiliary vision OCR.
 """
 
-import os
-import re
-import json
-import time
 import base64
 import hashlib
-import shutil
-import logging
-import subprocess
+import inspect
 import io
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 
@@ -29,7 +31,7 @@ from app.config import (
     OLLAMA_AUX_CHAT_MODEL,
     VISION_TIMEOUT_SECONDS,
 )
-from app.gpu_lock import gpu_coordinator, GPUBusyError
+from app.gpu_lock import GPUBusyError, IndexingCancelledError, gpu_coordinator
 from app.text_cleaner import normalize_vietnamese_text
 
 logger = logging.getLogger(__name__)
@@ -69,9 +71,53 @@ def get_ollama_model_digest(model_name: str = OLLAMA_AUX_CHAT_MODEL) -> Optional
     return None
 
 
-def _atomic_write_cache(file_path: Path, data: dict) -> None:
+def _acquire_inference_lock(timeout: float = 30.0, cancel_event: Optional[threading.Event] = None):
+    fn = gpu_coordinator.acquire_for_inference
+    try:
+        sig = inspect.signature(fn)
+        params = sig.parameters
+        has_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        kwargs: Dict[str, Any] = {}
+        if has_var_kw or "timeout" in params:
+            kwargs["timeout"] = timeout
+        if (has_var_kw or "cancel_event" in params) and cancel_event is not None:
+            kwargs["cancel_event"] = cancel_event
+        return fn(**kwargs)
+    except (TypeError, ValueError):
+        return fn()
+
+
+def classify_ocr_failure(exc: BaseException) -> str:
+    """Map OCR exceptions to stable durable failure reason codes."""
+    if isinstance(exc, GPUBusyError):
+        return "waiting_gpu"
+    if isinstance(exc, IndexingCancelledError):
+        return "cancelled"
+    if isinstance(exc, (subprocess.TimeoutExpired, TimeoutError)):
+        return "ocr_timeout"
+    msg = str(exc).lower()
+    if "timeout" in msg or "timed out" in msg or "quá thời gian" in msg:
+        return "ocr_timeout"
+    if "length" in msg or "cắt cụt" in msg or "truncat" in msg:
+        return "ocr_truncated"
+    if "json" in msg or "payload" in msg:
+        return "ocr_invalid_json"
+    if (
+        "chưa sẵn sàng" in msg
+        or "unavailable" in msg
+        or "không khả dụng" in msg
+        or ("không đọc được" in msg and ("cấu hình" in msg or "config" in msg or "mô hình" in msg))
+    ):
+        return "ocr_unavailable"
+    if "mơ hồ" in msg or "ambiguous" in msg or "không đọc được" in msg or "unreadable" in msg:
+        return "ocr_ambiguous"
+    return "ocr_runtime_error"
+
+
+def _atomic_write_cache(file_path: Path, data: dict, cache_dir: Optional[Path] = None) -> None:
     """Atomic write for cache files using temp file replace on same filesystem."""
-    base_dir = os.path.normpath(os.fspath(CACHE_DIR))
+    base_root = cache_dir if cache_dir is not None else CACHE_DIR
+    base_dir = os.path.normpath(os.fspath(base_root))
     target_norm = os.path.normpath(os.fspath(file_path))
     if not target_norm.startswith(base_dir + os.sep):
         raise PermissionError(f"Đường dẫn cache thoát khỏi CACHE_DIR: {target_norm}")
@@ -97,6 +143,7 @@ class VisionOCRManager:
         max_pages: int = 30,
         max_image_mb: float = 10.0,
         timeout_seconds: Optional[float] = VISION_TIMEOUT_SECONDS,
+        cache_dir: Optional[Path] = None,
     ):
         self.backend = backend
         self.vision_model = vision_model
@@ -105,6 +152,11 @@ class VisionOCRManager:
         self.timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else VISION_TIMEOUT_SECONDS
         )
+        self._cache_dir = Path(cache_dir) if cache_dir is not None else None
+
+    @property
+    def cache_dir(self) -> Path:
+        return self._cache_dir if self._cache_dir is not None else CACHE_DIR
 
     @classmethod
     def compute_cache_key(
@@ -127,7 +179,7 @@ class VisionOCRManager:
             raise ValueError(f"cache_key không hợp lệ (phải là 64 ký tự hex sha256): '{cache_key}'")
         hex_alphabet = "0123456789abcdef"
         untainted_key = "".join(hex_alphabet[int(ch, 16)] for ch in cache_key)
-        base_dir = os.path.normpath(os.fspath(CACHE_DIR))
+        base_dir = os.path.normpath(os.fspath(self.cache_dir))
         target_norm = os.path.normpath(os.path.join(base_dir, f"{untainted_key}.json"))
         if not target_norm.startswith(base_dir + os.sep):
             raise PermissionError(f"Đường dẫn cache thoát khỏi CACHE_DIR: {target_norm}")
@@ -145,7 +197,7 @@ class VisionOCRManager:
     def save_cached_transcript(self, entry: Dict[str, Any]) -> None:
         cache_key = entry["cache_key"]
         path = self._validate_cache_path(cache_key)
-        _atomic_write_cache(path, entry)
+        _atomic_write_cache(path, entry, cache_dir=self.cache_dir)
 
     @classmethod
     def ocr_available(cls, backend: str = BACKEND_TESSERACT) -> bool:
@@ -181,8 +233,12 @@ class VisionOCRManager:
         source_relpath: str,
         page_num: int,
         is_handwriting_suspected: bool = False,
+        cancel_event: Optional[threading.Event] = None,
+        gpu_timeout: float = 30.0,
     ) -> Dict[str, Any]:
         """Perform OCR under GPU lock and cache results. Never disguises Tesseract as vision."""
+        if cancel_event is not None and cancel_event.is_set():
+            raise IndexingCancelledError("Đã hủy tác vụ OCR theo yêu cầu dừng.")
         if len(image_bytes) > self.max_image_mb * 1024 * 1024:
             raise ValueError(
                 f"Kích thước ảnh vượt quá giới hạn an toàn {self.max_image_mb} MB"
@@ -245,7 +301,9 @@ class VisionOCRManager:
             text = ""
         else:
             # Run OCR with GPU lock coordination
-            with gpu_coordinator.acquire_for_inference():
+            with _acquire_inference_lock(timeout=gpu_timeout, cancel_event=cancel_event):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise IndexingCancelledError("Đã hủy tác vụ OCR theo yêu cầu dừng.")
                 if active_backend == BACKEND_OLLAMA_VISION:
                     if sys.platform == "darwin":
                         from app.native_vision import NativeVisionClient
@@ -259,10 +317,26 @@ class VisionOCRManager:
                             "Nếu không có chữ đọc được, trả về {\"text\":\"\"}. "
                             "Công thức dùng Unicode hoặc văn bản thuần; mọi dấu gạch chéo ngược phải escape đúng JSON."
                         )
-                        res = NativeVisionClient().generate_from_image(
+                        native_client = NativeVisionClient()
+                        gen_kwargs: Dict[str, Any] = {
+                            "prompt": ocr_prompt,
+                            "max_tokens": 2048,
+                        }
+                        try:
+                            sig = inspect.signature(native_client.generate_from_image)
+                            params = sig.parameters
+                            has_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+                            if has_kw or "timeout_seconds" in params:
+                                gen_kwargs["timeout_seconds"] = int(self.timeout_seconds)
+                            if (has_kw or "cancel_event" in params) and cancel_event is not None:
+                                gen_kwargs["cancel_event"] = cancel_event
+                            if has_kw or "gpu_timeout" in params:
+                                gen_kwargs["gpu_timeout"] = gpu_timeout
+                        except (TypeError, ValueError):
+                            pass
+                        res = native_client.generate_from_image(
                             image_bytes,
-                            prompt=ocr_prompt,
-                            max_tokens=2048,
+                            **gen_kwargs,
                         )
                         raw_text = res.get("text", "").strip()
                         if res.get("finish_reason") == "length" or res.get("is_truncated"):
@@ -292,6 +366,11 @@ class VisionOCRManager:
 
         normalized = normalize_vietnamese_text(text)
         ocr_type = OCR_TYPE_MAP.get(active_backend, "unknown")
+        upper_text = text.upper()
+        has_uncertainty = any(
+            marker in upper_text
+            for marker in ("[UNCLEAR]", "[UNREADABLE]", "[AMBIGUOUS]", "[KHÔNG RÕ]", "[KHÔNG ĐỌC ĐƯỢC]")
+        )
 
         entry = {
             "cache_key": cache_key,
@@ -307,6 +386,9 @@ class VisionOCRManager:
             "image_hash": image_hash,
             "raw_text": text,
             "text": normalized,
+            "status": "CAPTURED_PENDING_REVIEW",
+            "is_blank": bool(is_blank),
+            "has_uncertainty": bool(has_uncertainty),
             "disclaimer": PRINT_ONLY_DISCLAIMER if active_backend == BACKEND_TESSERACT else None,
             "handwriting_suspected": is_handwriting_suspected,
             "needs_review": True,  # All unverified OCR requires review before entering training
@@ -396,14 +478,19 @@ class VisionOCRManager:
         corrected_text: str,
         reviewer_name: str,
         notes: str = "",
+        *,
+        cache_dir: Optional[Path] = None,
+        src_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """Human review & approval hook for an OCR transcript with source validation and atomic revision tracking."""
-        mgr = cls()
+        active_cache_dir = Path(cache_dir) if cache_dir is not None else CACHE_DIR
+        active_src_dir = Path(src_dir) if src_dir is not None else SRC_DIR
+        mgr = cls(cache_dir=active_cache_dir)
         mgr._validate_cache_path(cache_key)
         expected_name = f"{cache_key}.json"
         path: Optional[Path] = None
-        if CACHE_DIR.is_dir():
-            for candidate_path in CACHE_DIR.iterdir():
+        if active_cache_dir.is_dir():
+            for candidate_path in active_cache_dir.iterdir():
                 if candidate_path.name == expected_name and candidate_path.is_file():
                     path = candidate_path
                     break
@@ -412,7 +499,7 @@ class VisionOCRManager:
 
         entry = json.loads(path.read_text(encoding="utf-8"))
 
-        # Verify source file with matching hash still exists in SRC_DIR
+        # Verify source file with matching hash still exists in active_src_dir
         source_hash = entry.get("source_hash")
         source_relpath = entry.get("source_relpath")
         from app.pdf_extractor import PDFExtractor
@@ -420,7 +507,7 @@ class VisionOCRManager:
         if source_hash:
             # Check source_relpath directly first (O(1))
             if source_relpath:
-                candidate = SRC_DIR / source_relpath
+                candidate = active_src_dir / source_relpath
                 if candidate.is_file():
                     try:
                         if PDFExtractor.calculate_file_hash(candidate) == source_hash:
@@ -428,7 +515,7 @@ class VisionOCRManager:
                     except Exception:
                         pass
             if not source_matched:
-                for sf in SRC_DIR.rglob("*"):
+                for sf in active_src_dir.rglob("*"):
                     if sf.is_file():
                         try:
                             if PDFExtractor.calculate_file_hash(sf) == source_hash:
@@ -439,7 +526,7 @@ class VisionOCRManager:
 
         if not source_matched:
             raise ValueError(
-                f"Nguồn gốc của bản ghi đã thay đổi hoặc không còn tồn tại trong {SRC_DIR}. "
+                "Nguồn gốc của bản ghi đã thay đổi hoặc không còn tồn tại trong thư mục nguồn. "
                 "Không thể tái dùng kết quả xác minh cho nguồn không xác định."
             )
 
@@ -454,18 +541,26 @@ class VisionOCRManager:
         # A reviewed transcription is authoritative. Automatic PDF degluing
         # would split getHeight/rotateLeft and alter source-code identifiers.
         entry["text"] = corrected_text.strip()
+        entry["status"] = "VERIFIED_BLANK" if (entry.get("is_blank") and not entry["text"]) else "VERIFIED"
         entry["is_verified"] = True
         entry["needs_review"] = False
         entry["verified_by"] = reviewer_name
         entry["verification_notes"] = notes
         entry["verified_at"] = now
 
-        _atomic_write_cache(path, entry)
+        _atomic_write_cache(path, entry, cache_dir=active_cache_dir)
         return entry
 
     @classmethod
-    def review_regions(cls, cache_key: str, regions: List[Dict[str, Any]],
-                       reviewer_name: str) -> Dict[str, Any]:
+    def review_regions(
+        cls,
+        cache_key: str,
+        regions: List[Dict[str, Any]],
+        reviewer_name: str,
+        *,
+        cache_dir: Optional[Path] = None,
+        src_dir: Optional[Path] = None,
+    ) -> Dict[str, Any]:
         """Save an immutable partial review; only source-verified spans enter text.
 
         Bounding boxes use normalized page coordinates. Unreadable, pending and
@@ -474,7 +569,9 @@ class VisionOCRManager:
         """
         if not isinstance(reviewer_name, str) or not reviewer_name.strip():
             raise ValueError('Thiếu người duyệt vùng chữ viết tay')
-        mgr = cls()
+        active_cache_dir = Path(cache_dir) if cache_dir is not None else CACHE_DIR
+        active_src_dir = Path(src_dir) if src_dir is not None else SRC_DIR
+        mgr = cls(cache_dir=active_cache_dir)
         parent_path = mgr._validate_cache_path(cache_key)
         parent_bytes = parent_path.read_bytes()
         parent = json.loads(parent_bytes)
@@ -501,14 +598,39 @@ class VisionOCRManager:
                 if not value.strip():
                     raise ValueError('Vùng đã duyệt không được trống')
                 accepted.append(value.strip())
-        source = (SRC_DIR / parent['source_relpath']).resolve()
-        if (not source.is_relative_to(SRC_DIR.resolve()) or not source.is_file() or
+        source = (active_src_dir / parent['source_relpath']).resolve()
+        if (not source.is_relative_to(active_src_dir.resolve()) or not source.is_file() or
                 hashlib.sha256(source.read_bytes()).hexdigest() != parent.get('source_hash')):
             raise ValueError('Nguồn source đã thay đổi hoặc nằm ngoài src')
-        image = Path(parent['image_path'])
-        if (not image.is_file() or
-                hashlib.sha256(image.read_bytes()).hexdigest() != parent.get('image_hash')):
-            raise ValueError('Ảnh source image không còn khớp bản OCR')
+        expected_image_hash = parent.get('image_hash')
+        if parent.get('image_path'):
+            image = Path(parent['image_path'])
+            if (not image.is_file() or
+                    hashlib.sha256(image.read_bytes()).hexdigest() != expected_image_hash):
+                raise ValueError('Ảnh source image không còn khớp bản OCR')
+        else:
+            cached_png = active_cache_dir / f"{parent.get('cache_key') or cache_key}.png"
+            image_matched = False
+            if cached_png.is_file() and hashlib.sha256(cached_png.read_bytes()).hexdigest() == expected_image_hash:
+                image_matched = True
+            elif expected_image_hash:
+                if source.suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp'}:
+                    image_matched = hashlib.sha256(source.read_bytes()).hexdigest() == expected_image_hash
+                else:
+                    import pymupdf
+                    p_idx = int(parent.get('page_num') or 1) - 1
+                    with pymupdf.open(str(source)) as pdf_doc:
+                        if 0 <= p_idx < len(pdf_doc):
+                            page = pdf_doc[p_idx]
+                            for pix in (
+                                page.get_pixmap(dpi=150),
+                                page.get_pixmap(matrix=pymupdf.Matrix(2.0, 2.0), alpha=False),
+                            ):
+                                if hashlib.sha256(pix.tobytes('png')).hexdigest() == expected_image_hash:
+                                    image_matched = True
+                                    break
+            if not image_matched:
+                raise ValueError('Ảnh source image không còn khớp bản OCR')
         parent_sha = hashlib.sha256(parent_bytes).hexdigest()
         signature = json.dumps({'parent': parent_sha, 'regions': regions,
                                 'reviewer': reviewer_name.strip(), 'schema': 'ocr-region-review-v2'},
@@ -541,10 +663,13 @@ class VisionOCRManager:
         return entry
 
     @classmethod
-    def list_unverified_records(cls) -> List[Dict[str, Any]]:
+    def list_unverified_records(cls, *, cache_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
         """List all OCR entries flagged as needing human verification."""
+        active_cache_dir = Path(cache_dir) if cache_dir is not None else CACHE_DIR
         results = []
-        for p in sorted(CACHE_DIR.glob("*.json")):
+        if not active_cache_dir.is_dir():
+            return results
+        for p in sorted(active_cache_dir.glob("*.json")):
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
                 if not data.get("is_verified"):

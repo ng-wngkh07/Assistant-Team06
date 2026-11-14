@@ -25,7 +25,7 @@ from PIL import Image
 
 from app.config import DATA_DIR, DEFAULT_CHAT_MODEL, MLX_CONTEXT_TOKENS, TRAINED_MODEL_NAME
 from app.gpu_lock import GPUBusyError, gpu_coordinator
-from app.dialogue import DialogueBusyError, dialogue_gate
+from app.dialogue import DialogueBusyError, acquire_inference, dialogue_gate
 from app.evaluation_metrics import has_language_drift
 from app.model_resolver import is_mlx_model, get_model_context_capacity
 from app.ollama_client import OllamaClient
@@ -449,7 +449,7 @@ class StudyMaterialManager:
             try:
                 quiz_prompt = build_quiz_prompt(admitted_passages, count=min(3,quiz_count), difficulty=difficulty)
                 for attempt in range(2):
-                    with dialogue_gate.acquire(), gpu_coordinator.acquire_for_inference():
+                    with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
                         if is_mlx:
                             resp_content = active_client.chat_complete(
                                 messages=[{"role": "user", "content": quiz_prompt}],
@@ -506,7 +506,7 @@ class StudyMaterialManager:
                     next_prompt += '\nKhông lặp lại các câu/cụm đã chọn: ' + json.dumps(excluded,ensure_ascii=False)
                     if not prompt_fits(next_prompt):
                         break
-                    with dialogue_gate.acquire(), gpu_coordinator.acquire_for_inference():
+                    with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
                         options = {'max_tokens':1500} if is_mlx else {'model':model_name,'num_predict':1500,'think':False}
                         raw = active_client.chat_complete(messages=[{'role':'user','content':next_prompt}],
                             system_prompt=system_prompt,temperature=0.2,num_ctx=capacity,**options)
@@ -540,7 +540,7 @@ class StudyMaterialManager:
                         flash_prompt += '\nKhông lặp lại các cụm đã chọn: ' + json.dumps(excluded,ensure_ascii=False)
                     if not prompt_fits(flash_prompt):
                         break
-                    with dialogue_gate.acquire(), gpu_coordinator.acquire_for_inference():
+                    with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
                         options = {'max_tokens':1500} if is_mlx else {'model':model_name,'num_predict':1500,'think':False}
                         resp_flash = active_client.chat_complete(messages=[{'role':'user','content':flash_prompt}],
                             system_prompt=system_prompt,temperature=0.2,num_ctx=capacity,**options)
@@ -697,7 +697,7 @@ class StudyMaterialManager:
             def review_chat(prompt, model, max_tokens, timeout=None, response_schema=None):
                 if not prompt_fits(prompt, max_tokens):
                     raise PracticeGenerationError('Complete source and review do not fit the context')
-                with dialogue_gate.acquire(), gpu_coordinator.acquire_for_inference():
+                with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
                     options = {'max_tokens':max_tokens} if is_mlx else {'model':model_name,'num_predict':max_tokens,'think':False}
                     if response_schema is not None:
                         options['response_schema'] = response_schema
@@ -1256,30 +1256,39 @@ class StudyMaterialManager:
 
     @staticmethod
     def _lookup_library_document(doc_id=None, filename=None):
-        """Resolve explicit identifiers exactly; display titles are not source identities."""
+        """Resolve explicit identifiers exactly and enforce disk/watcher freshness."""
         import sqlite3
         from contextlib import closing
-        from app.config import DB_PATH
+        from app.config import DATA_DIR, DB_PATH, SRC_DIR
+        from app.source_freshness import assess_document_freshness, fetch_document_row
 
         doc = None
         if DB_PATH.exists():
             try:
                 with closing(sqlite3.connect(DB_PATH.resolve().as_uri() + "?mode=ro", uri=True)) as db:
                     db.row_factory = sqlite3.Row
-                    if doc_id is not None:
-                        doc = db.execute(
-                            "SELECT id, filename, clean_title, total_pages FROM documents WHERE id = ?", (doc_id,)
-                        ).fetchone()
-                    elif filename:
-                        doc = db.execute(
-                            "SELECT id, filename, clean_title, total_pages FROM documents WHERE filename = ?", (filename,)
-                        ).fetchone()
+                    doc = fetch_document_row(db, doc_id=doc_id, filename=filename)
             except sqlite3.Error as exc:
                 raise StudyMaterialError("Không thể đọc thư viện tài liệu. Vui lòng kiểm tra dữ liệu cục bộ.") from exc
         if doc_id is not None and doc is None:
             raise StudyMaterialError(f"Không tìm thấy tài liệu '{doc_id}' trong thư viện.")
         if doc is not None and filename and filename != doc["filename"]:
             raise StudyMaterialError("Mã tài liệu và tên tệp không khớp.")
+        if doc is not None:
+            raw_fp = str(doc.get("filepath") or "").strip()
+            require_disk = bool(raw_fp and Path(raw_fp.replace("\\", "/")).is_absolute())
+            freshness = assess_document_freshness(
+                doc,
+                db_path=DB_PATH,
+                src_dir=SRC_DIR,
+                data_dir=DATA_DIR,
+                require_disk_if_unhashed=require_disk,
+            )
+            if not freshness.fresh:
+                raise StudyMaterialError(
+                    freshness.message
+                    or "Tài liệu nguồn đã thay đổi hoặc thiếu tệp gốc. Vui lòng cập nhật chỉ mục trước khi sử dụng."
+                )
         return doc
 
     def resolve_raw_file(
@@ -1341,10 +1350,19 @@ class StudyMaterialManager:
                     ).fetchall()
             except sqlite3.Error as exc:
                 raise StudyMaterialError("Không thể đọc nội dung tài liệu trong thư viện.") from exc
+            if not rows and dict(doc).get("status") not in ("indexed", "ocr_partial_reviewed"):
+                raise StudyMaterialError(
+                    "Tài liệu này đang chờ OCR và kiểm duyệt nguồn nên chưa sẵn sàng để trích xuất học liệu."
+                )
 
         target_filename = doc["filename"] if doc else filename
+        prefer_verified_db_rows = bool(
+            doc is not None
+            and rows
+            and (bool(dict(doc).get("is_scanned")) or dict(doc).get("status") == "ocr_partial_reviewed")
+        )
 
-        if target_filename:
+        if target_filename and not prefer_verified_db_rows:
             candidate = resolve_safe_source_file(target_filename)
             if candidate and candidate.is_file():
                 raw_bytes = candidate.read_bytes()
@@ -1451,10 +1469,21 @@ class StudyMaterialManager:
 
     def list_available_documents(self, indexed_docs: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
         """Return indexed documents plus uploaded session materials and discoverable local study files."""
-        from app.config import BASE_DIR, SRC_DIR
+        import sqlite3
+        from contextlib import closing
+        from app.config import BASE_DIR, DB_PATH, SRC_DIR
 
         results: List[Dict[str, Any]] = []
         seen_filenames = set()
+        known_db_filenames = set()
+        if DB_PATH.exists():
+            try:
+                with closing(sqlite3.connect(DB_PATH.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+                    for row in db.execute("SELECT filename FROM documents").fetchall():
+                        if row[0]:
+                            known_db_filenames.add(row[0])
+            except sqlite3.Error:
+                pass
 
         for d in (indexed_docs or []):
             fname = d.get("filename")
@@ -1468,7 +1497,7 @@ class StudyMaterialManager:
 
         for mat in reversed(cached_records):
             fname = mat.get("filename")
-            if not fname or fname in seen_filenames:
+            if not fname or fname in seen_filenames or fname in known_db_filenames:
                 continue
             seen_filenames.add(fname)
             results.append({
@@ -1495,7 +1524,7 @@ class StudyMaterialManager:
                     continue
                 if path.name.startswith(".") or path.name.lower() in excluded_ops:
                     continue
-                if path.name in seen_filenames:
+                if path.name in seen_filenames or path.name in known_db_filenames:
                     continue
                 seen_filenames.add(path.name)
                 results.append({
@@ -1604,6 +1633,62 @@ class StudyMaterialManager:
     def get_material(self, material_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             return self._materials.get(material_id)
+
+    def verify_cas_integrity(self, material_id: str) -> None:
+        """Verify file existence and integrity for in-memory or single-user manager."""
+        mat = self.get_material(material_id)
+        if not mat:
+            return
+        raw_b = self._raw_files.get(material_id)
+        if raw_b is None and mat.get("filename"):
+            raw_b = self._raw_files.get(mat["filename"])
+
+    def search_private(
+        self,
+        material_id: str,
+        query: str,
+        page_num: Optional[int] = None,
+        top_k: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """Fallback search for non-account or single-user mode."""
+        mat = self.get_material(material_id)
+        if not mat:
+            return []
+        pages = mat.get("pages") or []
+        from app.chunker import TextChunker
+        results = []
+        filename = mat.get("filename", "")
+        clean_title = mat.get("clean_title", filename)
+        import re
+        tokens = [w.lower() for w in re.findall(r"\w+", query) if len(w) > 1]
+        for p in pages:
+            p_num = int(p.get("page_num", 1))
+            if page_num is not None and p_num != page_num:
+                continue
+            p_text = str(p.get("text", "") or "")
+            if not p_text.strip():
+                continue
+            chunks = TextChunker.chunk_page(clean_title, filename, p_num, p_text)
+            for c in chunks:
+                c_text = c["text"]
+                score = sum(1 for t in tokens if t in c_text.lower())
+                results.append({
+                    "id": f"{material_id}_{p_num}_{c['chunk_index']}",
+                    "chunk_id": f"{material_id}_{p_num}_{c['chunk_index']}",
+                    "material_id": material_id,
+                    "is_private": True,
+                    "doc_id": None,
+                    "book_title": clean_title,
+                    "filename": filename,
+                    "page_num": p_num,
+                    "chunk_index": c["chunk_index"],
+                    "text": c_text,
+                    "safe_text": c_text,
+                    "fts_score": float(score),
+                    "download_url": f"/api/materials/download?material_id={material_id}",
+                })
+        results.sort(key=lambda x: x["fts_score"], reverse=True)
+        return results[:top_k]
 
 
 study_material_manager = StudyMaterialManager()

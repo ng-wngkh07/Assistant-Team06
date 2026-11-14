@@ -1,21 +1,46 @@
 """Practice & Topic-Based Learning API Routes (Single Responsibility Module)."""
 
 import logging
-from typing import Literal, Optional
+import re
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
-from app.dialogue import DialogueBusyError
+from app.dialogue import DialogueBusyError, acquire_inference
+from app.exercise_pdf import generate_exercise_worksheet_pdf
 from app.gpu_lock import GPUBusyError
 from app.input_policy import validate_topic_input
 from app.practice import PracticeGenerationError, PracticeSessionNotFound
+from app.response_projection import project_public_response, sanitize_error_detail
 from app.runtime_health import runtime_failure_message
 
 logger = logging.getLogger("psychology_agent")
 
 router = APIRouter()
+
+
+def _raise_learning_http_error(exc: Exception, *, context_label: str, fallback_detail: str | None = None) -> None:
+    """Map practice/learning route exceptions cleanly with sanitized error details."""
+    if isinstance(exc, DialogueBusyError):
+        raise HTTPException(
+            status_code=409,
+            detail=sanitize_error_detail(str(exc)),
+            headers={"Retry-After": "2"},
+        ) from exc
+    if isinstance(exc, GPUBusyError):
+        raise HTTPException(
+            status_code=503,
+            detail=sanitize_error_detail(str(exc)),
+            headers={"Retry-After": "2"},
+        ) from exc
+    if isinstance(exc, PracticeGenerationError):
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(exc))) from exc
+    logger.exception(context_label)
+    detail = fallback_detail if fallback_detail is not None else sanitize_error_detail(runtime_failure_message(exc))
+    raise HTTPException(status_code=502, detail=detail) from exc
 
 
 class PracticeGenerateRequest(BaseModel):
@@ -72,12 +97,19 @@ class LearningExercisesRequest(BaseModel):
 @router.post("/api/practice/generate")
 async def generate_practice(req: PracticeGenerateRequest):
     from app import server as _srv
-    document = await run_in_threadpool(_srv.document_lookup.document, req.source_document_id)
-    if not document or req.source_page_num > document["total_pages"]:
+    from app.routes.document_routes import _require_fresh_document
+    document = await run_in_threadpool(
+        _require_fresh_document,
+        _srv.document_lookup,
+        doc_id=req.source_document_id,
+        default_404="Không tìm thấy trang nguồn đã chọn.",
+        conflict_on_missing=True,
+    )
+    if req.source_page_num > document["total_pages"]:
         raise HTTPException(status_code=404, detail="Không tìm thấy trang nguồn đã chọn.")
 
     def run_generation():
-        with _srv.dialogue_gate.acquire(), _srv.gpu_coordinator.acquire_for_inference():
+        with acquire_inference(_srv.dialogue_gate), _srv.gpu_coordinator.acquire_for_inference():
             return _srv.practice_service.generate(
                 doc_id=req.source_document_id,
                 page_num=req.source_page_num,
@@ -87,16 +119,9 @@ async def generate_practice(req: PracticeGenerateRequest):
             )
 
     try:
-        return await run_in_threadpool(run_generation)
-    except DialogueBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
-    except GPUBusyError as exc:
-        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
-    except PracticeGenerationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        return project_public_response(await run_in_threadpool(run_generation))
     except Exception as exc:
-        logger.exception("Không tạo được bộ câu hỏi luyện tập")
-        raise HTTPException(status_code=502, detail=runtime_failure_message(exc)) from exc
+        _raise_learning_http_error(exc, context_label="Không tạo được bộ câu hỏi luyện tập")
 
 
 @router.get("/api/practice/examples")
@@ -108,9 +133,14 @@ async def list_practice_examples(
     limit: int = Query(20, ge=1, le=50),
 ):
     from app import server as _srv
-    document = await run_in_threadpool(_srv.document_lookup.document, document_id)
-    if not document:
-        raise HTTPException(status_code=404, detail="Không tìm thấy tài liệu.")
+    from app.routes.document_routes import _require_fresh_document
+    document = await run_in_threadpool(
+        _require_fresh_document,
+        _srv.document_lookup,
+        doc_id=document_id,
+        default_404="Không tìm thấy tài liệu.",
+        conflict_on_missing=True,
+    )
     final_page = page_to or document["total_pages"]
     if page_from > final_page or final_page > document["total_pages"]:
         raise HTTPException(status_code=422, detail="Khoảng trang không hợp lệ với tài liệu đã chọn.")
@@ -124,29 +154,43 @@ async def list_practice_examples(
             limit,
         )
     except PracticeGenerationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    return {
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(exc)))
+    return project_public_response({
         "items": items,
         "origin": "source_document",
         "document": document,
         "page_from": page_from,
         "page_to": final_page,
-    }
+    })
 
 
 @router.post("/api/practice/answer")
 async def answer_practice(req: PracticeAnswerRequest):
     from app import server as _srv
     try:
-        return _srv.practice_service.answer(req.practice_id, req.question_id, req.answer)
+        return project_public_response(
+            _srv.practice_service.answer(req.practice_id, req.question_id, req.answer)
+        )
     except PracticeSessionNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=sanitize_error_detail(str(exc)))
+
+
+@router.get("/api/practice/session/{practice_id}")
+async def get_practice_session_endpoint(practice_id: str):
+    from app import server as _srv
+    try:
+        return project_public_response(
+            await run_in_threadpool(_srv.practice_service.get_session, practice_id)
+        )
+    except PracticeSessionNotFound as exc:
+        raise HTTPException(status_code=404, detail=sanitize_error_detail(str(exc)))
+
 
 
 @router.get("/api/learning/topics")
 async def get_learning_topics():
     from app import server as _srv
-    return await run_in_threadpool(_srv.learning_service.topics)
+    return project_public_response(await run_in_threadpool(_srv.learning_service.topics))
 
 
 @router.post("/api/learning/generate")
@@ -154,7 +198,7 @@ async def generate_learning(req: LearningGenerateRequest):
     from app import server as _srv
 
     def run_generation():
-        with _srv.dialogue_gate.acquire(), _srv.gpu_coordinator.acquire_for_inference():
+        with acquire_inference(_srv.dialogue_gate), _srv.gpu_coordinator.acquire_for_inference():
             return _srv.learning_service.generate(
                 topic=req.topic,
                 count=req.count,
@@ -165,16 +209,9 @@ async def generate_learning(req: LearningGenerateRequest):
             )
 
     try:
-        return await run_in_threadpool(run_generation)
-    except DialogueBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
-    except GPUBusyError as exc:
-        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
-    except PracticeGenerationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        return project_public_response(await run_in_threadpool(run_generation))
     except Exception as exc:
-        logger.exception("Không tạo được bộ câu hỏi theo chủ đề")
-        raise HTTPException(status_code=502, detail=runtime_failure_message(exc)) from exc
+        _raise_learning_http_error(exc, context_label="Không tạo được bộ câu hỏi theo chủ đề")
 
 
 @router.post("/api/learning/exercises")
@@ -183,7 +220,7 @@ async def list_learning_exercises(req: LearningExercisesRequest):
 
     def run_exercises():
         if req.solve_missing:
-            with _srv.dialogue_gate.acquire(), _srv.gpu_coordinator.acquire_for_inference():
+            with acquire_inference(_srv.dialogue_gate), _srv.gpu_coordinator.acquire_for_inference():
                 return _srv.learning_service.exercises(
                     topic=req.topic,
                     limit=req.limit,
@@ -198,13 +235,124 @@ async def list_learning_exercises(req: LearningExercisesRequest):
         )
 
     try:
-        return await run_in_threadpool(run_exercises)
-    except DialogueBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
-    except GPUBusyError as exc:
-        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
-    except PracticeGenerationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        return project_public_response(await run_in_threadpool(run_exercises))
     except Exception as exc:
-        logger.exception("Không trích xuất được bài tập theo chủ đề")
-        raise HTTPException(status_code=502, detail="Không trích xuất được bài tập lúc này. Hãy thử lại sau.") from exc
+        _raise_learning_http_error(
+            exc,
+            context_label="Không trích xuất được bài tập theo chủ đề",
+            fallback_detail="Không trích xuất được bài tập lúc này. Hãy thử lại sau.",
+        )
+
+
+class LearningExportPdfRequest(BaseModel):
+    topic: str = Field(default="Chủ đề luyện tập", max_length=160)
+    course: str = Field(default="", max_length=160)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+    practice_id: Optional[str] = Field(default=None, max_length=64)
+    questions: Optional[list[dict[str, Any]]] = None
+
+
+def _safe_pdf_filename(topic: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", topic.strip().lower()).strip("-")
+    if not slug:
+        slug = "chude"
+    return f"arym-bai-tap-{slug[:40]}.pdf"
+
+
+@router.get("/api/learning/export-pdf/{practice_id}")
+async def export_practice_session_pdf(
+    practice_id: str,
+    topic: str = Query("Chủ đề luyện tập", max_length=160),
+    course: str = Query("", max_length=160),
+    difficulty: str = Query("medium", max_length=20),
+):
+    from app import server as _srv
+    try:
+        questions = _srv.practice_service.get_session_questions_with_answers(practice_id)
+    except PracticeSessionNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    try:
+        pdf_bytes = await run_in_threadpool(
+            generate_exercise_worksheet_pdf,
+            topic=topic,
+            course=course,
+            difficulty=difficulty,
+            questions=questions,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    filename = _safe_pdf_filename(topic)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+@router.post("/api/learning/export-pdf")
+async def export_topic_exercises_pdf(req: LearningExportPdfRequest):
+    from app import server as _srv
+
+    questions: list[dict[str, Any]] = []
+    if req.practice_id:
+        try:
+            questions = _srv.practice_service.get_session_questions_with_answers(req.practice_id)
+        except PracticeSessionNotFound:
+            raise HTTPException(status_code=404, detail="Phiên luyện tập không tồn tại.")
+    else:
+        clean_topic = validate_topic_input(req.topic)
+        ex_res = await run_in_threadpool(
+            _srv.learning_service.exercises,
+            topic=clean_topic,
+            limit=6,
+            solve_missing=False,
+            model=_srv.DEFAULT_CHAT_MODEL,
+        )
+        items = ex_res.get("items") or ex_res.get("exercises") or []
+        for idx, item in enumerate(items, start=1):
+            q_text = str(item.get("question") or item.get("text") or "").strip()
+            if not q_text:
+                continue
+            src = item.get("source") if isinstance(item.get("source"), dict) else {}
+            src_title = src.get("title") or item.get("title") or item.get("book_title") or item.get("filename") or "Tài liệu học tập"
+            page_num = src.get("page_num") or item.get("page_num") or 1
+            snippet = src.get("snippet") or item.get("snippet") or (item.get("text") or "")[:360]
+            ans = item.get("answer")
+            ans_status = item.get("answer_status")
+            ans_source = item.get("answer_source")
+            choices = item.get("choices") or []
+            questions.append(
+                {
+                    "question": q_text,
+                    "source_context": item.get("source_context") or src.get("source_context") or "",
+                    "choices": choices,
+                    "answer": ans,
+                    "answer_status": ans_status,
+                    "answer_source": ans_source,
+                    "explanation": item.get("explanation") or item.get("solution") or "",
+                    "source": {
+                        "title": src_title,
+                        "page_num": page_num,
+                        "snippet": snippet,
+                    },
+                }
+            )
+
+    if not questions:
+        raise HTTPException(
+            status_code=422,
+            detail="Chưa tìm thấy câu hỏi hoặc bài tập phù hợp cho chủ đề này để xuất PDF.",
+        )
+
+    pdf_bytes = await run_in_threadpool(
+        generate_exercise_worksheet_pdf,
+        topic=req.topic,
+        course=req.course,
+        difficulty=req.difficulty,
+        questions=questions,
+    )
+    filename = _safe_pdf_filename(req.topic)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

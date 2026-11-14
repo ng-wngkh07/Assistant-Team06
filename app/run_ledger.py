@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Union
 
 from app.config import BASE_DIR, DATA_DIR
+from app.model_resolver import resolve_base_weight_files
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +164,14 @@ def _compute_weights_hash(p: Path) -> str:
     return compute_file_sha256(p)
 
 
+def _has_base_weights(base_dir: Path) -> bool:
+    try:
+        resolve_base_weight_files(base_dir)
+        return True
+    except (FileNotFoundError, ValueError):
+        return False
+
+
 def compute_signature_hash(
     config: dict,
     base_model_dir: Union[Path, str],
@@ -176,13 +185,26 @@ def compute_signature_hash(
     Binds: config, base revision/file hashes, weights content, dataset hashes, holdout id, code fingerprint.
     """
     base_path = Path(base_model_dir)
-    weights_path = base_path / "model.safetensors"
+    try:
+        is_sharded, weight_files = resolve_base_weight_files(base_path)
+    except (FileNotFoundError, ValueError):
+        is_sharded, weight_files = False, []
+    if weight_files and not is_sharded:
+        weights_size = weight_files[0].stat().st_size
+        weights_hash = _compute_weights_hash(weight_files[0])
+    elif weight_files and is_sharded:
+        weights_size = sum(wf.stat().st_size for wf in weight_files)
+        shard_digests = {wf.relative_to(base_path).as_posix(): compute_file_sha256(wf) for wf in weight_files}
+        weights_hash = hashlib.sha256(json.dumps(shard_digests, sort_keys=True).encode("utf-8")).hexdigest()
+    else:
+        weights_size = 0
+        weights_hash = "none"
     base_hashes = {
         "path": str(base_path),
         "config_json": compute_file_sha256(base_path / "config.json"),
         "tokenizer_json": compute_file_sha256(base_path / "tokenizer.json"),
-        "weights_size": weights_path.stat().st_size if weights_path.exists() else 0,
-        "weights_hash": _compute_weights_hash(weights_path),
+        "weights_size": weights_size,
+        "weights_hash": weights_hash,
     }
 
     payload = {
@@ -392,7 +414,7 @@ class RunLedger:
                 "base_model": {
                     "path": str(base_model_dir),
                     "config_exists": (base_model_dir / "config.json").exists(),
-                    "weights_exists": (base_model_dir / "model.safetensors").exists(),
+                    "weights_exists": _has_base_weights(base_model_dir),
                 },
                 "dataset": {
                     "path": str(dataset_dir),
@@ -481,7 +503,7 @@ class RunLedger:
             record["manifest"]["base_model"] = {
                 "path": str(base_model_dir),
                 "config_exists": (base_model_path / "config.json").exists(),
-                "weights_exists": (base_model_path / "model.safetensors").exists(),
+                "weights_exists": _has_base_weights(base_model_path),
             }
             record["manifest"]["dataset"] = {
                 "path": str(dataset_dir),

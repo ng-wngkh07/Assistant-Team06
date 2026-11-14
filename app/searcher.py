@@ -5,7 +5,7 @@ import re
 import sqlite3
 import struct
 import sys
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Collection
 import numpy as np
@@ -34,11 +34,19 @@ from app.semantic_search import (
     normalize_unit_vector,
     rrf_merge_scores,
 )
+from app.source_freshness import FreshnessResult, check_doc_freshness, get_fresh_doc_ids
 
 
 class HybridSearcher:
-    def __init__(self, db_path: Optional[Union[Path, str]] = None):
+    def __init__(
+        self,
+        db_path: Optional[Union[Path, str]] = None,
+        src_dir: Optional[Path] = None,
+        data_dir: Optional[Path] = None,
+    ):
         self._db_path = Path(db_path) if db_path is not None else None
+        self._src_dir = src_dir
+        self._data_dir = data_dir
         self.ollama = OllamaClient()
         self.topic_router = TopicRouter(self._db_path)
         self.last_topic_routing: Optional[Dict[str, Any]] = None
@@ -57,7 +65,7 @@ class HybridSearcher:
             self.topic_router.db_path = self._db_path
 
     def plan_topic_routing(self, query: str, document_id: Optional[int] = None) -> Dict[str, Any]:
-        with closing(self.get_connection()) as conn:
+        with self._connection() as conn:
             return self.topic_router.plan_routing(
                 query, conn=conn, db_path=self.db_path, document_id=document_id
             )
@@ -73,14 +81,114 @@ class HybridSearcher:
     def connect(self) -> sqlite3.Connection:
         return self.get_connection()
 
+    @contextmanager
+    def _connection(self):
+        """Yield a SQLite connection whether get_connection() returns a Connection or context manager."""
+        raw = self.get_connection()
+        if isinstance(raw, sqlite3.Connection):
+            with closing(raw) as conn:
+                with conn:
+                    yield conn
+            return
+        if hasattr(raw, "__enter__"):
+            with raw as conn:
+                yield conn
+            return
+        with closing(raw) as conn:
+            yield conn
+
     @staticmethod
     def _clean_fts_query(query: str) -> str:
         """Sanitize query string for FTS5 syntax, avoiding syntax errors with special chars."""
         return clean_fts_query(query)
 
+    def document_freshness(self, doc_id: int) -> Optional[FreshnessResult]:
+        """Inspect freshness of doc_id against disk and watcher state; None if no documents table."""
+        with self._connection() as conn:
+            return check_doc_freshness(
+                conn,
+                doc_id,
+                db_path=self.db_path,
+                src_dir=self._src_dir,
+                data_dir=self._data_dir,
+            )
+
+    def _fresh_doc_id_set(
+        self,
+        conn: sqlite3.Connection,
+        candidate_doc_ids: Optional[Collection[int]] = None,
+    ) -> Optional[set[int]]:
+        ids = get_fresh_doc_ids(
+            conn,
+            db_path=self.db_path,
+            src_dir=self._src_dir,
+            data_dir=self._data_dir,
+            candidate_doc_ids=candidate_doc_ids,
+        )
+        return set(ids) if ids is not None else None
+
+    def _resolve_scope_ids(
+        self,
+        conn: sqlite3.Connection,
+        document_id: Optional[int],
+        document_ids: Optional[Collection[int]],
+    ) -> tuple[Optional[int], Optional[list[int]], bool]:
+        if document_id is not None:
+            fresh_set = self._fresh_doc_id_set(conn, [document_id])
+            if fresh_set is None:
+                return document_id, None, False
+            if int(document_id) not in fresh_set:
+                return document_id, [], True
+            return document_id, None, False
+        if document_ids is not None:
+            requested = [int(i) for i in document_ids]
+            if not requested:
+                return None, [], True
+            fresh_set = self._fresh_doc_id_set(conn, requested)
+            if fresh_set is None:
+                return None, requested, False
+            allowed = [i for i in requested if i in fresh_set]
+            return None, allowed, len(allowed) == 0
+        fresh_set = self._fresh_doc_id_set(conn, None)
+        if fresh_set is None:
+            return None, None, False
+        allowed = sorted(fresh_set)
+        return None, allowed, len(allowed) == 0
+
+    def _filter_fresh_chunks(
+        self,
+        conn: sqlite3.Connection,
+        chunks: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        candidate_ids = {
+            int(c["doc_id"])
+            for c in chunks
+            if not c.get("is_private") and not c.get("material_id") and c.get("doc_id") is not None
+        }
+        if not candidate_ids:
+            return list(chunks)
+        fresh_set = self._fresh_doc_id_set(conn, candidate_ids)
+        if fresh_set is None:
+            return list(chunks)
+        return [
+            c for c in chunks
+            if c.get("is_private")
+            or c.get("material_id")
+            or (c.get("doc_id") is not None and int(c["doc_id"]) in fresh_set)
+        ]
+
     def source_page_chunks(self, doc_id: int, page_num: int, limit: int = 12) -> List[Dict[str, Any]]:
         """Use the explicitly selected page; document titles are only labels."""
-        with self.get_connection() as conn:
+        with self._connection() as conn:
+            freshness = check_doc_freshness(
+                conn,
+                doc_id,
+                db_path=self.db_path,
+                src_dir=self._src_dir,
+                data_dir=self._data_dir,
+            )
+            if freshness is not None and not freshness.fresh:
+                return []
             rows=conn.execute('''SELECT id AS chunk_id,doc_id,book_title,filename,page_num,chunk_index,text
                 FROM chunks WHERE doc_id=? AND page_num=? ORDER BY chunk_index,id LIMIT ?''',
                 (doc_id,page_num,limit)).fetchall()
@@ -116,7 +224,10 @@ class HybridSearcher:
             return
 
         installed_digest = None
-        with self.get_connection() as conn:
+        with self._connection() as conn:
+            _, _, empty_scope = self._resolve_scope_ids(conn, doc_id, None)
+            if empty_scope:
+                return
             try:
                 row = conn.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
                 if row:
@@ -211,7 +322,7 @@ class HybridSearcher:
         chunk_ids = [c["chunk_id"] for c in target_chunks]
         id_to_row = {}
         try:
-            with self.get_connection() as conn:
+            with self._connection() as conn:
                 placeholders = ",".join("?" for _ in chunk_ids)
                 sql = f"""
                     SELECT c.id, c.doc_id, c.filename, c.page_num, c.chunk_index, c.text, c.embedding,
@@ -274,10 +385,12 @@ class HybridSearcher:
         if not items:
             return
         try:
-            with self.get_connection() as conn:
+            with self._connection() as conn:
                 tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
                 if "corpus_page_quality" in tables:
                     for item in items:
+                        if item.get("is_private") or item.get("material_id"):
+                            continue
                         fn = item.get("filename")
                         pn = item.get("page_num")
                         if fn and pn is not None:
@@ -294,6 +407,8 @@ class HybridSearcher:
                                 }
                 elif "document_source_quality" in tables:
                     for item in items:
+                        if item.get("is_private") or item.get("material_id"):
+                            continue
                         fn = item.get("filename")
                         if fn:
                             row = conn.execute(
@@ -316,13 +431,18 @@ class HybridSearcher:
         with the layout: numbered exercise heading, body, matching answer
         heading, answer body. Keep each added row independently citable.
         """
-        result = list(chunks)
-        size = sum(len(c.get("text", "")) for c in result)
-        seen = {c.get("chunk_id", c.get("id")) for c in result}
-        positions = {c.get("chunk_id", c.get("id")): i for i, c in enumerate(result)}
         added = []
-        with self.get_connection() as conn:
-            for anchor in chunks:
+        with self._connection() as conn:
+            result = self._filter_fresh_chunks(conn, chunks)
+            if not result:
+                return []
+            size = sum(len(c.get("text", "")) for c in result)
+            seen = {c.get("chunk_id", c.get("id")) for c in result}
+            positions = {c.get("chunk_id", c.get("id")): i for i, c in enumerate(result)}
+            anchors_snapshot = list(result)
+            for anchor in anchors_snapshot:
+                if anchor.get("is_private") or anchor.get("material_id"):
+                    continue
                 if Path(str(anchor.get("filename", ""))).suffix.casefold() not in {".md", ".markdown"}:
                     continue
                 cid = anchor.get("chunk_id", anchor.get("id"))
@@ -397,16 +517,18 @@ class HybridSearcher:
             return []
 
         result = list(chunks)
-        total_chunks = len(result)
-        total_chars = sum(len(c.get("text", "")) for c in result)
-
-        if total_chunks >= max_chunks or total_chars >= max_chars:
-            return result
-
         try:
-            with self.get_connection() as conn:
+            with self._connection() as conn:
                 tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
                 if "chunks" not in tables:
+                    return result
+
+                result = self._filter_fresh_chunks(conn, result)
+                if not result:
+                    return []
+                total_chunks = len(result)
+                total_chars = sum(len(c.get("text", "")) for c in result)
+                if total_chunks >= max_chunks or total_chars >= max_chars:
                     return result
 
                 seen_ids = set()
@@ -418,7 +540,9 @@ class HybridSearcher:
                     seen_keys.add((c.get("doc_id"), c.get("filename"), c.get("page_num"), c.get("chunk_index")))
 
                 new_neighbors = []
-                for c in chunks:
+                for c in list(result):
+                    if c.get("is_private") or c.get("material_id"):
+                        continue
                     cid = c.get("chunk_id") if c.get("chunk_id") is not None else c.get("id")
                     doc_id = c.get("doc_id")
                     filename = c.get("filename")
@@ -566,14 +690,18 @@ class HybridSearcher:
         fetch_limit = max(limit * 4, 100)
         results = []
         try:
-            with self.get_connection() as conn:
+            with self._connection() as conn:
+                eff_doc_id, eff_doc_ids, empty_scope = self._resolve_scope_ids(conn, document_id, document_ids)
+                if empty_scope:
+                    return []
+
                 phrase_rows = []
 
-                if document_id is not None:
+                if eff_doc_id is not None:
                     doc_filter = "AND (? IS NULL OR c.doc_id = ?)"
-                    doc_params = [document_id, document_id]
-                elif document_ids is not None:
-                    id_list = list(document_ids)
+                    doc_params = [eff_doc_id, eff_doc_id]
+                elif eff_doc_ids is not None:
+                    id_list = list(eff_doc_ids)
                     if id_list:
                         doc_filter = f"AND c.doc_id IN ({','.join('?' for _ in id_list)})"
                         doc_params = id_list
@@ -800,7 +928,7 @@ class HybridSearcher:
         except Exception:
             # Fallback to LIKE query if FTS syntax fails
             try:
-                with self.get_connection() as conn:
+                with self._connection() as conn:
                     words = [w for w in query.split() if len(w) > 2]
                     if words:
                         conditions = " OR ".join(["c.text LIKE ?" for _ in words])
@@ -848,7 +976,10 @@ class HybridSearcher:
             return []
 
         installed_digest = None
-        with self.get_connection() as conn:
+        with self._connection() as conn:
+            eff_doc_id, eff_doc_ids, empty_scope = self._resolve_scope_ids(conn, document_id, document_ids)
+            if empty_scope:
+                return []
             try:
                 row = conn.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
                 if row:
@@ -890,7 +1021,7 @@ class HybridSearcher:
         if not expected_identity:
             return []
 
-        with self.get_connection() as conn:
+        with self._connection() as conn:
             try:
                 compatible = conn.execute("""
                     SELECT 1 FROM chunks c JOIN corpus_vector_provenance p ON p.chunk_id=c.id
@@ -932,7 +1063,7 @@ class HybridSearcher:
 
         import hashlib
         results = []
-        with self.get_connection() as conn:
+        with self._connection() as conn:
             sql = """
                 SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num, c.chunk_index, c.text, c.embedding,
                        p.text_sha256, p.model_digest, p.vector_sha256, p.dimensions, p.full_text
@@ -940,11 +1071,11 @@ class HybridSearcher:
                 WHERE c.embedding IS NOT NULL AND p.model_digest = ? AND p.full_text = 1 AND p.dimensions = ?
             """
             params = [expected_identity, len(q_arr)]
-            if document_id is not None:
+            if eff_doc_id is not None:
                 sql += " AND c.doc_id = ?"
-                params.append(document_id)
-            elif document_ids is not None:
-                id_list = list(document_ids)
+                params.append(eff_doc_id)
+            elif eff_doc_ids is not None:
+                id_list = list(eff_doc_ids)
                 if id_list:
                     sql += f" AND c.doc_id IN ({','.join('?' for _ in id_list)})"
                     params.extend(id_list)
@@ -1063,7 +1194,12 @@ class HybridSearcher:
         if sidecar_path.is_file():
             from app.retrieval_tree import TreeSearcher
             try:
-                tree_searcher = TreeSearcher(sidecar_path, source_db=self.db_path)
+                tree_searcher = TreeSearcher(
+                    sidecar_path,
+                    source_db=self.db_path,
+                    src_dir=self._src_dir,
+                    data_dir=self._data_dir,
+                )
                 results = tree_searcher.search_hybrid(
                     query=query_clean,
                     top_k=top_k,
@@ -1082,7 +1218,7 @@ class HybridSearcher:
                 logger.warning("Sidecar retrieval tree error (%s); falling back to legacy routing", exc)
 
         # Plan topic routing
-        with closing(self.get_connection()) as conn:
+        with self._connection() as conn:
             plan = self.topic_router.plan_routing(
                 query_clean,
                 conn=conn,

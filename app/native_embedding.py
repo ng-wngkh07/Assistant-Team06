@@ -1,19 +1,77 @@
 """Direct native MLX dense embedding client."""
 
+import atexit
 import hashlib
 import json
 import math
 import os
+import signal
 import subprocess
 import sys
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
+import app.config as _app_config
+import app.model_resolver as _model_resolver
 from app.config import BASE_DIR
-from app.gpu_lock import gpu_coordinator
+from app.gpu_lock import IndexingCancelledError, gpu_coordinator
 from app.model_resolver import MLX_BGE_DIR
+
+_INITIAL_CFG_DATA_DIR = Path(_app_config.DATA_DIR)
+_INITIAL_MR_MLX_BGE_DIR = Path(_model_resolver.MLX_BGE_DIR)
+_INITIAL_NE_MLX_BGE_DIR = Path(MLX_BGE_DIR)
+
+_ACTIVE_WORKERS_LOCK = threading.Lock()
+_ACTIVE_WORKERS: set[subprocess.Popen] = set()
+
+
+def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) -> None:
+    """Terminate and reap ONLY the owned child worker (and its dedicated session group)."""
+    if proc.poll() is not None:
+        return
+    kill_pg = False
+    if os.name == "posix":
+        try:
+            kill_pg = os.getpgid(proc.pid) == proc.pid
+        except OSError:
+            kill_pg = False
+    try:
+        if kill_pg:
+            os.killpg(proc.pid, signal.SIGTERM)
+        else:
+            proc.terminate()
+    except OSError:
+        pass
+
+    deadline = time.monotonic() + max(0.1, float(grace_seconds))
+    while proc.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    if proc.poll() is None:
+        try:
+            if kill_pg:
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=2.0)
+    except Exception:
+        pass
+
+
+def _cleanup_active_workers() -> None:
+    with _ACTIVE_WORKERS_LOCK:
+        procs = list(_ACTIVE_WORKERS)
+    for proc in procs:
+        _terminate_owned_worker(proc, grace_seconds=0.3)
+
+
+atexit.register(_cleanup_active_workers)
 
 BGE_NATIVE_IDENTITY = "bge-m3-mlx-fp16@a37eddded9a6a1273a87fb8b0da0d1cdbd98aeec"
 
@@ -42,8 +100,90 @@ class NativeEmbeddingClient:
     _query_cache_lock = threading.Lock()
     _query_cache_limit = 128
 
+    # Bounded process-local verified status identity cache keyed by resolved path and
+    # stat/pinned-metadata snapshot. Only populated after full byte verification succeeds;
+    # query/embedding checks still call verify_identity() directly to rehash actual bytes.
+    _status_identity_cache: "OrderedDict[str, Tuple[Tuple[Any, ...], str]]" = OrderedDict()
+    _status_identity_lock = threading.Lock()
+    _STATUS_IDENTITY_CACHE_MAX = 16
+    _TRACKED_IDENTITY_FILES = (
+        "config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "sentence_bert_config.json",
+        "modules.json",
+        "model.safetensors.index.json",
+        "model.safetensors",
+    )
+
+    @classmethod
+    def _resolve_default_model_dir(cls) -> Path:
+        env_dir = (
+            os.getenv("MLX_BGE_MODEL_DIR") or os.getenv("BGE_MODEL_DIR") or ""
+        ).strip()
+        if env_dir:
+            return Path(env_dir)
+        if Path(MLX_BGE_DIR) != _INITIAL_NE_MLX_BGE_DIR:
+            return Path(MLX_BGE_DIR)
+        mr_dir = Path(getattr(_model_resolver, "MLX_BGE_DIR", _INITIAL_MR_MLX_BGE_DIR))
+        if mr_dir != _INITIAL_MR_MLX_BGE_DIR:
+            return mr_dir
+        cfg_data_dir = Path(getattr(_app_config, "DATA_DIR", _INITIAL_CFG_DATA_DIR))
+        if cfg_data_dir != _INITIAL_CFG_DATA_DIR:
+            return cfg_data_dir / "models" / "bge-m3-mlx-fp16"
+        env_data_dir = (os.getenv("AGENT_DATA_DIR") or "").strip()
+        if env_data_dir:
+            return Path(env_data_dir) / "models" / "bge-m3-mlx-fp16"
+        return cfg_data_dir / "models" / "bge-m3-mlx-fp16"
+
+    @classmethod
+    def clear_status_identity_cache(cls) -> None:
+        """Clear cached status identities after explicit configuration or test resets."""
+        with cls._status_identity_lock:
+            cls._status_identity_cache.clear()
+
+    @classmethod
+    def _artifact_status_signature(cls, resolved: Path) -> Optional[Tuple[Any, ...]]:
+        if not resolved.is_dir():
+            return None
+        pinned_sig = tuple(
+            (fname, int(meta["bytes"]), str(meta["sha256"]))
+            for fname, meta in sorted(PINNED_BGE_FILES.items())
+        )
+        candidate_names = set(cls._TRACKED_IDENTITY_FILES) | set(PINNED_BGE_FILES.keys())
+        try:
+            for shard in resolved.glob("model-*.safetensors"):
+                candidate_names.add(shard.name)
+        except OSError:
+            return None
+        file_stats = []
+        found_any = False
+        for fname in sorted(candidate_names):
+            f = resolved / fname
+            try:
+                if f.is_file():
+                    st = f.stat()
+                    found_any = True
+                    file_stats.append((
+                        fname,
+                        True,
+                        int(st.st_dev),
+                        int(st.st_ino),
+                        int(st.st_size),
+                        int(st.st_mtime_ns),
+                        int(st.st_ctime_ns),
+                    ))
+                else:
+                    file_stats.append((fname, False))
+            except OSError:
+                return None
+        if not found_any:
+            return None
+        return (pinned_sig, tuple(file_stats))
+
     def __init__(self, model_dir: Optional[Path] = None):
-        self.model_dir = Path(model_dir or MLX_BGE_DIR)
+        self.model_dir = Path(model_dir) if model_dir is not None else self._resolve_default_model_dir()
 
     @classmethod
     def verify_identity(cls, model_dir: Path) -> str:
@@ -52,9 +192,10 @@ class NativeEmbeddingClient:
         Never claims pinned BGE_NATIVE_IDENTITY unless actual file bytes/hashes match.
         """
         resolved = model_dir.resolve()
+        pre_sig = cls._artifact_status_signature(resolved)
 
         # Verify against pinned BGE files
-        all_match = True
+        all_match = bool(PINNED_BGE_FILES)
         for fname, meta in PINNED_BGE_FILES.items():
             f = resolved / fname
             if not f.is_file():
@@ -71,23 +212,22 @@ class NativeEmbeddingClient:
                 break
 
         if all_match:
+            post_sig = cls._artifact_status_signature(resolved)
+            with cls._status_identity_lock:
+                if pre_sig is not None and post_sig == pre_sig:
+                    cls._status_identity_cache[str(resolved)] = (post_sig, BGE_NATIVE_IDENTITY)
+                    cls._status_identity_cache.move_to_end(str(resolved))
+                    while len(cls._status_identity_cache) > cls._STATUS_IDENTITY_CACHE_MAX:
+                        cls._status_identity_cache.popitem(last=False)
+                else:
+                    cls._status_identity_cache.pop(str(resolved), None)
             return BGE_NATIVE_IDENTITY
 
         # If bytes do not match pinned revision, compute explicit content fingerprint.
         # Identities are never cached by mtime, so same-size/same-mtime replacements are detected.
-        tracked_fnames = (
-            "config.json",
-            "tokenizer.json",
-            "tokenizer_config.json",
-            "special_tokens_map.json",
-            "sentence_bert_config.json",
-            "modules.json",
-            "model.safetensors.index.json",
-            "model.safetensors",
-        )
         content_hasher = hashlib.sha256()
         found_any = False
-        for fname in sorted(tracked_fnames):
+        for fname in sorted(cls._TRACKED_IDENTITY_FILES):
             f = resolved / fname
             if f.is_file():
                 found_any = True
@@ -102,17 +242,44 @@ class NativeEmbeddingClient:
 
         if found_any:
             cfg_hash = content_hasher.hexdigest()[:16]
-            return f"bge-m3-custom@{cfg_hash}"
+            custom_id = f"bge-m3-custom@{cfg_hash}"
+            post_sig = cls._artifact_status_signature(resolved)
+            with cls._status_identity_lock:
+                if pre_sig is not None and post_sig == pre_sig:
+                    cls._status_identity_cache[str(resolved)] = (post_sig, custom_id)
+                    cls._status_identity_cache.move_to_end(str(resolved))
+                    while len(cls._status_identity_cache) > cls._STATUS_IDENTITY_CACHE_MAX:
+                        cls._status_identity_cache.popitem(last=False)
+                else:
+                    cls._status_identity_cache.pop(str(resolved), None)
+            return custom_id
+        with cls._status_identity_lock:
+            cls._status_identity_cache.pop(str(resolved), None)
         return "bge-m3-unknown@unverified"
 
     def get_identity(self) -> str:
         return self.verify_identity(self.model_dir)
 
+    def get_status_identity(self) -> str:
+        """Return verified status identity without rehashing unchanged verified artifacts."""
+        try:
+            resolved = self.model_dir.resolve()
+        except OSError:
+            return "bge-m3-unknown@unverified"
+        sig = self._artifact_status_signature(resolved)
+        if sig is not None:
+            with self._status_identity_lock:
+                cached = self._status_identity_cache.get(str(resolved))
+                if cached is not None and cached[0] == sig:
+                    self._status_identity_cache.move_to_end(str(resolved))
+                    return cached[1]
+        return self.get_identity()
+
     @classmethod
     def available(cls, model_dir: Optional[Path] = None) -> bool:
         if sys.platform != "darwin":
             return False
-        md = Path(model_dir or MLX_BGE_DIR)
+        md = Path(model_dir) if model_dir is not None else cls._resolve_default_model_dir()
         if not md.is_dir():
             return False
 
@@ -206,43 +373,168 @@ class NativeEmbeddingClient:
                     self._query_cache.popitem(last=False)
         return vector
 
+    @classmethod
+    def _worker_command(cls) -> List[str]:
+        training_python = BASE_DIR / ".train-venv" / "bin" / "python"
+        return [str(training_python), "-m", "app.mlx_embedding"]
+
+    @staticmethod
+    def _run_cancellable_popen(
+        cmd: List[str],
+        *,
+        input_text: str,
+        cwd: Path,
+        env: dict,
+        timeout: float = 120.0,
+        cancel_event: Optional[threading.Event] = None,
+        pass_fds: tuple = (),
+    ) -> subprocess.CompletedProcess:
+        popen_kwargs: dict = {
+            "cwd": cwd,
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "env": env,
+        }
+        if os.name == "posix":
+            popen_kwargs["start_new_session"] = True
+            if pass_fds:
+                popen_kwargs["pass_fds"] = pass_fds
+
+        proc = subprocess.Popen(cmd, **popen_kwargs)
+        with _ACTIVE_WORKERS_LOCK:
+            _ACTIVE_WORKERS.add(proc)
+
+        stdout_chunks: List[str] = []
+        stderr_chunks: List[str] = []
+
+        def _feed_stdin() -> None:
+            try:
+                if proc.stdin is not None:
+                    proc.stdin.write(input_text)
+                    proc.stdin.flush()
+            except OSError:
+                pass
+            finally:
+                try:
+                    if proc.stdin is not None:
+                        proc.stdin.close()
+                except OSError:
+                    pass
+
+        def _drain_stream(stream, target: List[str]) -> None:
+            try:
+                if stream is not None:
+                    target.append(stream.read())
+            except OSError:
+                pass
+            finally:
+                try:
+                    if stream is not None:
+                        stream.close()
+                except OSError:
+                    pass
+
+        t_in = threading.Thread(target=_feed_stdin, daemon=True)
+        t_out = threading.Thread(target=_drain_stream, args=(proc.stdout, stdout_chunks), daemon=True)
+        t_err = threading.Thread(target=_drain_stream, args=(proc.stderr, stderr_chunks), daemon=True)
+        t_in.start()
+        t_out.start()
+        t_err.start()
+
+        deadline = time.monotonic() + float(timeout)
+        try:
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    _terminate_owned_worker(proc)
+                    raise IndexingCancelledError("Đã hủy tiến trình embedding cục bộ theo yêu cầu dừng.")
+                rc = proc.poll()
+                if rc is not None:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    _terminate_owned_worker(proc)
+                    raise subprocess.TimeoutExpired(cmd, timeout)
+                wait_slice = min(0.04, remaining)
+                if cancel_event is not None:
+                    cancel_event.wait(timeout=wait_slice)
+                else:
+                    time.sleep(wait_slice)
+
+            t_out.join(timeout=1.0)
+            t_err.join(timeout=1.0)
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=rc,
+                stdout="".join(stdout_chunks),
+                stderr="".join(stderr_chunks),
+            )
+        finally:
+            if proc.poll() is None:
+                _terminate_owned_worker(proc)
+            t_in.join(timeout=0.2)
+            t_out.join(timeout=0.2)
+            t_err.join(timeout=0.2)
+            with _ACTIVE_WORKERS_LOCK:
+                _ACTIVE_WORKERS.discard(proc)
+
     def get_batch_embeddings(
-        self, texts: List[str], max_length: int = 512
+        self,
+        texts: List[str],
+        max_length: int = 512,
+        cancel_event: Optional[threading.Event] = None,
     ) -> List[Optional[List[float]]]:
         if not texts:
             return []
+        if cancel_event is not None and cancel_event.is_set():
+            raise IndexingCancelledError("Đã hủy nhúng vector cục bộ theo yêu cầu dừng.")
         if not self.available(self.model_dir):
             raise RuntimeError(f"Mô hình MLX BGE chưa sẵn sàng tại {self.model_dir}")
 
-        training_python = BASE_DIR / ".train-venv" / "bin" / "python"
+        cmd = self._worker_command()
         request = {
             "model_path": str(self.model_dir),
             "texts": texts,
             "max_length": max_length,
         }
+        payload_text = json.dumps(request, ensure_ascii=False)
+        worker_env = {
+            **os.environ,
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "HF_HUB_DISABLE_TELEMETRY": "1",
+            "HF_DATASETS_OFFLINE": "1",
+        }
 
-        with gpu_coordinator.acquire_for_inference() as lock_fds:
-            kwargs_run = {
-                "cwd": BASE_DIR,
-                "input": json.dumps(request, ensure_ascii=False),
-                "capture_output": True,
-                "text": True,
-                "timeout": 120,
-                "check": False,
-                "env": {
-                    **os.environ,
-                    "HF_HUB_OFFLINE": "1",
-                    "TRANSFORMERS_OFFLINE": "1",
-                    "HF_HUB_DISABLE_TELEMETRY": "1",
-                    "HF_DATASETS_OFFLINE": "1",
-                },
-            }
-            if sys.platform != "win32" and lock_fds and isinstance(lock_fds, (tuple, list)):
-                kwargs_run["pass_fds"] = tuple(fd for fd in lock_fds if isinstance(fd, int))
-
-            completed = subprocess.run(
-                [str(training_python), "-m", "app.mlx_embedding"],
-                **kwargs_run,
+        acq_ctx = (
+            gpu_coordinator.acquire_for_inference(cancel_event=cancel_event)
+            if cancel_event is not None
+            else gpu_coordinator.acquire_for_inference()
+        )
+        with acq_ctx as lock_fds:
+            if cancel_event is not None and cancel_event.is_set():
+                raise IndexingCancelledError("Đã hủy nhúng vector cục bộ theo yêu cầu dừng.")
+            raw_fds = getattr(lock_fds, "fds", lock_fds)
+            if sys.platform != "win32" and raw_fds is not None:
+                if isinstance(raw_fds, int) and not isinstance(raw_fds, bool):
+                    pass_fds = (raw_fds,)
+                elif isinstance(raw_fds, (tuple, list)):
+                    pass_fds = tuple(fd for fd in raw_fds if isinstance(fd, int) and not isinstance(fd, bool))
+                else:
+                    pass_fds = ()
+            else:
+                pass_fds = ()
+            completed = self._run_cancellable_popen(
+                cmd,
+                input_text=payload_text,
+                cwd=BASE_DIR,
+                env=worker_env,
+                timeout=120.0,
+                cancel_event=cancel_event,
+                pass_fds=pass_fds,
             )
 
         if completed.returncode != 0:

@@ -1,12 +1,16 @@
 """Local dialogue policy, bounded context and a process-wide inference admission gate."""
 
-from app import file_lock as fcntl
+from collections import deque
+from contextlib import contextmanager
 import json
 import logging
-import re
-from contextlib import contextmanager
+import os
 from pathlib import Path
+import re
+import threading
+import time
 
+from app import file_lock as fcntl
 from app.config import BASE_DIR, DATA_DIR, MLX_MODEL_DIR, TRAINED_MODEL_NAME, MLX_CONTEXT_TOKENS
 from app.query_normalizer import normalize_query
 
@@ -14,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 BUSY_TEXT = "Đang xử lý một yêu cầu khác. Câu hỏi này chưa được xử lý; hãy gửi lại sau khi yêu cầu trước hoàn tất."
+DEFAULT_MAX_INFERENCE_QUEUE = 20
+DEFAULT_ACCOUNT_QUEUE_TIMEOUT_SECONDS = 25.0
 
 
 class DialogueBusyError(RuntimeError):
@@ -24,22 +30,68 @@ class ContextLimitError(ValueError):
     pass
 
 
-import threading
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return max(minimum, float(raw))
+    except ValueError:
+        return default
 
 
 class DialogueGate:
     """One local inference request, including its context read and history commit.
 
-    Unlike the training coordinator's shared inference lock, this is exclusive
-    across threads and web processes. Never expires or interrupts a running job.
-    Supports re-entrant acquisition within the same thread to prevent nested deadlock.
+    Supports bounded FIFO queueing via ``acquire(timeout=..., max_queue_size=...)`` for
+    multi-account hosted serving while preserving immediate non-blocking exclusion when
+    ``timeout <= 0``. Never interrupts or expires a running job.
     """
-    def __init__(self, path=None):
+    def __init__(self, path=None, max_queue_size=None, queue_timeout_seconds=None):
         self.path = Path(path or DATA_DIR / "runtime/dialogue.lock")
         self._local = threading.local()
+        self._cond = threading.Condition()
+        self._active = False
+        self._waiters = deque()
+        self._next_ticket = 0
+        self._max_queue_size = max_queue_size
+        self._queue_timeout_seconds = queue_timeout_seconds
+        self.total_admitted = 0
+        self.total_rejected_busy = 0
+        self.total_timeouts = 0
+
+    def get_status(self) -> dict:
+        with self._cond:
+            return {
+                "active_requests": 1 if self._active else 0,
+                "queued_requests": len(self._waiters),
+                "max_queue_size": (
+                    self._max_queue_size
+                    if self._max_queue_size is not None
+                    else _env_int("STUDY_MAX_INFERENCE_QUEUE", DEFAULT_MAX_INFERENCE_QUEUE, minimum=1)
+                ),
+                "queue_timeout_seconds": (
+                    self._queue_timeout_seconds
+                    if self._queue_timeout_seconds is not None
+                    else _env_float("STUDY_INFERENCE_QUEUE_TIMEOUT_SECONDS", DEFAULT_ACCOUNT_QUEUE_TIMEOUT_SECONDS, minimum=0.0)
+                ),
+                "total_admitted": self.total_admitted,
+                "total_rejected_busy": self.total_rejected_busy,
+                "total_timeouts": self.total_timeouts,
+            }
 
     @contextmanager
-    def acquire(self):
+    def acquire(self, timeout: float = 0.0, max_queue_size: int | None = None):
         depth = getattr(self._local, "depth", 0)
         if depth > 0:
             self._local.depth = depth + 1
@@ -49,24 +101,150 @@ class DialogueGate:
                 self._local.depth -= 1
             return
 
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a+b") as handle:
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise DialogueBusyError(BUSY_TEXT) from exc
-            self._local.depth = 1
-            try:
-                yield
-            finally:
-                self._local.depth = 0
+        effective_timeout = float(self._queue_timeout_seconds) if (timeout == 0.0 and self._queue_timeout_seconds is not None) else float(timeout)
+        effective_max_queue = (
+            max_queue_size
+            if max_queue_size is not None
+            else (self._max_queue_size if self._max_queue_size is not None else _env_int("STUDY_MAX_INFERENCE_QUEUE", DEFAULT_MAX_INFERENCE_QUEUE, minimum=1))
+        )
+
+        # Wait in bounded FIFO order inside this process before touching the host file lock.
+        ticket = None
+        acquired_slot = False
+        deadline = time.monotonic() + max(0.0, effective_timeout)
+        with self._cond:
+            if self._active or self._waiters:
+                if effective_timeout <= 0.0:
+                    self.total_rejected_busy += 1
+                    raise DialogueBusyError(BUSY_TEXT)
+                if len(self._waiters) >= effective_max_queue:
+                    self.total_rejected_busy += 1
+                    raise DialogueBusyError(BUSY_TEXT)
+                self._next_ticket += 1
+                ticket = self._next_ticket
+                self._waiters.append(ticket)
                 try:
-                    fcntl.flock(handle, fcntl.LOCK_UN)
-                except OSError:
-                    pass
+                    while self._active or (self._waiters and self._waiters[0] != ticket):
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            self.total_timeouts += 1
+                            self.total_rejected_busy += 1
+                            raise DialogueBusyError(BUSY_TEXT)
+                        self._cond.wait(timeout=remaining)
+                except Exception:
+                    try:
+                        self._waiters.remove(ticket)
+                    except ValueError:
+                        pass
+                    self._cond.notify_all()
+                    raise
+                if self._waiters and self._waiters[0] == ticket:
+                    self._waiters.popleft()
+            self._active = True
+            acquired_slot = True
+
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a+b") as handle:
+                while True:
+                    try:
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError as exc:
+                        remaining = deadline - time.monotonic()
+                        if effective_timeout <= 0.0 or remaining <= 0.0:
+                            with self._cond:
+                                self.total_rejected_busy += 1
+                                if effective_timeout > 0.0:
+                                    self.total_timeouts += 1
+                            raise DialogueBusyError(BUSY_TEXT) from exc
+                        time.sleep(min(0.05, remaining))
+                with self._cond:
+                    self.total_admitted += 1
+                self._local.depth = 1
+                try:
+                    yield
+                finally:
+                    self._local.depth = 0
+                    try:
+                        fcntl.flock(handle, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+        finally:
+            if acquired_slot:
+                with self._cond:
+                    self._active = False
+                    self._cond.notify_all()
 
 
 dialogue_gate = DialogueGate()
+_ACCOUNT_GATES_LOCK = threading.Lock()
+_ACCOUNT_GATES: dict[str, DialogueGate] = {}
+
+
+def account_dialogue_gate(fallback_gate=None):
+    """Return a per-account DialogueGate when scoped under an authenticated account.
+
+    This keeps session/history CRUD and read locks isolated per user so one user's
+    model inference never blocks the other 19 users' workspace actions, while preserving
+    direct monkeypatched test gates when no account directory is active.
+    """
+    base = fallback_gate if fallback_gate is not None else dialogue_gate
+    if not isinstance(base, DialogueGate):
+        return base
+    from app.accounts import private_dir
+    scoped = private_dir()
+    if scoped is None:
+        return base
+    lock_path = (scoped / "dialogue.lock").resolve()
+    key = str(lock_path)
+    with _ACCOUNT_GATES_LOCK:
+        gate = _ACCOUNT_GATES.get(key)
+        if gate is None:
+            if len(_ACCOUNT_GATES) >= 4096:
+                _ACCOUNT_GATES.clear()
+            gate = DialogueGate(lock_path)
+            _ACCOUNT_GATES[key] = gate
+        return gate
+
+
+@contextmanager
+def acquire_inference(gate=None):
+    """Admit model/GPU inference fairly across authenticated users.
+
+    - Acquires the caller's per-account gate non-blockingly so one account holds at most
+      one active or queued inference request at a time.
+    - When an authenticated account scope is active (or STUDY_INFERENCE_QUEUE_TIMEOUT_SECONDS
+      is explicitly set), waits in the bounded FIFO host inference queue before entering
+      the shared GPU/inference gate.
+    - Preserves immediate non-blocking behavior for test doubles and unauthenticated callers.
+    """
+    target = gate if gate is not None else dialogue_gate
+    if not isinstance(target, DialogueGate):
+        with target.acquire():
+            yield
+        return
+
+    from app.accounts import private_dir
+    scoped = private_dir()
+    explicit_timeout = os.getenv("STUDY_INFERENCE_QUEUE_TIMEOUT_SECONDS")
+    if explicit_timeout is not None and explicit_timeout.strip():
+        timeout = _env_float("STUDY_INFERENCE_QUEUE_TIMEOUT_SECONDS", 0.0, minimum=0.0)
+    elif scoped is not None:
+        timeout = DEFAULT_ACCOUNT_QUEUE_TIMEOUT_SECONDS
+    else:
+        timeout = 0.0
+
+    max_queue = _env_int("STUDY_MAX_INFERENCE_QUEUE", DEFAULT_MAX_INFERENCE_QUEUE, minimum=1)
+
+    if scoped is not None:
+        acct_gate = account_dialogue_gate(target)
+        with acct_gate.acquire():
+            with target.acquire(timeout=timeout, max_queue_size=max_queue):
+                yield
+    else:
+        with target.acquire(timeout=timeout, max_queue_size=max_queue):
+            yield
 
 
 HELP_MESSAGE = """Chào bạn! Tôi là **Study Agent** — trợ lý hỗ trợ học tập cục bộ. Dưới đây là các chức năng tôi có thể giúp bạn:

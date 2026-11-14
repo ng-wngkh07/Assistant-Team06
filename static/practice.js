@@ -1,6 +1,6 @@
 document.addEventListener("DOMContentLoaded", () => {
-    const storageScope = document.querySelector?.('meta[name="study-account-scope"]')?.content || "local";
-    const progressKey = storageScope === "local" ? "study-agent-review-v1" : `study-agent-review-v1-${storageScope}`;
+    let storageScope = document.querySelector?.('meta[name="study-account-scope"]')?.content || "local";
+    let progressKey = storageScope === "local" ? "study-agent-review-v1" : `study-agent-review-v1-${storageScope}`;
     const practiceButton = document.getElementById("btn-practice-current");
     const practiceCount = document.getElementById("practice-count");
     const clearScopeButton = document.getElementById("btn-clear-practice-scope");
@@ -35,12 +35,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const learningExerciseResults = document.getElementById("learning-exercise-results");
     let selectedScope = null;
     let practiceSession = null;
+    let lastExerciseItems = [];
     let questionIndex = 0;
     let quizResults = [];
     let requestPending = false;
     let reviewItems = readProgress();
     let documentsById = new Map();
     let examplesRevision = 0;
+
+    if (typeof window !== "undefined") {
+        window.ARYMPracticeState = {
+            getSession: () => practiceSession,
+            getLastExercises: () => lastExerciseItems,
+        };
+    }
 
     document.addEventListener("app-source-selected", event => {
         const detail = event.detail || {};
@@ -127,6 +135,91 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         return result;
     }
+
+    async function getJson(url) {
+        const response = await fetch(url, {
+            headers: { "Accept": "application/json" }
+        });
+        let result = {};
+        try { result = await response.json(); } catch (_) {}
+        if (!response.ok) {
+            const detail = typeof result.detail === "string" ? result.detail
+                : Array.isArray(result.detail) ? result.detail.map(item => item?.msg).filter(Boolean).join(" ") : "";
+            throw new Error(detail || `Yêu cầu thất bại (${response.status}).`);
+        }
+        return result;
+    }
+
+    function _restoreSessionProgress() {
+        quizResults = [];
+        let firstUnanswered = -1;
+        const questions = (practiceSession && Array.isArray(practiceSession.questions)) ? practiceSession.questions : [];
+        const answers = (practiceSession && typeof practiceSession.answers === "object" && practiceSession.answers) ? practiceSession.answers : {};
+        for (let i = 0; i < questions.length; i++) {
+            const q = questions[i];
+            if (answers[q.id]) {
+                const ans = answers[q.id];
+                quizResults.push(Boolean(ans.is_correct));
+                if (!ans.is_correct) {
+                    const entry = makeReviewEntry(q, ans.submitted_answer, ans, practiceSession.practice_id);
+                    if (!reviewItems.some(item => item.id === entry.id)) {
+                        reviewItems.unshift(entry);
+                    }
+                }
+            } else if (firstUnanswered === -1) {
+                firstUnanswered = i;
+            }
+        }
+        if (reviewItems.length > 100) {
+            reviewItems = reviewItems.slice(0, 100);
+        }
+        if (firstUnanswered !== -1) {
+            questionIndex = firstUnanswered;
+        } else if (quizResults.length === questions.length && questions.length > 0) {
+            questionIndex = questions.length;
+        } else {
+            questionIndex = 0;
+        }
+    }
+
+    async function openPracticeSession(practiceIdOrData, topic) {
+        if (!practiceIdOrData) return;
+        if (practiceDialog && typeof practiceDialog.showModal === "function" && !practiceDialog.open) {
+            practiceDialog.showModal();
+        }
+        if (typeof practiceIdOrData === "object" && practiceIdOrData.practice_id) {
+            practiceSession = practiceIdOrData;
+            if (topic) practiceSession.topic = topic;
+            practiceSubtitle.textContent = topic ? `Chủ đề: ${topic}` : (practiceSession.topic ? `Chủ đề: ${practiceSession.topic}` : "Bộ câu hỏi luyện tập");
+            _restoreSessionProgress();
+            renderQuestion();
+            return;
+        }
+        const practiceId = String(practiceIdOrData);
+        practiceSession = null;
+        quizResults = [];
+        showMessage("Đang tải bộ câu hỏi luyện tập…");
+        try {
+            const data = await getJson(`/api/practice/session/${practiceId}`);
+            practiceSession = data;
+            if (topic) practiceSession.topic = topic;
+            practiceSubtitle.textContent = topic ? `Chủ đề: ${topic}` : (data.topic ? `Chủ đề: ${data.topic}` : "Bộ câu hỏi luyện tập");
+            _restoreSessionProgress();
+            renderQuestion();
+        } catch (err) {
+            showMessage(err.message || "Không thể tải bộ câu hỏi luyện tập.", true);
+        }
+    }
+
+    if (typeof window !== "undefined") {
+        window.ARYMPracticeBridge = {
+            openPracticeSession,
+        };
+    }
+    document.addEventListener("app-open-practice-session", event => {
+        const detail = event.detail || {};
+        openPracticeSession(detail.practice_id || detail.practiceSession, detail.topic);
+    });
 
     document.getElementById("btn-close-practice")?.addEventListener("click", () => practiceDialog.close());
     practiceDialog?.addEventListener("click", event => {
@@ -743,6 +836,7 @@ document.addEventListener("DOMContentLoaded", () => {
             };
             const data = await postJson("/api/learning/exercises", body);
             const items = data.items || [];
+            lastExerciseItems = items;
             if (!items.length) {
                 if (learningExerciseStatus) learningExerciseStatus.textContent = `Không tìm thấy bài tập nào cho chủ đề «${topic}» trong thư viện tài liệu.`;
             } else {
@@ -773,6 +867,13 @@ document.addEventListener("DOMContentLoaded", () => {
         qHeading.className = "exercise-question-title";
         qHeading.textContent = (cleanThoughts(item.question) || "").replace(/^\s*#{1,6}\s+/gm, "") || "Bài tập";
         card.appendChild(qHeading);
+
+        if (item.source_context) {
+            const ctxEl = document.createElement("div");
+            ctxEl.className = "exercise-source-context";
+            ctxEl.textContent = `[Ngữ cảnh nguồn]: ${item.source_context}`;
+            card.appendChild(ctxEl);
+        }
 
         if (item.source) {
             const isPdf = Boolean(
@@ -961,4 +1062,15 @@ document.addEventListener("DOMContentLoaded", () => {
     renderReviewList();
     loadExampleDocuments();
     loadLearningTopics();
+
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+        window.addEventListener("study:account-changed", (e) => {
+            const scope = e?.detail?.scope || (e?.detail?.account ? e.detail.account.id : "local");
+            storageScope = scope;
+            progressKey = storageScope === "local" ? "study-agent-review-v1" : `study-agent-review-v1-${storageScope}`;
+            updateReviewCount();
+            renderReviewList();
+            loadLearningTopics().catch(() => {});
+        });
+    }
 });

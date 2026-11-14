@@ -18,23 +18,58 @@ def inspect_mlx_adapter_layout(model_dir: Path, adapter_file: Path) -> dict:
         config_path = model_dir / "config.json"
         config_bytes = config_path.read_bytes()
         cfg = json.loads(config_bytes)
-        hidden = int(cfg["hidden_size"])
-        intermediate = int(cfg["intermediate_size"])
-        layers = int(cfg["num_hidden_layers"])
-        heads = int(cfg["num_attention_heads"])
-        kv_heads = int(cfg["num_key_value_heads"])
+        has_text_config = isinstance(cfg.get("text_config"), dict)
+        arch_cfg = cfg["text_config"] if has_text_config else cfg
+        hidden = int(arch_cfg["hidden_size"])
+        intermediate = int(arch_cfg["intermediate_size"])
+        layers = int(arch_cfg["num_hidden_layers"])
+        heads = int(arch_cfg["num_attention_heads"])
+        kv_heads = int(arch_cfg["num_key_value_heads"])
         if min(hidden, intermediate, layers, heads, kv_heads) <= 0 or hidden % heads:
             raise ValueError("Invalid base architecture")
-        kv_dim = int(cfg.get("head_dim", hidden // heads)) * kv_heads
+        head_dim = int(arch_cfg.get("head_dim", hidden // heads))
+        q_mult = 2 if arch_cfg.get("attn_output_gate") else 1
+        kv_dim = head_dim * kv_heads
+        o_in = heads * head_dim if (has_text_config or str(arch_cfg.get("model_type", "")).startswith("qwen3")) else hidden
         dimensions = {
-            "q_proj": (hidden, heads * int(cfg.get("head_dim", hidden // heads))),
-            "k_proj": (hidden, kv_dim), "v_proj": (hidden, kv_dim),
-            "o_proj": (hidden, hidden),
-            "gate_proj": (hidden, intermediate), "up_proj": (hidden, intermediate),
+            "q_proj": (hidden, heads * head_dim * q_mult),
+            "k_proj": (hidden, kv_dim),
+            "v_proj": (hidden, kv_dim),
+            "o_proj": (o_in, hidden),
+            "gate_proj": (hidden, intermediate),
+            "up_proj": (hidden, intermediate),
             "down_proj": (intermediate, hidden),
         }
+        linear_modules = {"in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"}
+        has_linear_attn = (
+            "linear_num_key_heads" in arch_cfg
+            and "linear_num_value_heads" in arch_cfg
+            and "linear_key_head_dim" in arch_cfg
+            and "linear_value_head_dim" in arch_cfg
+        )
+        if has_linear_attn:
+            lk_heads = int(arch_cfg["linear_num_key_heads"])
+            lv_heads = int(arch_cfg["linear_num_value_heads"])
+            lk_dim = int(arch_cfg["linear_key_head_dim"])
+            lv_dim = int(arch_cfg["linear_value_head_dim"])
+            if min(lk_heads, lv_heads, lk_dim, lv_dim) <= 0:
+                raise ValueError("Invalid linear attention architecture")
+            val_dim = lv_heads * lv_dim
+            qkv_dim = lk_heads * lk_dim * 2 + val_dim
+            dimensions.update({
+                "in_proj_qkv": (hidden, qkv_dim),
+                "in_proj_z": (hidden, val_dim),
+                "in_proj_a": (hidden, lv_heads),
+                "in_proj_b": (hidden, lv_heads),
+                "out_proj": (val_dim, hidden),
+            })
+        layer_types = arch_cfg.get("layer_types")
+        if layer_types is not None and (not isinstance(layer_types, list) or len(layer_types) != layers):
+            raise ValueError("Invalid layer_types configuration")
         byte_sizes = {"F32": 4, "F16": 2, "BF16": 2}
-        pattern = re.compile(r"^model\.layers\.(\d+)\.(?:self_attn|mlp)\.(\w+)\.lora_([ab])$")
+        prefix_pat = r"(?:language_model\.)?model\.layers\." if has_text_config else r"model\.layers\."
+        section_pat = r"(?:self_attn|linear_attn|mlp)" if has_linear_attn else r"(?:self_attn|mlp)"
+        pattern = re.compile(rf"^{prefix_pat}(\d+)\.{section_pat}\.(\w+)\.lora_([ab])$")
         groups = {}
         with adapter_file.open("rb") as f:
             size = adapter_file.stat().st_size
@@ -56,10 +91,23 @@ def inspect_mlx_adapter_layout(model_dir: Path, adapter_file: Path) -> dict:
                 match = pattern.fullmatch(name)
                 if not match or int(match[1]) >= layers or match[2] not in dimensions:
                     raise ValueError("Unknown tensor or incompatible layer: " + name)
-                section = name.split(".")[3]
-                expected_section = "mlp" if match[2] in {"gate_proj", "up_proj", "down_proj"} else "self_attn"
+                layer_idx = int(match[1])
+                module_name = match[2]
+                section = name.rsplit(".", 3)[-3]
+                if module_name in {"gate_proj", "up_proj", "down_proj"}:
+                    expected_section = "mlp"
+                elif module_name in linear_modules:
+                    expected_section = "linear_attn"
+                else:
+                    expected_section = "self_attn"
                 if section != expected_section:
                     raise ValueError("Tensor targets a nonexistent module: " + name)
+                if isinstance(layer_types, list):
+                    lt = layer_types[layer_idx]
+                    if expected_section == "linear_attn" and lt != "linear_attention":
+                        raise ValueError("Tensor targets linear_attn on non-linear layer: " + name)
+                    if expected_section == "self_attn" and lt != "full_attention":
+                        raise ValueError("Tensor targets self_attn on non-full-attention layer: " + name)
                 shape = info["shape"]
                 dtype = info["dtype"]
                 lo, hi = info["data_offsets"]

@@ -5,7 +5,7 @@ import json
 import os
 import shutil
 import subprocess
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import sqlite3
 import sys
 import threading
@@ -22,12 +22,19 @@ if hasattr(sys.stderr, "reconfigure"):
 ENV_KEYS = {
     "AGENT_DATA_DIR", "AGENT_SRC_DIR", "OLLAMA_BASE_URL", "DEFAULT_CHAT_MODEL",
     "DEFAULT_EMBED_MODEL", "OLLAMA_AUX_CHAT_MODEL", "MLX_CONTEXT_TOKENS", "HOST", "PORT",
-    "HISTORY_DB_PATH", "TIMETABLE_DB_PATH", "TIMETABLE_IMAGES_DIR",
+    "HISTORY_DB_PATH", "TIMETABLE_DB_PATH", "TIMETABLE_IMAGES_DIR", "STUDY_ACCOUNTS_DIR",
     "ANSWER_QUICK_MAX_TOKENS", "ANSWER_STEPS_MAX_TOKENS", "ANSWER_COMPARE_MAX_TOKENS",
     "MLX_MODEL_DIR", "MLX_9B_MODEL_DIR", "MLX_BGE_MODEL_DIR",
     "BGE_MODEL_DIR", "TRAINED_MODEL_NAME", "TRAINING_MODEL_DIR",
     "KNOWLEDGE_PACK_PATH", "KNOWLEDGE_PACK_SHA256",
-    "LLM_PROVIDER", "CHAT_BACKEND", "EMBED_BACKEND",
+    "LLM_PROVIDER", "CHAT_BACKEND", "EMBED_BACKEND", "SOFFICE_PATH",
+    "STUDY_ACCOUNTS_REQUIRED", "STUDY_ALLOW_REGISTRATION", "STUDY_SECURE_COOKIES",
+    "STUDY_SRC_AUTO_WATCH", "STUDY_GPU_RUNTIME_DIR",
+    "STUDY_MAX_INFERENCE_QUEUE", "STUDY_INFERENCE_QUEUE_TIMEOUT_SECONDS",
+    "STUDY_RATE_LIMIT_ENABLED", "STUDY_API_RATE_LIMIT_PER_MINUTE",
+    "STUDY_INFERENCE_RATE_LIMIT_PER_MINUTE", "STUDY_RATE_LIMIT_WINDOW_SECONDS",
+    "STUDY_ACCOUNT_MAX_FILES", "STUDY_ACCOUNT_MAX_STORAGE_MB",
+    "STUDY_MIN_FREE_DISK_MB", "FORWARDED_ALLOW_IPS",
 }
 
 
@@ -59,8 +66,20 @@ def configure(profile: str = "local") -> None:
         os.environ.setdefault("DEFAULT_CHAT_MODEL", platform_model)
     elif os.environ.get('KNOWLEDGE_PACK_PATH') or os.environ.get('KNOWLEDGE_PACK_SHA256'):
         configure_knowledge_pack(install=not _DEFER_INSTALL)
-    elif (ROOT / "resources/knowledge-packs.json").exists():
-        configure_bundled_library(ROOT / "resources/knowledge-packs.json", install=not _DEFER_INSTALL)
+    else:
+        for key, default_rel in (("AGENT_SRC_DIR", "src"), ("AGENT_DATA_DIR", "data")):
+            raw = os.environ.get(key)
+            if not raw:
+                os.environ[key] = str(ROOT / default_rel)
+            else:
+                candidate = Path(raw).expanduser()
+                os.environ[key] = str(candidate if candidate.is_absolute() else ROOT / candidate)
+        for key in ("HISTORY_DB_PATH", "TIMETABLE_DB_PATH", "TIMETABLE_IMAGES_DIR", "STUDY_ACCOUNTS_DIR"):
+            raw = os.environ.get(key)
+            if raw:
+                candidate = Path(raw).expanduser()
+                if not candidate.is_absolute():
+                    os.environ[key] = str(ROOT / candidate)
 
 
 def configure_knowledge_pack(install: bool = True) -> None:
@@ -183,237 +202,6 @@ def install_configured_knowledge_pack(archive: Path = None, destination: Path = 
         print('Prebuilt publisher knowledge installed. No document extraction, training or embedding was run.')
 
 
-def validate_personal_library(user_library: Path) -> None:
-    src_dir = user_library / "src"
-    if not src_dir.is_dir():
-        raise ValueError(f"Personal library at {user_library} is damaged: missing source directory 'src'. Existing personal data is preserved.")
-    db_file = user_library / "knowledge_base.db"
-    if not db_file.is_file():
-        raise ValueError(f"Personal library at {user_library} is damaged: missing working database 'knowledge_base.db'. Existing personal data is preserved.")
-
-    uri = f"{db_file.resolve().as_uri()}?mode=ro"
-    try:
-        with contextlib.closing(sqlite3.connect(uri, uri=True)) as conn:
-            cursor = conn.execute("PRAGMA quick_check(10)")
-            row = cursor.fetchone()
-            if not row or row[0] != "ok":
-                raise ValueError(f"Personal database at {db_file} quick_check failed: {row[0] if row else 'empty'}")
-            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = {r[0] for r in cursor.fetchall()}
-            required_tables = {"documents", "chunks", "document_source_quality", "corpus_vector_provenance"}
-            missing = required_tables - tables
-            if missing:
-                raise ValueError(f"Personal database at {db_file} missing required tables: {missing}")
-    except sqlite3.DatabaseError as exc:
-        raise ValueError(f"Personal database at {db_file} is corrupt or unreadable: {exc}")
-
-
-def configure_bundled_library(descriptor_file: Path, install: bool = True) -> None:
-    global _CONFIGURED_BUNDLED_PACK
-    try:
-        content = descriptor_file.read_text(encoding="utf-8")
-        data = json.loads(content)
-    except Exception as exc:
-        raise ValueError(f"Malformed knowledge-packs descriptor: {exc}")
-
-    if not isinstance(data, dict) or data.get("format") != 1:
-        raise ValueError("Invalid knowledge-packs descriptor format: format must be 1")
-
-    packs = data.get("packs")
-    if not isinstance(packs, dict) or not packs:
-        raise ValueError("Invalid knowledge-packs descriptor: 'packs' dictionary is required")
-
-    embed_backend = os.environ.get("EMBED_BACKEND")
-    if embed_backend == "ollama" or sys.platform != "darwin":
-        selected_backend = "ollama"
-    else:
-        selected_backend = "native"
-
-    if selected_backend not in packs:
-        raise ValueError(f"Knowledge pack descriptor has no configuration for selected backend '{selected_backend}'")
-
-    pack_config = packs[selected_backend]
-    if not isinstance(pack_config, dict):
-        raise ValueError(f"Invalid pack entry for backend '{selected_backend}'")
-
-    rel_path = pack_config.get("path")
-    digest = pack_config.get("sha256")
-
-    if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
-        raise ValueError(f"Invalid pack sha256 digest: {digest}")
-
-    if not isinstance(rel_path, str) or not rel_path or "\\" in rel_path or ":" in rel_path:
-        raise ValueError(f"Invalid resource path: {rel_path}")
-
-    posix_path = PurePosixPath(rel_path)
-    if posix_path.is_absolute() or any(part == ".." for part in posix_path.parts):
-        raise ValueError(f"Resource path escapes bundle: {rel_path}")
-
-    archive = (ROOT / rel_path).resolve()
-    root_resolved = ROOT.resolve()
-    try:
-        if not archive.is_relative_to(root_resolved):
-            raise ValueError(f"Resource path escapes bundle: {rel_path}")
-    except AttributeError:
-        if not str(archive).startswith(str(root_resolved)):
-            raise ValueError(f"Resource path escapes bundle: {rel_path}")
-
-    user_library = ROOT / "data/user-library"
-    seed_receipt = user_library / "seed-receipt.json"
-
-    is_seeded = False
-    if seed_receipt.is_file():
-        try:
-            receipt_data = json.loads(seed_receipt.read_text(encoding="utf-8"))
-            if receipt_data.get("sha256") == digest:
-                validate_personal_library(user_library)
-                is_seeded = True
-        except Exception:
-            pass
-
-    if not is_seeded and not archive.is_file():
-        raise ValueError(f"Bundled knowledge pack archive missing at {rel_path} and user library is not seeded")
-
-    user_sources = user_library / "src"
-    user_db = user_library / "knowledge_base.db"
-    user_history = user_library / "history.db"
-    user_timetable = user_library / "timetable.db"
-    user_timetable_images = user_library / "timetable_images"
-
-    old_data = Path(os.environ.get('AGENT_DATA_DIR', str(ROOT / 'data'))).expanduser()
-    if not old_data.is_absolute():
-        old_data = ROOT / old_data
-
-    os.environ.setdefault('MLX_MODEL_DIR', os.environ.get('MLX_9B_MODEL_DIR', str(old_data / 'models/qwen3.5-9b-4bit')))
-    os.environ.setdefault('MLX_BGE_MODEL_DIR', os.environ.get('BGE_MODEL_DIR', str(old_data / 'models/bge-m3-mlx-fp16')))
-
-    os.environ["AGENT_DATA_DIR"] = str(user_library)
-    os.environ["AGENT_SRC_DIR"] = str(user_sources)
-    os.environ["HISTORY_DB_PATH"] = str(user_history)
-    os.environ["TIMETABLE_DB_PATH"] = str(user_timetable)
-    os.environ["TIMETABLE_IMAGES_DIR"] = str(user_timetable_images)
-
-    if 'app.config' in sys.modules:
-        import importlib
-        importlib.reload(sys.modules['app.config'])
-
-    _CONFIGURED_BUNDLED_PACK = {
-        "archive": archive,
-        "digest": digest,
-        "backend": selected_backend,
-    }
-
-    if install:
-        install_configured_bundled_library(archive=archive, digest=digest, backend=selected_backend)
-
-
-def install_configured_bundled_library(archive: Path = None, digest: str = None, backend: str = None) -> None:
-    global _CONFIGURED_BUNDLED_PACK
-    if archive is None or digest is None or backend is None:
-        if not _CONFIGURED_BUNDLED_PACK:
-            return
-        archive = _CONFIGURED_BUNDLED_PACK["archive"]
-        digest = _CONFIGURED_BUNDLED_PACK["digest"]
-        backend = _CONFIGURED_BUNDLED_PACK["backend"]
-
-    user_library = ROOT / "data/user-library"
-    seed_receipt_path = user_library / "seed-receipt.json"
-    publisher_cache = ROOT / "data/knowledge-packs" / digest
-
-    expected_identity = None
-    if backend == "ollama":
-        from app.ollama_client import OllamaClient
-        client = OllamaClient()
-        expected_identity = client.embedding_identity(os.environ.get("DEFAULT_EMBED_MODEL", "bge-m3"))
-        if not expected_identity:
-            raise RuntimeError(
-                f'Could not verify Ollama embedding identity for model {os.environ.get("DEFAULT_EMBED_MODEL", "bge-m3")}. Ensure Ollama is running.'
-            )
-    elif backend == "native":
-        if sys.platform != "darwin":
-            raise ValueError("This native BGE knowledge pack requires macOS. Other backends need a separately verified pack.")
-        from app.native_embedding import NativeEmbeddingClient
-        expected_identity = NativeEmbeddingClient().get_identity()
-    else:
-        raise ValueError(f"Unsupported backend '{backend}'")
-
-    lock_path = ROOT / "data" / ".user-library.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    from app.file_lock import flock, LOCK_EX, LOCK_UN
-    with open(lock_path, "a+") as lock_file:
-        flock(lock_file.fileno(), LOCK_EX)
-        try:
-            if seed_receipt_path.is_file():
-                try:
-                    receipt = json.loads(seed_receipt_path.read_text(encoding="utf-8"))
-                except Exception as exc:
-                    raise ValueError(f"Corrupt seed receipt at {seed_receipt_path}: {exc}")
-                if receipt.get("sha256") != digest:
-                    raise ValueError(
-                        f"Personal library at {user_library} was seeded with pack {receipt.get('sha256')}, "
-                        f"which does not match descriptor pack {digest}. Existing personal data is preserved. "
-                        f"Move or backup {user_library} to upgrade."
-                    )
-                if receipt.get("model_identity") != expected_identity:
-                    raise ValueError(
-                        f"Personal library at {user_library} was seeded with model {receipt.get('model_identity')}, "
-                        f"which does not match current model {expected_identity}. Existing personal data is preserved. "
-                        f"Move or backup {user_library} to re-seed."
-                    )
-                validate_personal_library(user_library)
-                return
-
-            if user_library.exists():
-                children = list(user_library.rglob('*'))
-                if user_library.is_symlink() or not user_library.is_dir() or any(
-                        child.is_symlink() or not child.is_dir() for child in children):
-                    raise ValueError(
-                        f"Existing unrecognized user directory at {user_library} contains files; "
-                        f"data was preserved. Move or inspect it before seeding."
-                    )
-                for child in sorted(children, key=lambda p: len(p.parts), reverse=True):
-                    child.rmdir()
-                user_library.rmdir()
-
-            if not archive.is_file():
-                raise ValueError(f"Bundled knowledge pack archive missing: {archive}")
-
-            if not publisher_cache.exists():
-                from app.knowledge_pack import install_pack
-                install_pack(archive, publisher_cache, expected_sha256=digest, expected_identity=expected_identity)
-
-            import tempfile
-            with tempfile.TemporaryDirectory(prefix=".user-library-stage-", dir=ROOT / "data") as temp_dir:
-                staging_pack = Path(temp_dir) / "pack_ready"
-                from app.knowledge_pack import install_pack
-                install_pack(archive, staging_pack, expected_sha256=digest, expected_identity=expected_identity)
-
-                staging = Path(temp_dir) / "user-library"
-                staging.mkdir()
-                os.replace(staging_pack / "sources", staging / "src")
-                os.replace(staging_pack / "knowledge_base.db", staging / "knowledge_base.db")
-
-                receipt_content = {
-                    "sha256": digest,
-                    "model_identity": expected_identity,
-                    "backend": backend,
-                    "seed_version": 1,
-                }
-                (staging / "seed-receipt.json").write_text(json.dumps(receipt_content, ensure_ascii=False), encoding="utf-8")
-
-                if user_library.exists():
-                    children = list(user_library.rglob('*'))
-                    for child in sorted(children, key=lambda p: len(p.parts), reverse=True):
-                        child.rmdir()
-                    user_library.rmdir()
-                os.replace(staging, user_library)
-        finally:
-            try:
-                flock(lock_file.fileno(), LOCK_UN)
-            except Exception:
-                pass
-
-
 def prepare_demo() -> dict:
     from app.config import DB_PATH, SRC_DIR
     from app.indexer import KnowledgeIndexer
@@ -473,24 +261,120 @@ def ensure_local_model_service(timeout_seconds: float = 15) -> None:
     raise RuntimeError('Local model service did not become ready. Check its configured port and retry; no model was downloaded.')
 
 
+def _inspect_library_state(src_dir: Path, db_path: Path) -> tuple[bool, int]:
+    """Return (src_has_files, indexed_doc_count) without mutating files."""
+    src_exists = False
+    try:
+        is_src_dir = src_dir.is_dir()
+        resolved_root = src_dir.resolve() if is_src_dir else None
+    except OSError:
+        is_src_dir = False
+        resolved_root = None
+
+    if is_src_dir and resolved_root is not None:
+        stack = [src_dir]
+        visited: set[tuple[int, int]] = set()
+        while stack and not src_exists:
+            current = stack.pop()
+            try:
+                st = current.stat()
+            except OSError:
+                continue
+            dir_key = (st.st_dev, st.st_ino)
+            if dir_key in visited:
+                continue
+            visited.add(dir_key)
+            try:
+                with os.scandir(current) as entries:
+                    for entry in entries:
+                        if entry.name.startswith("."):
+                            continue
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                stack.append(Path(entry.path))
+                            elif entry.is_file(follow_symlinks=False):
+                                src_exists = True
+                                break
+                            elif entry.is_symlink():
+                                target = Path(entry.path)
+                                if target.is_file() and target.resolve().is_relative_to(resolved_root):
+                                    src_exists = True
+                                    break
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+
+    indexed_docs = 0
+    try:
+        db_uri = db_path.resolve().as_uri() if db_path.is_file() else None
+    except OSError:
+        db_uri = None
+    if db_uri:
+        uri = f"{db_uri}?mode=ro"
+        for target_uri in (uri, f"{uri}&immutable=1"):
+            try:
+                with contextlib.closing(sqlite3.connect(target_uri, uri=True)) as conn:
+                    row = conn.execute("SELECT COUNT(*) FROM documents").fetchone()
+                    indexed_docs = int(row[0]) if row else 0
+                break
+            except sqlite3.OperationalError:
+                indexed_docs = 0
+            except sqlite3.Error:
+                indexed_docs = 0
+                break
+    return src_exists, indexed_docs
+
+
+def _print_readiness_summary(models_ready: bool, library_ready: bool, label: str, missing_hint: str) -> None:
+    """Print honest library vs model readiness without falsely claiming full QA ready."""
+    if models_ready and library_ready:
+        print(f"Mode: Full {label}QA, embedding and vision ready.")
+    elif models_ready:
+        print(
+            "Models: OK (QA, embedding and vision ready); "
+            "Library: UNAVAILABLE (missing or empty library; full QA requires shared sources and indexed database)."
+        )
+    elif library_ready:
+        print(f"Search mode: OK (model-free FTS keyword search ready; full QA requires {missing_hint}).")
+    else:
+        print(f"Search mode: OK (model-free FTS engine ready; library currently missing/empty; full QA requires shared sources and {missing_hint}).")
+
+
 def check_environment(allow_wait: bool = False) -> bool:
-    from app.config import DATA_DIR, SRC_DIR, DEFAULT_CHAT_MODEL, OLLAMA_AUX_CHAT_MODEL
+    from app.config import DATA_DIR, DB_PATH, SRC_DIR, DEFAULT_CHAT_MODEL, OLLAMA_AUX_CHAT_MODEL
     from app.ollama_client import OllamaClient
     from app.trained_client import TrainedModelClient
     with sqlite3.connect(":memory:") as conn:
         conn.execute("CREATE VIRTUAL TABLE smoke USING fts5(text)")
     import pymupdf as fitz
     from PIL import Image  # noqa: F401
-    from app.server import app
+    src_exists, indexed_docs = _inspect_library_state(SRC_DIR, DB_PATH)
+    library_ready = src_exists and indexed_docs > 0
+    if DB_PATH.is_file() or "app.server" in sys.modules:
+        from app.server import app
+        app_status = f"App routes: {len(app.routes)}"
+    else:
+        import importlib.util
+        import fastapi
+        if importlib.util.find_spec("app.server") is None:
+            raise ImportError("app.server module not found")
+        app_status = f"App module: OK (FastAPI {fastapi.__version__}; no DB initialized)"
     print(f"Python: {sys.version.split()[0]} | platform: {sys.platform}")
     print(f"Sources: {SRC_DIR}\nLocal data: {DATA_DIR}")
-    print(f"App routes: {len(app.routes)} | SQLite FTS5: OK | PDF: {fitz.VersionBind}")
+    if not src_exists:
+        print(f"Library: MISSING ({SRC_DIR} not found or empty; no sample or user-library seeded)")
+    elif indexed_docs == 0:
+        print(f"Library: EMPTY (0 indexed documents in {DB_PATH})")
+    else:
+        print(f"Library: OK ({indexed_docs} indexed documents)")
+    print(f"{app_status} | SQLite FTS5: OK | PDF: {fitz.VersionBind}")
     from app.model_resolver import is_mlx_model, reject_retired_model
     reject_retired_model(DEFAULT_CHAT_MODEL)
     if is_mlx_model(DEFAULT_CHAT_MODEL):
         if sys.platform != "darwin":
             print(f"QA model: NOT_RUN (MLX native {DEFAULT_CHAT_MODEL} is Apple-only; Windows/Linux uses Ollama)")
-            print("Search mode: OK (model-free FTS keyword search ready; full QA/vision requires Ollama models).")
+            _print_readiness_summary(False, library_ready, "local ", "Ollama models")
             return False
 
         qa_ready = TrainedModelClient.available(DEFAULT_CHAT_MODEL)
@@ -516,12 +400,9 @@ def check_environment(allow_wait: bool = False) -> bool:
         from app.runtime_health import probe_mlx_runtime
         runtime = probe_mlx_runtime(force=True)
         print(f"Runtime: {runtime['code']} | {runtime['message']}")
-        all_ready = qa_ready and vision_ready and embedding_ready and runtime.get("ready", False)
-        if all_ready:
-            print("Mode: Full local QA, embedding and vision ready.")
-        else:
-            print("Search mode: OK (model-free FTS keyword search ready; full QA/vision requires missing models).")
-        return all_ready
+        models_ready = qa_ready and vision_ready and embedding_ready and runtime.get("ready", False)
+        _print_readiness_summary(models_ready, library_ready, "local ", "missing models")
+        return models_ready
 
     client = OllamaClient()
     if not client.check_health():
@@ -532,7 +413,7 @@ def check_environment(allow_wait: bool = False) -> bool:
                     break
     if not client.check_health():
         print("Configured local Ollama is unavailable; FTS/demo/mocked tests still work.")
-        print("Search mode: OK (model-free FTS keyword search ready; full QA requires Ollama service).")
+        _print_readiness_summary(False, library_ready, "", "Ollama service")
         return False
     names = {model.get("name") for model in client.list_models()}
     print(f"Ollama models: {', '.join(sorted(names)) if names else 'none'}")
@@ -555,25 +436,28 @@ def check_environment(allow_wait: bool = False) -> bool:
     else:
         print("Embedding model: MISSING (bge-m3)")
 
-    all_ready = qa_ready and vision_ready and embedding_ready
-    if all_ready:
-        print("Mode: Full QA, embedding and vision ready.")
-    else:
-        print("Search mode: OK (model-free FTS keyword search ready; full QA requires missing models).")
-    return all_ready
+    models_ready = qa_ready and vision_ready and embedding_ready
+    _print_readiness_summary(models_ready, library_ready, "", "missing models")
+    return models_ready
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["demo", "check", "serve"])
-    parser.add_argument("--profile", choices=["demo", "local"], default="demo")
+    parser.add_argument("--profile", choices=["demo", "local"], default=None)
     parser.add_argument("--reload", action="store_true")
     parser.add_argument("--require-model", action="store_true")
     parser.add_argument("--start-model-service", action="store_true", help="Start installed local Ollama if needed; never downloads models.")
     parser.add_argument("--open-browser", action="store_true", help="Open the local app after its web server responds.")
+    parser.add_argument("--install-pack", action="store_true", help="Explicitly install configured KNOWLEDGE_PACK_PATH/KNOWLEDGE_PACK_SHA256 pack.")
     args = parser.parse_args()
-    if args.command == "demo" and args.profile != "demo":
-        parser.error("The demo command requires --profile demo.")
+    if args.command == "demo":
+        if args.profile is not None and args.profile != "demo":
+            parser.error("The demo command requires --profile demo.")
+        args.profile = "demo"
+    else:
+        if args.profile is None:
+            args.profile = "local"
     global _DEFER_INSTALL
     _DEFER_INSTALL = True
     try:
@@ -589,17 +473,19 @@ def main() -> int:
         except (ValueError, RuntimeError, OSError) as exc:
             print(f"Model startup failed: {exc}", file=sys.stderr)
             return 1
-    if os.environ.get('KNOWLEDGE_PACK_PATH') or os.environ.get('KNOWLEDGE_PACK_SHA256'):
-        try:
-            install_configured_knowledge_pack()
-        except (ValueError, RuntimeError, OSError) as exc:
-            print(f'Knowledge pack installation failed: {exc}', file=sys.stderr)
-            return 1
-    elif _CONFIGURED_BUNDLED_PACK:
-        try:
-            install_configured_bundled_library()
-        except (ValueError, RuntimeError, OSError) as exc:
-            print(f'Bundled library installation failed: {exc}', file=sys.stderr)
+    # DATA01/DATA02: check/serve default do not install a pack
+    if args.install_pack:
+        if args.profile == "local" and os.environ.get('KNOWLEDGE_PACK_PATH') and os.environ.get('KNOWLEDGE_PACK_SHA256'):
+            try:
+                install_configured_knowledge_pack()
+            except (ValueError, RuntimeError, OSError) as exc:
+                print(f'Knowledge pack installation failed: {exc}', file=sys.stderr)
+                return 1
+        else:
+            print(
+                'No explicit knowledge pack configured. Set KNOWLEDGE_PACK_PATH and KNOWLEDGE_PACK_SHA256 together; no seeding performed.',
+                file=sys.stderr,
+            )
             return 1
     if args.command in {"demo", "serve"} and args.profile == "demo":
         print(prepare_demo())

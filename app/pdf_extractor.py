@@ -1,20 +1,22 @@
-import os
-import re
 import hashlib
-import shutil
-import zipfile
+import os
 import posixpath
+import re
+import shutil
 import subprocess
-import defusedxml.ElementTree as ET
+import threading
+import zipfile
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+import defusedxml.ElementTree as ET
 
 import pymupdf
 
 from app.config import DATA_DIR, MIN_TEXT_PER_PAGE
-from app.text_cleaner import normalize_vietnamese_text
-from app.vision_ocr import VisionOCRManager, BACKEND_TESSERACT, BACKEND_OLLAMA_VISION
+from app.gpu_lock import IndexingCancelledError
 from app.source_quality import PIPELINE_VERSION, inspect_page_quality
+from app.text_cleaner import normalize_vietnamese_text
+from app.vision_ocr import BACKEND_OLLAMA_VISION, BACKEND_TESSERACT, VisionOCRManager
 
 
 class PDFExtractionResult:
@@ -139,7 +141,15 @@ class PDFExtractor:
         return result
 
     @classmethod
-    def extract_pdf(cls, filepath: Path, ocr: bool = False, force_ocr: bool = False, rel_path: Optional[str] = None, max_pages: int = 0) -> PDFExtractionResult:
+    def extract_pdf(
+        cls,
+        filepath: Path,
+        ocr: bool = False,
+        force_ocr: bool = False,
+        rel_path: Optional[str] = None,
+        max_pages: int = 0,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> PDFExtractionResult:
         """Extract text from a single PDF page by page while preserving raw capture and typed positional blocks."""
         from app.config import SRC_DIR
         try:
@@ -178,6 +188,9 @@ class PDFExtractor:
             pages_with_significant_text = 0
 
             for page_num in range(1, limit_pages + 1):
+                if cancel_event is not None and cancel_event.is_set():
+                    doc.close()
+                    raise IndexingCancelledError("Đã hủy trích xuất PDF theo yêu cầu dừng.")
                 try:
                     page = doc[page_num - 1]
                     native_raw_text = page.get_text() or ""
@@ -685,11 +698,28 @@ class PDFExtractor:
         return result
 
     @classmethod
-    def extract_file(cls, filepath: Path, ocr: bool = False, force_ocr: bool = False, rel_path: Optional[str] = None, max_pages: int = 0) -> PDFExtractionResult:
+    def extract_file(
+        cls,
+        filepath: Path,
+        ocr: bool = False,
+        force_ocr: bool = False,
+        rel_path: Optional[str] = None,
+        max_pages: int = 0,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> PDFExtractionResult:
         """Dispatch extraction based on file extension."""
+        if cancel_event is not None and cancel_event.is_set():
+            raise IndexingCancelledError("Đã hủy trích xuất tài liệu theo yêu cầu dừng.")
         ext = filepath.suffix.lower()
         if ext == ".pdf":
-            return cls.extract_pdf(filepath, ocr=ocr, force_ocr=force_ocr, rel_path=rel_path, max_pages=max_pages)
+            return cls.extract_pdf(
+                filepath,
+                ocr=ocr,
+                force_ocr=force_ocr,
+                rel_path=rel_path,
+                max_pages=max_pages,
+                cancel_event=cancel_event,
+            )
         elif ext == ".docx":
             return cls.extract_docx(filepath)
         elif ext == ".pptx":

@@ -78,3 +78,32 @@ def test_chat_save_history_default_true(client):
     assert "history_id" in response.json()
     assert len(server.history_store.list()) == 1
 
+
+def test_models_endpoint_reports_grounded_review_v2(client, monkeypatch):
+    import app.practice_adapter as adapters
+    monkeypatch.setattr(adapters, 'active_practice_adapter', lambda *args, **kwargs: {'path': '/synthetic/legacy-accepted'})
+    monkeypatch.setattr(server, "_requires_mlx_model", lambda: True)
+    response = client.get("/api/models")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["practice_review_profile"] == "grounded_review_v2"
+    assert data["practice_review_adapter"] is None
+    assert data["active_adapter"] is None
+    assert data["model_mode"] == 'unadapted_base'
+
+
+
+def test_models_endpoint_reports_actual_qualified_practice_adapter(client, monkeypatch):
+    import app.practice_adapter as adapters
+    accepted = dict(path='/synthetic/grounded', sha256='fixture', scope='single_question_practice_review', review_profile=adapters.GROUNDED_REVIEW_PROFILE)
+    profiles = []
+    def active(path, profile):
+        profiles.append(profile)
+        return accepted
+    monkeypatch.setattr(adapters, 'active_practice_adapter', active)
+    monkeypatch.setattr(server, '_requires_mlx_model', lambda: True)
+    response = client.get('/api/models')
+    assert response.status_code == 200
+    assert response.json()['practice_review_adapter'] == accepted
+    assert response.json()['active_adapter'] is None
+    assert profiles == [adapters.GROUNDED_REVIEW_PROFILE]
