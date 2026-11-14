@@ -108,6 +108,7 @@ ollama = types.ModuleType('app.ollama_client')
 class StubOllamaClient:
     def __init__(self, *args, **kwargs): pass
     def check_health(self): return True
+    def list_models(self): return []
     def embedding_identity(self, model="bge-m3"): return EXPECTED_ID
 ollama.OllamaClient = StubOllamaClient
 sys.modules['app.ollama_client'] = ollama

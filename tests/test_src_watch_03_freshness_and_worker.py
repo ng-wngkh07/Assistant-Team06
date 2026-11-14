@@ -284,12 +284,15 @@ def test_freshness_bounded_under_concurrent_writer_and_candidate_filtering_prese
         idx = 0
         while not stop_writer.is_set():
             idx += 1
-            if idx % 2 == 0:
-                b_path.write_text(f"BETA_INPLACE_{idx}", encoding="utf-8")
-            else:
-                staging = tmp_path / "b_tmp.txt"
-                staging.write_text(f"BETA_REPLACED_{idx}", encoding="utf-8")
-                os.replace(staging, b_path)
+            try:
+                if idx % 2 == 0:
+                    b_path.write_text(f"BETA_INPLACE_{idx}", encoding="utf-8")
+                else:
+                    staging = tmp_path / "b_tmp.txt"
+                    staging.write_text(f"BETA_REPLACED_{idx}", encoding="utf-8")
+                    os.replace(staging, b_path)
+            except PermissionError:
+                pass
             time.sleep(0.002)
 
     t = threading.Thread(target=writer_loop, daemon=True)

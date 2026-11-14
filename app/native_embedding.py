@@ -31,6 +31,11 @@ _ACTIVE_WORKERS: set[subprocess.Popen] = set()
 def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) -> None:
     """Terminate and reap ONLY the owned child worker (and its dedicated session group)."""
     if proc.poll() is not None:
+        if os.name == "nt" and getattr(proc, "_handle", None) is not None:
+            try:
+                proc._handle.Close()
+            except Exception:
+                pass
         return
     kill_pg = False
     if os.name == "posix":
@@ -41,14 +46,22 @@ def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) 
     try:
         if os.name == "nt":
             try:
-                subprocess.run(  # nosec B603, B607
+                kill_proc = subprocess.Popen(  # nosec B603, B607
                     ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    check=False,
-                    timeout=3.0,
                 )
+                try:
+                    kill_proc.wait(timeout=3.0)
+                finally:
+                    if getattr(kill_proc, "_handle", None) is not None and kill_proc.returncode is not None:
+                        try:
+                            kill_proc._handle.Close()
+                        except Exception:
+                            pass
             except (OSError, subprocess.SubprocessError):
+                pass
+            if proc.poll() is None:
                 proc.terminate()
         elif kill_pg:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -73,6 +86,11 @@ def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) 
         proc.wait(timeout=2.0)
     except Exception:
         pass
+    if os.name == "nt" and getattr(proc, "_handle", None) is not None and proc.returncode is not None:
+        try:
+            proc._handle.Close()
+        except Exception:
+            pass
 
 
 def _cleanup_active_workers() -> None:
@@ -484,13 +502,15 @@ class NativeEmbeddingClient:
                 stderr="".join(stderr_chunks),
             )
         finally:
-            if proc.poll() is None:
-                _terminate_owned_worker(proc)
-            t_in.join(timeout=0.2)
-            t_out.join(timeout=0.2)
-            t_err.join(timeout=0.2)
-            with _ACTIVE_WORKERS_LOCK:
-                _ACTIVE_WORKERS.discard(proc)
+            try:
+                if proc.poll() is None:
+                    _terminate_owned_worker(proc)
+            finally:
+                with _ACTIVE_WORKERS_LOCK:
+                    _ACTIVE_WORKERS.discard(proc)
+                t_in.join(timeout=0.2)
+                t_out.join(timeout=0.2)
+                t_err.join(timeout=0.2)
 
     def get_batch_embeddings(
         self,
