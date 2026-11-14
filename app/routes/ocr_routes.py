@@ -157,10 +157,14 @@ async def submit_ocr_review(req: OCRReviewRequest):
             except Exception as sync_exc:
                 logger.warning("Watcher sync_after_review warning: %s", sync_exc)
 
+        public_index_update = dict(index_update) if isinstance(index_update, dict) else {"status": "failed"}
+        if public_index_update.get("status") != "success" and public_index_update.get("error"):
+            public_index_update["error"] = "Không thể cập nhật chỉ mục trang tài liệu."
+
         return project_public_response({
             "status": "success" if index_update.get("status") == "success" else "verified_not_indexed",
             "record": updated,
-            "index_update": index_update,
+            "index_update": public_index_update,
         })
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi OCR trong bộ nhớ đệm.")
@@ -225,10 +229,14 @@ async def submit_ocr_region_review(req: OCRRegionReviewRequest):
         else:
             status_val = "verified_not_indexed"
 
+        public_index_update = dict(index_update) if isinstance(index_update, dict) else {"status": "failed"}
+        if public_index_update.get("status") != "success" and public_index_update.get("error"):
+            public_index_update["error"] = "Không thể cập nhật chỉ mục trang tài liệu."
+
         return project_public_response({
             "status": status_val,
             "record": updated,
-            "index_update": index_update,
+            "index_update": public_index_update,
         })
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi OCR trong bộ nhớ đệm.")
