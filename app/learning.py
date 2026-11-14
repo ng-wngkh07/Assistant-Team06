@@ -666,7 +666,7 @@ class LearningService:
                 pass
         if not pdf_p and filename:
             from app import config as app_config
-            for base_dir in (Path.cwd() / "src", Path(app_config.SRC_DIR)):
+            for base_dir in (Path(app_config.SRC_DIR),):
                 try:
                     resolved_base = base_dir.resolve()
                     cand = (resolved_base / filename).resolve()

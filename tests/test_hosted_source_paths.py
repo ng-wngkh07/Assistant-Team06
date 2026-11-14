@@ -443,3 +443,35 @@ def test_legacy_user_library_untouched_by_local_check(tmp_path):
     assert legacy_note.read_text(encoding="utf-8") == "Legacy user note backup candidate\n"
     assert legacy_db.is_file()
     assert not (checkout / "src/old_notes.md").exists()
+
+
+def test_resolve_safe_source_file_defaults_strictly_to_src_dir(tmp_path, monkeypatch):
+    """Default source lookup resolves only files inside SRC_DIR, never docs/ or fixtures/."""
+    import app.config as cfg
+    from app.material_storage import resolve_safe_source_file
+
+    fake_base = tmp_path / "repo"
+    src_dir = fake_base / "src"
+    docs_dir = fake_base / "docs"
+    fixtures_dir = fake_base / "tests/fixtures/documents"
+    other_data_dir = fake_base / "data/user-library"
+    for d in (src_dir, docs_dir, fixtures_dir, other_data_dir):
+        d.mkdir(parents=True)
+
+    src_note = src_dir / "topic/course_note.md"
+    src_note.parent.mkdir(parents=True, exist_ok=True)
+    src_note.write_text("# Course note in src\n", encoding="utf-8")
+    (docs_dir / "doc_only.md").write_text("# Docs note\n", encoding="utf-8")
+    (fixtures_dir / "fixture_only.md").write_text("# Fixture note\n", encoding="utf-8")
+    (other_data_dir / "legacy_only.md").write_text("# Legacy note\n", encoding="utf-8")
+
+    monkeypatch.setattr(cfg, "BASE_DIR", fake_base)
+    monkeypatch.setattr(cfg, "SRC_DIR", src_dir)
+
+    assert resolve_safe_source_file("topic/course_note.md") == src_note.resolve()
+    assert resolve_safe_source_file("src/topic/course_note.md") == src_note.resolve()
+    assert resolve_safe_source_file("doc_only.md") is None
+    assert resolve_safe_source_file("fixture_only.md") is None
+    assert resolve_safe_source_file("legacy_only.md") is None
+    assert resolve_safe_source_file(str(docs_dir / "doc_only.md")) is None
+    assert resolve_safe_source_file(str(fixtures_dir / "fixture_only.md")) is None

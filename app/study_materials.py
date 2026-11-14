@@ -1336,7 +1336,7 @@ class StudyMaterialManager:
         """Load full content pages of a library/local document without generating Quiz/Flashcards yet."""
         import sqlite3
         from contextlib import closing
-        from app.config import BASE_DIR, DB_PATH, SRC_DIR
+        from app.config import DB_PATH, SRC_DIR
 
         doc = self._lookup_library_document(doc_id, filename)
         rows = []
@@ -1369,9 +1369,11 @@ class StudyMaterialManager:
                 extracted = self.extract_document(candidate.name, raw_bytes)
                 extracted.filename = target_filename
                 chunks_cnt = (dict(doc).get("chunk_count") if doc else len(rows)) or len(rows)
+                resolved_src = SRC_DIR.resolve() if SRC_DIR.is_dir() else None
+                in_src = bool(resolved_src and candidate.is_relative_to(resolved_src))
                 ingest_info = {
-                    "saved_to_src": candidate.is_relative_to(SRC_DIR.resolve()) if SRC_DIR.is_dir() else False,
-                    "src_path": str(candidate.relative_to(BASE_DIR.resolve())) if candidate.is_relative_to(BASE_DIR.resolve()) else f"src/{candidate.name}",
+                    "saved_to_src": in_src,
+                    "src_path": f"src/{candidate.relative_to(resolved_src).as_posix()}" if in_src else f"src/{candidate.name}",
                     "doc_id": doc["id"] if doc else None,
                     "chunks_indexed": chunks_cnt,
                     "status": "indexed" if doc else "unindexed",
@@ -1471,7 +1473,7 @@ class StudyMaterialManager:
         """Return indexed documents plus uploaded session materials and discoverable local study files."""
         import sqlite3
         from contextlib import closing
-        from app.config import BASE_DIR, DB_PATH, SRC_DIR
+        from app.config import DB_PATH, SRC_DIR
 
         results: List[Dict[str, Any]] = []
         seen_filenames = set()

@@ -34,10 +34,10 @@ def resolve_safe_source_file(
     """Resolve exact originals first; ambiguous basenames never pick an arbitrary file."""
     if not filename:
         return None
-    from app.config import BASE_DIR, SRC_DIR
+    from app.config import SRC_DIR
 
     if search_dirs is None:
-        search_dirs = [SRC_DIR, BASE_DIR / "docs", BASE_DIR / "tests" / "fixtures" / "documents"]
+        search_dirs = [SRC_DIR]
     raw_path = Path(filename.replace("\\", "/"))
     if ".." in raw_path.parts or raw_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
         return None
