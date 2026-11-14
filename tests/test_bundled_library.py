@@ -1,4 +1,4 @@
-"""Comprehensive contracts for bundled knowledge-pack descriptor and durable personal library."""
+"""Contracts for retired user-library routing, storage API semantics, and explicit knowledge-pack security."""
 import hashlib
 import json
 import os
@@ -13,8 +13,8 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from app.indexer import KnowledgeIndexer, pack_vector
-from app.knowledge_pack import export_pack, install_pack
+from app.indexer import KnowledgeIndexer
+from app.knowledge_pack import export_pack
 from app.server import app
 from tests.knowledge_pack_review_helpers import (
     create_synthetic_review,
@@ -37,7 +37,7 @@ def make_toy_publisher(tmp_path, identity=None, filename="public.md"):
     source_file = sources / filename
     source_file.parent.mkdir(parents=True, exist_ok=True)
     content = "Encapsulation keeps state behind a public interface.\n"
-    source_file.write_text(content)
+    source_file.write_text(content, encoding="utf-8")
     database = tmp_path / "publisher.db"
     KnowledgeIndexer(database, sources).index_all(ocr=False, embed_model=None)
     source_sha = hashlib.sha256(source_file.read_bytes()).hexdigest()
@@ -58,7 +58,7 @@ def make_toy_publisher(tmp_path, identity=None, filename="public.md"):
         "sha256": source_sha,
         "license": "CC0-1.0",
         "redistribution_reviewed": True,
-    }]))
+    }]), encoding="utf-8")
     archive = tmp_path / f"{DEFAULT_BACKEND}.zip"
     exported = export_pack(
         database, sources, allowlist, archive,
@@ -89,12 +89,18 @@ def test_storage_endpoint_returns_local_only_persistence_semantics():
 
 
 CHILD_TEMPLATE = r'''
-import importlib.util, json, os, sys, types
+import importlib, importlib.util, json, os, sys, types
 from pathlib import Path
+
+EXPECTED_ID = sys.argv[3]
+CHECKOUT_ROOT = Path(sys.argv[2])
+MODE = sys.argv[4] if len(sys.argv) > 4 else "configure"
 
 native = types.ModuleType('app.native_embedding')
 class NativeEmbeddingClient:
-    def get_identity(self): return sys.argv[3]
+    @classmethod
+    def available(cls): return False
+    def get_identity(self): return EXPECTED_ID
 native.NativeEmbeddingClient = NativeEmbeddingClient
 sys.modules['app.native_embedding'] = native
 
@@ -102,14 +108,14 @@ ollama = types.ModuleType('app.ollama_client')
 class StubOllamaClient:
     def __init__(self, *args, **kwargs): pass
     def check_health(self): return True
-    def embedding_identity(self, model="bge-m3"): return sys.argv[3]
+    def embedding_identity(self, model="bge-m3"): return EXPECTED_ID
 ollama.OllamaClient = StubOllamaClient
 sys.modules['app.ollama_client'] = ollama
 
 spec = importlib.util.spec_from_file_location('launcher', sys.argv[1])
 launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
-launcher.ROOT = Path(sys.argv[2])
+launcher.ROOT = CHECKOUT_ROOT
 
 from app.indexer import KnowledgeIndexer
 from app.pdf_extractor import PDFExtractor
@@ -119,33 +125,41 @@ KnowledgeIndexer.index_all = forbidden
 PDFExtractor.extract_file = forbidden
 TextChunker.chunk_page = forbidden
 
-try:
-    launcher.configure('local')
-except Exception as exc:
-    print(f"LAUNCHER_ERROR: {type(exc).__name__}: {exc}")
-    sys.exit(2)
+if MODE == "main_install":
+    sys.argv = ["dev.py", "check", "--profile", "local", "--install-pack"]
+    rc = launcher.main()
+    if rc != 0:
+        sys.exit(rc)
+else:
+    try:
+        launcher.configure('local')
+    except Exception as exc:
+        print(f"LAUNCHER_ERROR: {type(exc).__name__}: {exc}")
+        sys.exit(2)
 
 from app import config
+importlib.reload(config)
 print(json.dumps({'data': str(config.DATA_DIR), 'sources': str(config.SRC_DIR),
                   'db': str(config.DB_PATH), 'history': os.environ.get('HISTORY_DB_PATH')}))
 '''
 
 
-def run_launcher(checkout: Path, identity: str = None, env_overrides: dict = None):
+def run_launcher(checkout: Path, identity: str = None, env_overrides: dict = None, mode: str = "configure"):
     if identity is None:
         identity = DEFAULT_IDENTITY
     removed = {
         "AGENT_DATA_DIR", "AGENT_SRC_DIR", "HISTORY_DB_PATH", "TIMETABLE_DB_PATH",
         "TIMETABLE_IMAGES_DIR", "KNOWLEDGE_PACK_PATH", "KNOWLEDGE_PACK_SHA256",
-        "KNOWLEDGE_PACK_USER_DIR", "MLX_MODEL_DIR", "MLX_9B_MODEL_DIR", "MLX_BGE_MODEL_DIR",
-        "BGE_MODEL_DIR", "EMBED_BACKEND", "LLM_PROVIDER", "CHAT_BACKEND",
+        "KNOWLEDGE_PACK_USER_DIR", "STUDY_ACCOUNTS_DIR", "MLX_MODEL_DIR",
+        "MLX_9B_MODEL_DIR", "MLX_BGE_MODEL_DIR", "BGE_MODEL_DIR",
+        "EMBED_BACKEND", "LLM_PROVIDER", "CHAT_BACKEND",
     }
     env = {k: v for k, v in os.environ.items() if k not in removed}
     env["PYTHONPATH"] = str(PROJECT)
     if env_overrides:
         env.update(env_overrides)
     return subprocess.run(
-        [sys.executable, "-c", CHILD_TEMPLATE, str(PROJECT / "scripts/dev.py"), str(checkout), identity],
+        [sys.executable, "-c", CHILD_TEMPLATE, str(PROJECT / "scripts/dev.py"), str(checkout), identity, mode],
         cwd=checkout,
         env=env,
         text=True,
@@ -154,205 +168,215 @@ def run_launcher(checkout: Path, identity: str = None, env_overrides: dict = Non
     )
 
 
-def test_malformed_or_unsupported_descriptor_fails_closed(tmp_path):
+def test_descriptor_variants_ignored_and_canonical_paths_preserved(tmp_path):
+    """Valid, malformed, or escaping resources descriptors never block local mode or create user-library."""
     checkout = tmp_path / "app"
     resources = checkout / "resources"
     resources.mkdir(parents=True)
     descriptor = resources / "knowledge-packs.json"
 
-    # 1. Invalid JSON
-    descriptor.write_text("NOT_JSON")
-    proc = run_launcher(checkout)
-    assert proc.returncode == 2
-    assert "Malformed knowledge-packs descriptor" in proc.stdout
-
-    # 2. Format != 1
-    descriptor.write_text(json.dumps({"format": 2, "packs": {}}))
-    proc = run_launcher(checkout)
-    assert proc.returncode == 2
-    assert "format must be 1" in proc.stdout
-
-    # 3. Missing selected backend
-    descriptor.write_text(json.dumps({"format": 1, "packs": {"unsupported": {"path": "resources/x.zip", "sha256": "a" * 64}}}))
-    proc = run_launcher(checkout)
-    assert proc.returncode == 2
-    assert "no configuration for selected backend" in proc.stdout
-
-    # 4. Invalid digest length
-    descriptor.write_text(json.dumps({"format": 1, "packs": {DEFAULT_BACKEND: {"path": f"resources/{DEFAULT_BACKEND}.zip", "sha256": "short"}}}))
-    proc = run_launcher(checkout)
-    assert proc.returncode == 2
-    assert "Invalid pack sha256 digest" in proc.stdout
+    for payload in [
+        "NOT_JSON",
+        json.dumps({"format": 2, "packs": {}}),
+        json.dumps({"format": 1, "packs": {"unsupported": {"path": "resources/x.zip", "sha256": "a" * 64}}}),
+        json.dumps({"format": 1, "packs": {DEFAULT_BACKEND: {"path": "../../escape.zip", "sha256": "short"}}}),
+    ]:
+        descriptor.write_text(payload, encoding="utf-8")
+        proc = run_launcher(checkout)
+        assert proc.returncode == 0, proc.stderr + proc.stdout
+        report = json.loads(proc.stdout.splitlines()[-1])
+        assert report["sources"] == str(checkout / "src")
+        assert report["data"] == str(checkout / "data")
+        assert not (checkout / "data/user-library").exists()
 
 
-def test_existing_unrecognized_user_directory_is_not_overwritten(tmp_path):
+def test_explicit_pack_missing_pair_or_invalid_digest_fails_closed(tmp_path):
+    """Explicit KNOWLEDGE_PACK_* boundary rejects missing pair, malformed digest, and missing archive."""
+    checkout = tmp_path / "app"
+    checkout.mkdir(parents=True)
+
+    # 1. Missing SHA256 pair
+    proc_pair = run_launcher(checkout, env_overrides={"KNOWLEDGE_PACK_PATH": "missing.zip"})
+    assert proc_pair.returncode == 2
+    assert "Set KNOWLEDGE_PACK_PATH and the trusted publisher KNOWLEDGE_PACK_SHA256 together" in proc_pair.stdout
+
+    # 2. Invalid short / uppercase digest
+    proc_digest = run_launcher(checkout, env_overrides={"KNOWLEDGE_PACK_PATH": "missing.zip", "KNOWLEDGE_PACK_SHA256": "short"})
+    assert proc_digest.returncode == 2
+    assert "KNOWLEDGE_PACK_SHA256" in proc_digest.stdout
+
+    # 3. Missing archive on explicit install
+    proc_missing_zip = run_launcher(
+        checkout,
+        env_overrides={"KNOWLEDGE_PACK_PATH": str(tmp_path / "absent.zip"), "KNOWLEDGE_PACK_SHA256": "a" * 64},
+        mode="main_install",
+    )
+    assert proc_missing_zip.returncode == 1
+    assert "Knowledge pack installation failed" in proc_missing_zip.stderr
+    assert not (checkout / "data/knowledge-packs" / ("a" * 64) / "knowledge-pack.json").exists()
+
+
+def test_existing_unrecognized_pack_and_legacy_directories_not_overwritten(tmp_path):
+    """Pre-existing files/symlinks at data/knowledge-packs/<digest> or data/user-library are never overwritten."""
     archive, result = make_toy_publisher(tmp_path)
     checkout = tmp_path / "app"
-    resources = checkout / "resources"
-    resources.mkdir(parents=True)
-    shutil.copyfile(archive, resources / f"{DEFAULT_BACKEND}.zip")
-    (resources / "knowledge-packs.json").write_text(json.dumps({
-        "format": 1,
-        "packs": {DEFAULT_BACKEND: {"path": f"resources/{DEFAULT_BACKEND}.zip", "sha256": result["sha256"]}},
-    }))
+    checkout.mkdir(parents=True)
 
-    # Create preexisting nonempty unrecognized directory in data/user-library
-    unrecognized = checkout / "data/user-library"
+    # Preexisting unrecognized directory at explicit pack destination
+    unrecognized = checkout / "data/knowledge-packs" / result["sha256"]
     unrecognized.mkdir(parents=True)
     marker = unrecognized / "personal_notes.txt"
-    marker.write_text("CRITICAL EXISTING USER DATA NEVER OVERWRITE")
+    marker.write_text("CRITICAL EXISTING USER DATA NEVER OVERWRITE", encoding="utf-8")
 
-    proc = run_launcher(checkout)
-    assert proc.returncode == 2
-    assert "Existing unrecognized user directory" in proc.stdout
-    assert marker.read_text() == "CRITICAL EXISTING USER DATA NEVER OVERWRITE"
+    # Legacy user-library also present
+    legacy = checkout / "data/user-library"
+    legacy.mkdir(parents=True)
+    legacy_marker = legacy / "legacy_notes.txt"
+    legacy_marker.write_text("PRESERVE LEGACY USER LIBRARY", encoding="utf-8")
+
+    proc = run_launcher(
+        checkout,
+        env_overrides={
+            "KNOWLEDGE_PACK_PATH": str(archive),
+            "KNOWLEDGE_PACK_SHA256": result["sha256"],
+        },
+        mode="main_install",
+    )
+    assert proc.returncode == 1
+    assert "Incomplete knowledge-pack directory contains files" in proc.stderr
+    assert marker.read_text(encoding="utf-8") == "CRITICAL EXISTING USER DATA NEVER OVERWRITE"
+    assert legacy_marker.read_text(encoding="utf-8") == "PRESERVE LEGACY USER LIBRARY"
 
 
-def test_seed_mismatch_fails_with_actionable_guidance(tmp_path):
+def test_explicit_pack_receipt_mismatch_fails_with_actionable_guidance(tmp_path):
+    """Installed pack receipt sha256 or model_identity mismatch fails closed and preserves existing files."""
     archive, result = make_toy_publisher(tmp_path)
     checkout = tmp_path / "app"
-    resources = checkout / "resources"
-    resources.mkdir(parents=True)
-    shutil.copyfile(archive, resources / f"{DEFAULT_BACKEND}.zip")
-    (resources / "knowledge-packs.json").write_text(json.dumps({
-        "format": 1,
-        "packs": {DEFAULT_BACKEND: {"path": f"resources/{DEFAULT_BACKEND}.zip", "sha256": result["sha256"]}},
-    }))
+    checkout.mkdir(parents=True)
 
-    # First launch seeds successfully
-    first = run_launcher(checkout)
+    env_pack = {
+        "KNOWLEDGE_PACK_PATH": str(archive),
+        "KNOWLEDGE_PACK_SHA256": result["sha256"],
+    }
+    first = run_launcher(checkout, env_overrides=env_pack, mode="main_install")
     assert first.returncode == 0, first.stderr
 
-    # Tamper descriptor with a different digest
-    other_digest = "b" * 64
-    (resources / "knowledge-packs.json").write_text(json.dumps({
-        "format": 1,
-        "packs": {DEFAULT_BACKEND: {"path": f"resources/{DEFAULT_BACKEND}.zip", "sha256": other_digest}},
-    }))
+    dest = checkout / "data/knowledge-packs" / result["sha256"]
+    note = dest / "personal_keep.txt"
+    note.write_text("KEEP INSTALLED DATA", encoding="utf-8")
 
-    second = run_launcher(checkout)
-    assert second.returncode == 2
-    assert "Existing personal data is preserved" in second.stdout
-    assert "Move or backup" in second.stdout
+    # Mismatched model identity fails closed
+    wrong_id = DEFAULT_IDENTITY[:-4] + ("0000" if not DEFAULT_IDENTITY.endswith("0000") else "1111")
+    second = run_launcher(checkout, identity=wrong_id, env_overrides=env_pack, mode="main_install")
+    assert second.returncode == 1
+    assert "Installed knowledge pack receipt or embedding model differs" in second.stderr
+    assert note.read_text(encoding="utf-8") == "KEEP INSTALLED DATA"
+
+    # Tampered receipt sha256 fails closed
+    receipt_path = dest / "knowledge-pack.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["sha256"] = "b" * 64
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    third = run_launcher(checkout, env_overrides=env_pack, mode="main_install")
+    assert third.returncode == 1
+    assert "Installed knowledge pack receipt or embedding model differs" in third.stderr
+    assert note.read_text(encoding="utf-8") == "KEEP INSTALLED DATA"
 
 
-def test_explicit_env_pack_overrides_descriptor(tmp_path):
+def test_explicit_env_pack_overrides_malformed_descriptor(tmp_path):
+    """Explicit KNOWLEDGE_PACK_* resolves under data/knowledge-packs/<digest> even if descriptor is broken."""
     archive, result = make_toy_publisher(tmp_path)
     checkout = tmp_path / "app"
     resources = checkout / "resources"
     resources.mkdir(parents=True)
-    (resources / "knowledge-packs.json").write_text(json.dumps({"format": 1, "packs": {}}))
+    (resources / "knowledge-packs.json").write_text("CORRUPT_DESCRIPTOR_IGNORED", encoding="utf-8")
 
-    # Explicit KNOWLEDGE_PACK_PATH + KNOWLEDGE_PACK_SHA256 override descriptor
     env_override = {
         "KNOWLEDGE_PACK_PATH": str(archive),
         "KNOWLEDGE_PACK_SHA256": result["sha256"],
-        "KNOWLEDGE_PACK_IDENTITY": DEFAULT_IDENTITY,
     }
-    proc = run_launcher(checkout, env_overrides=env_override)
+    proc = run_launcher(checkout, env_overrides=env_override, mode="main_install")
     assert proc.returncode == 0, proc.stderr
     report = json.loads(proc.stdout.splitlines()[-1])
-    expected_legacy_dest = checkout / "data/knowledge-packs" / result["sha256"]
-    assert report["data"] == str(expected_legacy_dest)
+    expected_dest = checkout / "data/knowledge-packs" / result["sha256"]
+    assert report["data"] == str(expected_dest)
+    assert not (checkout / "data/user-library").exists()
 
 
-def test_nested_original_survives_seed_to_personal_library(tmp_path):
+def test_nested_original_survives_explicit_pack_install(tmp_path):
+    """Nested original file paths survive explicit knowledge pack installation without user-library creation."""
     archive, result = make_toy_publisher(tmp_path, filename="course/week 01/public.md")
     checkout = tmp_path / "app"
-    resources = checkout / "resources"
-    resources.mkdir(parents=True)
-    shutil.copyfile(archive, resources / f"{DEFAULT_BACKEND}.zip")
-    (resources / "knowledge-packs.json").write_text(json.dumps({
-        "format": 1,
-        "packs": {DEFAULT_BACKEND: {"path": f"resources/{DEFAULT_BACKEND}.zip", "sha256": result["sha256"]}},
-    }))
+    checkout.mkdir(parents=True)
 
-    proc = run_launcher(checkout)
+    proc = run_launcher(
+        checkout,
+        env_overrides={"KNOWLEDGE_PACK_PATH": str(archive), "KNOWLEDGE_PACK_SHA256": result["sha256"]},
+        mode="main_install",
+    )
     assert proc.returncode == 0, proc.stderr
-    original = checkout / "data/user-library/src/course/week 01/public.md"
-    assert original.is_file(), "Nested source file must survive seeding"
-    assert "Encapsulation" in original.read_text()
+    original = checkout / "data/knowledge-packs" / result["sha256"] / "sources/course/week 01/public.md"
+    assert original.is_file(), "Nested source file must survive explicit pack install"
+    assert "Encapsulation" in original.read_text(encoding="utf-8")
+    assert not (checkout / "data/user-library").exists()
 
 
-def test_damaged_personal_database_fails_closed_without_reset(tmp_path):
+def test_malicious_archive_entry_and_digest_tampering_fail_closed(tmp_path):
+    """Path traversal entries or wrong archive sha256 fail closed at explicit pack install."""
     archive, result = make_toy_publisher(tmp_path)
     checkout = tmp_path / "app"
-    resources = checkout / "resources"
-    resources.mkdir(parents=True)
-    shutil.copyfile(archive, resources / f"{DEFAULT_BACKEND}.zip")
-    (resources / "knowledge-packs.json").write_text(json.dumps({
-        "format": 1,
-        "packs": {DEFAULT_BACKEND: {"path": f"resources/{DEFAULT_BACKEND}.zip", "sha256": result["sha256"]}},
-    }))
+    checkout.mkdir(parents=True)
 
-    # Initial launch
-    proc1 = run_launcher(checkout)
-    assert proc1.returncode == 0, proc1.stderr
+    # 1. Tampered sha256
+    wrong_digest = "c" * 64
+    proc_sha = run_launcher(
+        checkout,
+        env_overrides={"KNOWLEDGE_PACK_PATH": str(archive), "KNOWLEDGE_PACK_SHA256": wrong_digest},
+        mode="main_install",
+    )
+    assert proc_sha.returncode == 1
+    assert not (checkout / "data/knowledge-packs" / wrong_digest / "knowledge-pack.json").exists()
 
-    library = checkout / "data/user-library"
-    personal = library / "src/personal_notes.txt"
-    personal.write_text("PERSONAL ORIGINAL MUST BE PRESERVED")
+    # 2. Malicious traversal entry with matching outer zip digest
+    bad_zip = tmp_path / "traversal.zip"
+    with zipfile.ZipFile(archive, "r") as src_z, zipfile.ZipFile(bad_zip, "w") as dst_z:
+        for item in src_z.infolist():
+            dst_z.writestr(item, src_z.read(item.filename))
+        dst_z.writestr("sources/../../pwned.txt", "escape")
+    bad_digest = hashlib.sha256(bad_zip.read_bytes()).hexdigest()
 
-    # Unlink database
-    (library / "knowledge_base.db").unlink()
+    proc_zip = run_launcher(
+        checkout,
+        env_overrides={"KNOWLEDGE_PACK_PATH": str(bad_zip), "KNOWLEDGE_PACK_SHA256": bad_digest},
+        mode="main_install",
+    )
+    assert proc_zip.returncode == 1
+    assert not (tmp_path / "pwned.txt").exists()
+    assert not (checkout / "pwned.txt").exists()
+    assert not (checkout / "data/knowledge-packs" / bad_digest / "knowledge-pack.json").exists()
 
-    # Second launch must fail closed
-    proc2 = run_launcher(checkout)
-    assert proc2.returncode == 2
-    assert "damaged: missing working database" in proc2.stdout
-    assert personal.read_text() == "PERSONAL ORIGINAL MUST BE PRESERVED"
-    assert not (library / "knowledge_base.db").exists()
 
-
-def test_seeding_ignores_unlisted_files_and_extra_tables_in_legacy_cache(tmp_path):
+def test_explicit_pack_recheck_and_unlisted_host_files_isolated(tmp_path):
+    """Explicit pack reinstall without receipt preserves incomplete data; default check creates no user-library."""
     archive, result = make_toy_publisher(tmp_path)
     checkout = tmp_path / "app"
-    resources = checkout / "resources"
-    resources.mkdir(parents=True)
-    shutil.copyfile(archive, resources / f"{DEFAULT_BACKEND}.zip")
-    (resources / "knowledge-packs.json").write_text(json.dumps({
-        "format": 1,
-        "packs": {DEFAULT_BACKEND: {"path": f"resources/{DEFAULT_BACKEND}.zip", "sha256": result["sha256"]}},
-    }))
+    checkout.mkdir(parents=True)
+    dest = checkout / "data/knowledge-packs" / result["sha256"]
 
-    # First launch
-    proc1 = run_launcher(checkout)
-    assert proc1.returncode == 0, proc1.stderr
-
-    # Remove user library and contaminate legacy publisher cache
-    shutil.rmtree(checkout / "data/user-library")
-    cache = checkout / "data/knowledge-packs" / result["sha256"]
-    unlisted_file = cache / "sources/confidential_memo.txt"
-    unlisted_file.write_text("CONFIDENTIAL CACHE CONTENT NEVER EXPORT TO USER")
-    with sqlite3.connect(cache / "knowledge_base.db") as db:
-        db.execute("CREATE TABLE private_admin_notes(id INT, note TEXT)")
-        db.execute("INSERT INTO private_admin_notes VALUES(1, 'SECRET NOTE')")
-
-    # Second launch seeds user library
-    proc2 = run_launcher(checkout)
-    assert unlisted_file.read_text() == "CONFIDENTIAL CACHE CONTENT NEVER EXPORT TO USER"
-    if proc2.returncode == 0:
-        library = checkout / "data/user-library"
-        assert not (library / "src/confidential_memo.txt").exists()
-        with sqlite3.connect(library / "knowledge_base.db") as db:
-            tables = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-            assert "private_admin_notes" not in tables
-
-
-def test_concurrent_initialization_safety(tmp_path):
-    archive, result = make_toy_publisher(tmp_path)
-    checkout = tmp_path / "app"
-    resources = checkout / "resources"
-    resources.mkdir(parents=True)
-    shutil.copyfile(archive, resources / f"{DEFAULT_BACKEND}.zip")
-    (resources / "knowledge-packs.json").write_text(json.dumps({
-        "format": 1,
-        "packs": {DEFAULT_BACKEND: {"path": f"resources/{DEFAULT_BACKEND}.zip", "sha256": result["sha256"]}},
-    }))
-
-    # Launch two subprocesses sequentially or concurrently
-    p1 = run_launcher(checkout)
-    p2 = run_launcher(checkout)
+    env_pack = {"KNOWLEDGE_PACK_PATH": str(archive), "KNOWLEDGE_PACK_SHA256": result["sha256"]}
+    p1 = run_launcher(checkout, env_overrides=env_pack, mode="main_install")
+    p2 = run_launcher(checkout, env_overrides=env_pack, mode="main_install")
     assert p1.returncode == 0, p1.stderr
     assert p2.returncode == 0, p2.stderr
-    assert (checkout / "data/user-library/src/public.md").is_file()
+    assert (dest / "sources/public.md").is_file()
+    assert (dest / "knowledge-pack.json").is_file()
+
+    # Removing receipt while keeping files in dest must fail closed without resetting
+    (dest / "knowledge-pack.json").unlink()
+    note = dest / "sources/user_keep.txt"
+    note.write_text("DO NOT RESET NONEMPTY PACK DIR", encoding="utf-8")
+    p3 = run_launcher(checkout, env_overrides=env_pack, mode="main_install")
+    assert p3.returncode == 1
+    assert "Incomplete knowledge-pack directory contains files" in p3.stderr
+    assert note.read_text(encoding="utf-8") == "DO NOT RESET NONEMPTY PACK DIR"
+    assert not (checkout / "data/user-library").exists()

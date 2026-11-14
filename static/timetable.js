@@ -1435,6 +1435,9 @@ document.addEventListener("DOMContentLoaded", () => {
         },
         hasUnconfirmedDraft() {
             return !!(currentDraftId && draftCard && draftCard.style.display !== "none" && draftTableBody.querySelectorAll("tr").length);
+        },
+        renderPlanDraft(draft) {
+            renderPlanDraft(draft);
         }
     };
 
@@ -1801,6 +1804,10 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    window.addEventListener("arym:preview-plan-draft", (e) => {
+        if (e.detail) renderPlanDraft(e.detail);
+    });
+
     function appendPlanDraftRow(item = {}) {
         if (!plannerDraftTableBody) return;
         const emptyCell = plannerDraftTableBody.querySelector("td[colspan]");
@@ -2125,11 +2132,15 @@ document.addEventListener("DOMContentLoaded", () => {
                 statusText = parts.join(" · ");
             }
 
+            const pdfBadgeHtml = item.pdf_url
+                ? `<div style="margin-top: 5px;"><a href="${escapeHtml(item.pdf_url)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline" style="padding: 2px 10px; min-height: 24px; font-size: 11px;">📄 Tải PDF Bài tập + Đáp án cuối trang${item.classified_topic ? ` (${escapeHtml(item.classified_topic)})` : ""}</a></div>`
+                : "";
+
             tr.innerHTML = `
                 <td><strong>${escapeHtml(item.weekday_label)}</strong></td>
                 <td><code>${escapeHtml(item.start_time)} - ${escapeHtml(item.end_time)}</code><br><small class="text-muted">${item.duration_minutes} phút</small></td>
                 <td>${badgeHtml}</td>
-                <td><strong class="master-item-title">${escapeHtml(item.title)}</strong>${item.notes ? `<br><small class="text-muted">${escapeHtml(item.notes)}</small>` : ""}</td>
+                <td><strong class="master-item-title">${escapeHtml(item.title)}</strong>${item.notes ? `<br><small class="text-muted">${escapeHtml(item.notes)}</small>` : ""}${pdfBadgeHtml}</td>
                 <td>${courseOrRoom}</td>
                 <td><small>${escapeHtml(statusText)}</small></td>
                 <td class="master-actions-cell" style="text-align: center; white-space: nowrap;"></td>
@@ -2169,6 +2180,81 @@ document.addEventListener("DOMContentLoaded", () => {
                     await loadFullPlannerState();
                 });
 
+                const btnEx = document.createElement("button");
+                btnEx.type = "button";
+                btnEx.className = "btn btn-sm btn-outline";
+                btnEx.style.padding = "2px 6px";
+                btnEx.style.marginRight = "4px";
+
+                if (item.exercise_status === "available" || item.practice_id) {
+                    btnEx.title = "Mở bài tập luyện tập";
+                    btnEx.textContent = "📝 Bài tập";
+                    btnEx.addEventListener("click", () => {
+                        const topic = item.classified_topic || item.title || item.course;
+                        document.dispatchEvent(new CustomEvent("app-open-practice-session", {
+                            detail: { practice_id: item.practice_id, topic: topic }
+                        }));
+                    });
+                } else if (item.exercise_status === "unavailable") {
+                    btnEx.title = "Thử tạo lại bài tập từ tài liệu nguồn";
+                    btnEx.textContent = "🔄 Thử lại";
+                    btnEx.addEventListener("click", async () => {
+                        btnEx.disabled = true;
+                        btnEx.textContent = "⏳ Đang tạo...";
+                        try {
+                            const res = await fetch(`/api/timetable/planner/sessions/${item.item_id}/exercise/generate`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" }
+                            });
+                            const data = await res.json().catch(() => ({}));
+                            if (!res.ok) {
+                                alert(data.detail || "Không thể tạo bài tập cho phiên học này.");
+                                return;
+                            }
+                            await loadFullPlannerState();
+                            if (data.practice) {
+                                document.dispatchEvent(new CustomEvent("app-open-practice-session", {
+                                    detail: { practiceSession: data.practice, topic: item.classified_topic || item.title || item.course }
+                                }));
+                            }
+                        } catch (err) {
+                            alert(`Lỗi kết nối: ${err.message}`);
+                        } finally {
+                            btnEx.disabled = false;
+                            btnEx.textContent = "🔄 Thử lại";
+                        }
+                    });
+                } else {
+                    btnEx.title = "Tạo bài tập tự động từ tài liệu học tập";
+                    btnEx.textContent = "＋ Bài tập";
+                    btnEx.addEventListener("click", async () => {
+                        btnEx.disabled = true;
+                        btnEx.textContent = "⏳ Đang tạo...";
+                        try {
+                            const res = await fetch(`/api/timetable/planner/sessions/${item.item_id}/exercise/generate`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" }
+                            });
+                            const data = await res.json().catch(() => ({}));
+                            if (!res.ok) {
+                                alert(data.detail || "Không thể tạo bài tập cho phiên học này.");
+                                return;
+                            }
+                            await loadFullPlannerState();
+                            if (data.practice) {
+                                document.dispatchEvent(new CustomEvent("app-open-practice-session", {
+                                    detail: { practiceSession: data.practice, topic: item.classified_topic || item.title || item.course }
+                                }));
+                            }
+                        } catch (err) {
+                            alert(`Lỗi kết nối: ${err.message}`);
+                        } finally {
+                            btnEx.disabled = false;
+                            btnEx.textContent = "＋ Bài tập";
+                        }
+                    });
+                }
+
                 const btnEdit = document.createElement("button");
                 btnEdit.type = "button";
                 btnEdit.className = "btn btn-sm btn-outline";
@@ -2203,7 +2289,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
                 });
 
-                actionCell.append(btnDone, btnLock, btnEdit, btnDel);
+                actionCell.append(btnEx, btnDone, btnLock, btnEdit, btnDel);
             } else if (item.category === "routine" || item.category === "rest" || item.category === "study_window") {
                 const btnDel = document.createElement("button");
                 btnDel.type = "button";
@@ -2239,5 +2325,16 @@ document.addEventListener("DOMContentLoaded", () => {
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#039;");
+    }
+
+    window.addEventListener("arym:planner-refresh", () => {
+        loadFullPlannerState();
+    });
+
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+        window.addEventListener("study:account-changed", () => {
+            loadConfirmedSchedule().catch(() => {});
+            loadFullPlannerState().catch(() => {});
+        });
     }
 });

@@ -17,7 +17,7 @@ Operational context: 8192 tokens
 
 The pinned [model configuration](https://huggingface.co/mlx-community/Qwen3.5-9B-4bit/blob/8b2b98c00a6b4d291155e4890773ca8f769aee53/config.json) contains a nested `text_config` and hybrid linear/full attention. Its advertised 262144-token capacity is not the application's memory budget. Record weight, tokenizer and template hashes when evaluating; the repository name alone does not identify all local bytes. Runtime loading must use local files and fail if required assets are missing.
 
-The screenshot's `Alexander85/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-NVFP4-MLP-FP8KV` is a different community artifact, with different distillation and numeric formats. It is neither the MLX artifact above nor the previously evaluated Ollama package. This project has not completed equivalent content, runtime or adapter acceptance for that distilled artifact.
+The separately considered `Alexander85/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-NVFP4-MLP-FP8KV` is a different community artifact, with different distillation and numeric formats. It is neither the MLX artifact above nor the previously evaluated Ollama package. This project has not completed equivalent content, runtime or adapter acceptance for that distilled artifact.
 
 ## Why Qwen3.5 9B is the current candidate
 

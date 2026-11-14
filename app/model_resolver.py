@@ -131,3 +131,46 @@ def get_model_context_capacity(model_name: Optional[str] = None) -> int:
         if isinstance(exc, ContextLimitError):
             raise
         raise ContextLimitError("Cấu hình mô hình không hợp lệ hoặc thiếu giới hạn ngữ cảnh") from exc
+
+
+def resolve_base_weight_files(base_dir: Path | str) -> tuple[bool, list[Path]]:
+    """Resolve base model safetensors layout (single file or sharded index).
+
+    Returns `(is_sharded, files)` where for sharded models `files` includes
+    `model.safetensors.index.json` followed by every shard path in deterministic order.
+    Raises `FileNotFoundError` when weights/shards are missing and `ValueError`
+    when a shard index is malformed or escapes `base_dir`.
+    """
+    base_path = Path(base_dir)
+    single_weights = base_path / "model.safetensors"
+    if single_weights.is_file():
+        return False, [single_weights]
+
+    index_path = base_path / "model.safetensors.index.json"
+    if not index_path.is_file():
+        raise FileNotFoundError(f"Không tìm thấy trọng số base model tại {base_path}")
+
+    try:
+        index_data = json.loads(index_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Invalid shard index JSON in {index_path}") from exc
+
+    weight_map = index_data.get("weight_map") if isinstance(index_data, dict) else None
+    if not isinstance(weight_map, dict) or not weight_map:
+        raise ValueError(f"Shard index missing non-empty weight_map in {index_path}")
+
+    base_resolved = base_path.resolve()
+    shard_rel_names = sorted(set(weight_map.values()))
+    resolved_files: list[Path] = [index_path]
+    for shard_rel in shard_rel_names:
+        if not isinstance(shard_rel, str) or not shard_rel.strip():
+            raise ValueError(f"Invalid shard entry in {index_path}: {shard_rel!r}")
+        shard_candidate = base_path / shard_rel
+        shard_resolved = shard_candidate.resolve()
+        if not shard_resolved.is_relative_to(base_resolved) or shard_resolved == base_resolved:
+            raise ValueError(f"Shard path escapes base directory: {shard_rel!r}")
+        if not shard_candidate.is_file():
+            raise FileNotFoundError(f"Missing safetensors shard {shard_rel} in {base_path}")
+        resolved_files.append(shard_candidate)
+
+    return True, resolved_files

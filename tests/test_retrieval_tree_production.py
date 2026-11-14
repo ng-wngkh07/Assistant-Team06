@@ -7,9 +7,9 @@ import sqlite3
 import struct
 import subprocess
 import sys
+import threading
 from contextlib import nullcontext
 from pathlib import Path
-from types import SimpleNamespace
 import pytest
 
 from app.indexer import KnowledgeIndexer
@@ -110,15 +110,61 @@ def test_duplicate_parent_hash_removal_regression(tmp_path, monkeypatch):
     monkeypatch.setattr(client, "get_identity", identity)
     monkeypatch.setattr(mod.gpu_coordinator, "acquire_for_inference", lambda: nullcontext())
 
-    def run(*args, **kwargs):
-        workers.append(json.loads(kwargs["input"]))
-        return SimpleNamespace(
-            returncode=0,
-            stderr="",
-            stdout=json.dumps({"vectors": [[1.0] + [0.0] * 1023], "model_identity": "fixture-basis"}),
-        )
+    def fake_popen(cmd, **kwargs):
+        class _Stdin:
+            def __init__(self, on_close):
+                self._buf = []
+                self._on_close = on_close
+                self._closed = False
 
-    monkeypatch.setattr(mod.subprocess, "run", run)
+            def write(self, data):
+                self._buf.append(data)
+                return len(data)
+
+            def flush(self):
+                pass
+
+            def close(self):
+                if not self._closed:
+                    self._closed = True
+                    self._on_close("".join(self._buf))
+
+        class _Out:
+            def __init__(self, done, text_fn):
+                self._done = done
+                self._text_fn = text_fn
+
+            def read(self):
+                self._done.wait(timeout=5.0)
+                return self._text_fn()
+
+            def close(self):
+                pass
+
+        done = threading.Event()
+        payload = {"out": "", "err": ""}
+        proc_ns = type("_FakeProc", (), {})()
+        proc_ns.args = cmd
+        proc_ns.pid = -1
+        proc_ns.returncode = None
+
+        def _finish(text):
+            if not done.is_set():
+                workers.append(json.loads(text))
+                payload["out"] = json.dumps({"vectors": [[1.0] + [0.0] * 1023], "model_identity": "fixture-basis"})
+                proc_ns.returncode = 0
+                done.set()
+
+        proc_ns.stdin = _Stdin(_finish)
+        proc_ns.stdout = _Out(done, lambda: payload["out"])
+        proc_ns.stderr = _Out(done, lambda: payload["err"])
+        proc_ns.poll = lambda: proc_ns.returncode
+        proc_ns.terminate = lambda: (setattr(proc_ns, "returncode", -15 if proc_ns.returncode is None else proc_ns.returncode), done.set())
+        proc_ns.kill = lambda: (setattr(proc_ns, "returncode", -9 if proc_ns.returncode is None else proc_ns.returncode), done.set())
+        proc_ns.wait = lambda timeout=None: (done.wait(timeout=timeout), proc_ns.returncode)[1]
+        return proc_ns
+
+    monkeypatch.setattr(mod.subprocess, "Popen", fake_popen)
     with client._query_cache_lock:
         client._query_cache.clear()
 

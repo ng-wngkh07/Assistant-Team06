@@ -69,7 +69,9 @@ def test_relocated_evidence_symlink_fails_closed(tmp_path):
 def reviewer_response(kw):
     prompt = kw['messages'][0]['content']
     item = json.JSONDecoder().raw_decode(prompt.split('Dữ liệu cần kiểm định:\n',1)[1])[0][0]
-    ans = item.get('proposed_answer', 'A')
+    masked = item['question'].split('\n', 1)[1].rsplit('\nPhần […] là gì?', 1)[0]
+    ans = next(label for label, text in item['choices'].items()
+               if masked.replace('[…]', text, 1) == item['source'])
     return json.dumps({'checks':[{'index':1,
         'input_audit': 'Đề bài cung cấp đầy đủ dữ kiện cần thiết từ trích đoạn.',
         'independent_solution': 'Suy luận độc lập trực tiếp từ nguồn văn bản.',

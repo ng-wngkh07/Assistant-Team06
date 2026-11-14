@@ -1,8 +1,80 @@
 """Repeated search queries reuse validated vectors without caching model identity by stat."""
 import json
+import threading
 from contextlib import nullcontext
-from types import SimpleNamespace
 import pytest
+
+
+def _make_fake_popen(handler):
+    class _Stdin:
+        def __init__(self, on_close):
+            self._buf = []
+            self._on_close = on_close
+            self._closed = False
+
+        def write(self, data):
+            self._buf.append(data)
+            return len(data)
+
+        def flush(self):
+            pass
+
+        def close(self):
+            if not self._closed:
+                self._closed = True
+                self._on_close("".join(self._buf))
+
+    class _OutStream:
+        def __init__(self, done, getter):
+            self._done = done
+            self._getter = getter
+
+        def read(self):
+            self._done.wait(timeout=5.0)
+            return self._getter()
+
+        def close(self):
+            pass
+
+    class _FakePopen:
+        def __init__(self, cmd, **kw):
+            self.args = cmd
+            self.pid = -1
+            self.returncode = None
+            self._kw = kw
+            self._stdout = ""
+            self._stderr = ""
+            self._done = threading.Event()
+            self.stdin = _Stdin(self._finish)
+            self.stdout = _OutStream(self._done, lambda: self._stdout)
+            self.stderr = _OutStream(self._done, lambda: self._stderr)
+
+        def _finish(self, text):
+            if not self._done.is_set():
+                rc, out, err = handler(text, **self._kw)
+                self._stdout = out
+                self._stderr = err
+                self.returncode = rc
+                self._done.set()
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            if self.returncode is None:
+                self.returncode = -15
+            self._done.set()
+
+        def kill(self):
+            if self.returncode is None:
+                self.returncode = -9
+            self._done.set()
+
+        def wait(self, timeout=None):
+            self._done.wait(timeout=timeout)
+            return self.returncode
+
+    return _FakePopen
 
 
 def setup_client(tmp_path, monkeypatch):
@@ -13,11 +85,14 @@ def setup_client(tmp_path, monkeypatch):
     monkeypatch.setattr(client, 'get_identity', lambda: identity[0])
     monkeypatch.setattr(mod.gpu_coordinator, 'acquire_for_inference', lambda: nullcontext())
     calls = []
-    def run(*args, **kw):
-        request = json.loads(kw['input']); calls.append(request)
+
+    def run_handler(stdin_text, **kw):
+        request = json.loads(stdin_text)
+        calls.append(request)
         vecs = [[1.0] + [0.0]*1023 for _ in request['texts']]
-        return SimpleNamespace(returncode=0, stderr='', stdout=json.dumps({'vectors':vecs,'model_identity':identity[0]}))
-    monkeypatch.setattr(mod.subprocess, 'run', run)
+        return 0, json.dumps({'vectors': vecs, 'model_identity': identity[0]}), ''
+
+    monkeypatch.setattr(mod.subprocess, 'Popen', _make_fake_popen(run_handler))
     return client, identity, calls
 
 
@@ -74,14 +149,14 @@ def test_artifact_change_during_generation_cannot_cache_a_vector(tmp_path, monke
 def test_failed_worker_never_populates_query_cache(tmp_path, monkeypatch):
     client, identity, calls = setup_client(tmp_path, monkeypatch)
     from app import native_embedding as mod
-    def fail(*a, **kw):
-        calls.append(kw)
-        return SimpleNamespace(returncode=1,stderr='fixture failure',stdout='')
-    monkeypatch.setattr(mod.subprocess,'run',fail)
+    def fail(stdin_text, **kw):
+        calls.append({'input': stdin_text, **kw})
+        return 1, '', 'fixture failure'
+    monkeypatch.setattr(mod.subprocess, 'Popen', _make_fake_popen(fail))
     for _ in range(2):
-        with pytest.raises(RuntimeError,match='fixture failure'):
+        with pytest.raises(RuntimeError, match='fixture failure'):
             client.get_embedding('Entropy')
-    assert len(calls)==2
+    assert len(calls) == 2
 
 
 def test_expected_vector_basis_is_checked_before_cache_hit_or_worker(tmp_path, monkeypatch):

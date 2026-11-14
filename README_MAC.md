@@ -1,5 +1,7 @@
 # macOS setup
 
+This guide is for operators and developers running the backend. Learners open the hosted website by link and do not need this installation.
+
 Use Python 3.12 for the supported web dependency profile. Keep the web environment separate from any existing MLX runtime. Do not recreate an environment while it is serving a running job.
 
 ## Install and run
@@ -45,25 +47,33 @@ Its weights occupy about 1.14 GB. The native dense representation uses 1024-dime
 
 The main QA worker loads local weights directly. Ollama is not the Mac QA installation target. See [model selection](docs/model-selection.md) for the pinned artifact, context budget and compatibility requirements. Retired weights and incompatible adapters must remain outside the active application tree. The current 9B base has no accepted active adapter; missing model files produce an explicit setup error.
 
-## Start with a prepared library
+## Prepared libraries and canonical paths
 
-For the ready-to-use product, obtain the publisher's reviewed application bundle with its native macOS knowledge pack, then follow [knowledge pack installation](docs/knowledge-packs.md#user-installation-and-no-index-workflow). After installing the dependencies and two model artifacts above, start `Start Study Agent.command`. The bundled descriptor selects the prepared library without manual path settings, document extraction, embedding generation or training. Subsequent launches reuse the personal library under `data/user-library/`; its `src/` directory retains originals and new uploads. Model downloads and dependency installation are one-time setup steps.
+Standard `--profile local` startup resolves your configured shared source directory (`AGENT_SRC_DIR`, defaulting to `src/`) and runtime data directory (`AGENT_DATA_DIR`, defaulting to `data/`), even when `src/` does not exist yet or an unused `resources/knowledge-packs.json` file is present. Missing real libraries remain honestly unpopulated rather than auto-seeding a sample personal library under `data/user-library/`.
 
-A pack contains readable originals and source text as well as vectors. Distribute only approved public materials. The application does not require the publisher's private documents or training dataset. A native pack has not been verified for Windows; no public pack release is claimed here.
+If an operator needs to import an explicitly prepared, reviewed macOS native knowledge pack archive, set both `KNOWLEDGE_PACK_PATH` and `KNOWLEDGE_PACK_SHA256` and run `python scripts/dev.py --install-pack --profile local` (see [knowledge pack installation](docs/knowledge-packs.md#explicit-operator-pack-installation)). A pack contains readable originals and source text as well as vectors; distribute only approved materials, and never mix native macOS and Ollama vector protocols. No public pack release is claimed here.
 
 ## First-use verification
 
-1. Open the launcher from the extracted bundle containing its `resources/` directory and installed model prerequisites.
-2. In the browser, use **Kiểm tra mô hình**, then ask a question covered by the installed library. Open its cited passage and original document.
+1. Configure `AGENT_SRC_DIR` and `AGENT_DATA_DIR` (or prepare `src/` and `data/`), verify model prerequisites, and run `.venv/bin/python scripts/dev.py serve --profile local` (or `Start Study Agent.command`) for foreground testing. For detached macOS operation with preflight path checks, foreign-port refusal, bounded log rotation, and bounded crash recovery, copy [launchers/macos/backend-quick-start/](launchers/macos/backend-quick-start/README.md) to an ignored runtime folder outside Git, configure `backend.config.json`, and run via `Start Backend.command` / `scripts/backend_service.py`.
+2. In the browser, use **Kiểm tra mô hình**, then ask a question covered by the configured library. Open its cited passage and original document.
 3. Open study tools, select a broad topic, question count and difficulty. Check the returned count and any partial-result notice, then answer a question and inspect its explanation.
 4. Generate a document study set, inspect the source, flip a flashcard and check the quiz answer. Follow [Using Study Agent](docs/usage.md) for uploads, history and calendar confirmation/export.
-5. Stop the server with Ctrl+C and launch it again. The prepared library and local history should persist without a new embedding build.
+5. Stop the server with Ctrl+C and launch it again. Existing configured shared sources, account stores (`STUDY_ACCOUNTS_DIR` or `data/accounts/`), history and timetables should persist without rebuilding embeddings.
 
-A prepared pack supplies its own original documents. Additional personal uploads are optional and require local extraction/indexing; they do not retrain the language model. Keep the terminal visible if startup fails and use the troubleshooting table below.
+Additional personal uploads remain separate under account storage (`STUDY_ACCOUNTS_DIR`) for signed-in users, or explicit guest save when enabled; uploads do not retrain the language model. Keep the terminal visible if startup fails and use the troubleshooting table below.
+
+## Upgrading from a legacy `data/user-library/` directory
+
+Automatic `data/user-library/` seeding and routing are retired. If an older checkout still has `data/user-library/`, the launcher never deletes, moves or merges it automatically:
+
+1. Stop the backend completely.
+2. Inventory the files inside `data/user-library/` (`src/`, `knowledge_base.db`, `history.db`, `timetable.db`, `seed-receipt.json`) and back up the full directory outside the repository.
+3. Archive that backup safely, then either configure your canonical shared `AGENT_SRC_DIR` / `AGENT_DATA_DIR` paths or pass explicit `HISTORY_DB_PATH` / `TIMETABLE_DB_PATH` / `AGENT_DATA_DIR` overrides only after verifying compatibility.
 
 ## Local documents and verification
 
-Copy `.env.example` to `.env` only if no settings file exists. Set `AGENT_SRC_DIR` and `AGENT_DATA_DIR` to your permitted source and data directories. An existing `DEFAULT_CHAT_MODEL` override wins over the platform default; review old overrides during migration.
+Copy `.env.example` to `.env` only if no settings file exists. Set `AGENT_SRC_DIR` and `AGENT_DATA_DIR` (plus optional `STUDY_ACCOUNTS_DIR`, `HISTORY_DB_PATH`, `TIMETABLE_DB_PATH`, `TIMETABLE_IMAGES_DIR`) to your permitted source and data directories. An existing `DEFAULT_CHAT_MODEL` override wins over the platform default; review old overrides during migration.
 
 ```bash
 .venv/bin/python scripts/dev.py check --profile local --require-model
@@ -72,7 +82,7 @@ Copy `.env.example` to `.env` only if no settings file exists. Set `AGENT_SRC_DI
 
 Check the model and health endpoints after restarting the backend. Make a real sourced request and review its answer and citations. Installed weights, reported readiness and verified model quality are separate checks. Embeddings and image recognition have their own local artifact requirements and must not silently fall back to cloud or daemon inference. Do not replace the serving database or mix embedding spaces as part of QA model setup.
 
-Synchronize new permitted sources explicitly in the application; local startup does not index automatically. Review recognized text and formulas against the original. Installing packages or weights does not approve a dataset, start training or activate an adapter.
+Synchronize new permitted shared sources explicitly, or export `STUDY_SRC_AUTO_WATCH=1` before launch to enable incremental new-file detection. The watcher is off by default; changed/missing reviewed originals require review and explicit re-indexing. Account uploads remain private and use their own durable processing. See [configuration](docs/configuration.md#automatic-source-ingestion). Review recognized text and formulas against the original. Installing packages or weights does not approve a dataset, start training or activate an adapter.
 
 ## Working without a network
 
@@ -100,7 +110,7 @@ Tesseract is optional and requires its binary and language data. OCR availabilit
 | Imports fail | Use `.venv/bin/python`, install the selected requirements and run `pip check`. |
 | Port 8000 is occupied | Stop your own server or choose another `PORT`; do not stop unrelated services. |
 | Model unavailable | Check the native runtime, local weight shards/tokenizer, environment overrides and `check --profile local --require-model`. |
-| Library is empty | Install the publisher's compatible knowledge pack, or use the search-only demo. For your own additional sources, synchronize explicitly. |
+| Library is empty | Point `AGENT_SRC_DIR` and `AGENT_DATA_DIR` to your permitted prepared library, run explicit operator `--install-pack` with `KNOWLEDGE_PACK_PATH` and `KNOWLEDGE_PACK_SHA256`, or use `--profile demo`. Sync additional permitted shared sources explicitly. |
 | New code does not appear | Check the serving process, restart it if needed and refresh browser assets. |
 
 For verification commands, see [Testing](docs/testing.md).

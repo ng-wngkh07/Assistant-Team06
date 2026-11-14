@@ -4,7 +4,7 @@ Start with a reproducible problem or a clear user outcome. Check existing issues
 
 ## Set up
 
-Follow the [Windows](README_WINDOWS.md) or [macOS](README_MAC.md) guide. Use a separate demo or test data directory. Keep private documents, databases and model files outside the public change.
+Follow the [Windows](README_WINDOWS.md) or [macOS](README_MAC.md) guide for an isolated developer demo or operator runtime. Hosted-service work also follows [deployment](docs/deployment.md), [account persistence](docs/service-persistence.md) and [configuration](docs/configuration.md). Use isolated source, account and test data directories; preserve real users and the serving library. Keep private documents, databases and model files outside the public change. Learners access the hosted website by link; they do not install the backend or maintain a local library. Source-checkout execution is an operator and developer workflow.
 
 Before starting from a clean checkout:
 
@@ -16,6 +16,12 @@ git switch -c fix/descriptive-name
 ```
 
 Save local work before switching or updating branches. Use names such as `fix/attachment-source-scope` or `docs/local-setup`; use `codex/` for branches created by Codex. Names and titles should describe the change. Personal role codes, classroom milestones and internal acceptance assignments do not belong in public titles or documentation.
+
+## Required documentation updates
+
+Any change affecting installation, configuration, application use, APIs/user flows, storage/architecture, deployment/recovery or the contribution/testing process must inspect and update **README.md and CONTRIBUTING.md**, together with the relevant `docs/` guides, platform instructions and examples, in the same change. If either entry file is unaffected, give a specific reason in the pull request; do not add cosmetic edits. Missing required documentation leaves the change incomplete.
+
+Keep hosted and local instructions consistent with actual code and validated commands. Distinguish implemented behavior, required acceptance and verified deployment. Keep operator and developer setup accurate; end-user delivery requires the hosted website, without a local installation. Changes to structure must also update the documentation index and affected paths/links. Public guides are the product and operations manual; private checkpoints are not public documentation.
 
 ## Make and verify a change
 
@@ -40,6 +46,7 @@ The repository owner merges after review and required checks. Approval and merge
 
 - Commit application code, synthetic fixtures, tests and public documentation only.
 - Keep `.env`, credentials, personal uploads, conversation history, SQLite databases, embeddings, datasets, model weights and private operational reports out of Git. Never force-add ignored assets.
+- Preserve per-account isolation, early ASGI body/rate-limit/security-header admission guards (`app/request_admission.py`), bounded FIFO GPU queue fairness (`app/dialogue.py`), upload storage quotas, and infrastructure readiness checks (`/api/health`, `/api/status`, `scripts/backend_service.py`) when modifying backend routes or environment configuration.
 - Preserve original source files. Keep uncertain extraction or OCR explicitly unresolved.
 - Use one writer for each canonical index or model operation, and coordinate inference through the existing resource locks.
 - Do not change the serving model, activate an adapter or start training as a side effect of a software fix.

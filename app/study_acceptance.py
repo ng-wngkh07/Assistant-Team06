@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 
 from app.config import SRC_DIR, TRAINING_MODEL_REPO, TRAINING_MODEL_REVISION
+from app.model_resolver import resolve_base_weight_files
 
 SUITE_HASH = '4752827e56b9d3e24bc6ec6b12bc479c5abbc5cacd016a0efafa9de656eb42d7'
 BASE_RAW_HASH = '370726de91575058976721e02d59034f9e66904d6751ec6bbbb60724ac3525ea'
@@ -92,7 +93,13 @@ def assess_dossier(dossier, adapter, base, file_hash):
     need(base_hashes == bv.get('base_files_sha256') == cv.get('base_files_sha256') == cr.get('base_files_sha256'),
          'Base identity differs across inference/review/dossier')
     need(adapter_hashes == cr.get('adapter_files_sha256'), 'Adapter identity differs from actual inference')
-    identity_files(base,base_hashes,{'model.safetensors','config.json','tokenizer.json'},file_hash)
+    try:
+        _, weight_files = resolve_base_weight_files(base)
+    except (FileNotFoundError, ValueError) as exc:
+        need(False, f'Invalid base model weights layout: {exc}')
+        weight_files = []
+    required_base_files = {wf.relative_to(base).as_posix() for wf in weight_files} | {'config.json', 'tokenizer.json'}
+    identity_files(base, base_hashes, required_base_files, file_hash)
     identity_files(adapter,adapter_hashes,{'adapters.safetensors','adapter_config.json'},file_hash)
     need(br.get('adapter') is None and Path(cr.get('adapter','')).resolve() == adapter, 'Wrong evaluated adapter')
     need(cr.get('baseline_raw_sha256') == BASE_RAW_HASH, 'Candidate is not paired with original baseline')

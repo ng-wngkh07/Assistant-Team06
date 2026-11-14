@@ -347,6 +347,7 @@ def test_attachment_preview_card_modal_structure_and_centered_chat_layout(client
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
     css = (root / "static/style.css").read_text(encoding="utf-8")
+    spatial_css = (root / "static/spatial-layout.css").read_text(encoding="utf-8")
     html = (root / "static/index.html").read_text(encoding="utf-8")
     js = (root / "static/app.js").read_text(encoding="utf-8")
 
@@ -371,11 +372,18 @@ def test_attachment_preview_card_modal_structure_and_centered_chat_layout(client
     )
     assert lib_idx < study_idx
 
-    # 3. Ensure welcome-card hides on has-chat and both frames share centered 720px max-width without negative translateY
-    assert ".messages-container.has-chat .welcome-card" in html
-    assert "display: none !important;" in html
-    assert "transform: translateY(-16px)" not in html
+    # 3. Ensure welcome-card & bento-hub hide on has-chat and centered chat layout guarantees
+    assert (
+        ".messages-container.has-chat .welcome-card" in spatial_css
+        or ".messages-container.has-chat .welcome-card" in css
+    )
+    assert "display: none !important;" in spatial_css or "display: none !important;" in css
+    assert ".messages-container.has-chat .arym-bento-grid" in spatial_css
+    assert ".messages-container > .message:not(.welcome-card)" in spatial_css
+    assert "margin: 0 auto !important;" in spatial_css
+    assert "transform: translateY(-16px)" not in spatial_css and "transform: translateY(-16px)" not in html
     assert ".message.study-card-message" in css
+    assert "arym-bento-grid" in html
 
     # 4. Ensure /api/materials/documents lists available documents and /api/materials/generate-from-library works
     docs_res = client.get("/api/materials/documents")
@@ -1251,6 +1259,9 @@ def test_difficulty_gate_hard_rejects_easy_cloze_and_fallback():
 def test_difficulty_gate_partial_count_with_warning(monkeypatch):
     """When only 1 hard question passes verification for count=3, honest partial set is returned."""
     import json
+    import app.token_counter as token_counter
+    monkeypatch.setattr(token_counter, 'get_exact_token_counter',
+                        lambda: lambda messages: sum(len(m['content']) for m in messages))
     from app.pdf_extractor import PDFExtractionResult
     from app.study_materials import StudyMaterialManager
 

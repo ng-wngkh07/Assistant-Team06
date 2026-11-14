@@ -1,5 +1,7 @@
 # Windows setup
 
+This guide is for operators and developers running the backend. Learners open the hosted website by link and do not need this installation.
+
 Use Windows 10/11 64-bit and PowerShell. The web dependency profile uses Python 3.12. **MLX is Apple Silicon only and not supported on Windows** (marked `NOT_RUN` / platform unsupported). Full QA on Windows uses local Ollama.
 
 ## Clean-clone search-only demo (no model download needed)
@@ -28,25 +30,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\start_windows.ps1 -Profile
 
 The installer uses WinGet and may request installation permissions or package agreements. Model downloads require additional disk space and network access. Existing settings are preserved; a mismatch with the manifest must be resolved explicitly rather than silently replacing your provider configuration.
 
-Copy `.env.example` to `.env` if needed. Configure source and data paths for your own library, then synchronize it in the application. Local startup does not automatically index documents. Search does not need a language model; question answering, embeddings and image recognition need their configured runtimes.
+Copy `.env.example` to `.env` if needed. Configure source and data paths for your own library, then synchronize it in the application. Local startup reuses existing data. Export `$env:STUDY_SRC_AUTO_WATCH = '1'` before launch for opt-in new-file ingestion, or synchronize manually. Changed/missing reviewed originals require operator review/re-indexing. Account uploads stay in separate private storage. See [configuration](docs/configuration.md#automatic-source-ingestion). Search does not need a language model; question answering, embeddings and image recognition need their configured runtimes.
 
 ## Prepared libraries and platform limits
 
-The ready-to-use distribution supports publisher-prepared knowledge libraries so recipients do not need to collect documents or run local embedding builds. Read [knowledge packs](docs/knowledge-packs.md) for privacy, license, and protocol specifications.
+Standard `--profile local` startup resolves your configured shared source directory (`AGENT_SRC_DIR`, defaulting to `src\`) and runtime data directory (`AGENT_DATA_DIR`, defaulting to `data\`), even when `src\` does not exist yet or an unused `resources\knowledge-packs.json` file is present. Automatic `data\user-library\` seeding and bundled-descriptor routing are retired; missing libraries stay honestly empty until populated or pointed at prepared data.
 
-The application supports both macOS native MLX packs and cross-platform Ollama portable packs (`bge-m3-ollama-l2-v1`). A publisher application bundle includes its Ollama pack and a descriptor with the trusted SHA256, so Windows recipients do not need to edit pack settings or run indexing. The launcher creates `data/user-library/src/` for the original library and persistent personal uploads. Advanced source-checkout installation can still use `KNOWLEDGE_PACK_PATH` and `KNOWLEDGE_PACK_SHA256` in `.env`. Do not import native macOS BGE vectors under an Ollama model; cross-protocol isolation prevents incompatible index loading.
+The application still supports explicit operator import of verified knowledge packs (`bge-m3-ollama-l2-v1` portable packs on Windows) when both `KNOWLEDGE_PACK_PATH` and `KNOWLEDGE_PACK_SHA256` are set in `.env` or the process environment and you run `.venv\Scripts\python.exe scripts\dev.py --install-pack --profile local`. Read [knowledge packs](docs/knowledge-packs.md) for privacy, license, and protocol specifications. Do not import native macOS BGE vectors under an Ollama model; cross-protocol isolation prevents incompatible index loading.
+
+If migrating from an older checkout containing `data\user-library\`, stop the backend, inventory and back up that entire folder manually outside the repository before archiving; the launcher never deletes, moves or merges it automatically.
 
 After full Windows setup, `Start Study Agent.bat` starts the local Ollama service, checks model readiness and opens the application. The public 144-chunk pack was verified on a Mac host running local Ollama; physical Windows machine acceptance with native PowerShell setup remains `NOT_RUN` on macOS hosts.
 
 ## First-use verification
 
-1. After setup, double-click `Start Study Agent.bat` in the extracted application bundle. Keep its `resources/` directory with the application and its window open while using it; close the server with Ctrl+C when finished.
-2. Use **Kiểm tra mô hình**, then ask a question covered by the installed library. Open the cited passage and original document.
+1. After configuring `.env` or prepared `src\` / `data\` paths, run `.venv\Scripts\python.exe scripts\dev.py serve --profile local` (or double-click `Start Study Agent.bat`). Keep its window open while using it; close the server with Ctrl+C when finished.
+2. Use **Kiểm tra mô hình**, then ask a question covered by the configured library. Open the cited passage and original document.
 3. In study tools, choose a broad topic, count and difficulty. Check the actual returned count, answer a question and inspect its explanation. A partial-result notice means the requested set is incomplete.
 4. Generate a document study set, check the source and flip a flashcard. Review timetable image recognition before confirming rows and exporting the semester calendar.
-5. Restart with the same launcher. The installed library, personal history and confirmed calendar remain local and should persist without a new embedding build.
+5. Restart with the same launcher. Configured sources, private account storage (`STUDY_ACCOUNTS_DIR` or `data\accounts\`), local history and confirmed calendar remain durable and should persist without a new embedding build.
 
-See [Using Study Agent](docs/usage.md) for source scopes, uploads, result states, study materials, history and [the calendar procedure](docs/timetable-workflow.md). Models and the pack are one-time downloads; ordinary inference uses local resources. Additional personal documents need local extraction/indexing, not language-model retraining.
+See [Using Study Agent](docs/usage.md) for source scopes, uploads, result states, study materials, history and [the calendar procedure](docs/timetable-workflow.md). Model setup is a one-time download; ordinary inference uses local resources. Additional personal documents need local extraction/indexing, not language-model retraining.
 
 ## Verify
 
@@ -65,7 +69,7 @@ See [Testing](docs/testing.md) for UI checks and model acceptance. A demo instal
 | A `.ps1` file opens in an editor | Invoke it with `powershell -NoProfile -ExecutionPolicy Bypass -File`. |
 | Wrong Python version | Use the project `.venv` and inspect setup output; preserve the old environment before replacing it. |
 | Ollama or a model is missing | Check the installer manifest, local service and `ollama list`. |
-| Library is empty | Install the publisher's compatible Ollama pack and trusted SHA256. The demo is search-only; synchronize only additional personal documents. |
+| Library is empty | Point `AGENT_SRC_DIR` and `AGENT_DATA_DIR` to your permitted library, or install a compatible Ollama pack explicitly with `--install-pack` (`KNOWLEDGE_PACK_PATH` + `KNOWLEDGE_PACK_SHA256`). `--profile demo` is search-only. |
 | Port is occupied | Stop your own server or change `PORT` in `.env`. |
 | Invalid `.env` setting | Use supported variables from `.env.example`; do not copy private machine paths into Git. |
 

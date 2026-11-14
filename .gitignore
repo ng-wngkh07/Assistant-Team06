@@ -34,6 +34,7 @@
 !/static/
 !/ui/
 !/scripts/
+!/launchers/
 !/tests/
 !/resources/
 !/eval/
@@ -96,6 +97,8 @@ Thumbs.db
 
 # Internal planning exports stay local.
 /output/
+/review_packets/
+/data/runtime/app-audit-20261024/review_packets/
 
 # Windows installer manifest and helpers are shared; installers stay on each machine.
 !/requirements-windows-tools.json

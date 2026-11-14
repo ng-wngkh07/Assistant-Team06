@@ -511,12 +511,13 @@ class HistoryStore:
         max_turns: int = 4,
         query: Optional[str] = None,
         document_id: Optional[int] = None,
+        material_id: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """Retrieve completed turns from the session formatted for rag_agent chat_history.
 
         Supports bounded original-turn recall: when query mentions an earlier topic,
         retrieves matching older turns within the session while always preserving recent context.
-        Filters out refusal/insufficient-evidence turns and, when document_id is set,
+        Filters out refusal/insufficient-evidence turns and, when document_id or material_id is set,
         only keeps turns belonging to the same document so earlier unrelated turns do not pollute Q&A.
         """
         with self._connect() as db:
@@ -546,6 +547,13 @@ class HistoryStore:
                 except Exception:
                     scope = {}
                 if scope.get("document_id") != document_id:
+                    continue
+            elif material_id is not None:
+                try:
+                    scope = json.loads(r["search_scope_json"] or "{}")
+                except Exception:
+                    scope = {}
+                if scope.get("material_id") != material_id:
                     continue
             rows.append(r)
 

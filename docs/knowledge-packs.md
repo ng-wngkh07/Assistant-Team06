@@ -1,6 +1,6 @@
 # Prebuilt local knowledge packs
 
-A publisher can distribute a reviewed document library with its vectors so users can start asking questions without collecting documents, extracting text or generating embeddings. The application still runs entirely on the user's computer. Model weights are installed once, separately from the knowledge pack. No hosted inference service, external model API, or cloud fallback is permitted.
+A publisher can distribute a reviewed document library with its vectors so users can start asking questions without collecting documents, extracting text or generating embeddings. This optional distribution path runs the backend and models on the user's computer. A hosted service instead keeps its prepared library on the backend host; it does not require a public knowledge-pack download. Model weights are installed once, separately from the knowledge pack. No hosted inference service, external model API, or cloud fallback is permitted.
 
 ## Supported pack protocols
 
@@ -83,7 +83,7 @@ python scripts/build_distribution.py \
   --output /path/to/new-study-agent-bundle
 ```
 
-Supply either backend or both; include the backend required by the recipient's platform. The output contains application code, checked pack archives, `resources/knowledge-packs.json` and `bundle-metadata.json`. The descriptor selects the native pack on macOS, or Ollama on other supported platforms and when `EMBED_BACKEND=ollama` is explicitly selected. Keep each archive bound to its own embedding protocol. Metadata records the source commit, pack digests and actual document/passage counts.
+Supply either backend or both; include the backend required by the recipient's platform. The output contains application code, checked pack archives, `resources/knowledge-packs.json` and `bundle-metadata.json` for distribution reference. Standard `--profile local` startup ignores `resources/knowledge-packs.json` and never auto-seeds `data/user-library/`; operators install a pack explicitly with `--install-pack`, `KNOWLEDGE_PACK_PATH` and `KNOWLEDGE_PACK_SHA256`. Keep each archive bound to its own embedding protocol. Metadata records the source commit, pack digests and actual document/passage counts.
 
 Review the final bundle before uploading it as a versioned release asset. Python dependencies, local runtimes and model weights are separate prerequisites; this command does not produce a standalone native executable or download models. Approval of all current source documents covers that reviewed snapshot, not future uploads or the publisher's mutable working database.
 
@@ -98,41 +98,24 @@ Both reference archives contain the same twelve synthetic CC0 originals and 144 
 
 Obtain archives from the publisher's release assets together with the supported application revision. The specifications above identify prepared artifacts; they do not establish that a release has been published. Do not substitute a same-named file from another download or mix the two vector protocols.
 
-## User installation and no-index workflow
+## Explicit operator pack installation
 
 Install the documented local model runtime and exact model assets first:
 - macOS native default: MLX base model and BGE weights in `data/models/`.
 - Windows / Linux default: Local Ollama with `bge-m3` and `qwen3.5:9b`.
 
-For an application bundle supplied by the publisher, extract it to a writable location and keep its `resources/` directory with the application. The descriptor already supplies the selected pack path and trusted digest: recipients do not need to edit `.env`, collect the originals or run indexing. Start `Start Study Agent.command` on macOS or `Start Study Agent.bat` on Windows after installing the prerequisites. Keep the extracted application folder when upgrading or backing up personal data.
+Standard `check --profile local` and `serve --profile local` launches resolve canonical configured `AGENT_SRC_DIR` (default `src/`) and `AGENT_DATA_DIR` (default `data/`), even when `src/` is absent or `resources/knowledge-packs.json` is present. Missing libraries stay honestly unpopulated rather than auto-seeding `data/user-library/`.
 
-The first local launch validates and installs the publisher seed under `data/knowledge-packs/<sha256>/`, then initializes a separate personal library:
+### Configure and install a pack explicitly
 
-```text
-data/user-library/
-  src/                 reviewed originals plus personal uploads
-  knowledge_base.db    writable retrieval index
-  seed-receipt.json    initial pack and embedding identity
-  history.db           local chat history, created when used
-  timetable.db         local calendar state, created when used
-```
-
-Initialization copies precomputed passages/vectors and constructs local SQLite keyword tables. It does not extract documents, perform OCR, generate embeddings or train a model. Subsequent launches use the personal library without recopying the seed; an intact initialized library can restart even if the original ZIP is no longer present. Keep originals in `src/` so citations can open their full source.
-
-Use the application upload control for additional documents. It automatically extracts and indexes those new originals locally, then retains them in the displayed personal source directory. Files copied directly into that directory need an explicit synchronization because there is no filesystem watcher. Uploading does not publish files, send them to a training service, approve training or modify the publisher seed. Back up the whole personal-library directory while the server is stopped, rather than only the originals.
-
-A different seed digest or incompatible embedding model fails with guidance and preserves the existing personal library. Automatic merging of library upgrades is not supported; retain a backup before performing an explicit migration.
-
-### Advanced: configure a separate pack in a source checkout
-
-Obtain the publisher's pack and its SHA256 from a trusted release. Add these settings to your local `.env`:
+Obtain the publisher's pack and its SHA256 from a trusted release. Add these settings to your local `.env` (or export them in the process environment):
 
 ```dotenv
 KNOWLEDGE_PACK_PATH=resources/knowledge-pack.zip
 KNOWLEDGE_PACK_SHA256=replace_with_the_trusted_64_character_sha256
 ```
 
-Create `resources/` in the checkout and put the downloaded archive there. Use its actual filename in `KNOWLEDGE_PACK_PATH`. Verify the downloaded file before starting:
+Create `resources/` in the checkout and put the downloaded archive there. Use its actual filename in `KNOWLEDGE_PACK_PATH`. Verify the downloaded file before installing:
 
 ```bash
 # macOS: replace the filename with your selected archive.
@@ -153,11 +136,25 @@ LLM_PROVIDER=ollama
 DEFAULT_CHAT_MODEL=qwen3.5:9b
 ```
 
-Run `Start Study Agent.command` or `python scripts/dev.py serve --profile local --require-model --open-browser`. If Ollama is not already running, pass `--start-model-service` so the launcher starts the local daemon before pack verification.
+Run explicit operator installation (never implicit on `check` or default `serve`):
 
-In this explicit legacy configuration, the application validates the download digest and uses `data/knowledge-packs/<sha256>/` as the working library. This copies precomputed data and builds local keyword-search (SQLite FTS5) tables; **it does not run document extraction, OCR, model training or embedding inference**. Later launches reuse that installation. Shared model assets stay outside the library, while history and timetable remain local. Explicit pack settings take precedence over a bundled descriptor.
+```bash
+python scripts/dev.py --install-pack --profile local --require-model
+```
 
-A new pack digest selects a separate installation; the launcher never overwrites an existing user's library, history or timetable. A mismatched model, malformed archive, changed hash or incomplete index fails closed with an actionable message. Leave both pack settings unset to use your own local library.
+If Ollama is not already running, pass `--start-model-service` so the launcher starts the local daemon before pack verification. Running `--install-pack` without both `KNOWLEDGE_PACK_PATH` and `KNOWLEDGE_PACK_SHA256` fails explicitly without seeding anything.
+
+When both explicit pack variables are supplied, `scripts/dev.py --install-pack --profile local` validates the download digest and embedding identity, installs originals and passages/vectors into an isolated directory under `data/knowledge-packs/<sha256>/`, and builds local keyword-search (SQLite FTS5) tables. **It does not run document extraction, OCR, model training or embedding inference**. Keeping both pack variables set selects that verified pack directory on subsequent `check`/`serve` launches. Unset both variables to return to canonical `AGENT_SRC_DIR` and `AGENT_DATA_DIR`, or configure explicit paths into a verified pack directory. Unused `resources/knowledge-packs.json` descriptors are ignored.
+
+A new pack digest selects a separate installation under `data/knowledge-packs/<sha256>/`; the installer never overwrites an existing library, account store, history or timetable. A mismatched model, malformed archive, changed hash, unreviewed pack, or incomplete index fails closed with an actionable message. Leave both pack settings unset unless performing an explicit operator `--install-pack`.
+
+### Safe manual migration from legacy `data/user-library/`
+
+Automatic `data/user-library/` seeding and routing are retired. If an older checkout still contains `data/user-library/`, the launcher never deletes, moves or merges it automatically:
+
+1. Stop all backend processes completely.
+2. Inventory the contents of `data/user-library/` (`src/`, `knowledge_base.db`, `history.db`, `timetable.db`, `seed-receipt.json`) and copy a full offline backup outside the repository.
+3. Archive that backup safely before configuring canonical `AGENT_SRC_DIR` / `AGENT_DATA_DIR` paths or pointing explicit overrides (`HISTORY_DB_PATH`, `TIMETABLE_DB_PATH`, `TIMETABLE_IMAGES_DIR`) to verified compatible copies. Never copy unreviewed uploads into hosted shared `src/` or mix private account stores with shared fixtures.
 
 Adding personal documents requires local extraction and compatible embeddings, but does not require retraining the language model. Keep those additions private. The current application uses the base model with RAG and has no approved active fine-tuned adapter. Training data is not needed to use a reviewed model or a prebuilt knowledge pack.
 

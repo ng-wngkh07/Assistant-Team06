@@ -191,7 +191,7 @@ def build_practice_verify_supported(
     difficulty: Optional[str] = None,
 ) -> Tuple[List[Dict[str, str]], str]:
     """Return (messages, reference_json_str)."""
-    from app.practice import build_practice_review_item, build_practice_review_prompt
+    from app.practice import build_practice_review_item, build_grounded_review_prompt, PracticeService
 
     if "verifier_check" not in question_dict:
         raise ValueError("Supported practice example requires authored verifier_check")
@@ -217,12 +217,16 @@ def build_practice_verify_supported(
     if "verified_answer" not in v_check or v_check["verified_answer"] not in ("A", "B", "C", "D"):
         raise ValueError("Supported practice example requires verified_answer in ('A', 'B', 'C', 'D')")
 
+    quote = question_dict.get("evidence_quote", "")
+    source = PracticeService.extract_supporting_evidence(context.passage, quote)
+    if not source:
+        raise ValueError("Practice example requires a bound evidence_quote")
+    surrounding = PracticeService.extract_surrounding_context(context.passage, quote)
     review_item = build_practice_review_item(
-        question_dict,
-        context.passage,
-        index=1,
+        question_dict, source, index=1,
+        context_text=surrounding if surrounding and surrounding != source else None,
     )
-    user_prompt = build_practice_review_prompt(
+    user_prompt = build_grounded_review_prompt(
         [review_item],
         difficulty=difficulty if difficulty is not None else question_dict.get("difficulty"),
     )
@@ -244,7 +248,7 @@ def build_practice_verify_invalid(
     difficulty: Optional[str] = None,
 ) -> Tuple[List[Dict[str, str]], str]:
     """Return (messages, reference_json_str)."""
-    from app.practice import build_practice_review_item, build_practice_review_prompt
+    from app.practice import build_practice_review_item, build_grounded_review_prompt, PracticeService
 
     if "verifier_check" not in invalid_question_dict:
         raise ValueError("Invalid practice example requires authored verifier_check")
@@ -270,12 +274,16 @@ def build_practice_verify_invalid(
     if "verified_answer" not in v_check:
         raise ValueError("Invalid practice example requires verified_answer key in verifier_check")
 
+    quote = invalid_question_dict.get("evidence_quote", "")
+    source = PracticeService.extract_supporting_evidence(context.passage, quote)
+    if not source:
+        raise ValueError("Practice example requires a bound evidence_quote")
+    surrounding = PracticeService.extract_surrounding_context(context.passage, quote)
     review_item = build_practice_review_item(
-        invalid_question_dict,
-        context.passage,
-        index=1,
+        invalid_question_dict, source, index=1,
+        context_text=surrounding if surrounding and surrounding != source else None,
     )
-    user_prompt = build_practice_review_prompt(
+    user_prompt = build_grounded_review_prompt(
         [review_item],
         difficulty=difficulty if difficulty is not None else invalid_question_dict.get("difficulty"),
     )

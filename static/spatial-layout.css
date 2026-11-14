@@ -1,0 +1,1016 @@
+/**
+ * ARYM — Fixed Spatial Layout Architecture (`static/spatial-layout.css`)
+ *
+ * Implements the selected Layout 3 architecture permanently:
+ * - Bottom Floating Liquid Glass Launcher Dock (`.chat-header` anchored at bottom center)
+ * - Slide-over Floating Liquid Glass Drawer (`#sidebar` hovering at top-left above the dock)
+ * - Full-Height Bento Spatial Hub (`#qa-panel`), 2-Column Bento Studio (`#learning-tools-panel`),
+ *   and 2-Column Split Command Dashboard (`#timetable-panel`).
+ */
+
+/* ============================================================================
+   1. GLOBAL SPATIAL STAGE & VISIBILITY RULES
+   ============================================================================ */
+[hidden],
+.qa-panel[hidden],
+.learning-tools-panel[hidden],
+.timetable-panel[hidden],
+.tool-tab-panel[hidden] {
+  display: none !important;
+}
+
+.app-container {
+  position: relative !important;
+  z-index: 1 !important;
+  display: flex !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  overflow: hidden !important;
+  background: transparent !important;
+  box-sizing: border-box !important;
+}
+
+.main-content {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  height: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: transparent !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+
+/* ============================================================================
+   2. BOTTOM FLOATING LIQUID GLASS LAUNCHER DOCK (`.chat-header`)
+   ============================================================================ */
+.chat-header {
+  position: fixed !important;
+  bottom: 16px !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  width: min(1260px, calc(100vw - 32px)) !important;
+  margin: 0 !important;
+  padding: 10px 18px !important;
+  min-height: 62px !important;
+  border-radius: 9999px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  box-sizing: border-box !important;
+  flex-shrink: 0 !important;
+  z-index: 55 !important;
+  box-shadow: var(--lg-shadow-island) !important;
+}
+
+.chat-header .header-left,
+.chat-header .header-right {
+  position: static !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex-shrink: 0 !important;
+}
+
+.chat-header .icon-btn {
+  width: auto !important;
+  height: 36px !important;
+  min-width: 36px !important;
+  padding: 0 13px !important;
+  border-radius: 9999px !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+}
+
+.chat-header .mode-switch {
+  margin: 0 !important;
+  width: auto !important;
+  max-width: none !important;
+  flex: 0 1 auto !important;
+}
+
+/* Compact Brand Pill inside the Bottom Floating Liquid Glass Dock */
+.header-brand-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 12px 4px 6px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.35);
+}
+
+.header-brand-monogram {
+  width: 28px;
+  height: 28px;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.08));
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 13px;
+  color: #ffffff;
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.7);
+}
+
+.header-brand-copy {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.header-brand-title {
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: #ffffff;
+}
+
+.header-brand-sub {
+  font-size: 9.5px;
+  color: #d4d4d8;
+  letter-spacing: 0.02em;
+}
+
+/* ============================================================================
+   3. FLOATING LIQUID GLASS SLIDE-OVER DRAWER (`#sidebar`)
+   ============================================================================ */
+.sidebar {
+  position: fixed !important;
+  top: 18px !important;
+  left: 18px !important;
+  bottom: 92px !important;
+  width: min(320px, calc(100vw - 36px)) !important;
+  height: auto !important;
+  margin-left: 0 !important;
+  border-radius: 28px !important;
+  padding: 18px !important;
+  z-index: 60 !important;
+  transform: translateX(calc(-100% - 36px)) !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.24s ease !important;
+}
+
+body.sidebar-collapsed .sidebar {
+  margin-left: 0 !important;
+}
+
+.sidebar.drawer-open,
+.sidebar.open,
+body.sidebar-open .sidebar {
+  transform: translateX(0) !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+.sidebar-backdrop {
+  display: block !important;
+  position: fixed !important;
+  inset: 0 !important;
+  background: rgba(8, 8, 12, 0.42) !important;
+  backdrop-filter: blur(4px) !important;
+  -webkit-backdrop-filter: blur(4px) !important;
+  z-index: 50 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.24s ease !important;
+}
+
+body.sidebar-open .sidebar-backdrop,
+.sidebar-backdrop.open {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+@media (max-width: 640px) {
+  .sidebar {
+    bottom: 112px !important;
+  }
+}
+
+/* ============================================================================
+   4. RESTRUCTURED QA WORKSPACE: BENTO SPATIAL HUB + FLOATING GLASS COMPOSER
+   ============================================================================ */
+.qa-panel:not([hidden]) {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  width: 100% !important;
+  max-width: 1280px !important;
+  margin: 0 auto !important;
+  padding: 20px 24px 96px 24px !important;
+  box-sizing: border-box !important;
+  gap: 14px !important;
+}
+
+.messages-container {
+  width: 100% !important;
+  max-width: 1180px !important;
+  margin: 0 auto !important;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 14px !important;
+  padding: 4px 6px !important;
+  box-sizing: border-box !important;
+}
+
+.qa-panel.welcome-mode .messages-container {
+  justify-content: center !important;
+  overflow-y: visible !important;
+}
+
+/* Welcome Card Restructured into Full Spatial Bento Hub */
+.message.assistant.welcome-card {
+  width: 100% !important;
+  max-width: 1140px !important;
+  margin: 0 auto !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 18px !important;
+}
+
+.arym-spatial-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+}
+
+.arym-hero-lens-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 18px;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.05));
+  border-top: 1.5px solid rgba(255, 255, 255, 0.68);
+  border-left: 1px solid rgba(255, 255, 255, 0.42);
+  border-right: 1px solid rgba(255, 255, 255, 0.20);
+  border-bottom: 1.5px solid rgba(255, 255, 255, 0.34);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.75),
+    inset 0 1.5px 2px rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #ffffff;
+}
+
+.arym-spatial-hero h3 {
+  font-size: clamp(1.55rem, 2.3vw, 2.15rem) !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.025em !important;
+  color: #ffffff !important;
+  margin: 2px 0 0 0 !important;
+  text-shadow: 0 4px 24px rgba(255, 255, 255, 0.18);
+}
+
+.arym-spatial-hero p {
+  font-size: 13.5px !important;
+  color: #cbd5e1 !important;
+  margin: 0 !important;
+  max-width: 680px;
+}
+
+/* 3-Column Apple Liquid Glass Bento Grid */
+.arym-bento-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.arym-bento-card {
+  border-radius: 24px !important;
+  padding: 20px 22px !important;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s ease;
+  overflow: hidden;
+}
+
+.arym-bento-card:hover {
+  transform: translateY(-3px);
+}
+
+.arym-bento-card::after {
+  content: "";
+  position: absolute;
+  top: -40%;
+  right: -25%;
+  width: 180px;
+  height: 180px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.14) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.bento-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.bento-step-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border-radius: 9999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.5);
+}
+
+.bento-icon-orb {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.06));
+  border: 1px solid rgba(255, 255, 255, 0.52);
+  box-shadow: inset 0 1.5px 2px rgba(255, 255, 255, 0.65);
+}
+
+.arym-bento-card h4 {
+  margin: 4px 0 4px 0;
+  font-size: 15.5px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: -0.01em;
+}
+
+.arym-bento-card p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #d4d4d8;
+}
+
+.bento-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 4px;
+}
+
+.bento-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 9999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.42);
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.bento-chip-btn:hover {
+  background: #ffffff;
+  color: #000000;
+  border-color: #ffffff;
+}
+
+/* Floating Liquid Glass Composer Capsule (`.input-area` / `.chat-form`) */
+.input-area {
+  width: 100% !important;
+  max-width: 960px !important;
+  margin: 0 auto !important;
+  padding: 0 !important;
+  flex-shrink: 0 !important;
+}
+
+.chat-form {
+  width: 100% !important;
+  border-radius: 26px !important;
+  padding: 14px 18px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 10px !important;
+  box-sizing: border-box !important;
+  box-shadow: var(--lg-shadow-island) !important;
+}
+
+.chat-form textarea {
+  width: 100% !important;
+  min-height: 28px !important;
+  max-height: 140px !important;
+  font-size: 14.5px !important;
+  line-height: 1.5 !important;
+  color: #ffffff !important;
+  padding: 2px 4px !important;
+  resize: none !important;
+}
+
+.chat-form textarea::placeholder {
+  color: #a1a1aa !important;
+}
+
+.chat-form-bottom {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+}
+
+.chat-form-controls,
+.chat-form-right {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.btn-attach {
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 9999px !important;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.06)) !important;
+  border: 1px solid rgba(255, 255, 255, 0.52) !important;
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.6) !important;
+  color: #ffffff !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+}
+
+.btn-send {
+  width: 38px !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  padding: 0 !important;
+  border-radius: 9999px !important;
+}
+
+/* ============================================================================
+   5. RESTRUCTURED LEARNING TOOLS WORKSPACE: 2-COLUMN BENTO STUDIO
+   ============================================================================ */
+.learning-tools-panel:not([hidden]) {
+  display: flex !important;
+  flex-direction: column !important;
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  width: 100% !important;
+  max-width: 1320px !important;
+  margin: 0 auto !important;
+  padding: 20px 24px 98px 24px !important;
+  box-sizing: border-box !important;
+  gap: 16px !important;
+}
+
+.learning-tools-panel .tool-tabs {
+  align-self: center !important;
+  display: inline-flex !important;
+  gap: 6px !important;
+  padding: 6px !important;
+  border-radius: 9999px !important;
+  width: auto !important;
+}
+
+.tool-tab-button {
+  padding: 8px 18px !important;
+  border-radius: 9999px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: #d4d4d8 !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  cursor: pointer !important;
+}
+
+.tool-tab-button.active {
+  background: var(--lg-pill-active) !important;
+  color: #000000 !important;
+  border-color: #ffffff !important;
+  box-shadow: 0 4px 16px rgba(255, 255, 255, 0.25) !important;
+}
+
+/* Transform Practice Tab into a 2-Column Side-by-Side Bento Grid */
+#tool-tab-practice:not([hidden]) {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px !important;
+}
+
+#tool-tab-practice .learning-topic-card {
+  display: grid !important;
+  grid-template-columns: 1.08fr 0.92fr !important;
+  gap: 22px !important;
+  align-items: start !important;
+  border-radius: 26px !important;
+  padding: 24px !important;
+}
+
+#tool-tab-practice .learning-topic-card > .tool-panel-header {
+  grid-column: 1 / 2 !important;
+}
+
+#tool-tab-practice .learning-topic-card > .learning-generate-form {
+  grid-column: 1 / 2 !important;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 20px;
+  padding: 18px;
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.32);
+}
+
+#tool-tab-practice .learning-topic-card > .study-material-integrated-box {
+  grid-column: 2 / 3 !important;
+  grid-row: 1 / 4 !important;
+  margin-top: 0 !important;
+  padding: 20px !important;
+  border-top: none !important;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.03)) !important;
+  border: 1px solid rgba(255, 255, 255, 0.34) !important;
+  border-radius: 22px !important;
+  box-shadow: inset 0 1.5px 2px rgba(255, 255, 255, 0.45) !important;
+}
+
+#tool-tab-practice .learning-topic-card > .advanced-source-selection {
+  grid-column: 1 / -1 !important;
+}
+
+.learning-tools-panel .form-row {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 12px !important;
+  align-items: flex-end !important;
+}
+
+.learning-tools-panel .form-group {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+  flex: 1 1 140px !important;
+}
+
+.learning-tools-panel .form-group.flex-2 {
+  flex: 2 1 240px !important;
+}
+
+.learning-tools-panel .form-group.form-actions {
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex: 0 0 auto !important;
+}
+
+/* ============================================================================
+   6. RESTRUCTURED TIMETABLE WORKSPACE: FULL USABLE WIDTH WIZARD & STEP 3
+   ============================================================================ */
+.timetable-panel:not([hidden]) {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 18px !important;
+  align-items: stretch !important;
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  width: 100% !important;
+  max-width: 1380px !important;
+  margin: 0 auto !important;
+  padding: 20px 24px 98px 24px !important;
+  box-sizing: border-box !important;
+}
+
+.timetable-panel > .timetable-header {
+  width: 100% !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  padding: 16px 22px !important;
+  border-radius: 24px !important;
+  background: var(--lg-surface) !important;
+  border-top: 1.5px solid var(--lg-border-top) !important;
+  border-left: 1.5px solid var(--lg-border-left) !important;
+  border-right: 1px solid var(--lg-border-right) !important;
+  border-bottom: 1.5px solid var(--lg-border-bottom) !important;
+  box-shadow: var(--lg-shadow-card) !important;
+}
+
+#planner-wizard-progress {
+  display: inline-flex !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  padding: 5px !important;
+  border-radius: 9999px !important;
+  background: rgba(0, 0, 0, 0.45) !important;
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+}
+
+#planner-wizard-progress button {
+  padding: 7px 14px !important;
+  border-radius: 9999px !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  color: #d4d4d8 !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  cursor: pointer !important;
+}
+
+#planner-wizard-progress button[aria-current="step"] {
+  background: var(--lg-pill-active) !important;
+  color: #000000 !important;
+  font-weight: 700 !important;
+  border-color: #ffffff !important;
+  box-shadow: 0 4px 14px rgba(255, 255, 255, 0.25) !important;
+}
+
+.timetable-panel > .timetable-header h2 {
+  margin: 0 !important;
+  font-size: 19px !important;
+  font-weight: 800 !important;
+}
+
+.timetable-panel > .timetable-header .lookup-description {
+  margin: 2px 0 0 0 !important;
+  font-size: 12.5px !important;
+  color: #cbd5e1 !important;
+}
+
+/* Full Usable Width Wizard Screens: Each Step Owns Full Width */
+.timetable-panel > .planner-wizard-screen:not([hidden]) {
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  margin: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 16px !important;
+  background: var(--lg-surface) !important;
+  border-top: 1.5px solid var(--lg-border-top) !important;
+  border-left: 1.5px solid var(--lg-border-left) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.20) !important;
+  border-bottom: 1.5px solid var(--lg-border-bottom) !important;
+  border-radius: 26px !important;
+  padding: 22px !important;
+  box-shadow: var(--lg-shadow-card) !important;
+}
+
+/* Weekly Lessons Card nested inside Step 3 with Full Usable Width */
+#planner-weekly-lessons-card {
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  margin: 16px 0 0 0 !important;
+  border-radius: 22px !important;
+  padding: 20px !important;
+  background: var(--lg-surface) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+}
+
+.timetable-panel > .planner-wizard-footer {
+  width: 100% !important;
+  box-sizing: border-box !important;
+  position: static !important;
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  padding: 12px 18px !important;
+  border-radius: 9999px !important;
+  background: var(--lg-surface) !important;
+  border: 1px solid rgba(255, 255, 255, 0.35) !important;
+}
+
+.planner-task-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 12px !important;
+}
+
+.planner-task-grid .task-col-wide {
+  grid-column: 1 / -1 !important;
+}
+
+/* Ensure Table Horizontal Overflow Scroll is Reachable and Smooth */
+.table-responsive,
+.timetable-card .table-responsive,
+.planner-section-card .table-responsive {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: auto !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+  box-sizing: border-box !important;
+}
+
+.kb-table {
+  min-width: 600px;
+  width: 100%;
+}
+
+/* Bento Hub Hiding on Active Chat & Centered Chat Layout */
+.qa-panel:not(.welcome-mode) .welcome-card,
+.messages-container.has-chat .welcome-card,
+.messages-container.has-chat .arym-bento-grid {
+  display: none !important;
+}
+
+.messages-container > .message:not(.welcome-card) {
+  flex-shrink: 0 !important;
+  width: 100% !important;
+  max-width: 900px !important;
+  margin: 0 auto !important;
+  box-sizing: border-box !important;
+}
+
+/* Responsive fallback on narrow screens */
+@media (max-width: 1060px) {
+  .arym-bento-grid,
+  #tool-tab-practice .learning-topic-card {
+    grid-template-columns: 1fr !important;
+  }
+  #tool-tab-practice .learning-topic-card > .study-material-integrated-box {
+    grid-column: 1 / -1 !important;
+  }
+}
+
+/* ============================================================================
+   7. MOBILE VIEWPORT OPTIMIZATIONS (355px, 390px, and mobile devices)
+   ============================================================================ */
+@media (max-width: 640px) {
+  /* Compact Two-Row Grid Floating Launcher Dock */
+  .chat-header {
+    position: fixed !important;
+    bottom: 8px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    width: calc(100vw - 12px) !important;
+    max-width: 640px !important;
+    box-sizing: border-box !important;
+    margin: 0 !important;
+    padding: 6px 8px !important;
+    border-radius: 20px !important;
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    grid-template-rows: auto auto !important;
+    row-gap: 5px !important;
+    column-gap: 6px !important;
+    min-height: auto !important;
+    height: auto !important;
+    z-index: 55 !important;
+    align-items: center !important;
+    justify-content: stretch !important;
+  }
+
+  /* Row 1, Column 1: Header Left (#btn-open-sidebar, #btn-clear-chat) */
+  .chat-header .header-left {
+    grid-column: 1 / 2 !important;
+    grid-row: 1 / 2 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 4px !important;
+    min-width: 0 !important;
+    flex-shrink: 0 !important;
+  }
+
+  /* No giant pill on mobile screens */
+  .chat-header .header-brand-pill {
+    display: none !important;
+  }
+
+  /* Target real #btn-open-sidebar, shorten visible label, maintain >= 32px touch target */
+  .chat-header #btn-open-sidebar {
+    min-width: 34px !important;
+    height: 32px !important;
+    padding: 0 8px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    flex-shrink: 0 !important;
+    border-radius: 9999px !important;
+  }
+
+  .chat-header #btn-open-sidebar .btn-text {
+    display: none !important;
+  }
+
+  /* #btn-clear-chat */
+  .chat-header #btn-clear-chat {
+    min-width: 34px !important;
+    height: 32px !important;
+    padding: 0 8px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 11px !important;
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    border-radius: 9999px !important;
+  }
+
+  /* Row 1, Column 2: Header Right (#btn-replay-tour, #btn-account-trigger) */
+  .chat-header .header-right {
+    grid-column: 2 / 3 !important;
+    grid-row: 1 / 2 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    gap: 4px !important;
+    min-width: 0 !important;
+    flex-shrink: 0 !important;
+  }
+
+  /* Shorten tour replay button */
+  .chat-header #btn-replay-tour {
+    min-width: 34px !important;
+    height: 32px !important;
+    padding: 0 8px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 11px !important;
+    flex-shrink: 0 !important;
+    border-radius: 9999px !important;
+  }
+
+  .chat-header #btn-replay-tour .btn-text {
+    display: none !important;
+  }
+
+  /* Bound and ellipsis username to prevent squeezing navigation */
+  .chat-header #btn-account-trigger {
+    max-width: 95px !important;
+    min-width: 34px !important;
+    height: 32px !important;
+    padding: 0 8px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 11px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    box-sizing: border-box !important;
+    flex-shrink: 1 !important;
+    border-radius: 9999px !important;
+  }
+
+  /* Row 2: Mode Switch (spans full width across both columns) */
+  .chat-header .mode-switch {
+    grid-column: 1 / -1 !important;
+    grid-row: 2 / 3 !important;
+    width: 100% !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 3px !important;
+    padding: 2px !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+    min-width: 0 !important;
+  }
+
+  /* 3 Mode buttons each occupy equal width */
+  .chat-header .mode-button {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    height: 34px !important;
+    min-height: 32px !important;
+    padding: 4px 4px !important;
+    font-size: 11px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 2px !important;
+    box-sizing: border-box !important;
+  }
+
+  .chat-header .mode-button .mode-text-rest {
+    display: none !important;
+  }
+
+  /* Ensure no overlap between bottom dock and workspace / composer / panels */
+  .qa-panel:not([hidden]) {
+    padding: 12px 10px 104px 10px !important;
+    gap: 10px !important;
+  }
+
+  .learning-tools-panel:not([hidden]) {
+    padding: 12px 10px 104px 10px !important;
+    gap: 12px !important;
+  }
+
+  .timetable-panel:not([hidden]) {
+    padding: 12px 10px 104px 10px !important;
+    gap: 12px !important;
+  }
+
+  .planner-task-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Compact Responsive Learning Forms (Practice, Review, Exercise Extraction) */
+  .learning-tools-panel .form-row {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  .learning-tools-panel .form-group,
+  .learning-tools-panel .form-group.flex-1,
+  .learning-tools-panel .form-group.flex-2 {
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  .learning-tools-panel .form-group .form-input,
+  .learning-tools-panel .form-group .form-select {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  .learning-tools-panel .form-group.form-actions {
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    flex-direction: column !important;
+    flex-wrap: wrap !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+    box-sizing: border-box !important;
+  }
+
+  .learning-tools-panel .form-group.form-actions button,
+  .learning-tools-panel .form-group.form-actions .btn {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box !important;
+    white-space: normal !important;
+    word-break: break-word !important;
+    text-align: center !important;
+    justify-content: center !important;
+  }
+}
+
+@media (max-width: 390px) {
+  .chat-header {
+    width: calc(100vw - 8px) !important;
+    padding: 4px 6px !important;
+    row-gap: 4px !important;
+    column-gap: 4px !important;
+  }
+
+  .chat-header #btn-account-trigger {
+    max-width: 82px !important;
+    font-size: 10.5px !important;
+    padding: 0 6px !important;
+  }
+
+  .chat-header .mode-button {
+    padding: 3px 2px !important;
+    font-size: 10px !important;
+    letter-spacing: -0.02em !important;
+  }
+}
