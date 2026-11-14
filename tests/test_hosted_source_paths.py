@@ -475,3 +475,21 @@ def test_resolve_safe_source_file_defaults_strictly_to_src_dir(tmp_path, monkeyp
     assert resolve_safe_source_file("legacy_only.md") is None
     assert resolve_safe_source_file(str(docs_dir / "doc_only.md")) is None
     assert resolve_safe_source_file(str(fixtures_dir / "fixture_only.md")) is None
+
+
+def test_sanitize_error_detail_linear_time_and_suffix_trimming():
+    """Error sanitization strips paths and trailing prepositions in linear time without ReDoS."""
+    import time
+    from app.response_projection import sanitize_error_detail
+
+    assert sanitize_error_detail("Không đọc được tệp tại: /Users/secret/file.pdf") == "Không đọc được tệp."
+    assert sanitize_error_detail("Error at C:\\private\\secret.pdf") == "Error."
+    assert sanitize_error_detail("Invalid format /Users/secret/file.pdf") == "Invalid format."
+    assert sanitize_error_detail("/Users/secret/only_path.pdf") != ""
+
+    payload = "Lỗi tại" + (" " * 50000) + "/Users/secret/file.pdf"
+    start = time.monotonic()
+    cleaned = sanitize_error_detail(payload)
+    elapsed = time.monotonic() - start
+    assert cleaned == "Lỗi."
+    assert elapsed < 0.25

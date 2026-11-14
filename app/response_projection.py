@@ -81,6 +81,20 @@ def project_public_response(value: Any) -> Any:
     return value
 
 
+def _trim_scrubbed_error_suffix(scrubbed: str) -> str:
+    """Trim trailing 'tại'/'at' prepositions and dangling colons/periods in linear time."""
+    cleaned = scrubbed.rstrip()
+    if cleaned.endswith((":", ".")):
+        cleaned = cleaned[:-1].rstrip()
+    for marker in ("tại", "at"):
+        if cleaned.endswith(marker):
+            prefix_end = len(cleaned) - len(marker)
+            if prefix_end > 0 and cleaned[prefix_end - 1].isspace():
+                cleaned = cleaned[:prefix_end].rstrip()
+                break
+    return cleaned.strip()
+
+
 def sanitize_error_detail(detail: Any, fallback: str = _DEFAULT_ERROR_MESSAGE) -> str:
     """Strip tracebacks and absolute host filesystem paths from runtime error messages."""
     if detail is None:
@@ -110,7 +124,7 @@ def sanitize_error_detail(detail: Any, fallback: str = _DEFAULT_ERROR_MESSAGE) -
     scrubbed = _POSIX_PATH_RE.sub("", scrubbed)
     if scrubbed == text:
         return text
-    cleaned = re.sub(r"(?:\s+(?:tại|at))?\s*[:.]?\s*$", "", scrubbed).strip()
+    cleaned = _trim_scrubbed_error_suffix(scrubbed)
     if not cleaned:
         return fallback
     if not cleaned.endswith((".", "!", "?")):
