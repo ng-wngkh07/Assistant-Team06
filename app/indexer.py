@@ -1891,7 +1891,7 @@ class KnowledgeIndexer:
                 except Exception as exc:
                     can_embed = False
                     resolved_embed_model = None
-                    vector_error = sanitize_error_detail(str(exc)) or "Không thể kết nối mô hình embedding"
+                    vector_error = "Không thể kết nối mô hình embedding"
             if can_embed and resolved_embed_model:
                 try:
                     with _acquire_inference_lock(timeout=gpu_timeout, cancel_event=cancel_event):
@@ -1901,7 +1901,7 @@ class KnowledgeIndexer:
                 except IndexingCancelledError:
                     raise
                 except Exception as exc:
-                    vector_error = sanitize_error_detail(str(exc)) or "Không thể tạo vector nhúng"
+                    vector_error = "Không thể tạo vector nhúng"
                     logger.warning(
                         "Vector generation skipped/deferred in update_page_chunks for '%s' p.%s: %s",
                         rel_filename,
