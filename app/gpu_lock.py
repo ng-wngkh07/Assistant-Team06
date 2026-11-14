@@ -30,7 +30,17 @@ from app.ollama_client import OllamaClient
 
 logger = logging.getLogger("gpu_lock")
 
-RUNTIME_DIR = DATA_DIR / "runtime"
+
+def resolve_gpu_runtime_dir() -> Path:
+    """Resolve the shared GPU coordination directory without relocating durable stores."""
+    raw = os.environ.get("STUDY_GPU_RUNTIME_DIR", "").strip()
+    if raw:
+        candidate = Path(raw).expanduser()
+        return candidate if candidate.is_absolute() else (BASE_DIR / candidate)
+    return DATA_DIR / "runtime"
+
+
+RUNTIME_DIR = resolve_gpu_runtime_dir()
 LOCK_FILE = RUNTIME_DIR / "gpu.lock"
 INTENT_LOCK_FILE = RUNTIME_DIR / "gpu_intent.lock"
 STATE_FILE = RUNTIME_DIR / "gpu_state.json"
@@ -113,6 +123,11 @@ class GPUBusyError(Exception):
     pass
 
 
+class IndexingCancelledError(RuntimeError):
+    """Raised when cooperative shutdown or cancellation aborts indexing or GPU lock waits."""
+    pass
+
+
 class GPULockDescriptors(int):
     """Wrapper around lock_fd that also carries intent_fd and fds tuple for subprocess inheritance."""
     fds: Tuple[int, ...]
@@ -135,11 +150,16 @@ class GPULockManager:
 
     def __init__(
         self,
-        lock_path: Path = LOCK_FILE,
-        state_path: Path = STATE_FILE,
+        lock_path: Optional[Path] = None,
+        state_path: Optional[Path] = None,
         intent_path: Optional[Path] = None,
         native_lock_path: Optional[Path] = None,
     ):
+        resolved_dir = resolve_gpu_runtime_dir()
+        if lock_path is None:
+            lock_path = LOCK_FILE if resolved_dir == RUNTIME_DIR else (resolved_dir / "gpu.lock")
+        if state_path is None:
+            state_path = STATE_FILE if resolved_dir == RUNTIME_DIR else (resolved_dir / "gpu_state.json")
         self.lock_path = lock_path
         self.state_path = state_path
         self.intent_path = intent_path or (lock_path.parent / (lock_path.stem + "_intent" + lock_path.suffix))
@@ -446,13 +466,20 @@ class GPULockManager:
                     pass
 
     @contextmanager
-    def acquire_for_inference(self, timeout: float = 30.0) -> Generator[Tuple[int, int], None, None]:
+    def acquire_for_inference(
+        self,
+        timeout: float = 30.0,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> Generator[Tuple[int, int], None, None]:
         """
         Acquire shared GPU lock against training AND exclusive lock for native worker admission.
         Re-checks state immediately after acquiring LOCK_SH to close any race window.
         Makes lock descriptors inheritable and yields (lock_fd, native_fd) for pass_fds in child subprocesses.
         Supports thread-local re-entrancy so nested callers in the same thread do not self-deadlock.
         """
+        if cancel_event is not None and cancel_event.is_set():
+            raise IndexingCancelledError("Đã hủy chờ tài nguyên GPU theo yêu cầu dừng.")
+
         status = self.get_status()
         if status.get("busy"):
             raise GPUBusyError(status.get("message", BUSY_MESSAGE))
@@ -471,7 +498,8 @@ class GPULockManager:
                 self._local.inference_depth -= 1
             return
 
-        _ensure_runtime_dir()
+        for path in (self.lock_path, self.state_path, self.intent_path, self.native_lock_path):
+            path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = None
         native_fd = None
         try:
@@ -481,6 +509,8 @@ class GPULockManager:
             acquired = False
 
             while time.time() - start_time < timeout:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise IndexingCancelledError("Đã hủy chờ tài nguyên GPU theo yêu cầu dừng.")
                 st = self.get_status()
                 if st.get("busy"):
                     raise GPUBusyError(st.get("message", BUSY_MESSAGE))
@@ -494,7 +524,10 @@ class GPULockManager:
                         fcntl.flock(lock_fd, fcntl.LOCK_UN)
                 except (BlockingIOError, OSError):
                     pass
-                time.sleep(0.05)
+                if cancel_event is not None:
+                    cancel_event.wait(timeout=0.05)
+                else:
+                    time.sleep(0.05)
 
             if not acquired:
                 st = self.get_status()

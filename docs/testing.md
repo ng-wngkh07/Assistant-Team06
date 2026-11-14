@@ -24,6 +24,8 @@ node --test (Get-ChildItem tests\*.test.cjs).FullName
 
 Python 3.12 on Windows and macOS is the CI dependency target. A local run on a different Python version is additional evidence, not a substitute for those CI jobs. Record skipped checks and their reasons. An environment check confirms routes and runtime availability, not answer quality.
 
+Operator recovery controller checks (`tests/test_backend_service_controller.py`), hosted UI error-copy tests (`tests/hosted_error_ui.test.cjs`), and 20-user scaling/HTTPS security tests (`tests/test_multiuser_scaling_and_security.py`) run strictly against disposable temporary directories, synthetic SQLite fixtures, and isolated ports without model execution or mutations to private seeds. POSIX supervisor lifecycle subtests in `tests/test_backend_service_controller.py` are skipped on `win32` while template/infrastructure posture checks run across platforms.
+
 Mocked native answer tests opt in to temporary context metadata and explicit model-client fakes; CI does not need private weights. In-process worker tests restore their socket and offline-environment guards. Native curation requires POSIX locks and is skipped on Windows, where training commands are unsupported. Calendar timezone data is supplied by the pinned `tzdata` package on hosts without a system IANA database.
 
 Optional adapter checks use `ui/requirements.txt` and `tests/test_streamlit_flow.py`; this separate client does not replace the primary web UI.
@@ -59,8 +61,24 @@ The [extended fixture guide](../tests/fixtures/EXTENDED_CORPUS.md) describes 12 
 
 Platform launch scripts provide single-action startup for development and manual verification:
 
-- **Windows (`Start Study Agent.bat`)**: Checks for `.venv\Scripts\python.exe`, then runs `scripts/dev.py serve --profile local --start-model-service --require-model --open-browser`. The Python launcher reads the configuration first, starts an installed local Ollama daemon if needed, and waits up to 15 seconds at the configured loopback endpoint before verifying the pack and model. It does not download models. If startup fails, the batch wrapper pauses to preserve error output.
+- **Windows (`Start Study Agent.bat`)**: Checks for `.venv\Scripts\python.exe`, then runs `scripts/dev.py serve --profile local --start-model-service --require-model --open-browser`. The Python launcher reads configured `AGENT_SRC_DIR` / `AGENT_DATA_DIR` first, starts an installed local Ollama daemon if needed, and waits up to 15 seconds at the configured loopback endpoint before checking the configured library and model without implicit pack seeding (explicit `--install-pack` requires both `KNOWLEDGE_PACK_PATH` and `KNOWLEDGE_PACK_SHA256`). It does not download models. If startup fails, the batch wrapper pauses to preserve error output.
 - **macOS (`Start Study Agent.command`)**: Checks for `.venv/bin/python` and launches `scripts/dev.py serve --profile local --require-model --open-browser`. It requires that any conflicting process holding port 8000 be stopped prior to launch; it will not arbitrarily terminate foreign processes.
+
+## Documentation and deployment checks
+
+For workflow/usage changes, apply the [same-change documentation rule](documentation.md#required-documentation-updates). Review README, CONTRIBUTING, both local platform guides and every affected business guide. Check relative file links and heading anchors, examples, endpoint names, environment loader behavior and the documentation index against source. A link checker cannot certify factual accuracy. Documentation-only edits need content/command review and diff checks; do not invent behavioral tests that repeat prose.
+
+Exercise account isolation, login/logout, permitted original access, upload persistence and disposable backup/restore through the actual configured service. For shared-source ingestion, verify the default-off behavior, automatic new-file indexing without a manual call, duplicate stability, modified/missing-source blocking, review preservation and explicit recovery. Native embedding checks must exercise the real worker's active shutdown/cancellation and prove no owned process survives. Unit tests and deliberate fault injection supplement these live gates and must be labelled accordingly.
+
+The optional `test_src_e2e_06_isolated_real_six_pdfs_reconcile` test in `tests/test_src_real_six_e2e.py` skips cleanly by default in portable runs without personal host paths. To exercise it locally against a private 6-PDF directory via isolated temporary copies across 1,411 physical pages without modifying originals, opt in explicitly:
+
+```sh
+STUDY_TEST_REAL_SIX_DIR=/path/to/six-pdfs pytest -c pytest.windows.ini -rs tests/test_src_real_six_e2e.py
+```
+
+Treat a skipped portable check as unverified for the real corpus rather than full corpus acceptance.
+
+Use separate disposable source/account/data paths. Check concurrent startup, foreign-port safety and recovery through any published launcher. Do not stop another process or replace a serving database to make a test pass. Distinguish code publication, UI/API behavior, actual native model quality, complete source/privacy review and deployed HTTPS acceptance.
 
 ## Real-model acceptance
 

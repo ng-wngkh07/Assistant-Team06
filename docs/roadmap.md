@@ -10,7 +10,7 @@ The goal is reliable question answering over a learner's permitted materials. Pr
 | P1 | Validate one course end to end | Independent source/page labels, answer and refusal scoring, error analysis and a learner pilot |
 | P1 | Improve retrieval and extraction where evaluation shows losses | Before/after comparison on the same holdout, including OCR and formula cases |
 | P1 | Make review workflows more useful | Source review states, usable feedback and retained evidence for corrections |
-| P2 | Support a shared deployment | Identity, document/session permissions, isolation, queues, monitoring and recovery tests |
+| P0 | Accept the single-host website while retaining local installation | Verify implemented accounts/persistence and source routes; complete measured capacity, quotas, recovery, durable long-job handling and final HTTPS/native acceptance |
 | P2 | Improve learning outcomes | Measured task completion time and learning results against a defined baseline |
 
 Core safety and integration checks are implemented incrementally. Passing them does not mark every row complete. Set course-level quality and latency targets after collecting a representative baseline; do not infer them from a demo or a small regression suite.

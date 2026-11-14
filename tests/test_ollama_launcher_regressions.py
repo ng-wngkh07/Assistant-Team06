@@ -252,7 +252,7 @@ def test_vector_rebuild_cleanliness_and_contract(tmp_path):
 
 
 def test_launcher_cold_daemon_and_untrusted_identity_rejection(tmp_path):
-    """A stopped Ollama daemon without --start-model-service raises actionable error; env var cannot bypass."""
+    """Default check stays no-install/no-model-init; explicit --install-pack rejects cold daemon & env bypass."""
     archive, exported = make_ollama_pack(tmp_path)
     checkout = tmp_path / "checkout_cold"
     checkout.mkdir()
@@ -270,6 +270,7 @@ class ColdOllamaClient:
     def check_health(self):
         return False
     def embedding_identity(self, model="bge-m3"):
+        print("CALLED_EMBEDDING_IDENTITY", file=sys.stderr)
         return None
 ollama_mod.OllamaClient = ColdOllamaClient
 sys.modules["app.ollama_client"] = ollama_mod
@@ -278,7 +279,7 @@ spec = importlib.util.spec_from_file_location("launcher", sys.argv[1])
 launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
 launcher.ROOT = Path(sys.argv[2])
-sys.argv = ["dev.py", "check", "--profile", "local"]
+sys.argv = ["dev.py", *sys.argv[3:]]
 sys.exit(launcher.main())
 '''
 
@@ -294,13 +295,29 @@ sys.exit(launcher.main())
     env["KNOWLEDGE_PACK_IDENTITY"] = OLLAMA_IDENTITY
 
     launcher_path = WORKSPACE_ROOT / "scripts/dev.py"
-    res = subprocess.run(
-        [sys.executable, "-c", child_code, str(launcher_path), str(checkout)],
+
+    # 1. Default check does NOT install packs or initialize pack embedding models;
+    # reports honest search-only and missing-library status.
+    res_default = subprocess.run(
+        [sys.executable, "-c", child_code, str(launcher_path), str(checkout), "check", "--profile", "local"],
         env=env, cwd=checkout, text=True, capture_output=True, timeout=30
     )
-    assert res.returncode == 1
-    assert "Could not verify Ollama embedding identity" in res.stderr
-    assert "Ensure Ollama is running" in res.stderr
+    assert res_default.returncode == 0, res_default.stderr
+    assert "CALLED_EMBEDDING_IDENTITY" not in res_default.stderr
+    assert "Search mode: OK" in res_default.stdout
+    assert "Mode: Full" not in res_default.stdout
+    assert not (checkout / "data/user-library").exists()
+    assert not (checkout / "data/knowledge-packs" / exported["sha256"] / "knowledge-pack.json").exists()
+
+    # 2. Explicit --install-pack fails closed against cold daemon and rejects untrusted env override.
+    res_install = subprocess.run(
+        [sys.executable, "-c", child_code, str(launcher_path), str(checkout), "check", "--profile", "local", "--install-pack"],
+        env=env, cwd=checkout, text=True, capture_output=True, timeout=30
+    )
+    assert res_install.returncode == 1
+    assert "Could not verify Ollama embedding identity" in res_install.stderr
+    assert "Ensure Ollama is running" in res_install.stderr
+    assert not (checkout / "data/knowledge-packs" / exported["sha256"] / "knowledge-pack.json").exists()
 
 
 def test_provider_envs_and_decoupled_coverage(tmp_path, monkeypatch):

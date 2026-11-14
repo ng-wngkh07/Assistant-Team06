@@ -13,7 +13,7 @@ Describe migration, rollback or remaining limitations, or write N/A.
 ## Checklist
 
 - [ ] Acceptance criteria are met and relevant checks pass.
-- [ ] Documentation and `CHANGELOG.md` reflect the change.
+- [ ] README.md, CONTRIBUTING.md, affected guides/examples and `CHANGELOG.md` reflect workflow/usage changes; explain specifically if either entry file is unaffected.
 - [ ] No secrets, private sources, databases, weights or internal work logs are included.
 - [ ] Source attribution and existing API behavior are preserved.
 - [ ] The full diff is ready for review.

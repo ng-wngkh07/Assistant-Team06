@@ -37,6 +37,10 @@ def weak_keyword_evidence(query: str, chunks: list[dict]) -> bool:
         c_ascii = unicodedata.normalize("NFD", c_norm).encode("ascii", "ignore").decode("utf-8").casefold()
         c_ascii_words = set(re.findall(r"\w+", c_ascii))
         found.update(terms.intersection(c_ascii_words))
+        for t in terms:
+            t_ascii = unicodedata.normalize("NFD", t).encode("ascii", "ignore").decode("utf-8").casefold()
+            if t_ascii and t_ascii in c_ascii_words:
+                found.add(t)
 
     return len(found) / len(terms) < 0.75
 
@@ -316,6 +320,9 @@ def build_suggested_actions(reason: str, scope: dict) -> List[Dict[str, str]]:
     if reason == "technical_error":
         actions.append({"action": "retry", "label": "Thử lại câu hỏi", "description": "Lỗi kỹ thuật có thể tạm thời; thử lại cùng phạm vi."})
         actions.append({"action": "select_other_document", "label": "Chọn tài liệu khác", "description": "Kiểm tra bằng một nguồn khác trong thư viện."})
+    elif reason in ("source_stale", "source_missing", "source_not_indexed", "source_identity_mismatch"):
+        actions.append({"action": "update_index", "label": "Cập nhật lại chỉ mục thư viện", "description": "Đồng bộ lại chỉ mục từ tệp gốc hiện có trong thư mục nguồn trước khi tra cứu."})
+        actions.append({"action": "select_other_document", "label": "Chọn tài liệu khác", "description": "Tra cứu từ một tài liệu còn khớp bản gốc trong thư viện."})
     elif reason in ("source_visual_content_unverified", "source_example_inconsistent"):
         actions.append({"action": "select_other_page", "label": "Chọn trang khác", "description": "Tìm và chọn một trang tài liệu khác."})
         actions.append({"action": "select_other_document", "label": "Chọn tài liệu khác", "description": "Tìm một nguồn khác để đối chiếu."})
@@ -401,6 +408,12 @@ def insufficient_evidence_message(reason: str, scope: dict) -> str:
     else:
         location = "kết quả tìm kiếm hiện tại"
 
+    if reason == "source_stale":
+        return f"Bản gốc của {location} đã thay đổi trên đĩa so với chỉ mục hiện tại nên kết quả cũ không còn được dùng làm căn cứ. Vui lòng cập nhật chỉ mục hoặc chọn tài liệu khác."
+    if reason == "source_missing":
+        return f"Không tìm thấy tệp gốc khớp với chỉ mục của {location} (tệp có thể đã bị xóa hoặc di chuyển) nên kết quả cũ không thể làm căn cứ. Vui lòng kiểm tra nguồn và cập nhật chỉ mục."
+    if reason in ("source_not_indexed", "source_identity_mismatch"):
+        return f"Tài liệu trong {location} chưa sẵn sàng hoặc không vượt qua kiểm tra toàn vẹn nguồn nên không thể làm căn cứ trả lời."
     if reason == "source_visual_content_unverified":
         return "Bản chữ của nguồn có thể thiếu hoặc thể hiện sai công thức hay hình minh họa, nên tôi chưa thể trả lời chắc chắn. Vui lòng xem trang tài liệu gốc để kiểm tra hoặc chọn nguồn khác."
     if reason == "source_example_inconsistent":

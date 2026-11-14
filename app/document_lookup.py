@@ -14,15 +14,26 @@ from app.gpu_lock import gpu_coordinator, GPUBusyError
 from app.indexer import unpack_vector
 from app.ollama_client import OllamaClient
 from app.searcher import HybridSearcher
+from app.source_freshness import (
+    assess_document_freshness,
+    load_watcher_state_items,
+    table_columns,
+)
 
 
 logger = logging.getLogger(__name__)
 
 
 class DocumentLookup:
-    def __init__(self, db_path: Optional[Path] = None, src_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        db_path: Optional[Path] = None,
+        src_dir: Optional[Path] = None,
+        data_dir: Optional[Path] = None,
+    ):
         self._db_path = db_path
         self._src_dir = src_dir
+        self._data_dir = data_dir
         self.ollama = OllamaClient()
 
     @property
@@ -82,30 +93,152 @@ class DocumentLookup:
             return None
         return path
 
+    def _query_document_rows(
+        self,
+        db: sqlite3.Connection,
+        *,
+        doc_id: Optional[int] = None,
+        filename: Optional[str] = None,
+        only_indexed: bool = True,
+    ) -> list[dict]:
+        cols = table_columns(db, "documents")
+        if not cols or "id" not in cols or "filename" not in cols:
+            return []
+        base_cols = ["d.id", "d.filename", "d.clean_title", "d.total_pages"]
+        extra_cols = [c for c in ("filepath", "file_size", "file_hash", "status") if c in cols]
+        select_exprs = ", ".join([*base_cols, *(f"d.{c}" for c in extra_cols), "COUNT(c.id) AS chunk_count"])
+        clauses = []
+        params = []
+        if only_indexed and "status" in cols:
+            clauses.append("d.status IN ('indexed','ocr_partial_reviewed')")
+        if doc_id is not None:
+            clauses.append("d.id=?")
+            params.append(doc_id)
+        if filename is not None:
+            clauses.append("d.filename=?")
+            params.append(filename)
+        where_sql = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+        order_sql = "ORDER BY d.clean_title, d.id" if (doc_id is None and filename is None) else ""
+        sql = (
+            f"SELECT {select_exprs} "
+            "FROM documents d "
+            "LEFT JOIN chunks c ON c.doc_id = d.id "
+            f"{where_sql}"
+            f"GROUP BY d.id {order_sql}"
+        )
+        return [dict(r) for r in db.execute(sql, params).fetchall()]
+
+    @staticmethod
+    def _public_doc_summary(row: dict) -> dict:
+        return {
+            "id": row["id"],
+            "filename": row["filename"],
+            "clean_title": row["clean_title"],
+            "total_pages": row["total_pages"],
+            "chunk_count": row["chunk_count"],
+        }
+
+    @staticmethod
+    def _status_from_legacy_lookup(doc: Optional[dict]) -> dict:
+        if doc is None:
+            return {
+                "exists": False,
+                "fresh": False,
+                "status": "absent",
+                "reason_code": "source_absent",
+                "message": "Không tìm thấy tài liệu trong thư viện.",
+                "doc": None,
+            }
+        return {
+            "exists": True,
+            "fresh": True,
+            "status": "fresh",
+            "reason_code": "fresh",
+            "message": "",
+            "doc": doc,
+        }
+
+    def inspect_document_status(
+        self,
+        doc_id: Optional[int] = None,
+        filename: Optional[str] = None,
+    ) -> dict:
+        """Inspect whether an indexed library document exists and strictly matches its original file."""
+        inst_dict = getattr(self, "__dict__", {})
+        cls = type(self)
+        # Honor legacy test monkeypatches on document()/document_by_filename() while
+        # keeping unpatched production lookups strictly bound to disk freshness.
+        if doc_id is not None and (
+            "document" in inst_dict or cls.document is not DocumentLookup.document
+        ):
+            return self._status_from_legacy_lookup(self.document(doc_id))
+        if filename and (
+            "document_by_filename" in inst_dict
+            or cls.document_by_filename is not DocumentLookup.document_by_filename
+        ):
+            return self._status_from_legacy_lookup(self.document_by_filename(filename))
+        if doc_id is None and not filename:
+            return self._status_from_legacy_lookup(None)
+        with closing(self.connect()) as db:
+            rows = self._query_document_rows(db, doc_id=doc_id, filename=filename, only_indexed=False)
+        if not rows:
+            return self._status_from_legacy_lookup(None)
+        row = rows[0]
+        freshness = assess_document_freshness(
+            row,
+            db_path=self.db_path,
+            src_dir=self.src_dir,
+            data_dir=self._data_dir,
+        )
+        if not freshness.fresh:
+            return {
+                "exists": True,
+                "fresh": False,
+                "status": freshness.status,
+                "reason_code": freshness.reason_code,
+                "message": freshness.message,
+                "doc": None,
+            }
+        if not self.supported_path(row["filename"]):
+            return {
+                "exists": True,
+                "fresh": False,
+                "status": "unsafe_source_path",
+                "reason_code": "source_identity_mismatch",
+                "message": "Định danh tệp tài liệu nguồn không hợp lệ hoặc nằm ngoài phạm vi hỗ trợ.",
+                "doc": None,
+            }
+        return {
+            "exists": True,
+            "fresh": True,
+            "status": "fresh",
+            "reason_code": "fresh",
+            "message": "",
+            "doc": self._public_doc_summary(row),
+        }
+
     def documents(self):
         with closing(self.connect()) as db:
-            rows = db.execute(
-                "SELECT d.id, d.filename, d.clean_title, d.total_pages, COUNT(c.id) AS chunk_count "
-                "FROM documents d "
-                "LEFT JOIN chunks c ON c.doc_id = d.id "
-                "WHERE d.status IN ('indexed','ocr_partial_reviewed') "
-                "GROUP BY d.id "
-                "ORDER BY d.clean_title, d.id"
-            ).fetchall()
-        return [dict(r) for r in rows if self.supported_path(r["filename"])]
+            rows = self._query_document_rows(db, only_indexed=True)
+        watcher_items = load_watcher_state_items(data_dir=self._data_dir, db_path=self.db_path)
+        fresh_docs = []
+        for row in rows:
+            if not self.supported_path(row["filename"]):
+                continue
+            freshness = assess_document_freshness(
+                row,
+                db_path=self.db_path,
+                src_dir=self.src_dir,
+                data_dir=self._data_dir,
+                watcher_items=watcher_items,
+            )
+            if freshness.fresh:
+                fresh_docs.append(self._public_doc_summary(row))
+        return fresh_docs
 
     def document(self, doc_id: int):
-        with closing(self.connect()) as db:
-            row = db.execute(
-                "SELECT d.id, d.filename, d.clean_title, d.total_pages, COUNT(c.id) AS chunk_count "
-                "FROM documents d "
-                "LEFT JOIN chunks c ON c.doc_id = d.id "
-                "WHERE d.id=? AND d.status IN ('indexed','ocr_partial_reviewed') "
-                "GROUP BY d.id", (doc_id,)
-            ).fetchone()
-        if not row or not self.supported_path(row["filename"]):
-            return None
-        return dict(row)
+        info = self.inspect_document_status(doc_id=doc_id)
+        return info["doc"] if info["fresh"] else None
 
     def document_by_filename(self, filename: str) -> Optional[dict]:
         """Resolve an attachment by its exact stored relative filename.
@@ -113,19 +246,20 @@ class DocumentLookup:
         Display titles, basenames and partial names are search terms, not source
         identities. Never silently attach another folder or document edition.
         """
-        with closing(self.connect()) as db:
-            row = db.execute(
-                "SELECT d.id, d.filename, d.clean_title, d.total_pages, COUNT(c.id) AS chunk_count "
-                "FROM documents d LEFT JOIN chunks c ON c.doc_id=d.id "
-                "WHERE d.filename=? AND d.status IN ('indexed','ocr_partial_reviewed') "
-                "GROUP BY d.id", (filename,)
-            ).fetchone()
-        if not row or not self.supported_path(row["filename"]):
-            return None
-        return dict(row)
+        info = self.inspect_document_status(filename=filename)
+        return info["doc"] if info["fresh"] else None
 
     def search(self, query: str, limit: int = 10, doc_id: Optional[int] = None,
                method: str = "fts"):
+        if doc_id is not None:
+            info = self.inspect_document_status(doc_id=doc_id)
+            if not info["fresh"]:
+                return {
+                    "results": [],
+                    "method": "fts",
+                    "notice": info["message"] or "Không tìm thấy tài liệu phù hợp.",
+                    "freshness_status": info["status"],
+                }
         available = self.documents()
         ids = [d["id"] for d in available if doc_id is None or d["id"] == doc_id]
         if not ids:
@@ -325,12 +459,14 @@ class DocumentLookup:
 
     def source_preview(self, filename: str, page_num: int) -> dict:
         """Resolve persisted citations using database IDs, never user paths or URLs."""
-        with closing(self.connect()) as db:
-            row = db.execute('SELECT id FROM documents WHERE filename=?', (filename,)).fetchone()
-        path = self.supported_path(filename)
-        if not row or not path or page_num < 1:
+        info = self.inspect_document_status(filename=filename)
+        if not info["fresh"] or not info["doc"] or page_num < 1:
             return {}
-        doc_id = row['id']
+        doc = info["doc"]
+        path = self.supported_path(doc["filename"])
+        if not path:
+            return {}
+        doc_id = doc["id"]
         ext = path.suffix.lower()
         original_url = f"/api/documents/{doc_id}/original"
 

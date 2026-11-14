@@ -22,6 +22,12 @@ QUESTION = {
     "source_chunk_id": 1,
     "evidence_quote": "Trong điều kiện A, hiện tượng X có thể xảy ra",
 }
+CAUSAL_PASSAGE = 'Trong điều kiện A, hiện tượng X có thể xảy ra vì quá trình Y.'
+CAUSAL_QUESTION = dict(QUESTION, question='Vì sao hiện tượng X có thể xảy ra trong điều kiện A?',
+                       evidence_quote=CAUSAL_PASSAGE,
+                       choices={'A': 'Vì quá trình Z.', 'B': 'Vì quá trình Y.',
+                                'C': 'Vì quá trình T.', 'D': 'Vì quá trình H.'},
+                       explanation='Theo nguồn, nguyên nhân là quá trình Y.')
 AUDIT_FIELDS = {
     "input_audit": "Đề bài nêu rõ điều kiện A và hiện tượng X.",
     "independent_solution": "Trong điều kiện A, hiện tượng X có thể xảy ra.",
@@ -31,6 +37,8 @@ AUDIT_FIELDS = {
 VALIDATION = {
     "checks": [{
         "index": 1,
+        "source_basis": QUESTION['evidence_quote'],
+        "matching_choices": "B",
         **AUDIT_FIELDS,
         "supported": True,
         "explanation_supported": True,
@@ -98,8 +106,8 @@ def make_service(responses=None, passages=None, db_path=None):
     return service, searcher, ollama
 
 
-@pytest.mark.parametrize('count,difficulty,compact', [(1, None, True), (2, None, False), (1, 'medium', False)])
-def test_native_single_review_uses_compact_base_without_adapter(monkeypatch, count, difficulty, compact):
+@pytest.mark.parametrize('count,difficulty,compact', [(1, None, True), (2, None, True), (3, None, True), (1, "medium", True), (4, None, False)])
+def test_native_small_review_uses_grounded_base_without_adapter(monkeypatch, count, difficulty, compact):
     import app.model_resolver as resolver
     import app.practice_adapter as profile
     from app.model_resolver import DEFAULT_CHAT_MODEL
@@ -107,11 +115,25 @@ def test_native_single_review_uses_compact_base_without_adapter(monkeypatch, cou
     prompts = []
     monkeypatch.setattr(resolver, 'is_mlx_model', lambda model: True)
     monkeypatch.setattr(profile, 'active_practice_adapter', lambda model: None)
-    monkeypatch.setattr(service, '_chat_complete', lambda prompt, *args, **kwargs: prompts.append(prompt) or '{"checks": []}')
+    def respond(prompt, *args, **kwargs):
+        prompts.append(prompt)
+        fields = kwargs['response_schema']['properties']['checks']['items']['properties']
+        if 'missing' in fields:
+            return json.dumps({'checks': [dict(index=i, asked='Fixture question', source_says='Fixture source',
+                                               missing=[], supported=True) for i in range(1, count + 1)]})
+        return '{"checks": []}'
+    monkeypatch.setattr(service, '_chat_complete', respond)
     questions = [dict(QUESTION, source={'chunk_id': 17}) for _ in range(count)]
     service._verify_questions(questions, {17: passage()}, DEFAULT_CHAT_MODEL, difficulty=difficulty)
     assert len(prompts) == 1
-    assert ('Mỗi trường audit tối đa 30 từ' in prompts[0]) is compact
+    assert ('source_basis: Copy a contiguous exact source substring' in prompts[-1]) is compact
+    if compact:
+        from app.practice_proof import native_grounded_review_prompt
+        for prompt in prompts:
+            items = json.JSONDecoder().raw_decode(prompt.split('Dữ liệu cần kiểm định:\n', 1)[1])[0]
+            assert prompt == native_grounded_review_prompt(items, difficulty=difficulty)
+            assert len(items) == count and [item['index'] for item in items] == list(range(1, count + 1))
+            assert all('proposed_answer' not in item and 'choices' in item and 'explanation' in item for item in items)
 
 
 def test_practice_rejects_page_with_unverified_visual_content_before_generation(monkeypatch):
@@ -126,6 +148,168 @@ def test_practice_rejects_page_with_unverified_visual_content_before_generation(
     with pytest.raises(PracticeGenerationError, match="trang tài liệu gốc"):
         service.generate(1, 4, count=1, source_chunk_id=17)
     assert not ollama.prompts
+
+
+@pytest.mark.parametrize('checks', [
+    [],
+    [{'index': True, 'asked': 'Question', 'source_says': 'Source', 'missing': [], 'supported': True}],
+    [{'index': 2, 'asked': 'Question', 'source_says': 'Source', 'missing': [], 'supported': True}],
+    [{'index': 1, 'asked': '', 'source_says': 'Source', 'missing': [], 'supported': True}],
+    [{'index': 1, 'asked': 'Question', 'source_says': 'Source', 'missing': ['Required input'], 'supported': True}],
+    [{'index': 1, 'asked': 'Question', 'source_says': 'Source', 'missing': [], 'supported': False}],
+    [{'index': 1, 'asked': 'Question', 'source_says': 'Source', 'missing': [], 'supported': True}] * 2,
+])
+def test_native_causal_review_rejects_incomplete_or_contradictory_checks(monkeypatch, checks):
+    import app.model_resolver as resolver
+    monkeypatch.setattr(resolver, 'is_mlx_model', lambda model: True)
+    service, _, _ = make_service()
+    calls = []
+    def respond(prompt, *args, **kwargs):
+        calls.append(prompt)
+        return json.dumps({'checks': checks})
+    monkeypatch.setattr(service, '_chat_complete', respond)
+    causal = dict(CAUSAL_QUESTION, source={'chunk_id': 17})
+    assert service._verify_questions([causal], {17: passage(text=CAUSAL_PASSAGE)}, 'test') == []
+    assert len(calls) == 1
+
+
+def test_native_reserve_remaps_index_after_batch_and_shares_deadline(monkeypatch):
+    import app.model_resolver as resolver
+    import app.practice as practice
+    monkeypatch.setattr(resolver, 'is_mlx_model', lambda model: True)
+    ticks = iter([100.0, 100.0, 100.0, 103.0, 103.0])
+    monkeypatch.setattr(practice.time, 'monotonic', lambda: next(ticks))
+    questions = [dict(QUESTION, question=f'Fixture question {i}?', source={'chunk_id': 17+i}) for i in range(4)]
+    service, _, _ = make_service()
+    calls = []
+    def respond(prompt, *args, **kwargs):
+        calls.append((prompt, kwargs))
+        items = json.loads(prompt.split('Dữ liệu cần kiểm định:\n')[1])
+        return json.dumps({'checks': [dict(VALIDATION['checks'][0], index=item['index'],
+            explanation_supported=item['question'] != questions[0]['question']) for item in items]})
+    monkeypatch.setattr(service, '_chat_complete', respond)
+    assert service._verify_questions(questions, {17+i: passage(17+i) for i in range(4)},
+                                     'test', timeout=20, stop_after=3) == questions[1:]
+    assert calls[0][1]['timeout'] == 20
+    assert calls[1][1]['timeout'] == 17
+    records = json.JSONDecoder().raw_decode(calls[1][0].split('Dữ liệu cần kiểm định:\n', 1)[1])[0]
+    assert len(records) == 1 and records[0]['index'] == 1 and records[0]['question'] == questions[3]['question']
+    assert 'proposed_answer' not in records[0]
+    assert calls[1][1]['response_schema']['properties']['checks']['minItems'] == 1
+
+
+def test_native_causal_admission_still_requires_full_four_audit_review(monkeypatch):
+    import app.model_resolver as resolver
+    monkeypatch.setattr(resolver, 'is_mlx_model', lambda model: True)
+    question = dict(CAUSAL_QUESTION, source={'chunk_id': 17})
+    service, _, _ = make_service()
+    calls = []
+    def respond(prompt, *args, **kwargs):
+        calls.append((prompt, kwargs))
+        return json.dumps(VALIDATION)
+    monkeypatch.setattr(service, '_chat_complete', respond)
+    assert service._verify_questions([question], {17: passage(text=CAUSAL_PASSAGE)}, 'test', timeout=20) == [question]
+    assert len(calls) == 1 and calls[0][1]['timeout'] == 20
+    full_schema = calls[0][1]['response_schema']['properties']['checks']['items']['properties']
+    assert set(AUDIT_FIELDS) <= full_schema.keys()
+    item = json.JSONDecoder().raw_decode(calls[0][0].split('Dữ liệu cần kiểm định:\n', 1)[1])[0][0]
+    assert item['source'] == CAUSAL_PASSAGE and 'proposed_answer' not in item
+
+
+
+def test_native_isolated_reviews_stop_at_shared_deadline_without_accepting_unreviewed(monkeypatch):
+    import app.model_resolver as resolver
+    import app.practice as practice
+    monkeypatch.setattr(resolver, 'is_mlx_model', lambda model: True)
+    ticks = iter([100.0, 100.0, 100.0, 121.0])
+    monkeypatch.setattr(practice.time, 'monotonic', lambda: next(ticks))
+    service, _, _ = make_service()
+    calls = []
+    monkeypatch.setattr(service, '_chat_complete', lambda *args, **kwargs: calls.append(kwargs) or json.dumps(VALIDATION))
+    first = dict(QUESTION, source={'chunk_id': 17})
+    second = dict(QUESTION, question='Second fixture question?', source={'chunk_id': 17})
+    assert service._verify_questions([first, second], {17: passage()}, 'test', timeout=20) == [first]
+    assert len(calls) == 1 and calls[0]['timeout'] == 20
+
+
+def test_native_statement_proposals_batch_bounded_reserve_without_repeated_startup(monkeypatch):
+    import app.model_resolver as resolver
+    import app.practice as practice
+    monkeypatch.setattr(resolver, 'is_mlx_model', lambda model: True)
+    sources = [passage(31 + i, text=f'The {name} is an object described by its explicitly stated property in this source.')
+               for i, name in enumerate(['widget', 'gadget', 'device', 'sensor'])]
+    service, _, _ = make_service()
+    calls = []
+    def respond(prompt, *args, **kwargs):
+        calls.append((prompt, kwargs))
+        props = kwargs['response_schema']['properties']['questions']
+        quotes = props['items']['allOf'][0]['anyOf']
+        return json.dumps({'questions': [dict(QUESTION, source_chunk_id=i+1,
+            evidence_quote=entry['properties']['evidence_quote']['enum'][0]) for i,entry in enumerate(quotes)]})
+    monkeypatch.setattr(service, '_chat_complete', respond)
+    result = json.loads(service._generate_text(sources, 3, 'test', timeout=20))
+    assert [q['source_chunk_id'] for q in result['questions']] == [31, 32, 33, 34]
+    assert len(calls) == 1 and calls[0][1]['timeout'] == 20
+    assert calls[0][0].count('<passage id=') == 4
+    assert calls[0][1]['response_schema']['properties']['questions']['maxItems'] == 4
+    assert calls[0][1]['response_schema']['properties']['questions']['minItems'] == 4
+    assert all(kwargs['response_schema']['properties']['questions']['items']['properties']['question']['pattern'] == '^Theo đoạn trích, '
+               for _, kwargs in calls)
+
+
+def test_native_reserve_reviews_every_accepted_question_and_stops_after_three(monkeypatch):
+    import app.model_resolver as resolver
+    monkeypatch.setattr(resolver, 'is_mlx_model', lambda model: True)
+    service, _, _ = make_service()
+    calls = []
+    def respond(prompt, *args, **kwargs):
+        calls.append((prompt, kwargs))
+        items = json.loads(prompt.split('Dữ liệu cần kiểm định:\n')[1])
+        return json.dumps({'checks': [dict(VALIDATION['checks'][0], index=item['index'],
+            explanation_supported=item['question'] != questions[0]['question']) for item in items]})
+    monkeypatch.setattr(service, '_chat_complete', respond)
+    questions = [dict(QUESTION, question=f'Fixture question number {i}?', source={'chunk_id': 17+i}) for i in range(4)]
+    sources = {17+i:passage(17+i) for i in range(4)}
+    result = service._verify_questions(questions, sources, 'test', timeout=180, stop_after=3)
+    assert result == questions[1:] and len(calls) == 2
+    assert all(set(AUDIT_FIELDS) <= kwargs['response_schema']['properties']['checks']['items']['properties'].keys() for _,kwargs in calls)
+    calls.clear()
+    result = service._verify_questions(questions, sources, 'test', timeout=180, stop_after=2)
+    assert result == questions[1:3] and len(calls) == 1
+
+
+@pytest.mark.parametrize('reject_first', [False, True])
+def test_three_question_request_can_use_reviewed_reserve_without_exposing_keys(monkeypatch, reject_first):
+    import app.model_resolver as resolver
+    monkeypatch.setattr(resolver, 'is_mlx_model', lambda model: True)
+    sources = [passage(17+i) for i in range(4)]
+    service, _, _ = make_service(passages=sources)
+    proposals = [dict(QUESTION, question=f'Fixture question number {i}?', source_chunk_id=17+i) for i in range(4)]
+    monkeypatch.setattr(service, '_generate_text', lambda *args, **kwargs: json.dumps({'questions': proposals}))
+    calls = []
+    def review(prompt, *args, **kwargs):
+        calls.append(kwargs)
+        items = json.loads(prompt.split('Dữ liệu cần kiểm định:\n')[1])
+        return json.dumps({'checks': [dict(VALIDATION['checks'][0], index=item['index'],
+            explanation_supported=not (reject_first and item['question'] == proposals[0]['question'])) for item in items]})
+    monkeypatch.setattr(service, '_chat_complete', review)
+    result = service.generate_from_passages(sources, count=3, model='test')
+    assert result['complete'] is True and result['count'] == result['requested_count'] == 3
+    expected = proposals[1:] if reject_first else proposals[:3]
+    assert [q['question'] for q in result['questions']] == [q['question'] for q in expected]
+    assert len(calls) == (2 if reject_first else 1)
+    assert all('answer' not in q and 'explanation' not in q for q in result['questions'])
+
+
+def test_remote_three_question_review_preserves_full_output_budget(monkeypatch):
+    import app.model_resolver as resolver
+    monkeypatch.setattr(resolver, 'is_mlx_model', lambda model: False)
+    service, _, _ = make_service()
+    calls = []
+    monkeypatch.setattr(service, '_chat_complete', lambda *args, **kwargs: calls.append((args, kwargs)) or '{"checks": []}')
+    service._verify_questions([dict(QUESTION, source={'chunk_id': 17}) for _ in range(3)], {17: passage()}, 'test')
+    assert len(calls) == 1 and calls[0][0][2] >= 1500
+    assert calls[0][1]['response_schema']['properties']['checks']['minItems'] == 3
 
 
 def test_practice_attaches_quality_to_direct_learning_passages(monkeypatch):
@@ -629,3 +813,32 @@ def test_practice_verification_accepts_honest_audit_for_constant_derivative():
     verified = service._verify_questions([derivative_question], {158: derivative_passage}, "test-model")
     assert len(verified) == 1
     assert verified[0]["answer"] == "B"
+
+
+@pytest.mark.parametrize('accept_review', [True, False])
+def test_generated_duplicate_distractors_are_repaired_before_source_review(monkeypatch, accept_review):
+    from app.math_choices import equivalent_choice_pair
+    quote = "For f(x) = 2x^2, the power rule gives f'(x) = 4x."
+    item = dict(QUESTION, question="For f(x) = 2x^2, what is its derivative?",
+                choices={'A': '2*2x', 'B': '4x', 'C': '4x+1', 'D': '2x'},
+                explanation="The cited power rule gives 4x.", answer='B',
+                source_chunk_id=17, evidence_quote=quote)
+    service, _, _ = make_service(passages=[passage(text=quote)])
+    monkeypatch.setattr(service, '_generate_text', lambda *args, **kwargs: json.dumps({'questions': [item]}))
+    def review(prompt, *args, **kwargs):
+        records = json.loads(prompt.split('Dữ liệu cần kiểm định:\n')[1])
+        record = records[0]
+        assert record['source'] == record['evidence_quote'] == quote
+        assert record['explanation'] == item['explanation']
+        assert record['choices']['B'] == '4x'
+        choices = [{'label': key, 'text': text} for key, text in record['choices'].items()]
+        assert equivalent_choice_pair(choices) is None
+        return json.dumps({'checks': [{**VALIDATION['checks'][0], 'explanation_supported': accept_review}]})
+    monkeypatch.setattr(service, '_chat_complete', review)
+    if accept_review:
+        result = service.generate(1, 4, count=1, model='test-model')
+        assert result['complete'] is True
+        assert result['questions'][0]['choices'][1]['text'] == '4x'
+    else:
+        with pytest.raises(PracticeGenerationError, match='đạt kiểm tra'):
+            service.generate(1, 4, count=1, model='test-model')

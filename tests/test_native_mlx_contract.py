@@ -359,3 +359,35 @@ def test_native_worker_requires_acceptance_path_and_exact_scope(tmp_path, monkey
         assert result['adapter_sha256'] == 'fixture'
         assert result['adapter_scope'] == 'single_question_practice_review'
     assert approvals == [False]
+
+
+@pytest.mark.parametrize('mode', ['accepted', 'legacy_acceptance', 'altered_prompt'])
+def test_native_grounded_adapter_cannot_cross_review_profiles(tmp_path, monkeypatch, mode):
+    from app import practice_adapter
+    from app.practice_proof import native_grounded_review_prompt, native_grounded_review_schema
+    module, calls, output = _worker(tmp_path, monkeypatch, max_tokens=1000, context=8192)
+    adapter = tmp_path / 'adapter'
+    adapter.mkdir()
+    (adapter / 'adapters.safetensors').write_bytes(b'synthetic fixture, never real model loaded')
+    value = json.loads(sys.stdin.getvalue())
+    item = dict(index=1, source='Synthetic source.', question='Synthetic question?', choices=dict(A='one', B='two', C='three', D='four'), proposed_answer='A', explanation='Synthetic explanation.', evidence_quote='Synthetic source.')
+    prompt = native_grounded_review_prompt(item)
+    if mode == 'altered_prompt':
+        altered = prompt.replace('Use ONLY source as evidence.', 'Use background knowledge as evidence.')
+        assert altered != prompt
+        prompt = altered
+    value.update(adapter_path=str(adapter), seed=42, temperature=0, messages=[{'role': 'system', 'content': practice_adapter.SYSTEM_PROMPT}, {'role': 'user', 'content': prompt}], response_schema=native_grounded_review_schema(1, None))
+    profile = practice_adapter.COMPACT_REVIEW_PROFILE if mode == 'legacy_acceptance' else practice_adapter.GROUNDED_REVIEW_PROFILE
+    accepted = dict(path=str(adapter), sha256='fixture', scope='single_question_practice_review', review_profile=profile)
+    monkeypatch.setattr(practice_adapter, 'load_practice_adapter', lambda *args, **kwargs: accepted)
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(value)))
+    monkeypatch.setitem(sys.modules, 'mlx_vlm.structured', types.SimpleNamespace(build_json_schema_logits_processor=lambda *args: object()))
+    if mode != 'accepted':
+        with pytest.raises(ValueError, match='nghiệm thu'): module.main()
+        assert calls['loads'] == []
+    else:
+        module.main()
+        result = json.loads(output.getvalue())
+        assert result['adapter_loaded'] is True
+        assert result['adapter_review_profile'] == practice_adapter.GROUNDED_REVIEW_PROFILE
+        assert calls['loads'][0][1]['adapter_path'] == str(adapter)

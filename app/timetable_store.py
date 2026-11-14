@@ -246,11 +246,11 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
 
 @contextmanager
-def get_connection() -> Generator[sqlite3.Connection, None, None]:
+def get_connection(db_path: Optional[Path | str] = None) -> Generator[sqlite3.Connection, None, None]:
     """Open a SQLite connection with guaranteed cleanup, versioned migrations, and transaction safety."""
-    db_path = get_db_path()
+    target_path = Path(db_path) if db_path is not None else get_db_path()
     conn = open_sqlite(
-        db_path,
+        target_path,
         timeout=10.0,
         wal=True,
         synchronous_full=True,
@@ -298,9 +298,9 @@ def validate_entry_values(
     return c, w, st, et
 
 
-def get_confirmed_entries() -> List[Dict[str, Any]]:
+def get_confirmed_entries(db_path: Optional[Path | str] = None) -> List[Dict[str, Any]]:
     """Retrieve all confirmed schedule entries sorted by weekday and start_time."""
-    with get_connection() as conn:
+    with get_connection(db_path=db_path) as conn:
         rows = conn.execute("""
             SELECT id, draft_id, course, weekday, start_time, end_time, room, created_at
             FROM timetable_confirmed

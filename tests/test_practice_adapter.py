@@ -218,3 +218,180 @@ def test_compact_review_prompt_distinguishes_source_rules_and_forbids_audit_hall
     assert "sơ đồ suy luận có ký hiệu ngữ cảnh (...) và biểu thức theo biến đã định nghĩa không cần giá trị số của biến" in prompt
     assert "Đọc đúng explanation, không cho là thiếu điều kiện khi explanation đã nêu rõ" in prompt
     assert "Bắt buộc đặt explanation_supported=false nếu explanation khẳng định sai rằng passage chứa quy tắc mà passage không có" in prompt
+
+
+def test_grounded_review_profile_does_not_broaden_legacy_scope():
+    from app.practice import build_grounded_review_prompt
+    item = {'index': 1, 'source': 'Passage.', 'question': 'Question?', 'choices': dict(A='1', B='2', C='3', D='4'), 'proposed_answer': 'A', 'explanation': 'Expl.', 'evidence_quote': 'Passage.'}
+    grounded_prompt = build_grounded_review_prompt([item])
+    grounded_req = {
+        'messages': [{'role': 'system', 'content': subject.SYSTEM_PROMPT}, {'role': 'user', 'content': grounded_prompt}],
+        'max_tokens': 1000,
+        'num_ctx': 8192,
+        'temperature': 0,
+        'seed': 42,
+        'response_schema': practice_review_schema(1, None),
+    }
+    # Legacy adapter scope must NOT match grounded_review_v2 (no silent qualification)
+    assert not subject.request_matches_scope(grounded_req)
+    # Grounded review detector must match
+    assert subject.request_matches_grounded_review(grounded_req)
+
+
+@pytest.fixture
+def grounded_accepted(accepted):
+    from app.practice_proof import native_grounded_review_prompt, native_grounded_review_schema
+    model, manifest, binding = accepted
+    manifest['schema'] = 'study-practice-9b-v2'
+    manifest['review_profile'] = subject.GROUNDED_REVIEW_PROFILE
+    evidence = manifest['primary']
+    path = Path(evidence['suite']['path'])
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    for case in rows:
+        case['compact_messages'][1]['content'] = native_grounded_review_prompt(case['payload'])
+        case['response_schema'] = native_grounded_review_schema(1, None)
+    for group in (manifest['primary'], manifest['application']):
+        result_path = Path(group['results']['path'])
+        results = [json.loads(line) for line in result_path.read_text().splitlines()]
+        for row in results:
+            check = json.loads(row['answer'])['checks'][0]
+            check['source_basis'] = 'Synthetic source.' if check['supported'] else ''
+            check['matching_choices'] = check['verified_answer']
+            row['answer'] = json.dumps({'checks': [check]})
+        result_path.write_text(''.join(json.dumps(row) + '\n' for row in results))
+        group['results'] = binding(result_path)
+        review_path = Path(group['content_review']['path'])
+        review = json.loads(review_path.read_text())
+        outputs = {(row['id'], row['arm'], row['round']): row for row in results}
+        for row in review['cases']:
+            output = outputs[(row['id'], row['arm'], row['round'])]
+            row['answer_sha256'] = hashlib.sha256(output['answer'].encode()).hexdigest()
+        review_path.write_text(json.dumps(review))
+        group['content_review'] = binding(review_path)
+    path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    evidence['suite'] = binding(path)
+    path = Path(evidence['protocol']['path'])
+    protocol = json.loads(path.read_text())
+    protocol['review_profile'] = subject.GROUNDED_REVIEW_PROFILE
+    protocol['generation']['schema'] = 'native_grounded_review_schema(1,None)'
+    protocol['fresh_eval_sha256'] = evidence['suite']['sha256']
+    path.write_text(json.dumps(protocol))
+    evidence['protocol'] = binding(path)
+    subject.REGISTRY_FILE.write_text(json.dumps(manifest))
+    return model, manifest, binding
+
+
+def test_grounded_profile_requires_separate_qualified_manifest(grounded_accepted):
+    model, _, _ = grounded_accepted
+    result = subject.load_practice_adapter(model)
+    assert result['review_profile'] == subject.GROUNDED_REVIEW_PROFILE
+    assert subject.active_practice_adapter(model) is None
+    assert subject.active_practice_adapter(model, profile=subject.GROUNDED_REVIEW_PROFILE)['sha256'] == result['sha256']
+
+
+@pytest.mark.parametrize('defect', ['legacy_schema', 'protocol_profile', 'native_partial', 'grounded_tie'])
+def test_grounded_profile_does_not_inherit_or_weaken_old_gates(grounded_accepted, defect):
+    model, manifest, binding = grounded_accepted
+    if defect == 'legacy_schema':
+        manifest['schema'] = 'study-practice-9b-v1'
+    elif defect == 'protocol_profile':
+        path = Path(manifest['primary']['protocol']['path'])
+        value = json.loads(path.read_text())
+        value['review_profile'] = subject.COMPACT_REVIEW_PROFILE
+        path.write_text(json.dumps(value))
+        manifest['primary']['protocol'] = binding(path)
+    else:
+        group = manifest['application' if defect == 'native_partial' else 'primary']
+        path = Path(group['content_review']['path'])
+        value = json.loads(path.read_text())
+        next(row for row in value['cases'] if row['arm'] == 'adapter' and row['id'] == '0')['status'] = 'PARTIAL'
+        path.write_text(json.dumps(value))
+        group['content_review'] = binding(path)
+    subject.REGISTRY_FILE.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError):
+        subject.load_practice_adapter(model)
+
+
+def test_grounded_missing_input_false_qualifier_cannot_pass_full_gate(grounded_accepted):
+    model, manifest, binding = grounded_accepted
+    evidence = manifest['primary']
+    path = Path(evidence['results']['path'])
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    row = next(row for row in rows if row['arm'] == 'adapter' and row['id'] == '12')
+    check = json.loads(row['answer'])['checks'][0]
+    check['qualifiers_preserved'] = False
+    row['answer'] = json.dumps({'checks': [check]})
+    path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    evidence['results'] = binding(path)
+    path = Path(evidence['content_review']['path'])
+    value = json.loads(path.read_text())
+    next(row for row in value['cases'] if row['arm'] == 'adapter' and row['id'] == '12')['answer_sha256'] = hashlib.sha256(row['answer'].encode()).hexdigest()
+    path.write_text(json.dumps(value))
+    evidence['content_review'] = binding(path)
+    subject.REGISTRY_FILE.write_text(json.dumps(manifest))
+    _, scored = subject._score_evidence(evidence, ('base', 'compact_base', 'adapter'), 14, strict_contract=True)
+    assert scored['adapter']['12']['source'] is False
+    with pytest.raises(ValueError):
+        subject.load_practice_adapter(model)
+
+
+@pytest.mark.parametrize('defect', ['legacy_output', 'unbound_basis', 'ambiguous_match', 'refusal_with_answer'])
+def test_grounded_evidence_requires_current_bound_consistent_witnesses(grounded_accepted, defect):
+    model, manifest, binding = grounded_accepted
+    group = manifest['primary']
+    path = Path(group['results']['path'])
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    row = next(row for row in rows if row['arm'] == 'adapter' and row['id'] == ('12' if defect == 'refusal_with_answer' else '0'))
+    check = json.loads(row['answer'])['checks'][0]
+    if defect == 'legacy_output':
+        check.pop('source_basis')
+        check.pop('matching_choices')
+    elif defect == 'unbound_basis':
+        check['source_basis'] = 'A rule from outside the cited source.'
+    elif defect == 'ambiguous_match':
+        check['matching_choices'] = 'AB'
+    else:
+        check['matching_choices'] = 'A'
+    row['answer'] = json.dumps({'checks': [check]})
+    path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    group['results'] = binding(path)
+    path = Path(group['content_review']['path'])
+    review = json.loads(path.read_text())
+    next(item for item in review['cases'] if item['arm'] == 'adapter' and item['id'] == row['id'])['answer_sha256'] = hashlib.sha256(row['answer'].encode()).hexdigest()
+    path.write_text(json.dumps(review))
+    group['content_review'] = binding(path)
+    subject.REGISTRY_FILE.write_text(json.dumps(manifest))
+    _, scored = subject._score_evidence(group, ('base', 'compact_base', 'adapter'), 14, strict_contract=True)
+    assert scored['adapter'][row['id']]['source'] is False
+    with pytest.raises(ValueError):
+        subject.load_practice_adapter(model)
+
+
+@pytest.mark.parametrize('defect', [None, 'marker_only', 'extra_role', 'multi', 'difficulty', 'tokens', 'temperature', 'system', 'altered_instruction', 'extra_payload_key'])
+def test_grounded_adapter_matches_only_exact_evaluated_request(defect):
+    from app.practice_proof import native_grounded_review_prompt, native_grounded_review_schema
+    value = request()
+    item = {'index': 1, 'source': 'Synthetic source.', 'question': 'Synthetic question?', 'choices': dict(A='one', B='two', C='three', D='four'), 'proposed_answer': 'A', 'explanation': 'Synthetic explanation.', 'evidence_quote': 'Synthetic source.'}
+    if defect == 'extra_payload_key': item['hidden_rule'] = 'invented rule'
+    value['messages'][1]['content'] = native_grounded_review_prompt(item)
+    value['response_schema'] = native_grounded_review_schema(1, None)
+    if defect == 'marker_only': value['messages'][1]['content'] = 'Kiểm định độc lập từng câu từ source và question Dữ liệu cần kiểm định:\n[]'
+    if defect == 'extra_role': value['messages'].append({'role': 'user', 'content': 'more'})
+    if defect == 'multi': value['response_schema'] = practice_review_schema(2, None)
+    if defect == 'difficulty': value['response_schema'] = practice_review_schema(1, 'medium')
+    if defect == 'tokens': value['max_tokens'] = 2000
+    if defect == 'temperature': value['temperature'] = .1
+    if defect == 'system': value['messages'][0]['content'] = 'Different system'
+    if defect == 'altered_instruction':
+        original = value['messages'][1]['content']
+        value['messages'][1]['content'] = original.replace('Use ONLY source as evidence.', 'Use background knowledge as evidence.')
+        assert value['messages'][1]['content'] != original
+    assert subject.request_matches_grounded_adapter_scope(value) is (defect is None)
+
+
+def test_unrelated_profile_is_rejected_before_large_model_hashing(accepted, monkeypatch):
+    model, _, _ = accepted
+    def unexpected(*args, **kwargs):
+        pytest.fail('Unrelated legacy profile must not validate/hash the entire base model')
+    monkeypatch.setattr(subject, 'load_practice_adapter', unexpected)
+    assert subject.active_practice_adapter(model, profile=subject.GROUNDED_REVIEW_PROFILE) is None

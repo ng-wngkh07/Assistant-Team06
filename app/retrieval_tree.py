@@ -545,7 +545,13 @@ class TreeSearcher:
     validates the source binding fingerprint on each request.
     """
 
-    def __init__(self, db_path: Union[Path, str], source_db: Optional[Union[Path, str]] = None):
+    def __init__(
+        self,
+        db_path: Union[Path, str],
+        source_db: Optional[Union[Path, str]] = None,
+        src_dir: Optional[Path] = None,
+        data_dir: Optional[Path] = None,
+    ):
         self.db_path = Path(db_path).resolve()
         if not self.db_path.is_file():
             raise FileNotFoundError(f"Tree shadow database not found: {self.db_path}")
@@ -558,7 +564,7 @@ class TreeSearcher:
             self.is_sidecar = False
 
         # Initialize underlying hybrid searcher pointing to the source database
-        self._searcher = HybridSearcher(self.source_db_path)
+        self._searcher = HybridSearcher(self.source_db_path, src_dir=src_dir, data_dir=data_dir)
         self._lock = threading.Lock()
         self._local = threading.local()
         self.last_topic_routing: Optional[Dict[str, Any]] = None
@@ -767,6 +773,12 @@ class TreeSearcher:
 
             candidate_chunk_ids = [r["chunk_id"] for r in cand_rows]
             candidate_doc_ids = sorted(list({r["doc_id"] for r in cand_rows}))
+            if candidate_doc_ids:
+                with closing(self._searcher.get_connection()) as src_conn:
+                    fresh_set = self._searcher._fresh_doc_id_set(src_conn, candidate_doc_ids)
+                if fresh_set is not None:
+                    candidate_chunk_ids = [r["chunk_id"] for r in cand_rows if r["doc_id"] in fresh_set]
+                    candidate_doc_ids = sorted(list({r["doc_id"] for r in cand_rows if r["doc_id"] in fresh_set}))
 
         matched_topics_list = list(matched_children) if matched_children else list(matched_parents)
 

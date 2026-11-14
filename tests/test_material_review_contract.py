@@ -81,7 +81,10 @@ class Batches:
         return json.dumps({'flashcards':[{'answer':a,'evidence_id':'Q1'} for a in answers]})
 
 
-def test_five_questions_seven_cards_keep_requested_counts_and_hard_review():
+def test_five_questions_seven_cards_keep_requested_counts_and_hard_review(monkeypatch):
+    import app.token_counter as token_counter
+    monkeypatch.setattr(token_counter, 'get_exact_token_counter',
+                        lambda: lambda messages: sum(len(m['content']) for m in messages))
     client=Batches()
     record=StudyMaterialManager(client).generate_materials_from_pages(
         source(),quiz_count=5,flashcard_count=7,difficulty='hard',model='test-remote')
@@ -119,7 +122,10 @@ def test_originals_require_exact_path_or_unique_basename(tmp_path):
     assert resolve_safe_source_file('.env',[tmp_path]) is None
 
 
-def test_short_evidence_quote_cannot_hide_source_exceptions_from_reviewer():
+def test_short_evidence_quote_cannot_hide_source_exceptions_from_reviewer(monkeypatch):
+    import app.token_counter as token_counter
+    monkeypatch.setattr(token_counter, 'get_exact_token_counter',
+                        lambda: lambda messages: sum(len(m['content']) for m in messages))
     quote = RULES.split('. ', 1)[0] + '.'
     proposal = {**question(1), 'page_num': 1, 'evidence_quote': quote}
     proposal.pop('evidence_id')
@@ -136,7 +142,8 @@ def test_short_evidence_quote_cannot_hide_source_exceptions_from_reviewer():
             self.reviewed = True
             prompt = kwargs['messages'][0]['content']
             records = json.JSONDecoder().raw_decode(prompt.split('Dữ liệu cần kiểm định:\n', 1)[1])[0]
-            assert records[0]['source'] == RULES
+            assert records[0]['source'] == quote
+            assert records[0]['context'] == RULES
             assert records[0]['evidence_quote'] == quote
             return json.dumps({'checks': [{'index': 1,
                 'input_audit': 'Đề bài nêu rõ trạng thái cửa, khóa, nhiệt độ và ghi đè.',

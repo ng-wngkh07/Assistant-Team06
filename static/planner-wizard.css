@@ -23,9 +23,3 @@ body > .app-container .main-content { height: 100%; min-height: 0; }
 @media (max-width: 600px) { body > .app-container .main-content { height: 100%; } .feature-guide { margin: .3rem .7rem; max-height: 28vh; overflow: auto; } }
 
 .planner-wizard-footer p:empty { display: none; }
-@media (max-width: 600px) {
-    .chat-header { padding: 8px !important; gap: 6px; }
-    .chat-header .header-left { position: static !important; flex: 0 0 auto; }
-    .chat-header .mode-switch { max-width: 100% !important; min-width: 0; flex: 1; }
-    .chat-header .mode-button { flex: 1; min-width: 0; white-space: normal !important; padding: 6px 4px !important; font-size: 11px !important; }
-}

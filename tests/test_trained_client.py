@@ -99,3 +99,53 @@ def test_accepted_practice_adapter_is_selected_only_for_exact_request(monkeypatc
     assert requests[-1]['seed'] == 42
     client.chat_complete([{'role': 'user', 'content': 'Ordinary QA'}], max_tokens=1000, temperature=0)
     assert requests[-1]['adapter_path'] is None
+
+
+def test_grounded_review_v2_profile_defaults_to_base_and_sets_diagnostics(monkeypatch):
+    from app import practice_adapter
+    from app.practice import build_grounded_review_prompt, practice_review_schema
+    monkeypatch.setattr(trained_client.TrainedModelClient, 'available', lambda *args: True)
+    monkeypatch.setattr(trained_client, 'get_model_context_capacity', lambda *args: 8192)
+    monkeypatch.setattr(trained_client.gpu_coordinator, 'acquire_for_inference', lambda: nullcontext())
+    accepted = {'path': '/synthetic/accepted', 'sha256': 'fixture', 'scope': 'single_question_practice_review'}
+    monkeypatch.setattr(practice_adapter, 'active_practice_adapter', lambda path, **kwargs: accepted)
+    requests = []
+    def run(*args, **kwargs):
+        requests.append(json.loads(kwargs['input']))
+        return SimpleNamespace(returncode=0, stderr='', stdout=json.dumps({'answer': '{}', 'done_reason': 'stop'}))
+    monkeypatch.setattr(trained_client.subprocess, 'run', run)
+    item = dict(index=1, source='Synthetic source.', question='Synthetic question?', choices=dict(A='one', B='two', C='three', D='four'), proposed_answer='A', explanation='Synthetic explanation.', evidence_quote='Synthetic source.')
+    grounded_prompt = build_grounded_review_prompt([item])
+    client = trained_client.TrainedModelClient()
+    client.chat_complete([{'role': 'user', 'content': grounded_prompt}], system_prompt=practice_adapter.SYSTEM_PROMPT, max_tokens=1000, temperature=0, response_schema=practice_review_schema(1, None))
+    # Must NOT load legacy adapter: defaults to base model!
+    assert requests[-1]['adapter_path'] is None
+    assert requests[-1]['seed'] == 42
+    # Diagnostics must report grounded_review_v2
+    assert client.last_diagnostics.get('practice_review_profile') == 'grounded_review_v2'
+
+
+@pytest.mark.parametrize('qualified', [True, False])
+def test_grounded_review_loads_only_separately_accepted_profile(monkeypatch, qualified):
+    from app import practice_adapter
+    from app.practice_proof import native_grounded_review_prompt, native_grounded_review_schema
+    monkeypatch.setattr(trained_client.TrainedModelClient, 'available', lambda *args: True)
+    monkeypatch.setattr(trained_client, 'get_model_context_capacity', lambda *args: 8192)
+    monkeypatch.setattr(trained_client.gpu_coordinator, 'acquire_for_inference', lambda: nullcontext())
+    accepted = dict(path='/synthetic/grounded', sha256='fixture', scope='single_question_practice_review', review_profile=practice_adapter.GROUNDED_REVIEW_PROFILE)
+    profiles = []
+    def active(path, profile):
+        profiles.append(profile)
+        return accepted if qualified else None
+    monkeypatch.setattr(practice_adapter, 'active_practice_adapter', active)
+    requests = []
+    def run(*args, **kwargs):
+        requests.append(json.loads(kwargs['input']))
+        return SimpleNamespace(returncode=0, stderr='', stdout=json.dumps({'answer': '{}', 'done_reason': 'stop'}))
+    monkeypatch.setattr(trained_client.subprocess, 'run', run)
+    item = dict(index=1, source='Synthetic source.', question='Synthetic question?', choices=dict(A='one', B='two', C='three', D='four'), proposed_answer='A', explanation='Synthetic explanation.', evidence_quote='Synthetic source.')
+    client = trained_client.TrainedModelClient()
+    client.chat_complete([{'role': 'user', 'content': native_grounded_review_prompt(item)}], system_prompt=practice_adapter.SYSTEM_PROMPT, max_tokens=1000, temperature=0, response_schema=native_grounded_review_schema(1, None))
+    assert profiles == [practice_adapter.GROUNDED_REVIEW_PROFILE]
+    assert requests[-1]['adapter_path'] == (accepted['path'] if qualified else None)
+    assert requests[-1]['seed'] == 42

@@ -276,7 +276,8 @@ def test_verification_prompt_demands_independent_solving_and_arithmetic_check():
     service._verify_questions([internal_q], {1: make_passage()}, "test-model", difficulty="hard")
     assert len(ollama.prompts) == 1
     prompt = ollama.prompts[0]
-    assert "tự giải độc lập" in prompt
-    assert "mọi bước tính toán, chỉ số trung gian" in prompt
-    assert "dữ kiện giả định nêu rõ trong đề là đầu vào bài tập hợp lệ" in prompt
+    assert "Kiểm định độc lập từng câu từ source và question" in prompt
+    assert "tự giải từ source" in prompt
+    assert "mọi bước tính, chỉ số và kết luận" in prompt
+    assert "Dữ kiện bài tập trong question dùng được để tính" in prompt
     assert "hard là yêu cầu từ hai bước lập luận phụ thuộc nhau" in prompt

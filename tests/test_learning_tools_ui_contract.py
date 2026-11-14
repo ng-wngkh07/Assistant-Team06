@@ -21,9 +21,9 @@ def test_three_learning_tabs_share_one_tools_navigation_item():
         assert f'id="btn-tool-tab-{tab}"' in tools
         assert f'id="tool-tab-{tab}"' in tools
     assert re.findall(r'role="tab"[^>]*>(.*?)</button>', tools) == [
-        "Tạo câu hỏi",
+        "Tạo bài tập",
         'Ôn tập <span id="review-count">0</span>',
-        "Trích xuất bài tập mẫu",
+        "Trích xuất bài tập",
     ]
     assert 'id="tool-tab-practice"' in tools
     assert 'id="tool-tab-review"' in tools

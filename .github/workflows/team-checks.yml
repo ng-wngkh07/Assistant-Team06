@@ -42,7 +42,29 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test tests/chat_input_ui.test.cjs tests/document_lookup_ui.test.cjs tests/practice_ui.test.cjs tests/chat_lifecycle_ui_yc206.test.cjs tests/material_grounding_ui_yc228.test.cjs
+      - name: Run Node UI tests (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          test_files=(tests/*.test.cjs)
+          if [ "${#test_files[@]}" -eq 0 ]; then
+            echo "No Node UI test files matched tests/*.test.cjs" >&2
+            exit 1
+          fi
+          printf '%s\n' "${test_files[@]}"
+          node --test "${test_files[@]}"
+      - name: Run Node UI tests (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $testFiles = @(Get-ChildItem -Path tests -Filter *.test.cjs -File | Sort-Object Name | ForEach-Object { "tests/$($_.Name)" })
+          if ($testFiles.Count -eq 0) {
+            throw 'No Node UI test files matched tests/*.test.cjs'
+          }
+          Write-Output $testFiles
+          node --test $testFiles
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   ui_adapter:
     runs-on: ubuntu-latest
     steps:

@@ -44,6 +44,7 @@ def native_context_metadata(tmp_path, monkeypatch):
 def isolated_default_gpu_coordinator(tmp_path, monkeypatch):
     from app.gpu_lock import gpu_coordinator
     from app.dialogue import dialogue_gate
+    from app.request_admission import rate_limiter
     runtime = tmp_path/'app-gpu-coordination'
     runtime.mkdir()
     monkeypatch.setattr(gpu_coordinator, 'lock_path', runtime/'gpu.lock')
@@ -51,6 +52,9 @@ def isolated_default_gpu_coordinator(tmp_path, monkeypatch):
     monkeypatch.setattr(gpu_coordinator, 'intent_path', runtime/'gpu_intent.lock')
     monkeypatch.setattr(gpu_coordinator, 'native_lock_path', runtime/'native_worker.lock')
     monkeypatch.setattr(dialogue_gate, 'path', runtime/'dialogue.lock')
+    rate_limiter.reset()
+    yield
+    rate_limiter.reset()
 
 
 @pytest.fixture

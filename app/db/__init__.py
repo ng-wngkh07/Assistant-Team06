@@ -11,6 +11,7 @@ from app.db.migrations import Migration, MigrationManager
 from app.db.schemas import (
     auth_migrations,
     history_migrations,
+    practice_migrations,
     timetable_migrations,
     uploads_migrations,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "MigrationManager",
     "auth_migrations",
     "history_migrations",
+    "practice_migrations",
     "timetable_migrations",
     "uploads_migrations",
 ]

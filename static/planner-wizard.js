@@ -4,8 +4,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!root || !progress) return;
     const definitions = [
         ["Lịch học", "Tải ảnh, kiểm tra kết quả và lưu lịch. Bạn cũng có thể nhập tay hoặc tiếp tục khi chưa có lịch học.", ["timetable-step-ocr"]],
-        ["Thời gian cá nhân", "Thêm giờ đi làm, học thêm, thể thao và nghỉ ngơi. Thêm khung giờ có thể học để bộ xếp lịch biết khi nào bạn rảnh.", ["planner-step-routines"]],
-        ["Kế hoạch & deadline", "Xem lịch hiện tại, thêm deadline có ngày cụ thể và thời gian cần làm. Tạo đề xuất, chỉnh sửa rồi xác nhận các buổi tự học.", ["planner-step-master-schedule", "planner-step-tasks", "planner-step-generate"]],
+        ["Thời gian cá nhân", "Thêm giờ đi làm, thể thao và nghỉ ngơi. Bộ xếp lịch tự tính giờ rảnh ban ngày, hoặc bạn có thể thêm khung giờ ưu tiên tự học (tùy chọn).", ["planner-step-routines"]],
+        ["Kế hoạch & deadline", "Xem lịch hiện tại, thêm deadline có ngày cụ thể và thời gian cần làm. Tạo đề xuất, chỉnh sửa rồi xác nhận các buổi tự học.", ["planner-step-master-schedule", "planner-step-tasks", "planner-weekly-lessons-card", "planner-step-generate"]],
         ["Xuất lịch", "Chọn khoảng ngày và thời gian nhắc. Nhập tệp .ics vào ứng dụng lịch, kiểm tra deadline và cho phép thông báo.", []]
     ];
     let current = 0;

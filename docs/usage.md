@@ -1,5 +1,9 @@
 # Using Study Agent
 
+## Choose your workspace
+
+For the hosted application, open the operator-provided HTTPS URL and sign in. Processing and private storage run on that backend host; a remote upload leaves the browser. On a local installation, the backend and its files are on your computer. Local loopback guest use remains available unless the operator requires accounts. Account history/planner/uploads are separate from the guest workspace and other accounts; guest data is not automatically imported.
+
 ## Ask and verify
 
 Choose an indexed document or attach a supported file, then ask a specific question. Open the cited passage and check that it supports the answer, including formulas, units and conditions. Follow-up questions can reuse the session's source. Start a new conversation to clear the current draft and source selection.
@@ -20,11 +24,21 @@ An ambiguous question may require clarification. A narrow page scope or missing 
 
 Upload PDF, DOCX, PPTX, TXT, Markdown, PNG, JPEG or WebP, up to 20 MB. Images can be attached and viewed even when they contain no readable text. Generating source-based study material still requires readable extracted content; names, dimensions and image metadata are not document evidence.
 
-Choose instant use to generate a study set without permanent indexing, or explicitly choose to save the document to the library. Library uploads persist in the configured source directory and are indexed into the local knowledge base using cross-process allocation locks and atomic exclusive creation. Application bundles use `data/user-library/src/`; source checkouts default to `src/` unless configured otherwise. The library area displays the actual directory. It is created automatically and retained after restart. Upload through the application to save and process a new document; copying a file directly into the folder does not automatically make it searchable. Keep a backup of the complete personal library when moving or updating the application.
+Upload behavior depends on the active workspace:
 
-Same-name files with different bytes receive a content-hash suffix to avoid overwriting existing documents and to preserve separate document and chunk scopes. Identical repeat uploads remain idempotent, returning existing document identities and counts without re-extraction or chunk replacement, preserving human-reviewed chunks, vector embeddings and provenance. The interface consumes canonical filenames for active attachment scoping, QA, previews, original file downloads, and generation. Instant uploads retain original binary downloads in memory without writing originals or indexing durable chunks. They do not survive a server restart. API callers of `/api/materials/upload` and `/api/materials/inspect-library` must send `persist_to_src: true` to request library storage; omitted, null and false values select instant use. Local uploads never modify the publisher cache or authorize public redistribution, central collection or model training.
+| Workspace | Original and retrieval storage | Shared library effect |
+| --- | --- | --- |
+| Signed-in account | Private durable originals and extracted records under `STUDY_ACCOUNTS_DIR/<account_id>/`; retained after restart | No shared `src/` insertion; leave the shared-library save option off |
+| Local guest, instant use | Temporary in-memory material/original cache | No durable shared indexing; lost after backend restart |
+| Local guest, explicitly save to library | Configured shared source directory and knowledge database | Extracts/indexes the new permitted file and retains it |
 
-Uploaded sources must produce searchable chunks to be admitted; empty extractions fail closed with a safe HTTP 503 and clean only the newly allocated source attempt without removing existing files. Resource contention during admission preserves retryable busy responses (GPU busy HTTP 503 and dialogue busy HTTP 409 with Retry-After headers) rather than masking them. Persisting sources for local RAG retrieval and question answering is strictly distinct from parameter training; uploaded materials receive no automatic training approval. Offline embeddings preserve real keyword-retrievable chunks and report status from actual stored rows rather than claiming vectors are ready from backend health. Automatic OCR on scanned uploads preserves review uncertainty rather than claiming human verification.
+For guest library persistence, `/api/materials/upload` and `/api/materials/inspect-library` require `persist_to_src: true`; omitted/null/false selects instant use. For accounts, requesting shared persistence is rejected with guidance, while private originals/records are persisted by the account service independently. The private material ID scopes later retrieval and original downloads. Uploading is not permission to publish or train on that content.
+
+Guest saved-library uploads use exclusive file creation and collision handling; distinct same-named content receives a hash suffix. Identical repeats retain the existing document/chunk identities and reviewed data. Both hosted and local `--profile local` checkouts resolve the configured shared `src` (`AGENT_SRC_DIR`, default `src`) and `data` (`AGENT_DATA_DIR`, default `data`) without auto-seeding `data/user-library/`. Account uploads always use private storage (`STUDY_ACCOUNTS_DIR/<account_id>/`). The actual directory appears only where appropriate for local operators; hosted users do not need host filesystem access.
+
+Files copied directly into the shared directory are detected only when the operator enables [automatic ingestion](configuration.md#automatic-source-ingestion). Otherwise synchronize manually. Modified/missing indexed originals require reviewed re-indexing; stale sources are excluded rather than silently serving mismatched evidence. Account uploads are processed through their private upload flow, not this watcher. Keep consistent backups when moving/updating the backend.
+
+Uploaded sources must produce searchable chunks to be admitted; empty extractions fail closed with a safe HTTP 503 and clean only the newly allocated source attempt without removing existing files. Resource contention during admission preserves retryable busy responses (GPU busy HTTP 503 and dialogue busy HTTP 409 with Retry-After headers) rather than masking them. When study-set generation fails after valid extraction because the local model runtime or configuration is unavailable or busy, `/api/materials/upload` retains the extracted document and raw file and returns an explicit HTTP 503 (or HTTP 409 when dialogue-busy) without exposing host paths or tracebacks, and `/api/materials/generate-from-library` similarly returns a bounded HTTP 503 while invalid or empty inputs remain HTTP 422. Public and authenticated JSON/SSE API responses omit internal host filesystem paths (such as `review_path` and `filepath`) while keeping document titles, page numbers, grounding quotes and API viewer/download links intact. Persisting sources for local RAG retrieval and question answering is strictly distinct from parameter training; uploaded materials receive no automatic training approval. Offline embeddings preserve real keyword-retrievable chunks and report status from actual stored rows rather than claiming vectors are ready from backend health. Automatic OCR on scanned uploads preserves review uncertainty rather than claiming human verification.
 
 Model quizzes ask you to choose a missing phrase in the original source passage. Flashcards hide a source phrase for free recall. Both retain the surrounding context and conditions, in the source language. Quizzes include the answer and exact source evidence after you respond. If model output cannot be used, the application labels the extractive fallback. Fallback material is basic reading practice, not a reviewed assessment.
 
@@ -42,7 +56,7 @@ Follow four screens: confirm the class timetable, add personal commitments and s
 
 ## History and privacy
 
-Completed conversations are stored locally. Repeating a completed request with its request identifier can return the saved result without another generation. Do not use personal conversations or uploaded documents as model-training data without a separate, explicit process.
+Completed conversations are stored on the backend: in the signed-in account store or the local guest history database. Repeating a completed request with its request identifier can return the saved result without another generation. Do not use personal conversations or uploaded documents as model-training data without a separate, explicit process.
 
 ## Conversation context
 

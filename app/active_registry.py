@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
 from app.config import DATA_DIR, MLX_MODEL_DIR, TRAINING_MODEL_REPO, TRAINING_MODEL_REVISION
+from app.model_resolver import resolve_base_weight_files
 
 logger = logging.getLogger(__name__)
 
@@ -150,12 +151,20 @@ def validate_adapter_acceptance(
             if bound_p_hash != protocol_sha256:
                 raise ValueError("Mã băm protocol trong semantic acceptance không khớp với protocol binding trong bằng chứng.")
 
-    # 3. Verify base model weights on disk
+    # 3. Verify base model weights on disk (single file or sharded index)
     base_dir = Path(base_model_dir) if base_model_dir is not None else MLX_MODEL_DIR
-    base_weights = base_dir / "model.safetensors"
-    if not base_weights.exists():
-        raise FileNotFoundError(f"Không tìm thấy trọng số base model tại {base_dir}")
-    base_sha256 = get_file_sha256_cached(base_weights)
+    try:
+        is_sharded, weight_files = resolve_base_weight_files(base_dir)
+    except ValueError as exc:
+        raise ValueError(f"Chỉ mục trọng số base model không hợp lệ tại {base_dir}: {exc}") from exc
+    if not is_sharded:
+        base_sha256 = get_file_sha256_cached(weight_files[0])
+    else:
+        shard_hashes = {
+            wf.relative_to(base_dir).as_posix(): get_file_sha256_cached(wf)
+            for wf in weight_files
+        }
+        base_sha256 = hashlib.sha256(json.dumps(shard_hashes, sort_keys=True).encode("utf-8")).hexdigest()
     if semantic_acceptance.get("base_sha256") and semantic_acceptance["base_sha256"] != base_sha256:
         raise ValueError("Mã băm base model không khớp với bằng chứng nghiệm thu.")
 

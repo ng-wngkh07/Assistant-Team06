@@ -20,8 +20,8 @@ data/
 │   │   │   └── <sha256>.bin      [0o600: Raw document payloads, deduplicated]
 │   │   └── timetable_images/     [0o700: Timetable input photos]
 │   └── ...
-├── knowledge_base.db             [READ-ONLY: Shared source-bound library; permission/quality gates apply]
-└── retrieval_tree.db             [READ-ONLY: Retrieval sidecar; shared embeddings remain separate]
+├── knowledge_base.db             [Read-only for account operations; serialized operator ingestion may update]
+└── retrieval_tree.db             [Read-only for queries; explicit derived-index maintenance is separate]
 ```
 
 ### Core Invariants:
@@ -34,7 +34,7 @@ data/
 
 ## 2. SQLite Configuration & Concurrency Controls
 
-Every database connection across the persistence layer is opened via `app.db.open_sqlite` with the following mandatory PRAGMAs:
+The account persistence layer uses `app.db.open_sqlite` with the following settings. Shared-library read-only readers and other subsystems have their own connection modes; this is not a claim about every SQLite connection in the repository:
 
 * **`PRAGMA journal_mode = WAL;`**
   Write-Ahead Logging permits concurrent, non-blocking readers alongside an active writer.
@@ -54,7 +54,7 @@ Connections should be deterministically managed using `app.db.managed_sqlite(pat
 
 ## 3. Versioned Schema Migrations (`app/db/`)
 
-All databases manage their lifecycle via atomic, versioned migrations managed by `app.db.MigrationManager`.
+The account authentication, upload, history, practice and timetable schemas use versioned migrations managed by `app.db.MigrationManager`. Shared corpus and sidecar schemas have separate lifecycle contracts; this is not a claim that every repository database uses this manager.
 
 ### Tracking Schema:
 ```sql
@@ -148,7 +148,7 @@ python scripts/migrate_legacy_data.py --source-dir data/ --accounts-dir data/acc
 
 ## 7. Operational Scope & Service Boundaries
 
-The persistence architecture is strictly single-host bounded. It does not claim general public production readiness, guaranteed power-loss recovery across separate files, multi-host replication, or verified global snapshot consistency across disparate SQLite databases. Shared course materials, vector sidecars, model weights, and original source documents remain strictly immutable. Database migrations, backups, and data imports operate exclusively within local, host-isolated accounts storage.
+The persistence architecture is strictly single-host bounded. It does not claim general public production readiness, guaranteed power-loss recovery across separate files, multi-host replication, or verified global snapshot consistency across disparate SQLite databases. Account operations do not modify shared course materials, vector sidecars, model weights or shared originals. Authorized operator indexing, source-watcher admission and derived-index maintenance are separate serialized operations and may update the shared index; they must preserve source/review gates. Database migrations, backups, and data imports operate exclusively within local, host-isolated accounts storage.
 
 ## Acceptance boundary
 

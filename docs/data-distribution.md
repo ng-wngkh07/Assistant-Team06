@@ -1,6 +1,10 @@
-# Distributing documents safely
+# Source access and optional document distribution
 
 A complete local source library and a public release are different inventories. Account for every original in the local library, then publish only the exact files whose redistribution rights and privacy review are complete. Keep unresolved files visible in the private inventory with a reason. Do not report a public library as complete while required files remain pending.
+
+## Hosted and local delivery
+
+Hosted web is the main delivery target, with supported local installation retained. For the hosted service, keep approved originals and precomputed retrieval on private server storage and verify authenticated citation access. Public Git carries code/guides and safe fixtures; it does not require publishing the real library, vectors or working database. The public-pack steps below apply only when distributing a separately reviewed archive is explicitly intended. Hosted access and public redistribution have different audiences and permission decisions, while both retain source-quality and privacy gates.
 
 ## Review each original
 
@@ -39,7 +43,7 @@ Vectors, extracted text, titles and original files all belong within the same pu
 4. Install the exact archive into an isolated fresh checkout. Verify original downloads and citations, model answers, study tools, restart persistence and the absence of an embedding rebuild. Test each advertised runtime with its matching pack protocol.
 5. Publish the reviewed asset with its digest, required notices and supported application revision. Keep permission evidence and private inventory details out of public issues, PR bodies, logs and screenshots.
 
-Anyone receiving a public pack can read and copy its contents. If a source is restricted to named recipients, use a separate access-controlled distribution channel after permission is established. The current Study Agent API has no per-user authorization and must not be exposed as a private multi-user document service. Encryption can protect a transfer, but does not stop an authorized recipient from copying a decrypted document.
+Anyone receiving a public pack can read and copy its contents. If a source is restricted to named recipients, use a separate access-controlled distribution channel after permission is established. Study Agent now authenticates non-loopback API access and isolates account uploads/history/planners. The shared library remains common to its authorized audience; this is not arbitrary per-document entitlement management or proof of public-service readiness. Verify the intended audience, source routes, account boundaries and [hosted acceptance](web-deployment.md) before exposure. Encryption can protect a transfer, but does not stop an authorized recipient from copying a decrypted document.
 
 Approval of an entire source directory applies to a frozen inventory of exact files and hashes. It does not approve files added later, including documents uploaded by recipients. Include every approved original and its compatible retrieval data in the release asset; the original directory does not need to enter Git history. An application bundle initializes a separate personal working library from that public seed. Never rebuild a public release by copying a recipient's working library or exporting all newly discovered files without a new publication review.
 

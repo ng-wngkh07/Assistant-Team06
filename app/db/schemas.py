@@ -347,11 +347,72 @@ def _migrate_timetable_v2(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_timetable_drafts_image_hash ON timetable_drafts(image_hash)")
 
 
+def _migrate_timetable_v3(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS weekly_lessons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            course TEXT NOT NULL,
+            lesson_title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'upcoming',
+            classified_topic TEXT NOT NULL,
+            domain_label TEXT DEFAULT '',
+            question_count INTEGER NOT NULL DEFAULT 4,
+            worksheet_id TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS planner_worksheets (
+            worksheet_id TEXT PRIMARY KEY,
+            course TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            lesson_title TEXT DEFAULT '',
+            questions_json TEXT NOT NULL,
+            pdf_blob BLOB NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    session_cols = {row[1] for row in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
+    if "classified_topic" not in session_cols and "id" in session_cols:
+        conn.execute("ALTER TABLE study_sessions ADD COLUMN classified_topic TEXT DEFAULT ''")
+    if "worksheet_id" not in session_cols and "id" in session_cols:
+        conn.execute("ALTER TABLE study_sessions ADD COLUMN worksheet_id TEXT DEFAULT ''")
+
+
+def _migrate_timetable_v4(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(planner_worksheets)").fetchall()}
+    if "generator_version" not in cols and "worksheet_id" in cols:
+        conn.execute("ALTER TABLE planner_worksheets ADD COLUMN generator_version TEXT DEFAULT ''")
+
+
+def _migrate_timetable_v5(conn: sqlite3.Connection) -> None:
+    session_cols = {row[1] for row in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
+    if "practice_id" not in session_cols and "id" in session_cols:
+        conn.execute("ALTER TABLE study_sessions ADD COLUMN practice_id TEXT DEFAULT ''")
+    if "exercise_status" not in session_cols and "id" in session_cols:
+        conn.execute("ALTER TABLE study_sessions ADD COLUMN exercise_status TEXT DEFAULT ''")
+    lesson_cols = {row[1] for row in conn.execute("PRAGMA table_info(weekly_lessons)").fetchall()}
+    if "practice_id" not in lesson_cols and "id" in lesson_cols:
+        conn.execute("ALTER TABLE weekly_lessons ADD COLUMN practice_id TEXT DEFAULT ''")
+    if "exercise_status" not in lesson_cols and "id" in lesson_cols:
+        conn.execute("ALTER TABLE weekly_lessons ADD COLUMN exercise_status TEXT DEFAULT ''")
+
+
+def _migrate_timetable_v6(conn: sqlite3.Connection) -> None:
+    session_cols = {row[1] for row in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
+    if "weekly_lesson_id" not in session_cols and "id" in session_cols:
+        conn.execute("ALTER TABLE study_sessions ADD COLUMN weekly_lesson_id INTEGER")
+
+
 timetable_migrations = MigrationManager(
     store_name="timetable",
     migrations=[
         Migration(1, "001_baseline_timetable", _migrate_timetable_v1),
         Migration(2, "002_timetable_indexes", _migrate_timetable_v2),
+        Migration(3, "003_weekly_lessons_and_worksheets", _migrate_timetable_v3),
+        Migration(4, "004_worksheet_generator_version", _migrate_timetable_v4),
+        Migration(5, "005_session_practice_linkage", _migrate_timetable_v5),
+        Migration(6, "006_session_weekly_lesson_linkage", _migrate_timetable_v6),
     ],
 )
 
@@ -434,11 +495,85 @@ def _migrate_uploads_v2(conn: sqlite3.Connection) -> None:
     _rebuild_files_nullable(conn)
 
 
+def _migrate_uploads_v4(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS private_chunks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            material_id TEXT NOT NULL,
+            file_hash TEXT,
+            filename TEXT NOT NULL,
+            clean_title TEXT NOT NULL,
+            page_num INTEGER NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_private_chunks_mat ON private_chunks(material_id, page_num)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_private_chunks_hash ON private_chunks(file_hash)")
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS private_chunks_fts USING fts5(
+            text,
+            content='private_chunks',
+            content_rowid='id'
+        )
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS trg_private_chunks_ai AFTER INSERT ON private_chunks BEGIN
+            INSERT INTO private_chunks_fts(rowid, text) VALUES (new.id, new.text);
+        END;
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS trg_private_chunks_ad AFTER DELETE ON private_chunks BEGIN
+            INSERT INTO private_chunks_fts(private_chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+        END;
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS trg_private_chunks_au AFTER UPDATE ON private_chunks BEGIN
+            INSERT INTO private_chunks_fts(private_chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+            INSERT INTO private_chunks_fts(rowid, text) VALUES (new.id, new.text);
+        END;
+    """)
+
+
 uploads_migrations = MigrationManager(
     store_name="uploads",
     migrations=[
         Migration(1, "001_baseline_uploads", _migrate_uploads_v1),
         Migration(2, "002_content_addressed_files", _migrate_uploads_v2),
         Migration(3, "003_nullable_content_rebuild", _rebuild_files_nullable),
+        Migration(4, "004_private_chunks_fts", _migrate_uploads_v4),
+    ],
+)
+
+
+# ============================================================================
+# Practice Store (practice.db) Migrations
+# ============================================================================
+
+def _migrate_practice_v1(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS practice_sessions (
+            practice_id TEXT PRIMARY KEY,
+            created_at REAL NOT NULL,
+            count INTEGER NOT NULL,
+            requested_count INTEGER NOT NULL,
+            difficulty TEXT NOT NULL,
+            purpose TEXT NOT NULL DEFAULT 'practice',
+            topic TEXT DEFAULT '',
+            warning TEXT,
+            processing_level TEXT NOT NULL DEFAULT 'careful',
+            questions_json TEXT NOT NULL,
+            answers_json TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_practice_sessions_created ON practice_sessions(created_at DESC)")
+
+
+practice_migrations = MigrationManager(
+    store_name="practice",
+    migrations=[
+        Migration(1, "001_baseline_practice", _migrate_practice_v1),
     ],
 )

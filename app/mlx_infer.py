@@ -58,11 +58,17 @@ def main():
     adapter_acceptance = None
     validation_started = time.perf_counter()
     if adapter_path is not None:
-        from app.practice_adapter import load_practice_adapter, request_matches_scope
+        from app.practice_adapter import (
+            load_practice_adapter, request_matches_scope,
+            request_matches_grounded_adapter_scope, GROUNDED_REVIEW_PROFILE,
+        )
         adapter_acceptance = load_practice_adapter(model_path, require_active=False)
+        matches_scope = (request_matches_grounded_adapter_scope
+                         if adapter_acceptance and adapter_acceptance.get('review_profile') == GROUNDED_REVIEW_PROFILE
+                         else request_matches_scope)
         if (adapter_acceptance is None or
                 adapter_path.resolve() != Path(adapter_acceptance["path"]).resolve() or
-                not request_matches_scope(request)):
+                not matches_scope(request)):
             raise ValueError("Adapter chưa được nghiệm thu cho loại yêu cầu này.")
         request["seed"] = 42
     adapter_validation_seconds = time.perf_counter() - validation_started
@@ -148,11 +154,18 @@ def main():
             build_json_schema_logits_processor(tokenizer, response_schema)
         )
 
+    cache_started = time.perf_counter()
+    from app.mlx_review_cache import prepare_review_cache
+    generation_prompt, cache_kwargs, cache_diagnostics = prepare_review_cache(
+        model, active_tok, prompt, request, adapter_acceptance)
+    gen_kwargs.update(cache_kwargs)
+    cache_seconds = time.perf_counter() - cache_started
+
     generation_started = time.perf_counter()
     first_token_seconds = None
     last_chunk = None
     parts = []
-    for chunk in stream_generate(model, active_tok, prompt=prompt, **gen_kwargs):
+    for chunk in stream_generate(model, active_tok, prompt=generation_prompt, **gen_kwargs):
         if first_token_seconds is None:
             first_token_seconds = time.perf_counter() - generation_started
         parts.append(chunk.text)
@@ -182,9 +195,12 @@ def main():
         "adapter_path": str(adapter_path) if has_adapter else None,
         "adapter_sha256": adapter_acceptance["sha256"] if adapter_acceptance else None,
         "adapter_scope": adapter_acceptance["scope"] if adapter_acceptance else None,
+        "adapter_review_profile": adapter_acceptance.get("review_profile") if adapter_acceptance else None,
+        "review_cache": cache_diagnostics,
         "generation_profile": {"presence_penalty": presence_penalty, "presence_context_size": 2048},
         "timings": {
             "load_seconds": load_seconds,
+            "review_cache_seconds": cache_seconds,
             "adapter_validation_seconds": adapter_validation_seconds,
             "first_token_seconds": first_token_seconds,
             "generation_seconds": generation_seconds,

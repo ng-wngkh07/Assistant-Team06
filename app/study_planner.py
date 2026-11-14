@@ -11,10 +11,27 @@ and never enters the RAG index or training datasets.
 import json
 import re
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from app import timetable_store
+
+VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+
+
+def _ceil_vn_now(now: Optional[datetime] = None) -> datetime:
+    """Return current Asia/Ho_Chi_Minh time rounded up to the next minute boundary.
+
+    Uses the module-global ``datetime.now(VN_TZ)`` when ``now`` is omitted so
+    tests overriding ``study_planner.datetime`` or passing ``now`` stay deterministic.
+    """
+    current = now if now is not None else datetime.now(VN_TZ)
+    local_now = current.replace(tzinfo=VN_TZ) if current.tzinfo is None else current.astimezone(VN_TZ)
+    if local_now.second or local_now.microsecond:
+        return local_now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    return local_now.replace(second=0, microsecond=0)
 
 TIME_REGEX = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 DATE_REGEX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -191,8 +208,8 @@ def _enrich_routine(row_dict: Dict[str, Any]) -> Dict[str, Any]:
     return d
 
 
-def get_routines() -> List[Dict[str, Any]]:
-    with timetable_store.get_connection() as conn:
+def get_routines(db_path: Optional[Path | str] = None) -> List[Dict[str, Any]]:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         rows = conn.execute("""
             SELECT id, weekday, start_time, end_time, title, activity_type, flexibility, is_recurring, note, created_at
             FROM personal_routines
@@ -208,12 +225,13 @@ def check_routine_conflicts_with_classes(
     flexibility: str,
     title: str,
     exclude_routine_id: Optional[int] = None,
+    db_path: Optional[Path | str] = None,
 ) -> List[str]:
     """Return warning messages if a non-study-window routine overlaps with confirmed classes or fixed routines."""
     if flexibility == "study_window":
         return []
     warnings: List[str] = []
-    classes = timetable_store.get_confirmed_entries()
+    classes = timetable_store.get_confirmed_entries(db_path=db_path)
     day_label = WEEKDAY_NAMES.get(weekday, f"Thứ {weekday}")
     for c in classes:
         if c["weekday"] == weekday and start_time < c["end_time"] and c["start_time"] < end_time:
@@ -221,7 +239,7 @@ def check_routine_conflicts_with_classes(
                 f"Hoạt động '{title}' ({day_label} {start_time}-{end_time}) trùng giờ với lớp học cố định "
                 f"'{c['course']}' ({c['start_time']}-{c['end_time']})."
             )
-    routines = get_routines()
+    routines = get_routines(db_path=db_path)
     for r in routines:
         if exclude_routine_id is not None and r["id"] == exclude_routine_id:
             continue
@@ -235,10 +253,10 @@ def check_routine_conflicts_with_classes(
     return warnings
 
 
-def add_routine(data: Dict[str, Any]) -> Dict[str, Any]:
+def add_routine(data: Dict[str, Any], db_path: Optional[Path | str] = None) -> Dict[str, Any]:
     clean = validate_routine_data(data)
-    now = datetime.now(timezone.utc).isoformat()
-    with timetable_store.get_connection() as conn:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with timetable_store.get_connection(db_path=db_path) as conn:
         cursor = conn.execute(
             """
             INSERT INTO personal_routines
@@ -254,22 +272,28 @@ def add_routine(data: Dict[str, Any]) -> Dict[str, Any]:
                 clean["flexibility"],
                 clean["is_recurring"],
                 clean["note"],
-                now,
+                now_iso,
             ),
         )
         new_id = cursor.lastrowid or 0
     warnings = check_routine_conflicts_with_classes(
-        clean["weekday"], clean["start_time"], clean["end_time"], clean["flexibility"], clean["title"], new_id
+        clean["weekday"],
+        clean["start_time"],
+        clean["end_time"],
+        clean["flexibility"],
+        clean["title"],
+        new_id,
+        db_path=db_path,
     )
     return {
-        "routine": _enrich_routine({**clean, "id": new_id, "created_at": now}),
+        "routine": _enrich_routine({**clean, "id": new_id, "created_at": now_iso}),
         "warnings": warnings,
     }
 
 
-def update_routine(routine_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+def update_routine(routine_id: int, data: Dict[str, Any], db_path: Optional[Path | str] = None) -> Dict[str, Any]:
     clean = validate_routine_data(data)
-    with timetable_store.get_connection() as conn:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         row = conn.execute("SELECT id, created_at FROM personal_routines WHERE id = ?", (routine_id,)).fetchone()
         if not row:
             raise KeyError("Không tìm thấy mục lịch sinh hoạt")
@@ -293,7 +317,13 @@ def update_routine(routine_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
         )
         created_at = row["created_at"]
     warnings = check_routine_conflicts_with_classes(
-        clean["weekday"], clean["start_time"], clean["end_time"], clean["flexibility"], clean["title"], routine_id
+        clean["weekday"],
+        clean["start_time"],
+        clean["end_time"],
+        clean["flexibility"],
+        clean["title"],
+        routine_id,
+        db_path=db_path,
     )
     return {
         "routine": _enrich_routine({**clean, "id": routine_id, "created_at": created_at}),
@@ -301,17 +331,17 @@ def update_routine(routine_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def delete_routine(routine_id: int) -> bool:
-    with timetable_store.get_connection() as conn:
+def delete_routine(routine_id: int, db_path: Optional[Path | str] = None) -> bool:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         cursor = conn.execute("DELETE FROM personal_routines WHERE id = ?", (routine_id,))
         return cursor.rowcount > 0
 
 
-def replace_routines_bulk(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+def replace_routines_bulk(items: List[Dict[str, Any]], db_path: Optional[Path | str] = None) -> Dict[str, Any]:
     """Replace the entire weekly personal routine table with validated rows."""
     validated = [validate_routine_data(item) for item in items]
-    now = datetime.now(timezone.utc).isoformat()
-    with timetable_store.get_connection() as conn:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with timetable_store.get_connection(db_path=db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute("DELETE FROM personal_routines")
         for clean in validated:
@@ -330,14 +360,14 @@ def replace_routines_bulk(items: List[Dict[str, Any]]) -> Dict[str, Any]:
                     clean["flexibility"],
                     clean["is_recurring"],
                     clean["note"],
-                    now,
+                    now_iso,
                 ),
             )
-    saved = get_routines()
+    saved = get_routines(db_path=db_path)
     all_warnings: List[str] = []
     for r in saved:
         w = check_routine_conflicts_with_classes(
-            r["weekday"], r["start_time"], r["end_time"], r["flexibility"], r["title"], r["id"]
+            r["weekday"], r["start_time"], r["end_time"], r["flexibility"], r["title"], r["id"], db_path=db_path
         )
         for msg in w:
             if msg not in all_warnings:
@@ -362,8 +392,8 @@ DEFAULT_PREFERENCES: Dict[str, Any] = {
 }
 
 
-def get_preferences() -> Dict[str, Any]:
-    with timetable_store.get_connection() as conn:
+def get_preferences(db_path: Optional[Path | str] = None) -> Dict[str, Any]:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         row = conn.execute("SELECT * FROM study_preferences WHERE id = 1").fetchone()
         if not row:
             return dict(DEFAULT_PREFERENCES)
@@ -372,8 +402,8 @@ def get_preferences() -> Dict[str, Any]:
         return data
 
 
-def update_preferences(payload: Dict[str, Any]) -> Dict[str, Any]:
-    current = get_preferences()
+def update_preferences(payload: Dict[str, Any], db_path: Optional[Path | str] = None) -> Dict[str, Any]:
+    current = get_preferences(db_path=db_path)
     earliest = str(payload.get("earliest_study_time") or current["earliest_study_time"]).strip()
     latest = str(payload.get("latest_study_time") or current["latest_study_time"]).strip()
     e_min = time_to_minutes(earliest)
@@ -414,8 +444,8 @@ def update_preferences(payload: Dict[str, Any]) -> Dict[str, Any]:
         if week_start_date and not DATE_REGEX.match(week_start_date):
             raise ValueError("Ngày bắt đầu tuần phải có định dạng YYYY-MM-DD")
 
-    now = datetime.now(timezone.utc).isoformat()
-    with timetable_store.get_connection() as conn:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with timetable_store.get_connection(db_path=db_path) as conn:
         conn.execute(
             """
             INSERT INTO study_preferences
@@ -443,10 +473,10 @@ def update_preferences(payload: Dict[str, Any]) -> Dict[str, Any]:
                 buffer_hours,
                 ai_notes,
                 week_start_date,
-                now,
+                now_iso,
             ),
         )
-    return get_preferences()
+    return get_preferences(db_path=db_path)
 
 
 def parse_ai_preference_notes(ai_notes: str, base_prefs: Dict[str, Any]) -> Dict[str, Any]:
@@ -589,8 +619,8 @@ def _enrich_task(row_dict: Dict[str, Any], session_stats: Optional[Dict[int, Dic
     return d
 
 
-def get_tasks() -> List[Dict[str, Any]]:
-    with timetable_store.get_connection() as conn:
+def get_tasks(db_path: Optional[Path | str] = None) -> List[Dict[str, Any]]:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         rows = conn.execute("""
             SELECT id, title, course, deadline_weekday, deadline_time, deadline_date,
                    estimated_minutes, priority, completed, completed_minutes, splittable, notes, created_at
@@ -620,7 +650,7 @@ def get_tasks() -> List[Dict[str, Any]]:
     return [_enrich_task(dict(r), stats) for r in rows]
 
 
-def add_task(data: Dict[str, Any]) -> Dict[str, Any]:
+def add_task(data: Dict[str, Any], db_path: Optional[Path | str] = None) -> Dict[str, Any]:
     title = str(data.get("title") or "").strip()
     if not title:
         raise ValueError("Tên bài tập hoặc công việc không được để trống")
@@ -649,9 +679,9 @@ def add_task(data: Dict[str, Any]) -> Dict[str, Any]:
     completed = 1 if data.get("completed", False) else 0
     splittable = 1 if data.get("splittable", True) else 0
     notes = str(data.get("notes") or "").strip()
-    now = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
 
-    with timetable_store.get_connection() as conn:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         cursor = conn.execute(
             """
             INSERT INTO study_tasks
@@ -659,17 +689,17 @@ def add_task(data: Dict[str, Any]) -> Dict[str, Any]:
              estimated_minutes, priority, completed, completed_minutes, splittable, notes, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
             """,
-            (title, course, w, t_str, d_date, estimated_minutes, priority, completed, splittable, notes, now),
+            (title, course, w, t_str, d_date, estimated_minutes, priority, completed, splittable, notes, now_iso),
         )
         task_id = cursor.lastrowid or 0
 
-    tasks = get_tasks()
+    tasks = get_tasks(db_path=db_path)
     created = next((t for t in tasks if t["id"] == task_id), None)
     return created or {}
 
 
-def update_task(task_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
-    with timetable_store.get_connection() as conn:
+def update_task(task_id: int, data: Dict[str, Any], db_path: Optional[Path | str] = None) -> Dict[str, Any]:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         existing_row = conn.execute("SELECT * FROM study_tasks WHERE id = ?", (task_id,)).fetchone()
         if not existing_row:
             raise KeyError("Không tìm thấy bài tập")
@@ -708,7 +738,7 @@ def update_task(task_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
     splittable = 1 if data.get("splittable", bool(existing["splittable"])) else 0
     notes = str(data.get("notes", existing["notes"]) or "").strip()
 
-    with timetable_store.get_connection() as conn:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         conn.execute(
             """
             UPDATE study_tasks
@@ -721,13 +751,13 @@ def update_task(task_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
         if completed:
             conn.execute("UPDATE study_sessions SET completed = 1 WHERE task_id = ?", (task_id,))
 
-    tasks = get_tasks()
+    tasks = get_tasks(db_path=db_path)
     updated = next((t for t in tasks if t["id"] == task_id), None)
     return updated or {}
 
 
-def delete_task(task_id: int) -> bool:
-    with timetable_store.get_connection() as conn:
+def delete_task(task_id: int, db_path: Optional[Path | str] = None) -> bool:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         conn.execute("DELETE FROM study_sessions WHERE task_id = ? AND completed = 0 AND locked = 0", (task_id,))
         cursor = conn.execute("DELETE FROM study_tasks WHERE id = ?", (task_id,))
         return cursor.rowcount > 0
@@ -740,31 +770,120 @@ def delete_task(task_id: int) -> bool:
 
 def _enrich_session(row_dict: Dict[str, Any]) -> Dict[str, Any]:
     d = dict(row_dict)
-    w = d["weekday"]
+    w = int(d.get("weekday") or 1)
     d["weekday_label"] = WEEKDAY_NAMES.get(w, f"Thứ {w}")
+    d["weekday_name"] = d["weekday_label"]
     d["priority_label"] = PRIORITY_LABELS.get(d.get("priority") or "medium", "Trung bình")
     d["completed"] = bool(d.get("completed", 0))
     d["locked"] = bool(d.get("locked", 0))
-    d["source_label"] = (
-        "Bộ xếp lịch đề xuất" if d.get("source") == "ai_assistant" else "Người dùng tự xếp"
-    )
+    src = d.get("source") or "ai_assistant"
+    if src in ("ai_auto_90m", "ai_auto_courses"):
+        d["source_label"] = "Đề xuất thông minh"
+    elif src == "ai_assistant":
+        d["source_label"] = "Bộ xếp lịch đề xuất"
+    else:
+        d["source_label"] = "Người dùng tự xếp"
+    ws_id = (d.get("worksheet_id") or "").strip()
+    p_id = (d.get("practice_id") or "").strip()
+    d["classified_topic"] = (d.get("classified_topic") or "").strip()
+    d["worksheet_id"] = ws_id or None
+    d["practice_id"] = p_id or None
+
+    ex_status = (d.get("exercise_status") or "").strip()
+    if not ex_status:
+        if p_id or ws_id:
+            ex_status = "available"
+        else:
+            ex_status = "not_generated"
+    d["exercise_status"] = ex_status
+
+    if p_id:
+        d["pdf_url"] = f"/api/learning/export-pdf/{p_id}"
+    elif ws_id:
+        d["pdf_url"] = f"/api/timetable/worksheets/{ws_id}.pdf"
+    else:
+        d["pdf_url"] = None
     return d
 
 
-def get_study_sessions() -> List[Dict[str, Any]]:
-    with timetable_store.get_connection() as conn:
-        rows = conn.execute("""
+def get_study_sessions(db_path: Optional[Path | str] = None) -> List[Dict[str, Any]]:
+    with timetable_store.get_connection(db_path=db_path) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
+        extra_fields = [c for c in ("classified_topic", "worksheet_id", "practice_id", "exercise_status", "weekly_lesson_id") if c in cols]
+        extra_cols = (", " + ", ".join(extra_fields)) if extra_fields else ""
+        rows = conn.execute(f"""
             SELECT id, plan_id, task_id, title, course, weekday, start_time, end_time,
                    duration_minutes, priority, source, completed, locked,
-                   session_index, total_sessions, notes, created_at
+                   session_index, total_sessions, notes, created_at{extra_cols}
             FROM study_sessions
             ORDER BY weekday ASC, start_time ASC, id ASC
         """).fetchall()
-        return [_enrich_session(dict(r)) for r in rows]
+        from app.planner_topic_bridge import is_valid_worksheet
+
+        results = []
+        for r in rows:
+            sess_dict = _enrich_session(dict(r))
+            ws_id = sess_dict.get("worksheet_id")
+            if ws_id and not is_valid_worksheet(conn, ws_id):
+                if not sess_dict.get("pdf_url") or sess_dict.get("pdf_url", "").startswith("/api/timetable/worksheets/"):
+                    sess_dict["pdf_url"] = None
+                if sess_dict.get("notes"):
+                    sess_dict["notes"] = re.sub(
+                        r"Bài tập PDF đính kèm(?:\s*\([^)]*\))?:\s*(?:https?://[^\s|]+|/api/timetable/worksheets/[^\s|]+)",
+                        "(Chưa có bài tập PDF đính kèm)",
+                        sess_dict["notes"],
+                        flags=re.IGNORECASE,
+                    )
+            results.append(sess_dict)
+        return results
 
 
-def get_latest_active_plan_draft() -> Optional[Dict[str, Any]]:
-    with timetable_store.get_connection() as conn:
+def get_session(session_id: int, db_path: Optional[Path | str] = None) -> Optional[Dict[str, Any]]:
+    with timetable_store.get_connection(db_path=db_path) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
+        extra_fields = [c for c in ("classified_topic", "worksheet_id", "practice_id", "exercise_status", "weekly_lesson_id") if c in cols]
+        extra_cols = (", " + ", ".join(extra_fields)) if extra_fields else ""
+        row = conn.execute(
+            f"""
+            SELECT id, plan_id, task_id, title, course, weekday, start_time, end_time,
+                   duration_minutes, priority, source, completed, locked,
+                   session_index, total_sessions, notes, created_at{extra_cols}
+            FROM study_sessions
+            WHERE id = ?
+            """,
+            (int(session_id),),
+        ).fetchone()
+        if not row:
+            return None
+        return _enrich_session(dict(row))
+
+
+def update_session_practice(
+    session_id: int,
+    practice_id: str,
+    exercise_status: str = "available",
+    db_path: Optional[Path | str] = None,
+) -> bool:
+    with timetable_store.get_connection(db_path=db_path) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
+        updates = []
+        params = []
+        if "practice_id" in cols:
+            updates.append("practice_id = ?")
+            params.append(str(practice_id or "").strip())
+        if "exercise_status" in cols:
+            updates.append("exercise_status = ?")
+            params.append(str(exercise_status or "").strip())
+        if not updates:
+            return False
+        params.append(int(session_id))
+        cur = conn.execute(f"UPDATE study_sessions SET {', '.join(updates)} WHERE id = ?", params)
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def get_latest_active_plan_draft(db_path: Optional[Path | str] = None) -> Optional[Dict[str, Any]]:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         row = conn.execute("""
             SELECT * FROM study_plan_drafts
             WHERE status = 'draft'
@@ -776,8 +895,8 @@ def get_latest_active_plan_draft() -> Optional[Dict[str, Any]]:
         return _deserialize_plan_draft(dict(row))
 
 
-def get_plan_draft(plan_id: str) -> Optional[Dict[str, Any]]:
-    with timetable_store.get_connection() as conn:
+def get_plan_draft(plan_id: str, db_path: Optional[Path | str] = None) -> Optional[Dict[str, Any]]:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         row = conn.execute("SELECT * FROM study_plan_drafts WHERE plan_id = ?", (plan_id,)).fetchone()
         if not row:
             return None
@@ -787,21 +906,34 @@ def get_plan_draft(plan_id: str) -> Optional[Dict[str, Any]]:
 def _deserialize_plan_draft(data: Dict[str, Any]) -> Dict[str, Any]:
     sessions = json.loads(data.get("sessions_json") or "[]")
     preserved = json.loads(data.get("preserved_sessions_json") or "[]")
+    raw_unscheduled = json.loads(data.get("unscheduled_json") or "[]")
+    unscheduled_tasks = []
+    unplaced_courses = []
+    if isinstance(raw_unscheduled, dict):
+        unscheduled_tasks = raw_unscheduled.get("tasks") or []
+        unplaced_courses = raw_unscheduled.get("courses") or []
+    elif isinstance(raw_unscheduled, list):
+        for item in raw_unscheduled:
+            if isinstance(item, dict) and item.get("course") and not item.get("task_id"):
+                unplaced_courses.append(str(item["course"]))
+            else:
+                unscheduled_tasks.append(item)
     return {
         "plan_id": data["plan_id"],
         "created_at": data["created_at"],
         "status": data["status"],
         "sessions": [_enrich_session(s) for s in sessions],
         "preserved_sessions": [_enrich_session(s) for s in preserved],
-        "unscheduled_tasks": json.loads(data.get("unscheduled_json") or "[]"),
+        "unscheduled_tasks": unscheduled_tasks,
+        "unplaced_courses": unplaced_courses,
         "warnings": json.loads(data.get("warnings_json") or "[]"),
         "suggestions": json.loads(data.get("suggestions_json") or "[]"),
         "explanation": data.get("explanation") or "",
     }
 
 
-def discard_plan_draft(plan_id: str) -> bool:
-    with timetable_store.get_connection() as conn:
+def discard_plan_draft(plan_id: str, db_path: Optional[Path | str] = None) -> bool:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         cursor = conn.execute(
             "UPDATE study_plan_drafts SET status = 'discarded' WHERE plan_id = ?",
             (plan_id,),
@@ -822,9 +954,14 @@ def verify_schedule_constraints(
     require_inside_study_window: bool = False,
     max_daily_minutes: Optional[int] = None,
     week_monday: Optional[date] = None,
+    earliest_study_time: Optional[str] = None,
+    latest_study_time: Optional[str] = None,
+    enforce_awake_bounds: bool = False,
+    now: Optional[datetime] = None,
 ) -> List[str]:
     """Deterministically verify hard scheduling constraints. Returns list of violation messages."""
     violations: List[str] = []
+    ceil_now = _ceil_vn_now(now) if week_monday is not None else None
 
     # 1. Check each session's time format & range, plus overlap with classes and blocking routines
     for idx, s in enumerate(sessions):
@@ -846,46 +983,113 @@ def verify_schedule_constraints(
                     f"'{c['course']}' ({c['start_time']}-{c['end_time']})."
                 )
 
-        # Check against fixed, protected (rest), and unapproved flexible routines
+        # Check against fixed, protected (rest), and unapproved flexible routines (handling cross-midnight)
         for r in routines:
-            if r["weekday"] != w:
-                continue
-            if r["flexibility"] in ("fixed", "protected", "flexible"):
-                if st < r["end_time"] and r["start_time"] < et:
+            if r.get("flexibility") in ("fixed", "protected", "flexible") or r.get("activity_type") in ("sleep", "rest", "work", "class", "commute", "sport", "meal"):
+                r_w = int(r["weekday"])
+                r_s = time_to_minutes(r["start_time"])
+                r_e = time_to_minutes(r["end_time"])
+                collides = False
+                if r_s < r_e:
+                    if r_w == w and st < r["end_time"] and r["start_time"] < et:
+                        collides = True
+                else:
+                    if r_w == w and s_min < 1440 and r_s < e_min:
+                        collides = True
+                    next_w = (r_w % 7) + 1
+                    if next_w == w and s_min < r_e and 0 < e_min:
+                        collides = True
+                if collides:
                     kind = (
                         "giờ nghỉ ngơi được bảo vệ"
-                        if r["flexibility"] == "protected" or r["activity_type"] == "rest"
-                        else f"hoạt động cá nhân ({FLEXIBILITY_TYPES.get(r['flexibility'], r['flexibility'])})"
+                        if r.get("flexibility") == "protected" or r.get("activity_type") == "rest"
+                        else f"hoạt động cá nhân ({FLEXIBILITY_TYPES.get(r.get('flexibility'), r.get('flexibility'))})"
                     )
                     violations.append(
                         f"Phiên học '{s['title']}' ({day_label} {st}-{et}) xâm phạm {kind} "
                         f"'{r['title']}' ({r['start_time']}-{r['end_time']})."
                     )
 
-        # Check inside study_window if required (for AI-generated sessions)
-        if require_inside_study_window and not s.get("locked") and not s.get("completed"):
-            day_windows = [
-                (time_to_minutes(r["start_time"]), time_to_minutes(r["end_time"]))
-                for r in routines
-                if r["weekday"] == w and r["flexibility"] == "study_window"
-            ]
-            merged_win = merge_intervals(day_windows)
-            inside = any(ws <= s_min and e_min <= we for ws, we in merged_win)
-            if not inside:
+        # Historical preserved records remain exempt from shifts in awake bounds / deadlines / current-time cutoff,
+        # but ALL new reviewed proposals must validate awake/night/window/deadline/cutoff/task existence regardless of client flags.
+        is_preserved = bool(s.get("_is_preserved", False))
+        if not is_preserved:
+            if week_monday is not None and ceil_now is not None:
+                session_date = week_monday + timedelta(days=w - 1)
+                session_start_dt = datetime.combine(
+                    session_date,
+                    time(s_min // 60, s_min % 60),
+                    tzinfo=VN_TZ,
+                )
+                if session_start_dt < ceil_now:
+                    violations.append(
+                        f"Phiên học '{s['title']}' ({day_label} {st}-{et}, ngày {session_date.isoformat()}) "
+                        f"bắt đầu trước thời điểm hiện tại ({ceil_now.strftime('%Y-%m-%d %H:%M')}) — không thể xếp phiên học mới vào quá khứ."
+                    )
+
+            if enforce_awake_bounds or earliest_study_time or latest_study_time:
+                if earliest_study_time:
+                    early_min = time_to_minutes(earliest_study_time)
+                    if s_min < early_min:
+                        violations.append(
+                            f"Phiên học '{s['title']}' ({day_label} {st}-{et}) bắt đầu trước khung giờ học sớm nhất đã thiết lập ({earliest_study_time})."
+                        )
+                if latest_study_time:
+                    late_min = time_to_minutes(latest_study_time)
+                    if e_min > late_min:
+                        violations.append(
+                            f"Phiên học '{s['title']}' ({day_label} {st}-{et}) kết thúc sau khung giờ học muộn nhất đã thiết lập ({latest_study_time})."
+                        )
+
+            # Night protection
+            if s_min < 6 * 60 or e_min > 23 * 60:
                 violations.append(
-                    f"Phiên học '{s['title']}' ({day_label} {st}-{et}) nằm ngoài khung giờ có thể học đã khai báo."
+                    f"Phiên học '{s['title']}' ({day_label} {st}-{et}) nằm trong khung giờ đêm không được phép."
                 )
 
-        # Check task deadline
-        tid = s.get("task_id")
-        if tid and tid in tasks_by_id:
-            t = tasks_by_id[tid]
-            cutoff_w, cutoff_min = _compute_task_week_cutoff(t, week_monday)
-            if (w, e_min) > (cutoff_w, cutoff_min):
-                violations.append(
-                    f"Phiên học '{s['title']}' ({day_label} {st}-{et}) kết thúc sau hạn nộp "
-                    f"({t['deadline_display']})."
-                )
+            # Check inside study_window if required (for AI-generated sessions)
+            if require_inside_study_window:
+                day_windows = [
+                    (time_to_minutes(r["start_time"]), time_to_minutes(r["end_time"]))
+                    for r in routines
+                    if int(r["weekday"]) == w and (r.get("flexibility") == "study_window" or r.get("activity_type") == "study_window")
+                ]
+                if day_windows:
+                    merged_win = merge_intervals(day_windows)
+                    inside = any(ws <= s_min and e_min <= we for ws, we in merged_win)
+                    if not inside:
+                        violations.append(
+                            f"Phiên học '{s['title']}' ({day_label} {st}-{et}) nằm ngoài khung giờ có thể học đã khai báo."
+                        )
+                else:
+                    violations.append(
+                        f"Phiên học '{s['title']}' ({day_label} {st}-{et}) nằm ngoài khung giờ có thể học đã khai báo."
+                    )
+
+            # Check task existence, deadline & completion status
+            tid = s.get("task_id")
+            if tid is not None and str(tid).strip() != "":
+                try:
+                    tid_int = int(tid)
+                except (ValueError, TypeError):
+                    tid_int = None
+                if tid_int not in tasks_by_id:
+                    violations.append(
+                        f"Bài tập liên kết (ID {tid}) của phiên học '{s['title']}' không còn tồn tại hoặc đã bị xóa."
+                    )
+                else:
+                    t = tasks_by_id[tid_int]
+                    if t.get("completed"):
+                        violations.append(
+                            f"Bài tập '{t.get('title')}' liên kết với phiên học '{s['title']}' đã được đánh dấu hoàn thành."
+                        )
+                    else:
+                        cutoff_w, cutoff_min = _compute_task_week_cutoff(t, week_monday)
+                        if (w, e_min) > (cutoff_w, cutoff_min):
+                            violations.append(
+                                f"Phiên học '{s['title']}' ({day_label} {st}-{et}) kết thúc sau hạn nộp "
+                                f"({t.get('deadline_display') or t.get('deadline_time')})."
+                            )
 
     # 2. Check session-to-session overlaps
     for i in range(len(sessions)):
@@ -972,13 +1176,20 @@ def _slot_preference_bonus(start_min: int, end_min: int, preferred_periods: List
 def generate_study_plan(
     reschedule_only: bool = False,
     ai_notes_override: Optional[str] = None,
+    include_courses: bool = False,
+    course_items: Optional[List[Dict[str, Any]]] = None,
+    session_duration: Optional[int] = None,
+    db_path: Optional[Path | str] = None,
+    learning_service: Any = None,
+    document_lookup: Any = None,
+    now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """Generate a draft personal study schedule combining classes, routines, study windows, and deadlines."""
-    confirmed_classes = timetable_store.get_confirmed_entries()
-    routines = get_routines()
-    prefs = get_preferences()
+    """Generate a draft personal study schedule combining classes, routines, study windows, deadlines, and courses."""
+    confirmed_classes = timetable_store.get_confirmed_entries(db_path=db_path)
+    routines = get_routines(db_path=db_path)
+    prefs = get_preferences(db_path=db_path)
     if ai_notes_override is not None:
-        prefs = update_preferences({**prefs, "ai_notes": ai_notes_override})
+        prefs = update_preferences({**prefs, "ai_notes": ai_notes_override}, db_path=db_path)
 
     parsed_ai = parse_ai_preference_notes(prefs.get("ai_notes", ""), prefs)
     earliest_min = parsed_ai["earliest_min"]
@@ -989,18 +1200,30 @@ def generate_study_plan(
     buffer_hours = int(prefs.get("buffer_before_deadline_hours", 12))
     buffer_minutes = buffer_hours * 60
 
-    all_tasks = get_tasks()
+    all_tasks = get_tasks(db_path=db_path)
     tasks_by_id = {t["id"]: t for t in all_tasks}
     week_monday = _infer_week_monday(prefs, all_tasks)
+    ceil_now = _ceil_vn_now(now) if week_monday is not None else None
+    now_date = ceil_now.date() if ceil_now is not None else None
+    now_min_of_day = (ceil_now.hour * 60 + ceil_now.minute) if ceil_now is not None else 0
+    week_sunday = (week_monday + timedelta(days=6)) if week_monday is not None else None
+    is_historical_week = bool(week_sunday is not None and now_date is not None and week_sunday < now_date)
 
-    existing_sessions = get_study_sessions()
-    # Keep completed sessions and user-locked sessions intact!
+    existing_sessions = get_study_sessions(db_path=db_path)
+    # Keep completed sessions, user-locked sessions, and manual sessions intact!
     preserved_sessions: List[Dict[str, Any]] = [
-        dict(s) for s in existing_sessions if s.get("completed") or s.get("locked")
+        dict(s) for s in existing_sessions
+        if s.get("completed") or s.get("locked") or s.get("source") in ("manual", "user_manual")
     ]
 
     warnings: List[str] = []
     suggestions: List[Dict[str, Any]] = []
+    if is_historical_week and week_monday is not None and week_sunday is not None and ceil_now is not None:
+        warnings.append(
+            f"Tuần lập lịch đã chọn ({week_monday.isoformat()} đến {week_sunday.isoformat()}) "
+            f"đã qua so với thời điểm hiện tại ({ceil_now.strftime('%Y-%m-%d %H:%M')}); "
+            "không thể xếp các phiên tự học mới vào quá khứ."
+        )
 
     # Check tasks with missing estimated_minutes
     active_tasks = [t for t in all_tasks if not t.get("completed")]
@@ -1023,16 +1246,9 @@ def generate_study_plan(
         else:
             schedulable_tasks.append(t)
 
-    # Build blocked intervals and study windows per day (1..7)
-    study_window_routines = [r for r in routines if r["flexibility"] == "study_window"]
-    if not study_window_routines and schedulable_tasks:
-        warnings.append(
-            "Bạn chưa khai báo 'Khung giờ có thể học' nào trong Bảng lịch sinh hoạt hằng tuần. "
-            "Trợ lý chỉ xếp phiên tự học vào các khung giờ được bạn cho phép."
-        )
-
     free_slots_by_day: Dict[int, List[Tuple[int, int]]] = {}
     blocked_by_day: Dict[int, List[Tuple[int, int]]] = {}
+    past_cutoff_by_day: Dict[int, int] = {w: 0 for w in range(1, 8)}
     daily_used_minutes: Dict[int, int] = {w: 0 for w in range(1, 8)}
 
     for s in preserved_sessions:
@@ -1040,27 +1256,345 @@ def generate_study_plan(
         dur = time_to_minutes(s["end_time"]) - time_to_minutes(s["start_time"])
         daily_used_minutes[w] = daily_used_minutes.get(w, 0) + dur
 
+    total_study_windows = [
+        r for r in routines
+        if (r.get("flexibility") == "study_window" or r.get("activity_type") == "study_window")
+        and time_to_minutes(r["end_time"]) > time_to_minutes(r["start_time"])
+    ]
+    has_any_study_windows = len(total_study_windows) > 0
+
     for w in range(1, 8):
+        if week_monday is not None and now_date is not None:
+            day_date = week_monday + timedelta(days=w - 1)
+            if day_date < now_date:
+                past_cutoff_by_day[w] = 1440
+            elif day_date == now_date:
+                past_cutoff_by_day[w] = now_min_of_day
+
         blocked: List[Tuple[int, int]] = []
         for c in confirmed_classes:
-            if c["weekday"] == w:
+            if int(c["weekday"]) == w:
                 blocked.append((time_to_minutes(c["start_time"]), time_to_minutes(c["end_time"])))
         for r in routines:
-            if r["weekday"] == w and r["flexibility"] in ("fixed", "protected", "flexible"):
-                blocked.append((time_to_minutes(r["start_time"]), time_to_minutes(r["end_time"])))
+            if r.get("flexibility") in ("fixed", "protected", "flexible") or r.get("activity_type") in ("sleep", "rest", "work", "class", "commute", "sport", "meal"):
+                r_w = int(r["weekday"])
+                r_s = time_to_minutes(r["start_time"])
+                r_e = time_to_minutes(r["end_time"])
+                if r_s < r_e:
+                    if r_w == w:
+                        blocked.append((r_s, r_e))
+                else:
+                    if r_w == w:
+                        blocked.append((r_s, 1440))
+                    next_w = (r_w % 7) + 1
+                    if next_w == w:
+                        blocked.append((0, r_e))
         for s in preserved_sessions:
             if int(s["weekday"]) == w:
                 blocked.append((time_to_minutes(s["start_time"]), time_to_minutes(s["end_time"])))
         blocked_by_day[w] = merge_intervals(blocked)
 
-        raw_windows: List[Tuple[int, int]] = []
-        for r in study_window_routines:
-            if r["weekday"] == w:
-                ws = max(earliest_min, time_to_minutes(r["start_time"]))
-                we = min(latest_min, time_to_minutes(r["end_time"]))
-                if we > ws:
-                    raw_windows.append((ws, we))
-        free_slots_by_day[w] = subtract_intervals(raw_windows, blocked_by_day[w])
+        day_cutoff = past_cutoff_by_day[w]
+        if day_cutoff >= 1440:
+            free_slots_by_day[w] = []
+            continue
+
+        day_windows = [
+            (max(earliest_min, time_to_minutes(r["start_time"])), min(latest_min, time_to_minutes(r["end_time"])))
+            for r in total_study_windows
+            if int(r["weekday"]) == w and min(latest_min, time_to_minutes(r["end_time"])) > max(earliest_min, time_to_minutes(r["start_time"]))
+        ]
+        day_windows = [(s, e) for s, e in day_windows if e > s]
+        if day_windows:
+            raw_windows = merge_intervals(day_windows)
+        elif not has_any_study_windows:
+            raw_windows = [(earliest_min, latest_min)]
+        else:
+            raw_windows = []
+
+        effective_blocked = blocked_by_day[w] + ([(0, day_cutoff)] if day_cutoff > 0 else [])
+        free_slots_by_day[w] = subtract_intervals(raw_windows, effective_blocked)
+
+    proposed_sessions: List[Dict[str, Any]] = []
+    unscheduled_tasks: List[Dict[str, Any]] = []
+    unplaced_courses: List[str] = []
+    days_without_free_slot: List[str] = []
+
+    # Optional course/weekly-lesson scheduling (unified core)
+    if include_courses or course_items is not None:
+        ordered_courses: List[str] = []
+        lessons_by_course: Dict[str, List[Dict[str, Any]]] = {}
+
+        if course_items is not None:
+            for item in course_items:
+                c = (item.get("course") or "").strip()
+                if c and c not in ordered_courses:
+                    ordered_courses.append(c)
+                lessons_by_course.setdefault(c, []).append(item)
+        else:
+            with timetable_store.get_connection(db_path=db_path) as conn:
+                lesson_rows = conn.execute(
+                    "SELECT * FROM weekly_lessons ORDER BY id ASC"
+                ).fetchall()
+                for r in lesson_rows:
+                    item = dict(r)
+                    c = (item.get("course") or "").strip()
+                    if c and c not in ordered_courses:
+                        ordered_courses.append(c)
+                    lessons_by_course.setdefault(c, []).append(item)
+
+            for cls in confirmed_classes:
+                c = (cls.get("course") or "").strip()
+                if c and c not in ordered_courses:
+                    ordered_courses.append(c)
+
+            for tsk in all_tasks:
+                c = (tsk.get("course") or "").strip()
+                if c and c not in ordered_courses:
+                    ordered_courses.append(c)
+
+        if not ordered_courses:
+            raise ValueError(
+                "Chưa có môn học nào trong Thời khóa biểu hoặc danh sách Bài học trong tuần. "
+                "Hãy lưu ít nhất 1 môn học hoặc nhập bài học tuần trước khi tự động phân bổ."
+            )
+
+        duration = int(session_duration or pref_session_min or 60)
+        if duration < 15 or duration > 240:
+            duration = 60
+
+        preferred_anchors = (8 * 60 + 30, 14 * 60, 19 * 60 + 30, earliest_min)
+        assigned_days: set[int] = set()
+
+        retained_courses_by_day: Dict[int, set[str]] = {}
+        for s in preserved_sessions:
+            w = int(s["weekday"])
+            c_name = (s.get("course") or "").strip()
+            if c_name:
+                retained_courses_by_day.setdefault(w, set()).add(c_name)
+
+        for w in range(1, 8):
+            slots = [
+                (s, e) for s, e in free_slots_by_day.get(w, [])
+                if (e - s) >= duration and (max_daily_min - daily_used_minutes.get(w, 0)) >= duration
+            ]
+            retained_c = retained_courses_by_day.get(w, set())
+            if not slots or len(retained_c) > 1:
+                days_without_free_slot.append(WEEKDAY_NAMES.get(w, f"Thứ {w}"))
+
+        lesson_cursor: Dict[str, int] = {c: 0 for c in ordered_courses}
+
+        def _get_course_meta(course_name: str) -> Tuple[str, str, Optional[str], Optional[str], Optional[int]]:
+            c_lessons = lessons_by_course.get(course_name) or []
+            if c_lessons:
+                idx = lesson_cursor.get(course_name, 0) % len(c_lessons)
+                les = c_lessons[idx]
+                lesson_cursor[course_name] = idx + 1
+                l_title = les.get("lesson_title") or f"Ôn tập {course_name}"
+                c_topic = les.get("classified_topic") or course_name
+                ws_id = (les.get("worksheet_id") or "").strip() or None
+                p_id = (les.get("practice_id") or "").strip() or None
+                l_id = les.get("id")
+            else:
+                from app.topic_tree import resolve_topic_hierarchy
+                resolved = resolve_topic_hierarchy(course_name)
+                c_topic = str(resolved.get("topic") if resolved else course_name)
+                l_title = f"Ôn tập {course_name}"
+                ws_id = None
+                p_id = None
+                l_id = None
+
+            return l_title, c_topic, ws_id, p_id, l_id
+
+        # Step 1: Place courses on days that already have that course retained
+        for course in ordered_courses:
+            for w in range(1, 8):
+                if w in assigned_days:
+                    continue
+                retained_c = retained_courses_by_day.get(w, set())
+                if course in retained_c and len(retained_c) == 1:
+                    slots = [
+                        (s, e) for s, e in free_slots_by_day.get(w, [])
+                        if (e - s) >= duration and (max_daily_min - daily_used_minutes.get(w, 0)) >= duration
+                    ]
+                    if not slots:
+                        continue
+                    assigned_days.add(w)
+                    chosen_start = None
+                    for anchor in preferred_anchors:
+                        for s, e in slots:
+                            if s <= anchor and anchor + duration <= e:
+                                chosen_start = anchor
+                                break
+                        if chosen_start is not None:
+                            break
+                    if chosen_start is None:
+                        chosen_start = slots[0][0]
+                    chosen_end = chosen_start + duration
+
+                    l_title, c_topic, ws_id, p_id, l_id = _get_course_meta(course)
+                    session_title = f"Tự học {course}: {l_title}"
+                    proposed_sessions.append({
+                        "id": None,
+                        "task_id": None,
+                        "weekly_lesson_id": l_id,
+                        "title": session_title,
+                        "course": course,
+                        "weekday": w,
+                        "start_time": minutes_to_time(chosen_start),
+                        "end_time": minutes_to_time(chosen_end),
+                        "duration_minutes": duration,
+                        "priority": "high",
+                        "source": "ai_auto_90m",
+                        "completed": False,
+                        "locked": False,
+                        "session_index": 1,
+                        "total_sessions": 1,
+                        "classified_topic": c_topic,
+                        "worksheet_id": ws_id,
+                        "practice_id": p_id,
+                        "exercise_status": "available" if (p_id or ws_id) else "not_generated",
+                        "notes": f"Đề xuất tự học {course} | Khung giờ rảnh {minutes_to_time(chosen_start)}-{minutes_to_time(chosen_end)} | Chủ đề: {c_topic}" + (f" | Bài tập đính kèm: /api/timetable/worksheets/{ws_id}.pdf" if ws_id else (f" | Bài tập đính kèm: /api/learning/export-pdf/{p_id}" if p_id else " (Chưa có bài tập PDF đính kèm)")),
+                    })
+                    daily_used_minutes[w] = daily_used_minutes.get(w, 0) + duration
+                    for s_idx, (s, e) in enumerate(free_slots_by_day[w]):
+                        if s <= chosen_start and chosen_end <= e:
+                            del free_slots_by_day[w][s_idx]
+                            if chosen_end < e:
+                                free_slots_by_day[w].insert(s_idx, (chosen_end, e))
+                            if s < chosen_start:
+                                free_slots_by_day[w].insert(s_idx, (s, chosen_start))
+                            break
+                    break
+
+        # Step 2: Place remaining courses on open days (days with NO retained courses)
+        courses_to_place = [c for c in ordered_courses if not any(s["course"] == c for s in proposed_sessions)]
+        for course in courses_to_place:
+            placed = False
+            for w in range(1, 8):
+                if w in assigned_days:
+                    continue
+                retained_c = retained_courses_by_day.get(w, set())
+                if retained_c:
+                    continue
+                slots = [
+                    (s, e) for s, e in free_slots_by_day.get(w, [])
+                    if (e - s) >= duration and (max_daily_min - daily_used_minutes.get(w, 0)) >= duration
+                ]
+                if not slots:
+                    continue
+                assigned_days.add(w)
+                chosen_start = None
+                for anchor in preferred_anchors:
+                    for s, e in slots:
+                        if s <= anchor and anchor + duration <= e:
+                            chosen_start = anchor
+                            break
+                    if chosen_start is not None:
+                        break
+                if chosen_start is None:
+                    chosen_start = slots[0][0]
+                chosen_end = chosen_start + duration
+
+                l_title, c_topic, ws_id, p_id, l_id = _get_course_meta(course)
+                session_title = f"Tự học {course}: {l_title}"
+                proposed_sessions.append({
+                    "id": None,
+                    "task_id": None,
+                    "weekly_lesson_id": l_id,
+                    "title": session_title,
+                    "course": course,
+                    "weekday": w,
+                    "start_time": minutes_to_time(chosen_start),
+                    "end_time": minutes_to_time(chosen_end),
+                    "duration_minutes": duration,
+                    "priority": "high",
+                    "source": "ai_auto_90m",
+                    "completed": False,
+                    "locked": False,
+                    "session_index": 1,
+                    "total_sessions": 1,
+                    "classified_topic": c_topic,
+                    "worksheet_id": ws_id,
+                    "practice_id": p_id,
+                    "exercise_status": "available" if (p_id or ws_id) else "not_generated",
+                    "notes": f"Đề xuất tự học {course} | Khung giờ rảnh {minutes_to_time(chosen_start)}-{minutes_to_time(chosen_end)} | Chủ đề: {c_topic}" + (f" | Bài tập đính kèm: /api/timetable/worksheets/{ws_id}.pdf" if ws_id else (f" | Bài tập đính kèm: /api/learning/export-pdf/{p_id}" if p_id else " (Chưa có bài tập PDF đính kèm)")),
+                })
+                daily_used_minutes[w] = daily_used_minutes.get(w, 0) + duration
+                for s_idx, (s, e) in enumerate(free_slots_by_day[w]):
+                    if s <= chosen_start and chosen_end <= e:
+                        del free_slots_by_day[w][s_idx]
+                        if chosen_end < e:
+                            free_slots_by_day[w].insert(s_idx, (chosen_end, e))
+                        if s < chosen_start:
+                            free_slots_by_day[w].insert(s_idx, (s, chosen_start))
+                        break
+                placed = True
+                break
+
+            if not placed:
+                unplaced_courses.append(course)
+
+        # Step 3: If days still remain open and all courses placed, rotate through remaining open days
+        if not unplaced_courses:
+            remaining_days = [
+                d for d in range(1, 8)
+                if d not in assigned_days and not retained_courses_by_day.get(d)
+            ]
+            for idx_d, w in enumerate(remaining_days):
+                slots = [
+                    (s, e) for s, e in free_slots_by_day.get(w, [])
+                    if (e - s) >= duration and (max_daily_min - daily_used_minutes.get(w, 0)) >= duration
+                ]
+                if not slots:
+                    continue
+                assigned_days.add(w)
+                course = ordered_courses[idx_d % len(ordered_courses)]
+                chosen_start = None
+                for anchor in preferred_anchors:
+                    for s, e in slots:
+                        if s <= anchor and anchor + duration <= e:
+                            chosen_start = anchor
+                            break
+                    if chosen_start is not None:
+                        break
+                if chosen_start is None:
+                    chosen_start = slots[0][0]
+                chosen_end = chosen_start + duration
+
+                l_title, c_topic, ws_id, p_id, l_id = _get_course_meta(course)
+                session_title = f"Tự học {course}: {l_title}"
+                proposed_sessions.append({
+                    "id": None,
+                    "task_id": None,
+                    "weekly_lesson_id": l_id,
+                    "title": session_title,
+                    "course": course,
+                    "weekday": w,
+                    "start_time": minutes_to_time(chosen_start),
+                    "end_time": minutes_to_time(chosen_end),
+                    "duration_minutes": duration,
+                    "priority": "high",
+                    "source": "ai_auto_90m",
+                    "completed": False,
+                    "locked": False,
+                    "session_index": 1,
+                    "total_sessions": 1,
+                    "classified_topic": c_topic,
+                    "worksheet_id": ws_id,
+                    "practice_id": p_id,
+                    "exercise_status": "available" if (p_id or ws_id) else "not_generated",
+                    "notes": f"Đề xuất tự học {course} | Khung giờ rảnh {minutes_to_time(chosen_start)}-{minutes_to_time(chosen_end)} | Chủ đề: {c_topic}" + (f" | Bài tập đính kèm: /api/timetable/worksheets/{ws_id}.pdf" if ws_id else (f" | Bài tập đính kèm: /api/learning/export-pdf/{p_id}" if p_id else " (Chưa có bài tập PDF đính kèm)")),
+                })
+                daily_used_minutes[w] = daily_used_minutes.get(w, 0) + duration
+                for s_idx, (s, e) in enumerate(free_slots_by_day[w]):
+                    if s <= chosen_start and chosen_end <= e:
+                        del free_slots_by_day[w][s_idx]
+                        if chosen_end < e:
+                            free_slots_by_day[w].insert(s_idx, (chosen_end, e))
+                        if s < chosen_start:
+                            free_slots_by_day[w].insert(s_idx, (s, chosen_start))
+                        break
 
     # Sort schedulable tasks by deadline urgency + priority
     def _task_sort_key(t: Dict[str, Any]) -> Tuple[Any, ...]:
@@ -1070,9 +1604,6 @@ def generate_study_plan(
         return (week_min, p_rank, t["id"])
 
     schedulable_tasks.sort(key=_task_sort_key)
-
-    proposed_sessions: List[Dict[str, Any]] = []
-    unscheduled_tasks: List[Dict[str, Any]] = []
 
     # Calculate already preserved minutes per task
     preserved_by_task: Dict[int, int] = {}
@@ -1104,8 +1635,8 @@ def generate_study_plan(
             safety_counter = 0
             while needed_min > 0 and safety_counter < 100:
                 safety_counter += 1
-                best_candidate: Optional[Tuple[float, int, int, int, int, int]] = None
-                # Candidate tuple: (score, weekday, slot_idx, alloc_start, alloc_end, alloc_dur)
+                best_candidate: Optional[Tuple[float, int, int, int, int, int, int, int]] = None
+                # Candidate tuple: (score, -w, -alloc_s, w, s_idx, alloc_s, alloc_end, alloc_dur)
 
                 for w in range(1, 8):
                     if w > cutoff_w:
@@ -1116,7 +1647,6 @@ def generate_study_plan(
 
                     slots = free_slots_by_day.get(w, [])
                     for s_idx, (slot_s, slot_e) in enumerate(slots):
-                        # Must finish before pass limit and task deadline
                         day_offset = (w - 1) * 1440
                         max_end_in_pass = pass_limit_week_min - day_offset
                         if w == cutoff_w:
@@ -1134,11 +1664,9 @@ def generate_study_plan(
                         else:
                             effective_min_chunk = min(min_session_min, needed_min)
                             if max_placeable < effective_min_chunk:
-                                # Only allow smaller chunk in Pass 2 if no other choice
                                 if pass_idx == 0 or max_placeable < 15:
                                     continue
                             target_chunk = min(needed_min, pref_session_min)
-                            # Avoid leaving a tiny fragment (< min_session_min) if we can either fit all or balance it
                             if needed_min > target_chunk and (needed_min - target_chunk) < min_session_min:
                                 if max_placeable >= needed_min and needed_min <= pref_session_min + min_session_min:
                                     target_chunk = needed_min
@@ -1152,18 +1680,12 @@ def generate_study_plan(
                         alloc_s = slot_s
                         alloc_e = slot_s + alloc_dur
 
-                        # Compute candidate score (higher is better)
-                        # 1. Prefer days not in avoided_weekdays
                         avoid_penalty = -200 if w in parsed_ai["avoided_weekdays"] else 0
-                        # 2. Prefer days with more remaining daily study budget (load balancing)
                         load_score = (max_daily_min - daily_used_minutes[w]) * 0.4
-                        # 3. Prefer earlier days before deadline so work is completed early
                         earliness_score = (8 - w) * 15
-                        # 4. Time-of-day bonus from AI notes
                         tod_bonus = _slot_preference_bonus(alloc_s, alloc_e, parsed_ai["preferred_periods"])
-                        # 5. Penalty if this task already has a session on day w (encourage spreading across days if possible)
                         same_task_today = sum(
-                            1 for ps in proposed_sessions if ps["task_id"] == tid and ps["weekday"] == w
+                            1 for ps in proposed_sessions if ps.get("task_id") == tid and ps["weekday"] == w
                         )
                         spread_penalty = -35 * same_task_today
 
@@ -1191,18 +1713,20 @@ def generate_study_plan(
                     "locked": False,
                     "session_index": 1,
                     "total_sessions": 1,
+                    "classified_topic": task.get("classified_topic") or task["course"],
+                    "worksheet_id": None,
+                    "practice_id": None,
+                    "exercise_status": "not_generated",
                     "notes": f"Hạn nộp: {task['deadline_display']}",
                 })
 
                 needed_min -= alloc_dur
                 daily_used_minutes[chosen_w] += alloc_dur
-                # Subtract allocated interval (plus a 10-min micro-break if another session follows in same window)
                 old_s, old_e = free_slots_by_day[chosen_w][chosen_s_idx]
                 del free_slots_by_day[chosen_w][chosen_s_idx]
                 if alloc_e < old_e:
                     free_slots_by_day[chosen_w].insert(chosen_s_idx, (alloc_e, old_e))
 
-        # Check if task still has unscheduled minutes
         if needed_min > 0:
             scheduled_for_task = est_min - needed_min
             reason, task_suggestions = _diagnose_unscheduled_task(
@@ -1217,6 +1741,9 @@ def generate_study_plan(
                 earliest_min=earliest_min,
                 latest_min=latest_min,
                 routines=routines,
+                week_monday=week_monday,
+                ceil_now=ceil_now,
+                past_cutoff_by_day=past_cutoff_by_day,
             )
             unscheduled_tasks.append({
                 "task_id": tid,
@@ -1263,6 +1790,16 @@ def generate_study_plan(
                 else:
                     s["title"] = f"Tự học: {base_title}"
 
+    if unplaced_courses:
+        warnings.append(
+            f"Không đủ khung giờ tự học hợp lệ cho các môn sau: {', '.join(unplaced_courses)}."
+        )
+
+    for p in preserved_sessions:
+        p["_is_preserved"] = True
+    for p in proposed_sessions:
+        p["_is_preserved"] = False
+
     proposed_sessions.sort(key=lambda x: (int(x["weekday"]), x["start_time"]))
 
     # Hard constraint verification on the generated plan
@@ -1271,9 +1808,10 @@ def generate_study_plan(
         confirmed_classes=confirmed_classes,
         routines=routines,
         tasks_by_id=tasks_by_id,
-        require_inside_study_window=True,
+        require_inside_study_window=has_any_study_windows,
         max_daily_minutes=max_daily_min,
         week_monday=week_monday,
+        now=now,
     )
     if violations:
         warnings.extend(violations)
@@ -1288,12 +1826,20 @@ def generate_study_plan(
         parsed_ai=parsed_ai,
         prefs=prefs,
         reschedule_only=reschedule_only,
+        unplaced_courses=unplaced_courses,
+        is_historical_week=is_historical_week,
+        week_monday=week_monday,
+        ceil_now=ceil_now,
     )
 
     plan_id = uuid.uuid4().hex
-    now = datetime.now(timezone.utc).isoformat()
-    with timetable_store.get_connection() as conn:
-        # Mark previous draft plans as superseded
+    created_at_iso = datetime.now(timezone.utc).isoformat()
+    unscheduled_payload = {
+        "tasks": unscheduled_tasks,
+        "courses": unplaced_courses,
+    }
+
+    with timetable_store.get_connection(db_path=db_path) as conn:
         conn.execute("UPDATE study_plan_drafts SET status = 'discarded' WHERE status = 'draft'")
         conn.execute(
             """
@@ -1304,9 +1850,9 @@ def generate_study_plan(
             """,
             (
                 plan_id,
-                now,
+                created_at_iso,
                 json.dumps(proposed_sessions, ensure_ascii=False),
-                json.dumps(unscheduled_tasks, ensure_ascii=False),
+                json.dumps(unscheduled_payload, ensure_ascii=False),
                 json.dumps(warnings, ensure_ascii=False),
                 json.dumps(suggestions, ensure_ascii=False),
                 explanation,
@@ -1314,9 +1860,11 @@ def generate_study_plan(
             ),
         )
 
-    draft = get_plan_draft(plan_id) or {}
+    draft = get_plan_draft(plan_id, db_path=db_path) or {}
     draft["missing_estimate_tasks"] = missing_estimate_tasks
     draft["constraint_violations"] = violations
+    draft["unplaced_courses"] = unplaced_courses
+    draft["days_without_free_slot"] = days_without_free_slot
     return draft
 
 
@@ -1332,10 +1880,28 @@ def _diagnose_unscheduled_task(
     earliest_min: int,
     latest_min: int,
     routines: List[Dict[str, Any]],
+    week_monday: Optional[date] = None,
+    ceil_now: Optional[datetime] = None,
+    past_cutoff_by_day: Optional[Dict[int, int]] = None,
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """Identify why a task could not be fully scheduled and propose actionable user options."""
     suggestions: List[Dict[str, Any]] = []
     reasons: List[str] = []
+    cutoffs = past_cutoff_by_day or {}
+
+    local_ceil: Optional[datetime] = None
+    if ceil_now is not None:
+        local_ceil = ceil_now.replace(tzinfo=VN_TZ) if ceil_now.tzinfo is None else ceil_now.astimezone(VN_TZ)
+
+    if week_monday is not None and local_ceil is not None:
+        week_sunday = week_monday + timedelta(days=6)
+        if week_sunday < local_ceil.date():
+            return (
+                f"Tuần lập lịch đã chọn ({week_monday.isoformat()} đến {week_sunday.isoformat()}) "
+                f"đã qua so với thời điểm hiện tại ({local_ceil.strftime('%Y-%m-%d %H:%M')}); "
+                "không còn khung giờ hợp lệ trong tuần này.",
+                [],
+            )
 
     if cutoff_w <= 0:
         return (
@@ -1348,6 +1914,22 @@ def _diagnose_unscheduled_task(
                 "task_id": task["id"],
             }],
         )
+
+    if week_monday is not None and local_ceil is not None:
+        week_start_dt = datetime.combine(week_monday, time.min, tzinfo=VN_TZ)
+        deadline_dt = week_start_dt + timedelta(days=cutoff_w - 1, minutes=cutoff_min)
+        if deadline_dt <= local_ceil:
+            return (
+                f"Thời điểm hiện tại ({local_ceil.strftime('%Y-%m-%d %H:%M')}) đã qua hạn nộp "
+                f"của bài tập ({task['deadline_display']}); không thể xếp phiên học mới vào quá khứ.",
+                [{
+                    "key": f"extend_deadline_{task['id']}",
+                    "type": "update_deadline",
+                    "title": f"Cập nhật lại hạn nộp cho '{task['title']}'",
+                    "description": "Hạn nộp đã qua so với thời điểm hiện tại; hãy cập nhật ngày hạn nộp mới hoặc đánh dấu hoàn thành.",
+                    "task_id": task["id"],
+                }],
+            )
 
     # 1. Check if study windows before deadline still had time but hit max_daily_study_minutes
     unused_window_due_to_cap = 0
@@ -1380,15 +1962,15 @@ def _diagnose_unscheduled_task(
             "new_max_daily_minutes": new_max,
         })
 
-    # 2. Check if there are flexible routines ("Có thể đổi giờ") before the deadline
+    # 2. Check if there are future flexible routines ("Có thể đổi giờ") before the deadline
     flexible_candidates = []
     for r in routines:
         if r["flexibility"] == "flexible" and r["weekday"] <= cutoff_w:
+            day_cutoff = cutoffs.get(int(r["weekday"]), 0)
             r_end = time_to_minutes(r["end_time"])
-            r_start = time_to_minutes(r["start_time"])
-            if r["weekday"] == cutoff_w and r_start >= cutoff_min:
-                continue
-            dur = min(r_end, cutoff_min if r["weekday"] == cutoff_w else r_end) - r_start
+            r_start = max(time_to_minutes(r["start_time"]), day_cutoff)
+            eff_end = min(r_end, cutoff_min) if r["weekday"] == cutoff_w else r_end
+            dur = eff_end - r_start
             if dur >= 30:
                 flexible_candidates.append((r, dur))
 
@@ -1410,47 +1992,66 @@ def _diagnose_unscheduled_task(
                 "end_time": r["end_time"],
             })
 
-    # 3. Check unscheduled free daytime intervals (outside declared study_windows but not blocked by class/fixed/rest)
+    # 3. Check unscheduled future free daytime intervals (outside declared study_windows but not blocked by class/fixed/rest)
+    has_study_windows = any(
+        (r.get("flexibility") == "study_window" or r.get("activity_type") == "study_window")
+        and time_to_minutes(r["end_time"]) > time_to_minutes(r["start_time"])
+        for r in routines
+    )
     potential_new_windows: List[Tuple[int, int, int]] = []
+    total_remaining_daytime_open = 0
     for w in range(1, min(7, cutoff_w) + 1):
+        day_cap_start = max(earliest_min, cutoffs.get(w, 0))
         day_cap_end = min(latest_min, cutoff_min) if w == cutoff_w else latest_min
-        if day_cap_end <= earliest_min:
+        if day_cap_end <= day_cap_start:
             continue
-        existing_win = [
-            (time_to_minutes(r["start_time"]), time_to_minutes(r["end_time"]))
-            for r in routines
-            if r["weekday"] == w and r["flexibility"] == "study_window"
-        ]
-        # Subtract both blocked intervals and already declared study windows from [earliest_min, day_cap_end]
-        open_gaps = subtract_intervals([(earliest_min, day_cap_end)], blocked_by_day.get(w, []) + existing_win)
-        for gs, ge in open_gaps:
-            if ge - gs >= 45:
-                potential_new_windows.append((w, gs, ge))
+        day_open = subtract_intervals([(day_cap_start, day_cap_end)], blocked_by_day.get(w, []))
+        total_remaining_daytime_open += sum(ge - gs for gs, ge in day_open)
+        if has_study_windows:
+            existing_win = [
+                (time_to_minutes(r["start_time"]), time_to_minutes(r["end_time"]))
+                for r in routines
+                if r["weekday"] == w and (r.get("flexibility") == "study_window" or r.get("activity_type") == "study_window")
+            ]
+            # Subtract both blocked intervals and already declared study windows from [day_cap_start, day_cap_end]
+            open_gaps = subtract_intervals([(day_cap_start, day_cap_end)], blocked_by_day.get(w, []) + existing_win)
+            for gs, ge in open_gaps:
+                if ge - gs >= 45:
+                    potential_new_windows.append((w, gs, ge))
 
-    if not any(r["flexibility"] == "study_window" for r in routines):
-        reasons.append("chưa khai báo khung giờ có thể học nào trong tuần")
-    elif not reasons:
-        reasons.append(
-            f"tổng thời gian trống trong các 'Khung giờ có thể học' trước hạn ({task['deadline_display']}) đã hết"
-        )
+    if not reasons:
+        if week_monday is not None and local_ceil is not None and total_remaining_daytime_open < missing_minutes:
+            reasons.append(
+                f"thời gian còn lại từ thời điểm hiện tại ({local_ceil.strftime('%Y-%m-%d %H:%M')}) "
+                f"đến hạn nộp ({task['deadline_display']}) không còn đủ {missing_minutes} phút trong khung giờ hợp lệ"
+            )
+        elif has_study_windows:
+            reasons.append(
+                f"tổng thời gian trống trong các 'Khung giờ có thể học' trước hạn ({task['deadline_display']}) đã hết"
+            )
+        else:
+            reasons.append(
+                f"không còn khoảng thời gian phù hợp trong khung giờ rảnh ban ngày trước hạn ({task['deadline_display']})"
+            )
 
-    for w, gs, ge in potential_new_windows[:3]:
-        win_end = min(ge, gs + max(60, min(180, missing_minutes)))
-        day_label = WEEKDAY_NAMES[w]
-        st_str = minutes_to_time(gs)
-        et_str = minutes_to_time(win_end)
-        suggestions.append({
-            "key": f"add_window_{w}_{st_str}_{et_str}",
-            "type": "add_study_window",
-            "title": f"Mở thêm khung giờ có thể học: {day_label} ({st_str} - {et_str})",
-            "description": (
-                f"Khoảng {day_label} từ {st_str} đến {et_str} ({win_end - gs} phút) hiện đang trống, "
-                f"không trùng lịch học trên trường hay giờ nghỉ ngơi và nằm trước hạn nộp."
-            ),
-            "weekday": w,
-            "start_time": st_str,
-            "end_time": et_str,
-        })
+    if has_study_windows:
+        for w, gs, ge in potential_new_windows[:3]:
+            win_end = min(ge, gs + max(60, min(180, missing_minutes)))
+            day_label = WEEKDAY_NAMES[w]
+            st_str = minutes_to_time(gs)
+            et_str = minutes_to_time(win_end)
+            suggestions.append({
+                "key": f"add_window_{w}_{st_str}_{et_str}",
+                "type": "add_study_window",
+                "title": f"Mở thêm khung giờ có thể học: {day_label} ({st_str} - {et_str})",
+                "description": (
+                    f"Khoảng {day_label} từ {st_str} đến {et_str} ({win_end - gs} phút) hiện đang trống, "
+                    f"không trùng lịch học trên trường hay giờ nghỉ ngơi và nằm trước hạn nộp."
+                ),
+                "weekday": w,
+                "start_time": st_str,
+                "end_time": et_str,
+            })
 
     reason_text = "; ".join(reasons) if reasons else "không còn đủ khung giờ có thể học trước hạn nộp"
     return reason_text, suggestions
@@ -1466,12 +2067,16 @@ def _build_ai_explanation(
     parsed_ai: Dict[str, Any],
     prefs: Dict[str, Any],
     reschedule_only: bool,
+    unplaced_courses: Optional[List[str]] = None,
+    is_historical_week: bool = False,
+    week_monday: Optional[date] = None,
+    ceil_now: Optional[datetime] = None,
 ) -> str:
     """Create a clear, structured Vietnamese explanation of the generated study plan."""
-    fixed_routines = [r for r in routines if r["flexibility"] == "fixed"]
-    protected_routines = [r for r in routines if r["flexibility"] == "protected"]
-    flexible_routines = [r for r in routines if r["flexibility"] == "flexible"]
-    study_windows = [r for r in routines if r["flexibility"] == "study_window"]
+    fixed_routines = [r for r in routines if r.get("flexibility") == "fixed"]
+    protected_routines = [r for r in routines if r.get("flexibility") == "protected"]
+    flexible_routines = [r for r in routines if r.get("flexibility") == "flexible"]
+    study_windows = [r for r in routines if r.get("flexibility") == "study_window"]
 
     total_proposed_min = sum(int(s["duration_minutes"]) for s in proposed_sessions)
     total_preserved_min = sum(
@@ -1480,11 +2085,18 @@ def _build_ai_explanation(
 
     parts: List[str] = []
     mode_str = "sắp xếp lại các phần việc chưa hoàn thành" if reschedule_only else "tạo kế hoạch học tập cá nhân mới"
-    parts.append(
-        f"Bộ xếp lịch đã {mode_str} dựa trên {len(confirmed_classes)} buổi học cố định trên trường, "
-        f"{len(fixed_routines)} hoạt động cá nhân cố định, {len(protected_routines)} khung giờ nghỉ ngơi được bảo vệ "
-        f"và {len(study_windows)} khung giờ cho phép tự học."
-    )
+    if study_windows:
+        parts.append(
+            f"Bộ xếp lịch đã {mode_str} dựa trên {len(confirmed_classes)} buổi học cố định trên trường, "
+            f"{len(fixed_routines)} hoạt động cá nhân cố định, {len(protected_routines)} khung giờ nghỉ ngơi được bảo vệ "
+            f"và {len(study_windows)} khung giờ cho phép tự học."
+        )
+    else:
+        parts.append(
+            f"Bộ xếp lịch đã {mode_str} dựa trên {len(confirmed_classes)} buổi học cố định trên trường, "
+            f"{len(fixed_routines)} hoạt động cá nhân cố định, {len(protected_routines)} khung giờ nghỉ ngơi được bảo vệ "
+            f"và tự động tính khung giờ rảnh ban ngày ({minutes_to_time(parsed_ai['earliest_min'])} - {minutes_to_time(parsed_ai['latest_min'])})."
+        )
 
     if preserved_sessions:
         parts.append(
@@ -1497,7 +2109,14 @@ def _build_ai_explanation(
             f"ưu tiên các bài tập có hạn nộp gần nhất và độ ưu tiên cao, đồng thời cố gắng chừa khoảng dự phòng "
             f"trước deadline và giới hạn không quá {parsed_ai['max_daily_min']} phút tự học/ngày."
         )
-    elif not unscheduled_tasks and not missing_estimate_tasks:
+    elif is_historical_week and week_monday is not None:
+        week_sunday = week_monday + timedelta(days=6)
+        now_str = ceil_now.strftime("%Y-%m-%d %H:%M") if ceil_now is not None else "hiện tại"
+        parts.append(
+            f"⚠️ Tuần lập lịch đã chọn ({week_monday.isoformat()} đến {week_sunday.isoformat()}) "
+            f"đã qua so với thời điểm {now_str}; không thể xếp các phiên tự học mới vào quá khứ."
+        )
+    elif not unscheduled_tasks and not missing_estimate_tasks and not unplaced_courses:
         parts.append("Hiện không có bài tập nào cần xếp thêm phiên học mới.")
 
     if flexible_routines:
@@ -1515,13 +2134,18 @@ def _build_ai_explanation(
             f"Vui lòng bổ sung số phút dự kiến cho các công việc này."
         )
 
+    if unplaced_courses:
+        parts.append(
+            f"⚠️ Cảnh báo: Không đủ khung giờ tự học hợp lệ cho các môn sau: {', '.join(unplaced_courses)}."
+        )
+
     if unscheduled_tasks:
         total_missing = sum(int(u["missing_minutes"]) for u in unscheduled_tasks)
         parts.append(
             f"⚠️ Lưu ý quan trọng: Còn {len(unscheduled_tasks)} bài tập chưa xếp đủ thời gian (thiếu tổng cộng {total_missing} phút). "
             f"Xem chi tiết cảnh báo và các lựa chọn gợi ý bên dưới để quyết định điều chỉnh."
         )
-    elif proposed_sessions and not missing_estimate_tasks:
+    elif proposed_sessions and not missing_estimate_tasks and not unplaced_courses:
         parts.append(
             "✅ Toàn bộ khối lượng bài tập đã được xếp đủ vào các khung giờ có thể học trước hạn nộp mà không vi phạm lịch cố định hay giờ nghỉ ngơi. "
             "Hãy kiểm tra bản nháp bên dưới và bấm 'Xác nhận & Lưu lịch học tập'."
@@ -1535,24 +2159,22 @@ def _build_ai_explanation(
 # ==============================================================================
 
 
-def confirm_study_plan(plan_id: str, reviewed_sessions: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+def confirm_study_plan(
+    plan_id: str,
+    reviewed_sessions: Optional[List[Dict[str, Any]]] = None,
+    db_path: Optional[Path | str] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
     """Validate and save the user-reviewed study plan draft into study_sessions."""
-    draft = get_plan_draft(plan_id)
+    draft = get_plan_draft(plan_id, db_path=db_path)
     if not draft:
         raise KeyError("Không tìm thấy bản nháp kế hoạch học tập")
-
-    confirmed_classes = timetable_store.get_confirmed_entries()
-    routines = get_routines()
-    all_tasks = get_tasks()
-    tasks_by_id = {t["id"]: t for t in all_tasks}
-    prefs = get_preferences()
-    week_monday = _infer_week_monday(prefs, all_tasks)
-
-    existing_sessions = get_study_sessions()
-    preserved_sessions = [s for s in existing_sessions if s.get("completed") or s.get("locked")]
+    if str(draft.get("status") or "") != "draft":
+        raise ValueError("Bản nháp kế hoạch học tập không còn hợp lệ (đã được xác nhận hoặc hủy trước đó).")
 
     sessions_to_save = reviewed_sessions if reviewed_sessions is not None else draft["sessions"]
     normalized_new: List[Dict[str, Any]] = []
+    allowed_draft_sources = ("ai_assistant", "ai_auto_90m", "ai_auto_courses")
 
     for idx, s in enumerate(sessions_to_save):
         title = str(s.get("title") or "").strip()
@@ -1569,8 +2191,12 @@ def confirm_study_plan(plan_id: str, reviewed_sessions: Optional[List[Dict[str, 
         if e_min <= s_min:
             raise ValueError(f"Dòng {idx + 1} ({title}): Giờ kết thúc ({et}) phải sau giờ bắt đầu ({st})")
 
+        raw_source = str(s.get("source") or "ai_assistant").strip()
+        safe_source = raw_source if raw_source in allowed_draft_sources else "ai_assistant"
+
         normalized_new.append({
             "task_id": s.get("task_id"),
+            "weekly_lesson_id": s.get("weekly_lesson_id"),
             "title": title,
             "course": course,
             "weekday": w,
@@ -1578,60 +2204,132 @@ def confirm_study_plan(plan_id: str, reviewed_sessions: Optional[List[Dict[str, 
             "end_time": et,
             "duration_minutes": e_min - s_min,
             "priority": str(s.get("priority") or "medium"),
-            "source": str(s.get("source") or "ai_assistant"),
-            "completed": 1 if s.get("completed") else 0,
+            "source": safe_source,
+            "completed": 0,
             "locked": 1 if s.get("locked") else 0,
             "session_index": int(s.get("session_index") or 1),
             "total_sessions": int(s.get("total_sessions") or 1),
             "notes": str(s.get("notes") or ""),
+            "classified_topic": str(s.get("classified_topic") or ""),
+            "worksheet_id": str(s.get("worksheet_id") or ""),
+            "practice_id": str(s.get("practice_id") or ""),
+            "exercise_status": str(s.get("exercise_status") or ""),
+            "_is_preserved": False,
         })
 
-    # Verify hard constraints: no overlap with classes, fixed routines, protected rest, or preserved sessions
-    violations = verify_schedule_constraints(
-        sessions=preserved_sessions + normalized_new,
-        confirmed_classes=confirmed_classes,
-        routines=routines,
-        tasks_by_id=tasks_by_id,
-        require_inside_study_window=False,  # User may intentionally adjust a session time when reviewing draft
-        max_daily_minutes=None,
-        week_monday=week_monday,
-    )
-    if violations:
-        raise ValueError(" | ".join(violations))
-
-    now = datetime.now(timezone.utc).isoformat()
-    with timetable_store.get_connection() as conn:
+    created_at_iso = datetime.now(timezone.utc).isoformat()
+    with timetable_store.get_connection(db_path=db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
-        # Delete only unlocked and uncompleted sessions; keep completed and locked sessions intact
-        conn.execute("DELETE FROM study_sessions WHERE completed = 0 AND locked = 0")
-        for item in normalized_new:
-            conn.execute(
-                """
-                INSERT INTO study_sessions
-                (plan_id, task_id, title, course, weekday, start_time, end_time,
-                 duration_minutes, priority, source, completed, locked,
-                 session_index, total_sessions, notes, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    plan_id,
-                    item["task_id"],
-                    item["title"],
-                    item["course"],
-                    item["weekday"],
-                    item["start_time"],
-                    item["end_time"],
-                    item["duration_minutes"],
-                    item["priority"],
-                    item["source"],
-                    item["completed"],
-                    item["locked"],
-                    item["session_index"],
-                    item["total_sessions"],
-                    item["notes"],
-                    now,
-                ),
+        d_row = conn.execute("SELECT status FROM study_plan_drafts WHERE plan_id = ?", (plan_id,)).fetchone()
+        if not d_row or d_row[0] != "draft":
+            raise ValueError("Bản nháp kế hoạch học tập không còn hợp lệ (đã được xác nhận hoặc hủy trước đó).")
+
+        curr_classes = [dict(r) for r in conn.execute("SELECT * FROM timetable_confirmed").fetchall()]
+        curr_routines = [dict(r) for r in conn.execute("SELECT * FROM personal_routines").fetchall()]
+        curr_tasks = [dict(r) for r in conn.execute("SELECT * FROM study_tasks").fetchall()]
+        curr_tasks_by_id = {t["id"]: t for t in curr_tasks}
+        curr_preserved = [
+            dict(r) for r in conn.execute(
+                "SELECT * FROM study_sessions WHERE completed = 1 OR locked = 1 OR source IN ('manual', 'user_manual')"
+            ).fetchall()
+        ]
+        for p in curr_preserved:
+            p["_is_preserved"] = True
+
+        pref_row = conn.execute("SELECT * FROM study_preferences WHERE id = 1").fetchone()
+        curr_prefs = dict(pref_row) if pref_row else {}
+        curr_week_monday = _infer_week_monday(curr_prefs, curr_tasks)
+        has_study_windows = any(
+            (r.get("flexibility") == "study_window" or r.get("activity_type") == "study_window")
+            and time_to_minutes(r["end_time"]) > time_to_minutes(r["start_time"])
+            for r in curr_routines
+        )
+
+        earliest = curr_prefs.get("earliest_study_time") or "07:00"
+        latest = curr_prefs.get("latest_study_time") or "22:30"
+        max_daily = curr_prefs.get("max_daily_study_minutes")
+
+        # Revalidate hard constraints: awake bounds, daily budget, current-time cutoff, no overlap with classes, fixed routines, protected rest, or preserved sessions
+        violations = verify_schedule_constraints(
+            sessions=curr_preserved + normalized_new,
+            confirmed_classes=curr_classes,
+            routines=curr_routines,
+            tasks_by_id=curr_tasks_by_id,
+            require_inside_study_window=has_study_windows,
+            max_daily_minutes=max_daily,
+            week_monday=curr_week_monday,
+            earliest_study_time=earliest,
+            latest_study_time=latest,
+            enforce_awake_bounds=True,
+            now=now,
+        )
+        if violations:
+            raise ValueError(
+                "Lịch hoặc thiết lập học tập đã thay đổi so với thời điểm đề xuất (phát hiện xung đột hoặc vi phạm giới hạn): "
+                + " | ".join(violations)
+                + ". Vui lòng tạo lại đề xuất lịch mới."
             )
+
+        # Delete only unlocked, uncompleted, non-manual sessions
+        conn.execute(
+            "DELETE FROM study_sessions WHERE completed = 0 AND locked = 0 AND source NOT IN ('manual', 'user_manual')"
+        )
+
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
+        col_names = [
+            "plan_id", "task_id", "title", "course", "weekday", "start_time", "end_time",
+            "duration_minutes", "priority", "source", "completed", "locked",
+            "session_index", "total_sessions", "notes", "created_at"
+        ]
+        val_placeholders = ["?"] * len(col_names)
+        if "classified_topic" in cols:
+            col_names.append("classified_topic")
+            val_placeholders.append("?")
+        if "worksheet_id" in cols:
+            col_names.append("worksheet_id")
+            val_placeholders.append("?")
+        if "practice_id" in cols:
+            col_names.append("practice_id")
+            val_placeholders.append("?")
+        if "exercise_status" in cols:
+            col_names.append("exercise_status")
+            val_placeholders.append("?")
+        if "weekly_lesson_id" in cols:
+            col_names.append("weekly_lesson_id")
+            val_placeholders.append("?")
+
+        insert_sql = f"INSERT INTO study_sessions ({', '.join(col_names)}) VALUES ({', '.join(val_placeholders)})"
+        for item in normalized_new:
+            params = [
+                plan_id,
+                item["task_id"],
+                item["title"],
+                item["course"],
+                item["weekday"],
+                item["start_time"],
+                item["end_time"],
+                item["duration_minutes"],
+                item["priority"],
+                item["source"],
+                item["completed"],
+                item["locked"],
+                item["session_index"],
+                item["total_sessions"],
+                item["notes"],
+                created_at_iso,
+            ]
+            if "classified_topic" in cols:
+                params.append(item.get("classified_topic") or "")
+            if "worksheet_id" in cols:
+                params.append(item.get("worksheet_id") or "")
+            if "practice_id" in cols:
+                params.append(item.get("practice_id") or "")
+            if "exercise_status" in cols:
+                params.append(item.get("exercise_status") or "")
+            if "weekly_lesson_id" in cols:
+                params.append(item.get("weekly_lesson_id"))
+            conn.execute(insert_sql, params)
+
         conn.execute(
             "UPDATE study_plan_drafts SET status = 'confirmed' WHERE plan_id = ?",
             (plan_id,),
@@ -1641,11 +2339,11 @@ def confirm_study_plan(plan_id: str, reviewed_sessions: Optional[List[Dict[str, 
         "status": "ok",
         "plan_id": plan_id,
         "saved_count": len(normalized_new),
-        "sessions": get_study_sessions(),
+        "sessions": get_study_sessions(db_path=db_path),
     }
 
 
-def add_manual_study_session(data: Dict[str, Any]) -> Dict[str, Any]:
+def add_manual_study_session(data: Dict[str, Any], db_path: Optional[Path | str] = None) -> Dict[str, Any]:
     """Allow the user to manually add a study session and lock it by default."""
     title = str(data.get("title") or "").strip()
     course = str(data.get("course") or "").strip()
@@ -1661,10 +2359,10 @@ def add_manual_study_session(data: Dict[str, Any]) -> Dict[str, Any]:
     if e_min <= s_min:
         raise ValueError("Giờ kết thúc phải lớn hơn giờ bắt đầu")
 
-    confirmed_classes = timetable_store.get_confirmed_entries()
-    routines = get_routines()
-    existing_sessions = get_study_sessions()
-    tasks_by_id = {t["id"]: t for t in get_tasks()}
+    confirmed_classes = timetable_store.get_confirmed_entries(db_path=db_path)
+    routines = get_routines(db_path=db_path)
+    existing_sessions = get_study_sessions(db_path=db_path)
+    tasks_by_id = {t["id"]: t for t in get_tasks(db_path=db_path)}
 
     candidate = {
         "task_id": data.get("task_id"),
@@ -1691,8 +2389,8 @@ def add_manual_study_session(data: Dict[str, Any]) -> Dict[str, Any]:
     if violations:
         raise ValueError(" | ".join(violations))
 
-    now = datetime.now(timezone.utc).isoformat()
-    with timetable_store.get_connection() as conn:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with timetable_store.get_connection(db_path=db_path) as conn:
         cursor = conn.execute(
             """
             INSERT INTO study_sessions
@@ -1713,18 +2411,18 @@ def add_manual_study_session(data: Dict[str, Any]) -> Dict[str, Any]:
                 candidate["completed"],
                 candidate["locked"],
                 candidate["notes"],
-                now,
+                now_iso,
             ),
         )
         sid = cursor.lastrowid or 0
 
-    sessions = get_study_sessions()
+    sessions = get_study_sessions(db_path=db_path)
     return next((s for s in sessions if s["id"] == sid), {})
 
 
-def update_study_session(session_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+def update_study_session(session_id: int, data: Dict[str, Any], db_path: Optional[Path | str] = None) -> Dict[str, Any]:
     """Update a study session (mark completed, lock/unlock, or edit time/title/course)."""
-    with timetable_store.get_connection() as conn:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         row = conn.execute("SELECT * FROM study_sessions WHERE id = ?", (session_id,)).fetchone()
         if not row:
             raise KeyError("Không tìm thấy phiên học")
@@ -1755,7 +2453,7 @@ def update_study_session(session_id: int, data: Dict[str, Any]) -> Dict[str, Any
 
     notes = str(data.get("notes", existing["notes"]) or "").strip()
 
-    other_sessions = [s for s in get_study_sessions() if s["id"] != session_id]
+    other_sessions = [s for s in get_study_sessions(db_path=db_path) if s["id"] != session_id]
     candidate = {
         **existing,
         "title": title,
@@ -1770,9 +2468,9 @@ def update_study_session(session_id: int, data: Dict[str, Any]) -> Dict[str, Any
     }
 
     if time_changed:
-        confirmed_classes = timetable_store.get_confirmed_entries()
-        routines = get_routines()
-        tasks_by_id = {t["id"]: t for t in get_tasks()}
+        confirmed_classes = timetable_store.get_confirmed_entries(db_path=db_path)
+        routines = get_routines(db_path=db_path)
+        tasks_by_id = {t["id"]: t for t in get_tasks(db_path=db_path)}
         violations = verify_schedule_constraints(
             sessions=other_sessions + [candidate],
             confirmed_classes=confirmed_classes,
@@ -1783,7 +2481,7 @@ def update_study_session(session_id: int, data: Dict[str, Any]) -> Dict[str, Any
         if violations:
             raise ValueError(" | ".join(violations))
 
-    with timetable_store.get_connection() as conn:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         conn.execute(
             """
             UPDATE study_sessions
@@ -1811,22 +2509,22 @@ def update_study_session(session_id: int, data: Dict[str, Any]) -> Dict[str, Any
                 if all(r["completed"] for r in sess_rows):
                     conn.execute("UPDATE study_tasks SET completed = 1 WHERE id = ?", (tid,))
 
-    sessions = get_study_sessions()
+    sessions = get_study_sessions(db_path=db_path)
     return next((s for s in sessions if s["id"] == session_id), {})
 
 
-def delete_study_session(session_id: int) -> bool:
-    with timetable_store.get_connection() as conn:
+def delete_study_session(session_id: int, db_path: Optional[Path | str] = None) -> bool:
+    with timetable_store.get_connection(db_path=db_path) as conn:
         cursor = conn.execute("DELETE FROM study_sessions WHERE id = ?", (session_id,))
         return cursor.rowcount > 0
 
 
-def apply_planner_suggestion(payload: Dict[str, Any]) -> Dict[str, Any]:
+def apply_planner_suggestion(payload: Dict[str, Any], db_path: Optional[Path | str] = None) -> Dict[str, Any]:
     """Apply a user-approved scheduling suggestion (e.g., add study window, increase daily limit, or convert flexible routine)."""
     sug_type = str(payload.get("type") or "").strip()
     if sug_type == "increase_daily_limit":
         new_max = int(payload.get("new_max_daily_minutes") or 300)
-        prefs = update_preferences({"max_daily_study_minutes": new_max})
+        prefs = update_preferences({"max_daily_study_minutes": new_max}, db_path=db_path)
         return {"status": "ok", "applied": sug_type, "preferences": prefs}
 
     if sug_type == "add_study_window":
@@ -1840,12 +2538,12 @@ def apply_planner_suggestion(payload: Dict[str, Any]) -> Dict[str, Any]:
             "title": payload.get("title") or "Khung giờ tự học bổ sung",
             "activity_type": "study_window",
             "flexibility": "study_window",
-        })
+        }, db_path=db_path)
         return {"status": "ok", "applied": sug_type, "routine": res["routine"]}
 
     if sug_type == "convert_flexible_to_study_window":
         rid = int(payload["routine_id"])
-        existing = next((r for r in get_routines() if r["id"] == rid), None)
+        existing = next((r for r in get_routines(db_path=db_path) if r["id"] == rid), None)
         if not existing:
             raise KeyError("Không tìm thấy hoạt động cá nhân để đổi giờ")
         res = update_routine(rid, {
@@ -1853,7 +2551,7 @@ def apply_planner_suggestion(payload: Dict[str, Any]) -> Dict[str, Any]:
             "title": f"Khung giờ tự học (Đổi từ: {existing['title']})",
             "activity_type": "study_window",
             "flexibility": "study_window",
-        })
+        }, db_path=db_path)
         return {"status": "ok", "applied": sug_type, "routine": res["routine"]}
 
     raise ValueError(f"Loại gợi ý không được hỗ trợ: {sug_type}")
@@ -1864,12 +2562,12 @@ def apply_planner_suggestion(payload: Dict[str, Any]) -> Dict[str, Any]:
 # ==============================================================================
 
 
-def get_combined_weekly_schedule() -> Dict[str, Any]:
+def get_combined_weekly_schedule(db_path: Optional[Path | str] = None) -> Dict[str, Any]:
     """Build unified weekly schedule combining OCR classes, personal routines, rest, and study sessions."""
-    classes = timetable_store.get_confirmed_entries()
-    routines = get_routines()
-    study_sessions = get_study_sessions()
-    active_draft = get_latest_active_plan_draft()
+    classes = timetable_store.get_confirmed_entries(db_path=db_path)
+    routines = get_routines(db_path=db_path)
+    study_sessions = get_study_sessions(db_path=db_path)
+    active_draft = get_latest_active_plan_draft(db_path=db_path)
 
     items: List[Dict[str, Any]] = []
     study_windows: List[Dict[str, Any]] = []
@@ -1945,7 +2643,7 @@ def get_combined_weekly_schedule() -> Dict[str, Any]:
             "task_id": s.get("task_id"),
             "category": "study_session",
             "category_label": "Phiên tự học",
-            "source_badge": "Bộ xếp lịch đề xuất" if s.get("source") == "ai_assistant" else "Người dùng tự xếp",
+            "source_badge": s.get("source_label") or ("Bộ xếp lịch đề xuất" if s.get("source") == "ai_assistant" else "Người dùng tự xếp"),
             "weekday": w,
             "weekday_label": WEEKDAY_NAMES.get(w, f"Thứ {w}"),
             "start_time": s["start_time"],
@@ -1953,6 +2651,9 @@ def get_combined_weekly_schedule() -> Dict[str, Any]:
             "duration_minutes": s["duration_minutes"],
             "title": s["title"],
             "course": s["course"],
+            "classified_topic": s.get("classified_topic") or "",
+            "worksheet_id": s.get("worksheet_id") or "",
+            "pdf_url": s.get("pdf_url"),
             "priority": s.get("priority", "medium"),
             "priority_label": s.get("priority_label", "Trung bình"),
             "flexibility": "locked" if s.get("locked") else "scheduled",
@@ -1993,14 +2694,14 @@ def get_combined_weekly_schedule() -> Dict[str, Any]:
     }
 
 
-def get_full_planner_state() -> Dict[str, Any]:
+def get_full_planner_state(db_path: Optional[Path | str] = None) -> Dict[str, Any]:
     """Return complete state for the Personal Study Schedule Assistant UI."""
-    confirmed_classes = timetable_store.get_confirmed_entries()
-    routines = get_routines()
-    preferences = get_preferences()
-    tasks = get_tasks()
-    sessions = get_study_sessions()
-    combined = get_combined_weekly_schedule()
+    confirmed_classes = timetable_store.get_confirmed_entries(db_path=db_path)
+    routines = get_routines(db_path=db_path)
+    preferences = get_preferences(db_path=db_path)
+    tasks = get_tasks(db_path=db_path)
+    sessions = get_study_sessions(db_path=db_path)
+    combined = get_combined_weekly_schedule(db_path=db_path)
     courses = sorted({c["course"] for c in confirmed_classes if c.get("course")} | {t["course"] for t in tasks if t.get("course")})
     return {
         "confirmed_classes": confirmed_classes,

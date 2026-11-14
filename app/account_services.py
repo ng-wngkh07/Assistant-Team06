@@ -322,6 +322,78 @@ def make_material_manager():
                                     pass
                             raise
 
+        def get_storage_usage(self) -> Dict[str, Any]:
+            """Return current private material count and total deduplicated bytes on disk."""
+            with self._lock, self.connect() as db:
+                obj_row = db.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM file_objects"
+                ).fetchone()
+                rec_row = db.execute("SELECT COUNT(*) FROM records").fetchone()
+            object_count = int(obj_row[0] or 0) if obj_row else 0
+            total_bytes = int(obj_row[1] or 0) if obj_row else 0
+            record_count = int(rec_row[0] or 0) if rec_row else 0
+            return {
+                "file_count": max(object_count, record_count),
+                "object_count": object_count,
+                "record_count": record_count,
+                "total_bytes": total_bytes,
+            }
+
+        def check_upload_quota(
+            self,
+            file_bytes: Optional[bytes],
+            *,
+            material_id: Optional[str] = None,
+        ) -> None:
+            """Enforce per-account file count and storage quotas before saving non-deduplicated uploads."""
+            max_files_raw = os.getenv("STUDY_ACCOUNT_MAX_FILES", "50").strip()
+            max_mb_raw = os.getenv("STUDY_ACCOUNT_MAX_STORAGE_MB", "250").strip()
+            try:
+                max_files = int(max_files_raw) if max_files_raw else 50
+            except ValueError:
+                max_files = 50
+            try:
+                max_storage_mb = int(max_mb_raw) if max_mb_raw else 250
+            except ValueError:
+                max_storage_mb = 250
+            max_bytes = max_storage_mb * 1024 * 1024 if max_storage_mb > 0 else 0
+
+            incoming_size = len(file_bytes) if file_bytes else 0
+            file_hash = hashlib.sha256(file_bytes).hexdigest() if file_bytes is not None else None
+
+            with self._lock, self.connect() as db:
+                obj_row = db.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM file_objects"
+                ).fetchone()
+                object_count = int(obj_row[0] or 0) if obj_row else 0
+                used_bytes = int(obj_row[1] or 0) if obj_row else 0
+                rec_row = db.execute("SELECT COUNT(*) FROM records").fetchone()
+                record_count = int(rec_row[0] or 0) if rec_row else 0
+
+                hash_exists = False
+                if file_hash:
+                    hash_exists = (
+                        db.execute("SELECT 1 FROM file_objects WHERE hash = ?", (file_hash,)).fetchone()
+                        is not None
+                    )
+                record_exists = False
+                if material_id:
+                    record_exists = (
+                        db.execute("SELECT 1 FROM records WHERE id = ?", (material_id,)).fetchone()
+                        is not None
+                    )
+
+            effective_count = max(object_count, record_count)
+            will_add_entry = not record_exists and not hash_exists
+            if max_files > 0 and will_add_entry and effective_count >= max_files:
+                raise StudyMaterialError(
+                    f"Tài khoản đã đạt giới hạn tối đa {max_files} tệp tài liệu. Vui lòng dùng lại hoặc giải phóng bớt tài liệu."
+                )
+            if max_bytes > 0 and not hash_exists and incoming_size > 0 and (used_bytes + incoming_size) > max_bytes:
+                raise StudyMaterialError(
+                    f"Dung lượng lưu trữ tài khoản vượt quá giới hạn {max_storage_mb}MB. Hãy giải phóng dung lượng trước khi tải thêm."
+                )
+
         def cache_raw_file(
             self,
             filename: Optional[str],
@@ -333,6 +405,7 @@ def make_material_manager():
             if file_bytes is None:
                 return
 
+            self.check_upload_quota(file_bytes, material_id=material_id)
             file_hash = hashlib.sha256(file_bytes).hexdigest()
             target_file = self.originals_dir / f"{file_hash}.bin"
             validate_path_containment(target_file, self.originals_dir)
@@ -410,6 +483,8 @@ def make_material_manager():
                             "INSERT OR REPLACE INTO records(id, content) VALUES(?, ?)",
                             (material_id, json.dumps(self._materials[material_id], ensure_ascii=False)),
                         )
+                    if material_id:
+                        self._ensure_material_indexed(db, material_id, record=_record)
 
             # 3. ONLY AFTER SUCCESSFUL COMMIT: update in-memory caches and aliases (no recursive super call)
             if hasattr(self._raw_files, "_mem_cache"):
@@ -430,15 +505,225 @@ def make_material_manager():
             if raw_b is not None:
                 self.cache_raw_file(extracted_result.filename, raw_b, material_id=mid, _record=record)
             else:
+                self.check_upload_quota(None, material_id=mid)
                 with self._lock, self.connect() as db:
                     with atomic_transaction(db):
                         db.execute(
                             "INSERT OR REPLACE INTO records(id, content) VALUES(?, ?)",
                             (mid, json.dumps(record, ensure_ascii=False)),
                         )
+                        self._ensure_material_indexed(db, mid, record=record)
             with self._lock:
                 self._materials[mid] = record
             return record
+
+        def verify_cas_integrity(self, material_id: str) -> None:
+            """Ensure original CAS file exists on disk and matches checksum."""
+            if not material_id:
+                return
+            with self.connect() as db:
+                f_row = db.execute("SELECT file_hash FROM files WHERE key = ?", (material_id,)).fetchone()
+                if not f_row or not f_row[0]:
+                    rec_row = db.execute("SELECT content FROM records WHERE id = ?", (material_id,)).fetchone()
+                    if rec_row:
+                        rec = json.loads(rec_row[0])
+                        if rec.get("filename"):
+                            f_row = db.execute("SELECT file_hash FROM files WHERE key = ?", (rec["filename"],)).fetchone()
+            if not f_row or not f_row[0]:
+                return
+            file_hash = f_row[0]
+            target_file = self.originals_dir / f"{file_hash}.bin"
+            validate_path_containment(target_file, self.originals_dir)
+            if not target_file.is_file() or compute_sha256_file(target_file) != file_hash:
+                raise CorruptedOriginalError(f"Corrupted or missing original detected for hash {file_hash}")
+
+        def _ensure_material_indexed(
+            self,
+            db: sqlite3.Connection,
+            material_id: str,
+            record: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            """Ensure pages of a private material are chunked and indexed in private_chunks and FTS5."""
+            if not material_id:
+                return
+            existing = db.execute(
+                "SELECT 1 FROM private_chunks WHERE material_id = ? LIMIT 1",
+                (material_id,)
+            ).fetchone()
+            if existing:
+                return
+
+            if record is None:
+                row = db.execute("SELECT content FROM records WHERE id = ?", (material_id,)).fetchone()
+                if not row:
+                    return
+                record = json.loads(row[0])
+
+            f_row = db.execute("SELECT file_hash FROM files WHERE key = ?", (material_id,)).fetchone()
+            file_hash = f_row[0] if f_row and f_row[0] else None
+            if not file_hash and record.get("filename"):
+                f_row2 = db.execute("SELECT file_hash FROM files WHERE key = ?", (record["filename"],)).fetchone()
+                file_hash = f_row2[0] if f_row2 and f_row2[0] else None
+
+            if file_hash:
+                target_file = self.originals_dir / f"{file_hash}.bin"
+                validate_path_containment(target_file, self.originals_dir)
+                if not target_file.is_file() or compute_sha256_file(target_file) != file_hash:
+                    raise CorruptedOriginalError(f"Corrupted or missing original detected for hash {file_hash}")
+
+            pages = record.get("pages") or []
+            from app.chunker import TextChunker
+            now = time.time()
+            filename = record.get("filename", "")
+            clean_title = record.get("clean_title", filename)
+
+            with atomic_transaction(db):
+                db.execute("DELETE FROM private_chunks WHERE material_id = ?", (material_id,))
+                for p in pages:
+                    p_num = int(p.get("page_num", 1))
+                    p_text = str(p.get("text", "") or "").strip()
+                    if not p_text or p_text.startswith("[Tài liệu hình ảnh:") or p.get("has_text") is False:
+                        continue
+                    chunks = TextChunker.chunk_page(clean_title, filename, p_num, p_text)
+                    for c in chunks:
+                        db.execute(
+                            """INSERT INTO private_chunks
+                            (material_id, file_hash, filename, clean_title, page_num, chunk_index, text, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (
+                                material_id,
+                                file_hash,
+                                filename,
+                                clean_title,
+                                p_num,
+                                c["chunk_index"],
+                                c["text"],
+                                now,
+                            ),
+                        )
+
+        def search_private(
+            self,
+            material_id: str,
+            query: str,
+            page_num: Optional[int] = None,
+            top_k: int = 8,
+        ) -> List[Dict[str, Any]]:
+            """Retrieve relevant chunks from account-private document using FTS5 and sequential fallback."""
+            if not material_id:
+                return []
+            self.verify_cas_integrity(material_id)
+
+            with self._lock, self.connect() as db:
+                self._ensure_material_indexed(db, material_id)
+
+            with self.connect() as db:
+                db.row_factory = sqlite3.Row
+                results: List[Dict[str, Any]] = []
+                seen_ids = set()
+
+                import re
+                tokens = [w for w in re.findall(r"\w+", query) if len(w) > 1]
+                if tokens:
+                    clean_tokens = [t.replace('"', '') for t in tokens[:12]]
+                    fts_match_query = " OR ".join(f'"{t}"*' for t in clean_tokens)
+                    try:
+                        if page_num is not None:
+                            rows = db.execute(
+                                """
+                                SELECT c.id, c.material_id, c.file_hash, c.filename, c.clean_title,
+                                       c.page_num, c.chunk_index, c.text, bm25(private_chunks_fts) as rank
+                                FROM private_chunks c
+                                JOIN private_chunks_fts ON c.id = private_chunks_fts.rowid
+                                WHERE c.material_id = ? AND c.page_num = ? AND private_chunks_fts MATCH ?
+                                ORDER BY rank ASC LIMIT ?
+                                """,
+                                (material_id, page_num, fts_match_query, top_k),
+                            ).fetchall()
+                        else:
+                            rows = db.execute(
+                                """
+                                SELECT c.id, c.material_id, c.file_hash, c.filename, c.clean_title,
+                                       c.page_num, c.chunk_index, c.text, bm25(private_chunks_fts) as rank
+                                FROM private_chunks c
+                                JOIN private_chunks_fts ON c.id = private_chunks_fts.rowid
+                                WHERE c.material_id = ? AND private_chunks_fts MATCH ?
+                                ORDER BY rank ASC LIMIT ?
+                                """,
+                                (material_id, fts_match_query, top_k),
+                            ).fetchall()
+
+                        for r in rows:
+                            cid = r["id"]
+                            if cid not in seen_ids:
+                                seen_ids.add(cid)
+                                rank = r["rank"] if "rank" in r.keys() else 0.0
+                                results.append({
+                                    "id": cid,
+                                    "chunk_id": cid,
+                                    "material_id": r["material_id"],
+                                    "is_private": True,
+                                    "doc_id": None,
+                                    "book_title": r["clean_title"],
+                                    "filename": r["filename"],
+                                    "page_num": r["page_num"],
+                                    "chunk_index": r["chunk_index"],
+                                    "text": r["text"],
+                                    "safe_text": r["text"],
+                                    "fts_score": -rank if rank is not None else 0.0,
+                                    "download_url": f"/api/materials/download?material_id={r['material_id']}",
+                                })
+                    except Exception as fts_err:
+                        logger.warning("FTS query failed on private_chunks: %s", fts_err)
+
+                if len(results) < top_k:
+                    needed = top_k - len(results)
+                    if page_num is not None:
+                        seq_rows = db.execute(
+                            """
+                            SELECT id, material_id, file_hash, filename, clean_title, page_num, chunk_index, text
+                            FROM private_chunks
+                            WHERE material_id = ? AND page_num = ?
+                            ORDER BY page_num, chunk_index
+                            LIMIT ?
+                            """,
+                            (material_id, page_num, needed * 2),
+                        ).fetchall()
+                    else:
+                        seq_rows = db.execute(
+                            """
+                            SELECT id, material_id, file_hash, filename, clean_title, page_num, chunk_index, text
+                            FROM private_chunks
+                            WHERE material_id = ?
+                            ORDER BY page_num, chunk_index
+                            LIMIT ?
+                            """,
+                            (material_id, needed * 2),
+                        ).fetchall()
+
+                    for r in seq_rows:
+                        cid = r["id"]
+                        if cid not in seen_ids:
+                            seen_ids.add(cid)
+                            results.append({
+                                "id": cid,
+                                "chunk_id": cid,
+                                "material_id": r["material_id"],
+                                "is_private": True,
+                                "doc_id": None,
+                                "book_title": r["clean_title"],
+                                "filename": r["filename"],
+                                "page_num": r["page_num"],
+                                "chunk_index": r["chunk_index"],
+                                "text": r["text"],
+                                "safe_text": r["text"],
+                                "fts_score": 0.0,
+                                "download_url": f"/api/materials/download?material_id={r['material_id']}",
+                            })
+                            if len(results) >= top_k:
+                                break
+
+                return results
 
         def get_material(self, material_id: str) -> Optional[Dict[str, Any]]:
             """Get material record by ID, checking database for latest committed updates."""

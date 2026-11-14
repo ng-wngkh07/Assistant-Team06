@@ -2,7 +2,7 @@
 """Build persistent hierarchical retrieval tree sidecar database.
 
 Usage:
-    python scripts/build_retrieval_tree.py --source-db data/user-library/knowledge_base.db --output data/user-library/retrieval_tree.db
+    python scripts/build_retrieval_tree.py --source-db data/knowledge_base.db --output data/retrieval_tree.db
 """
 from __future__ import annotations
 

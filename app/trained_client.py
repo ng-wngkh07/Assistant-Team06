@@ -5,6 +5,9 @@ import logging
 import os
 import sys
 import subprocess
+import tempfile
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Generator, Optional
 
@@ -18,6 +21,26 @@ from app.model_resolver import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_review_cache_dir = ContextVar("native_review_cache_dir", default=None)
+
+
+def current_review_cache_dir():
+    return _review_cache_dir.get()
+
+
+@contextmanager
+def native_review_session():
+    if current_review_cache_dir() is not None:
+        yield
+        return
+    with tempfile.TemporaryDirectory(prefix="study-review-") as directory:
+        token = _review_cache_dir.set(directory)
+        try:
+            yield
+        finally:
+            _review_cache_dir.reset(token)
 
 
 class TrainedModelClient:
@@ -139,13 +162,31 @@ class TrainedModelClient:
         if sd is not None:
             request["seed"] = sd
 
-        from app.practice_adapter import active_practice_adapter, request_matches_scope
+        from app.practice_adapter import (
+            active_practice_adapter,
+            request_matches_scope,
+            request_matches_grounded_review,
+            request_matches_grounded_adapter_scope,
+            GROUNDED_REVIEW_PROFILE,
+            COMPACT_REVIEW_PROFILE,
+        )
         compact_review = request_matches_scope(request)
+        grounded_review = request_matches_grounded_review(request)
         if compact_review:
             request["seed"] = 42
             accepted = active_practice_adapter(model_dir)
             if accepted:
                 request["adapter_path"] = accepted["path"]
+        elif grounded_review:
+            request["seed"] = 42
+            request["adapter_path"] = None
+            if request_matches_grounded_adapter_scope(request):
+                accepted = active_practice_adapter(model_dir, profile=GROUNDED_REVIEW_PROFILE)
+                if accepted and accepted.get('review_profile') == GROUNDED_REVIEW_PROFILE:
+                    request["adapter_path"] = accepted["path"]
+
+        if grounded_review and current_review_cache_dir() is not None:
+            request["review_cache_dir"] = current_review_cache_dir()
 
         # Serialize model workloads through exclusive native worker admission and training lock inheritance
         with gpu_coordinator.acquire_for_inference() as lock_fds:
@@ -168,7 +209,9 @@ class TrainedModelClient:
             raise RuntimeError(f"Không thể chạy mô hình MLX: {completed.stderr[-1000:]}")
         result_data = json.loads(completed.stdout)
         if compact_review:
-            result_data["practice_review_profile"] = "compact_review_v1"
+            result_data["practice_review_profile"] = COMPACT_REVIEW_PROFILE
+        elif grounded_review:
+            result_data["practice_review_profile"] = GROUNDED_REVIEW_PROFILE
         answer = result_data["answer"]
         reason = result_data.get("done_reason")
         self.last_done_reason = reason if reason in {"stop", "length"} else None

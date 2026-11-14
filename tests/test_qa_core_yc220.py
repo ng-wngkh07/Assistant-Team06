@@ -245,3 +245,120 @@ def test_draft_claims_drop_source_intro_with_marker():
     claims = extract_draft_claims('Theo nguồn [S1], ví dụ P(A|B)=0,4.')
     assert claims and not any('Theo nguồn' in c or ' ,' in c for c in claims), claims
     assert any('P(A|B)=0,4' in c for c in claims)
+
+
+def test_auditor_prompt_preserves_question_and_rejects_positional_inversion():
+    import json
+    from app.reasoning_policy import build_auditor_messages, audit_draft_answer, build_evidence_catalog
+
+    source_text = (
+        "Queue\n"
+        "- FIFO (First In First Out): First insert first remove.\n"
+        "[Diagram: Queue top to bottom 5, 7, 2, 6; insertion at top labelled Last insert last remove; "
+        "removal from bottom labelled First insert first remove.]"
+    )
+    query = "Trong hình hàng đợi, số nào được lấy ra đầu tiên?"
+    draft_wrong = "FIFO là First In First Out [S1]. Trong hình hàng đợi, số 5 được lấy ra đầu tiên [S1]."
+    msgs = build_auditor_messages(query, draft_wrong, "", sources_map={"S1": source_text})
+    combined = "\n".join(m["content"] for m in msgs)
+    assert query in combined
+
+    catalog = build_evidence_catalog({"S1": source_text})
+    # Even if an auditor LLM mistakenly cites E3/last span and says supported for '5', deterministic check rejects '5' and '2'
+    for bad_num in ("5", "2", "7"):
+        bad_draft = f"FIFO là First In First Out [S1]. Trong hình hàng đợi, số {bad_num} được lấy ra đầu tiên [S1]."
+        fake_auditor_out = json.dumps({
+            "claims": [
+                {"statement": "FIFO là First In First Out", "source_id": "S1", "evidence_id": "E2", "verdict": "supported"},
+                {"statement": f"Trong hình hàng đợi, số {bad_num} được lấy ra đầu tiên", "source_id": "S1", "evidence_id": "E3", "verdict": "supported"},
+            ],
+            "overall_verdict": "supported",
+        })
+        status, verified = audit_draft_answer(
+            fake_auditor_out, {"S1"}, {"S1": source_text}, draft=bad_draft, evidence_catalog=catalog, query=query
+        )
+        assert status == "unverified", (bad_num, verified)
+        assert verified[1]["verdict"] == "unsupported"
+
+    good_draft = "FIFO là First In First Out [S1]. Hàng đợi gồm 5, 7, 2, 6; số 6 ở đáy nên số 6 được lấy ra đầu tiên [S1]."
+    fake_good_auditor = json.dumps({
+        "claims": [
+            {"statement": "FIFO là First In First Out", "source_id": "S1", "evidence_id": "E2", "verdict": "supported"},
+            {"statement": "Hàng đợi gồm 5, 7, 2, 6; số 6 ở đáy nên số 6 được lấy ra đầu tiên", "source_id": "S1", "evidence_id": "E3", "verdict": "supported"},
+        ],
+        "overall_verdict": "supported",
+    })
+    good_status, good_verified = audit_draft_answer(
+        fake_good_auditor, {"S1"}, {"S1": source_text}, draft=good_draft, evidence_catalog=catalog, query=query
+    )
+    assert good_status == "verified", good_verified
+
+
+def test_agent_triggers_repair_on_positional_contradiction_and_fails_closed():
+    source_text = (
+        "Queue\n"
+        "- FIFO (First In First Out): First insert first remove.\n"
+        "[Diagram: Queue top to bottom 5, 7, 2, 6; insertion at top labelled Last insert last remove; "
+        "removal from bottom labelled First insert first remove.]"
+    )
+    query = "Trong hình hàng đợi, số nào được lấy ra đầu tiên?"
+
+    class InvertThenFixModel(RecordingModel):
+        def __init__(self, repaired_text):
+            super().__init__(repaired_text)
+            self._repaired_text = repaired_text
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            self.last_done_reason = "stop"
+            if len(self.calls) == 1:
+                yield "Trong hình hàng đợi, số 5 được lấy ra đầu tiên. [S1]"
+            else:
+                yield self._repaired_text
+
+    # Case 1: repair fixes 5 -> 6 -> succeeds
+    fixed_model = InvertThenFixModel("Trong hình hàng đợi, số 6 được lấy ra đầu tiên. [S1]")
+    agent_ok = PsychologyAgent(searcher=RecordingSearcher([make_chunk(source_text)]), ollama=fixed_model, translator=NoTranslation())
+    res_ok = agent_ok.process_query_sync(query, model="test-ollama", embed_model=None, processing_level="standard")
+    assert res_ok["response_kind"] == "answer"
+    assert "6" in res_ok["answer"]
+    assert res_ok["generation_calls"] == 2
+
+    # Case 2: repair still returns 2 -> fails closed instead of serving wrong endpoint
+    broken_model = InvertThenFixModel("Trong hình hàng đợi, số 2 được lấy ra đầu tiên. [S1]")
+    agent_bad = PsychologyAgent(searcher=RecordingSearcher([make_chunk(source_text)]), ollama=broken_model, translator=NoTranslation())
+    res_bad = agent_bad.process_query_sync(query, model="test-ollama", embed_model=None, processing_level="standard")
+    assert res_bad["response_kind"] == "generation_failed"
+    assert res_bad["failure_reason"] == "positional_contradiction"
+    assert res_bad["citations"] == []
+
+
+def test_audit_draft_answer_accepts_multiline_indented_source_quote():
+    import json
+    from app.reasoning_policy import audit_draft_answer
+
+    source_text = (
+        "Queue\n"
+        "- FIFO (First In First Out):\n"
+        "  - First come first serve.\n"
+        "  - First insert first remove."
+    )
+    stmt = "Nguyên tắc FIFO nghĩa là đến trước phục vụ trước và phần tử chèn đầu tiên được lấy ra đầu tiên."
+    auditor_out = json.dumps({
+        "claims": [{
+            "statement": stmt,
+            "source_id": "S1",
+            "evidence_quote": "- First come first serve.\n- First insert first remove.",
+            "verdict": "supported",
+        }],
+        "overall_verdict": "supported",
+    }, ensure_ascii=False)
+    status, verified = audit_draft_answer(
+        auditor_out,
+        {"S1"},
+        {"S1": source_text},
+        draft=stmt + " [S1]",
+        query="Nêu nguyên tắc FIFO?",
+    )
+    assert status == "verified", verified
+    assert verified[0]["verdict"] == "supported"

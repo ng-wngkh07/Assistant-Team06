@@ -187,11 +187,36 @@ def generate_ics(
 
         room = str(entry.get("room") or "")
         notes = str(entry.get("notes") or "")
+        pdf_url = str(entry.get("pdf_url") or "").strip()
+        classified_topic = str(entry.get("classified_topic") or "").strip()
+
+        if not pdf_url and notes:
+            notes = re.sub(
+                r"Bài tập PDF đính kèm(?:\s*\([^)]*\))?:\s*(?:https?://[^\s|]+|/api/timetable/worksheets/[^\s|]+)",
+                "(Chưa có bài tập PDF đính kèm)",
+                notes,
+                flags=re.IGNORECASE,
+            )
+            notes = re.sub(
+                r"(?:https?://[^\s|]+)?/api/timetable/worksheets/[a-zA-Z0-9_-]+(?:\.pdf)?",
+                "",
+                notes,
+            ).strip()
+
         description = f"Môn học: {course}"
         if room:
             description += f"\nPhòng: {room}"
+        if classified_topic:
+            description += f"\nChủ đề phân loại: {classified_topic}"
+        if pdf_url:
+            description += f"\nBài tập PDF đính kèm (có đáp án cuối trang): {pdf_url}"
         if notes:
             description += f"\nGhi chú: {notes}"
+
+        extra_pdf_lines = []
+        if pdf_url:
+            extra_pdf_lines.append(f"URL:{pdf_url}")
+            extra_pdf_lines.append(f"ATTACH;FMTTYPE=application/pdf:{pdf_url}")
 
         lines.extend([
             "BEGIN:VEVENT",
@@ -203,6 +228,7 @@ def generate_ics(
             f"SUMMARY:{_escape_text(course)}",
             f"LOCATION:{_escape_text(room)}",
             f"DESCRIPTION:{_escape_text(description)}",
+            *extra_pdf_lines,
             "STATUS:CONFIRMED",
             "END:VEVENT",
         ])

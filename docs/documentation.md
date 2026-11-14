@@ -10,6 +10,12 @@ Write public project documentation in English. Use direct sentences, concrete be
 
 Keep internal work allocation, classroom submissions, tool transcripts and private operational evidence outside public documentation. Public examples must be clearly synthetic. Preserve legal attribution and original source material.
 
+## Required documentation updates
+
+Any change affecting installation, configuration, application use, APIs/user flows, storage/architecture, deployment/recovery or the contribution/testing process must inspect and update **README.md and CONTRIBUTING.md**, together with the relevant `docs/` guides, platform instructions and examples, in the same change. If either entry file is unaffected, give a specific reason in the pull request; do not add cosmetic edits. Missing required documentation leaves the change incomplete.
+
+Keep hosted and local instructions consistent with actual code and validated commands. Distinguish implemented behavior, required acceptance and verified deployment. Keep downloading/running locally supported. Changes to structure must also update the documentation index and affected paths/links. Public guides are the product and operations manual; private checkpoints are not public documentation.
+
 ## Changelog format
 
 Add changes under **Unreleased**, grouped as Added, Changed, Fixed, Removed or Security where relevant. State the effect on users and any required migration. Do not claim a version has shipped before release. Historical reference identifiers are retained as hidden compatibility metadata; they are not current roles or assignments.

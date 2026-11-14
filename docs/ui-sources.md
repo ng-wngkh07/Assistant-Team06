@@ -1,6 +1,6 @@
 # Citation presentation
 
-Display citation identifiers in the same order and with the same source mapping returned by the backend. Show document title, page or reading section, the actual passage and any available source-quality warning. Let the learner open the original document when a valid local source link is available.
+Display citation identifiers in the same order and with the same source mapping returned by the backend. Show document title, page or reading section, the actual passage and any available source-quality warning. Let the learner open the original document through a validated application source link, authorized for the active account or local guest workspace.
 
 For chat, consume `citations` from `/api/chat` or the completed streaming response. Refer to the current API schema and `app/rag_agent.py` for optional fields. Do not invent missing OCR confidence or review states.
 

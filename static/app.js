@@ -187,6 +187,27 @@ document.addEventListener("DOMContentLoaded", () => {
     async function selectPreviousSource(citation) {
         if (isGenerating) return;
         const page = Number(citation.page_num);
+        if (citation.material_id || citation.is_private) {
+            const matId = citation.material_id;
+            const title = citation.book_title || citation.filename || "Tài liệu riêng";
+            activeAttachment = {
+                id: matId,
+                material_id: matId,
+                filename: citation.filename || title,
+                title: title,
+                is_private: true,
+            };
+            if (Number.isInteger(page) && page > 0) {
+                selectedSourcePage = { material_id: matId, page_num: page, title: title };
+                selectedSourceMode = "page";
+            } else {
+                selectedSourcePage = null;
+                selectedSourceMode = "document";
+            }
+            updateAttachmentBanner();
+            chatStatus.textContent = "Đã chọn lại tài liệu riêng. Khi gửi câu hỏi mới, hệ thống sẽ truy xuất lại bằng chứng cho lượt đó.";
+            return;
+        }
         let docId = Number(citation.doc_id);
         if ((!Number.isInteger(docId) || docId < 1) && citation.filename && Number.isInteger(page) && page > 0) {
             try {
@@ -668,13 +689,27 @@ document.addEventListener("DOMContentLoaded", () => {
             };
             if (activeAttachment && activeAttachment.filename) {
                 reqBody.attachment_filename = activeAttachment.filename;
-                const dId = activeAttachment.doc_id || activeAttachment.material?.doc_id || activeAttachment.id;
-                if (dId && !selectedSourcePage) {
-                    reqBody.source_document_id = dId;
+                const docId = Number.isInteger(activeAttachment.doc_id)
+                    ? activeAttachment.doc_id
+                    : (Number.isInteger(activeAttachment.material?.doc_id) ? activeAttachment.material.doc_id : null);
+                const matId = activeAttachment.material_id
+                    || (typeof activeAttachment.id === "string" && !docId ? activeAttachment.id : null)
+                    || activeAttachment.material?.id;
+
+                if (!selectedSourcePage) {
+                    if (docId) {
+                        reqBody.source_document_id = docId;
+                    } else if (matId) {
+                        reqBody.material_id = matId;
+                    }
                 }
             }
             if (selectedSourcePage) {
-                reqBody.source_document_id = selectedSourcePage.doc_id;
+                if (Number.isInteger(selectedSourcePage.doc_id)) {
+                    reqBody.source_document_id = selectedSourcePage.doc_id;
+                } else if (selectedSourcePage.material_id) {
+                    reqBody.material_id = selectedSourcePage.material_id;
+                }
                 if (selectedSourceMode === "page") reqBody.source_page_num = selectedSourcePage.page_num;
             }
             if (!sessionsApiSupported && clientChatHistory.length > 0) {
@@ -1104,12 +1139,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 let turnAttachment = null;
                 const scope = turn.search_scope || {};
                 const attFilename = scope.attachment_filename
-                    || (scope.kind === "document" && Array.isArray(turn.citations) && turn.citations[0]?.filename)
+                    || ((scope.kind === "document" || scope.kind === "material") && Array.isArray(turn.citations) && turn.citations[0]?.filename)
                     || null;
                 if (attFilename) {
                     turnAttachment = {
                         filename: attFilename,
                         doc_id: scope.document_id || (Array.isArray(turn.citations) && turn.citations[0]?.doc_id) || null,
+                        material_id: scope.material_id || (Array.isArray(turn.citations) && turn.citations[0]?.material_id) || null,
+                        is_private: Boolean(scope.material_id || (Array.isArray(turn.citations) && turn.citations[0]?.is_private)),
                     };
                     window.sessionActiveAttachment = turnAttachment;
                 }
@@ -1166,10 +1203,8 @@ document.addEventListener("DOMContentLoaded", () => {
         if (messagesContainer) {
             messagesContainer.innerHTML = initialWelcomeHTML || `
                 <div class="message assistant welcome-card">
-                    <div class="message-avatar">
-                        <img src="/static/logo.jpg" alt="ARYM AI" class="hero-avatar-img">
-                    </div>
-                    <div class="message-body">
+                    <div class="arym-spatial-hero">
+                        <div class="arym-hero-lens-badge">ARYM · Adaptive Revision Yields Mastery</div>
                         <h3>Xin chào! Bạn muốn học gì hôm nay?</h3>
                     </div>
                 </div>
@@ -1408,6 +1443,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 detail.appendChild(quote);
             }
             async function attachOriginalPage() {
+                if (c.material_id || c.is_private) {
+                    const downloadUrl = c.download_url || `/api/materials/download?material_id=${encodeURIComponent(c.material_id)}`;
+                    const origLink = document.createElement("a");
+                    origLink.className = "citation-preview-link citation-private-link";
+                    origLink.href = downloadUrl;
+                    origLink.target = "_blank";
+                    origLink.rel = "noopener noreferrer";
+                    const pageText = (Number.isInteger(page) && page > 0) ? ` · Trang ${page}` : "";
+                    origLink.textContent = `🔒 Tải tệp tài liệu riêng gốc (${fname || 'tài liệu'})${pageText}`;
+                    detail.appendChild(origLink);
+                    return;
+                }
                 let id = Number(c.doc_id);
                 if (!Number.isInteger(page) || page < 1) return;
                 if ((!Number.isInteger(id) || id < 1) && c.filename) {
@@ -1558,7 +1605,7 @@ document.addEventListener("DOMContentLoaded", () => {
             status.textContent = response.ok ? data.message : (data.detail || "Không kiểm tra được mô hình.");
             await fetchKnowledgeBaseStatus();
         } catch (_) {
-            status.textContent = "Không kết nối được máy chủ. Mở Start Study Agent.command (Mac) hoặc Start Study Agent.bat (Windows).";
+            status.textContent = "Không kết nối được tới máy chủ dịch vụ. Vui lòng thử lại sau hoặc liên hệ người vận hành hệ thống.";
         } finally {
             button.disabled = false;
         }
@@ -1606,26 +1653,87 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             }
 
-            statDocs.textContent = kb.total_documents || 0;
-            btnOpenKb.textContent = `Xem chi tiết ${kb.total_documents || 0} tài liệu`;
-            statPages.textContent = kb.total_indexed_pages || 0;
-            statChunks.textContent = kb.total_chunks || 0;
-            statScanned.textContent = kb.scanned_documents || 0;
+            const searchableDocs = (typeof kb.searchable_documents === "number")
+                ? kb.searchable_documents
+                : (kb.total_documents || 0);
+            const registeredDocs = (typeof kb.registered_documents === "number")
+                ? kb.registered_documents
+                : (kb.total_documents || 0);
+            const discoveredFiles = (typeof kb.discovered_files === "number")
+                ? kb.discovered_files
+                : registeredDocs;
+            if (statDocs) {
+                statDocs.textContent = searchableDocs;
+                if (discoveredFiles > searchableDocs) {
+                    statDocs.title = `${searchableDocs} tài liệu có thể tìm kiếm / ${discoveredFiles} tệp phát hiện trong thư mục nguồn`;
+                } else {
+                    statDocs.title = "";
+                }
+            }
+            if (btnOpenKb) {
+                btnOpenKb.textContent = discoveredFiles > searchableDocs
+                    ? `Xem chi tiết ${searchableDocs}/${discoveredFiles} tài liệu`
+                    : `Xem chi tiết ${searchableDocs} tài liệu`;
+            }
+            if (statPages) statPages.textContent = kb.total_indexed_pages || 0;
+            if (statChunks) statChunks.textContent = kb.total_chunks || 0;
+            if (statScanned) statScanned.textContent = kb.scanned_documents || 0;
             embeddingCoverage = kb.total_chunks ? (kb.embedded_chunks || 0) / kb.total_chunks : 0;
 
             window.kbData = kb.documents || [];
+            window.watcherItems = (data.watcher && data.watcher.items)
+                || (data.storage && data.storage.watcher && data.storage.watcher.items)
+                || [];
 
-            if (data.storage && data.storage.sources_dir) {
+            if (data.storage) {
                 const storagePathEl = document.getElementById("storage-sources-path");
-                if (storagePathEl) {
-                    storagePathEl.textContent = data.storage.sources_dir;
-                    storagePathEl.title = data.storage.sources_dir;
+                const storagePathRow = document.getElementById("storage-sources-path-row");
+                const copyStorageBtn = document.getElementById("btn-copy-storage-path");
+                if (data.storage.sources_dir) {
+                    if (storagePathEl) {
+                        storagePathEl.textContent = data.storage.sources_dir;
+                        storagePathEl.title = data.storage.sources_dir;
+                    }
+                    if (storagePathRow) storagePathRow.style.display = "";
+                    if (copyStorageBtn) copyStorageBtn.style.display = "";
+                } else {
+                    if (storagePathRow) storagePathRow.style.display = "none";
+                    if (copyStorageBtn) copyStorageBtn.style.display = "none";
+                }
+
+                const watchStatusEl = document.getElementById("storage-watch-status");
+                const w = data.storage.watcher || data.watcher;
+                if (watchStatusEl && w) {
+                    if (!w.enabled) {
+                        watchStatusEl.textContent = "Tự động quét nguồn chung: Đang tắt (bật qua cấu hình máy chủ)";
+                    } else {
+                        const parts = [w.running ? "Đang bật" : "Đã dừng"];
+                        if (w.auto_ocr === false) {
+                            parts.push("OCR tự động: Tắt");
+                        } else if (w.ocr_runtime_available === false) {
+                            parts.push("OCR cục bộ: Chưa sẵn sàng");
+                        } else if (w.auto_ocr) {
+                            parts.push("OCR tự động: Bật");
+                        }
+                        if (w.pending_count) parts.push(`Chờ: ${w.pending_count}`);
+                        if (w.indexed_count) parts.push(`Đã đồng bộ: ${w.indexed_count}`);
+                        if (w.ocr_running_count) parts.push(`Đang chạy OCR: ${w.ocr_running_count}`);
+                        if (w.captured_pending_review_count) parts.push(`Đã chụp chờ duyệt: ${w.captured_pending_review_count}`);
+                        if (w.hold_count) parts.push(`HOLD: ${w.hold_count}`);
+                        if (w.needs_ocr_count) parts.push(`Cần OCR: ${w.needs_ocr_count}`);
+                        if (w.vector_pending_count) parts.push(`Chờ vector: ${w.vector_pending_count}`);
+                        if (w.needs_update_count) parts.push(`Cần cập nhật: ${w.needs_update_count}`);
+                        if (w.missing_source_count) parts.push(`Thiếu tệp: ${w.missing_source_count}`);
+                        if (w.waiting_gpu_count) parts.push(`Chờ GPU: ${w.waiting_gpu_count}`);
+                        if (w.error_count) parts.push(`Lỗi: ${w.error_count}`);
+                        watchStatusEl.textContent = `Tự động quét nguồn chung: ${parts.join(" · ")}`;
+                    }
                 }
             }
         } catch (e) {
             console.error("Status fetch error:", e);
             if (ollamaStatus) {
-                ollamaStatus.textContent = "🔴 Máy chủ web backend không phản hồi (Port 8000)";
+                ollamaStatus.textContent = "🔴 Máy chủ dịch vụ hiện không phản hồi. Vui lòng thử lại sau hoặc liên hệ người vận hành.";
                 ollamaStatus.className = "status-indicator disconnected";
             }
         }
@@ -1663,22 +1771,59 @@ document.addEventListener("DOMContentLoaded", () => {
     const fetchModels = fetchOllamaModels;
 
     function renderKbTable() {
+        if (!kbTableBody) return;
         const docs = window.kbData || [];
+        const watcherMap = {};
+        (window.watcherItems || []).forEach(w => {
+            if (w && w.filename) watcherMap[w.filename] = w;
+        });
         if (docs.length === 0) {
-            kbTableBody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Chưa có dữ liệu chỉ mục. Hãy nhấn "Tái lập chỉ mục".</td></tr>';
+            kbTableBody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Chưa có tài liệu nào được tự động lập chỉ mục từ thư mục nguồn.</td></tr>';
             return;
         }
 
         let html = "";
         docs.forEach((d, idx) => {
-            let statusBadge = `<span class="badge-status indexed">Đã lập chỉ mục</span>`;
-            if (d.is_scanned) {
-                const captured = d.ocr_captured_pages || 0;
-                const reviewed = d.ocr_reviewed_pages || 0;
-                const label = captured ? `OCR ${captured}/${d.total_pages} trang · đã duyệt nội dung ${reviewed} trang` : "Scan · chưa có bản OCR";
-                statusBadge = `<span class="badge-status scanned" title="Bản OCR thô cần đối chiếu; phần đã duyệt có thể chỉ bao phủ một đoạn trên trang">${label}</span>`;
-            } else if (d.status === "error") {
-                statusBadge = `<span class="badge-status error" title="${escapeHtml(d.error_message || '')}">Lỗi trích xuất</span>`;
+            const w = watcherMap[d.filename] || {};
+            const embStatus = d.embedding_status || w.embedding_status || "none";
+            const vectorHint = d.searchable === false
+                ? ""
+                : (embStatus === "vectorized"
+                    ? " · Vector sẵn sàng"
+                    : (embStatus === "vector_pending" || embStatus === "partial"
+                        ? " · Chờ vector cục bộ"
+                        : " · Chỉ từ khóa"));
+            let statusBadge = `<span class="badge-status indexed">Đã lập chỉ mục${vectorHint}</span>`;
+
+            if (w.status === "missing_source") {
+                statusBadge = `<span class="badge-status error" title="Tệp gốc không còn trong thư mục nguồn">Thiếu tệp nguồn</span>`;
+            } else if (w.status === "needs_update") {
+                statusBadge = `<span class="badge-status scanned" title="Tệp nguồn đã thay đổi so với bản đã lập chỉ mục">Nguồn đã đổi · chờ cập nhật</span>`;
+            } else if (w.status === "ocr_running") {
+                const cap = w.ocr_pages_captured || d.ocr_captured_pages || 0;
+                statusBadge = `<span class="badge-status scanned">Đang chạy OCR (${cap}/${d.total_pages || 0} trang)</span>`;
+            } else if (d.status === "error" || w.status === "error") {
+                statusBadge = `<span class="badge-status error" title="${escapeHtml(d.error_message || w.message || '')}">Lỗi trích xuất</span>`;
+            } else if (d.is_scanned) {
+                const captured = d.ocr_captured_pages || w.ocr_pages_captured || 0;
+                const reviewed = d.ocr_reviewed_pages || w.ocr_pages_reviewed || 0;
+                const holdPages = w.ocr_pages_hold || 0;
+                let label = captured
+                    ? `Đã chụp OCR ${captured}/${d.total_pages} · đã duyệt ${reviewed}`
+                    : "Cần OCR cục bộ";
+                if (holdPages > 0) label += ` · HOLD ${holdPages}`;
+                if (d.status === "ocr_partial_reviewed") {
+                    label = `Tìm được phần đã duyệt (${reviewed}/${d.total_pages})${vectorHint}`;
+                } else if (d.status === "indexed" && (d.chunk_count || 0) > 0) {
+                    label = `Đã duyệt OCR (${reviewed}/${d.total_pages})${vectorHint}`;
+                }
+                const actionBtn = (captured > reviewed || holdPages > 0)
+                    ? ` <button type="button" class="btn btn-sm btn-outline btn-kb-open-ocr" data-filename="${escapeHtml(d.filename)}" style="margin-left:6px;padding:1px 6px;font-size:0.75rem;">Duyệt OCR</button>`
+                    : "";
+                const cls = d.status === "indexed" ? "indexed" : "scanned";
+                statusBadge = `<span class="badge-status ${cls}" title="Bản OCR thô cần đối chiếu; phần đã duyệt mới được tìm kiếm">${label}</span>${actionBtn}`;
+            } else if (d.status === "scanned_unocred") {
+                statusBadge = `<span class="badge-status scanned">Chờ OCR / kiểm duyệt nguồn</span>`;
             }
 
             html += `
@@ -1695,6 +1840,15 @@ document.addEventListener("DOMContentLoaded", () => {
             `;
         });
         kbTableBody.innerHTML = html;
+        if (typeof kbTableBody.querySelectorAll === "function") {
+            kbTableBody.querySelectorAll(".btn-kb-open-ocr").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    if (kbModal) kbModal.style.display = "none";
+                    if (ocrModal) ocrModal.style.display = "flex";
+                    loadOcrReviews();
+                });
+            });
+        }
     }
 
     function scrollToBottom() {
@@ -1810,9 +1964,15 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             let html = "";
             records.forEach(r => {
-                const statusBadge = r.is_verified
-                    ? '<span class="badge" style="background:#e6f4ea;color:#137333;">Đã xác minh</span>'
-                    : '<span class="badge" style="background:#fef7e0;color:#b06000;" title="Bản chép cần đối chiếu trang gốc trước khi dùng để huấn luyện">Cần đối chiếu trang gốc</span>';
+                const hasPendingRegions = Array.isArray(r.pending_region_ids) && r.pending_region_ids.length > 0;
+                let statusBadge = '<span class="badge" style="background:#fef7e0;color:#b06000;" title="Bản chép đã chụp OCR, cần đối chiếu trang gốc trước khi đưa vào tìm kiếm">Đã chụp · Cần duyệt</span>';
+                if (r.has_uncertainty || hasPendingRegions) {
+                    statusBadge = '<span class="badge" style="background:#fdecea;color:#b3261e;" title="Có vùng chữ khó đọc/chưa xác nhận đang giữ HOLD">HOLD · Cần kiểm tra</span>';
+                } else if (r.is_verified && !r.needs_review) {
+                    statusBadge = r.is_blank
+                        ? '<span class="badge" style="background:#e6f4ea;color:#137333;">Đã xác minh (trang trống)</span>'
+                        : '<span class="badge" style="background:#e6f4ea;color:#137333;">Đã xác minh</span>';
+                }
                 html += `
                     <tr>
                         <td><strong>${escapeHtml(r.source_relpath || "N/A")}</strong></td>
@@ -1901,8 +2061,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.detail || "Lỗi chạy OCR");
-                if (ocrRunStatusMsg) ocrRunStatusMsg.textContent = "✅ Chạy OCR hoàn tất!";
+                if (ocrRunStatusMsg) {
+                    ocrRunStatusMsg.textContent = (data.record && data.record.has_uncertainty)
+                        ? "⚠️ Đã chụp OCR ở trạng thái HOLD — cần đối chiếu trước khi đưa vào tìm kiếm."
+                        : "✅ Đã chụp OCR — chờ rà soát và duyệt trước khi đưa vào tìm kiếm.";
+                }
                 loadOcrReviews();
+                if (typeof fetchStatus === "function") fetchStatus();
                 if (data.record) openOcrEditor(data.record);
             } catch (err) {
                 if (ocrRunStatusMsg) ocrRunStatusMsg.textContent = `❌ ${err.message}`;
@@ -1954,9 +2119,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 ocrReviewStatus.textContent = indexed ? "✅ Đã lưu bản duyệt và cập nhật tra cứu." : `⚠️ Đã lưu bản duyệt; chưa cập nhật tra cứu: ${(data.index_update && data.index_update.error) || "chưa tìm thấy tài liệu trong chỉ mục"}`;
                 ocrReviewStatus.style.color = indexed ? "green" : "var(--text-muted)";
             }
+            if (typeof fetchStatus === "function") {
+                fetchStatus();
+            }
             setTimeout(() => {
                 loadOcrReviews();
-            }, 1000);
+            }, 400);
         } catch (e) {
             if (ocrReviewStatus) {
                 ocrReviewStatus.textContent = `❌ ${e.message}`;
@@ -2466,8 +2634,155 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    let docContentPreviousActiveElement = null;
+    let docContentOpenerCardKey = null;
+
+    function isDocViewerModalOpen() {
+        return Boolean(
+            documentContentModal &&
+            (documentContentModal.classList?.contains?.("active") || documentContentModal.style?.display === "flex")
+        );
+    }
+
+    function isDocViewerTopmostModal() {
+        if (!isDocViewerModalOpen()) return false;
+        const practiceDialog = document.getElementById("practice-dialog");
+        if (practiceDialog && (practiceDialog.open === true || practiceDialog.hasAttribute?.("open"))) {
+            return false;
+        }
+        if (typeof document.querySelectorAll === "function") {
+            const dialogs = document.querySelectorAll("dialog");
+            for (const dlg of dialogs) {
+                if (dlg && dlg.tagName === "DIALOG" && (dlg.open === true || dlg.hasAttribute?.("open"))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    function isDocViewerVisibleFocusable(el) {
+        if (!el || typeof el.focus !== "function") return false;
+        if (el === document.body || el === document.documentElement) return false;
+        if ("isConnected" in el && !el.isConnected) return false;
+        if (el.disabled || el.hasAttribute?.("disabled")) return false;
+        if (el.getAttribute?.("tabindex") === "-1") return false;
+        if (el.tagName === "INPUT" && (el.getAttribute?.("type") || "").toLowerCase() === "hidden") {
+            return false;
+        }
+
+        let prev = null;
+        let cur = el;
+        while (cur && cur !== document.body && cur !== document.documentElement) {
+            if (cur.hidden === true || cur.hasAttribute?.("hidden")) return false;
+            if (cur.getAttribute?.("aria-hidden") === "true") return false;
+            if (cur.style?.display === "none" || cur.style?.visibility === "hidden") return false;
+            if (prev && cur.tagName === "DETAILS" && cur.open !== true && !cur.hasAttribute?.("open")) {
+                if (!(prev.tagName === "SUMMARY" && prev.parentElement === cur)) {
+                    return false;
+                }
+            }
+            if (typeof window !== "undefined" && typeof window.getComputedStyle === "function") {
+                try {
+                    const cs = window.getComputedStyle(cur);
+                    if (cs && (cs.display === "none" || cs.visibility === "hidden")) return false;
+                } catch (_) {}
+            }
+            prev = cur;
+            cur = cur.parentElement;
+        }
+
+        if (typeof el.getClientRects === "function" && el.getClientRects().length === 0) {
+            return false;
+        }
+        return true;
+    }
+
+    function getDocViewerFocusables() {
+        if (!documentContentModal || typeof documentContentModal.querySelectorAll !== "function") {
+            return [];
+        }
+        let candidates = Array.from(
+            documentContentModal.querySelectorAll("a[href], button, input, select, textarea, summary, [tabindex]")
+        );
+        if (!candidates.length) {
+            candidates = [docContentSearchInput, btnDocContentGenerate, btnCloseDocContentModal].filter(Boolean);
+        }
+        return candidates.filter((el) => isDocViewerVisibleFocusable(el));
+    }
+
+    function focusFirstDocViewerElement() {
+        if (!documentContentModal) return;
+        if (isDocViewerVisibleFocusable(docContentSearchInput)) {
+            try { docContentSearchInput.focus(); } catch (_) {}
+            return;
+        }
+        const focusables = getDocViewerFocusables();
+        if (focusables.length > 0) {
+            try { focusables[0].focus(); } catch (_) {}
+            return;
+        }
+        if (typeof documentContentModal.focus === "function") {
+            try { documentContentModal.focus(); } catch (_) {}
+        }
+    }
+
+    function restoreDocViewerFocus() {
+        let target = null;
+        if (
+            docContentPreviousActiveElement &&
+            (!documentContentModal || !documentContentModal.contains?.(docContentPreviousActiveElement)) &&
+            isDocViewerVisibleFocusable(docContentPreviousActiveElement)
+        ) {
+            target = docContentPreviousActiveElement;
+        } else if (
+            docContentOpenerCardKey &&
+            typeof chatAttachmentPreviewTray !== "undefined" &&
+            chatAttachmentPreviewTray &&
+            typeof chatAttachmentPreviewTray.querySelector === "function" &&
+            typeof CSS !== "undefined" &&
+            typeof CSS.escape === "function"
+        ) {
+            const cardBtn = chatAttachmentPreviewTray.querySelector(
+                `[data-attachment-key="${CSS.escape(docContentOpenerCardKey)}"] .attachment-card-open`
+            );
+            if (isDocViewerVisibleFocusable(cardBtn)) {
+                target = cardBtn;
+            }
+        }
+        if (!target) {
+            const fallbackIds = ["user-input", "btn-chat-attach", "btn-open-sidebar", "btn-account-trigger"];
+            for (const id of fallbackIds) {
+                const candidate = document.getElementById(id);
+                if (
+                    candidate &&
+                    (!documentContentModal || !documentContentModal.contains?.(candidate)) &&
+                    isDocViewerVisibleFocusable(candidate)
+                ) {
+                    target = candidate;
+                    break;
+                }
+            }
+        }
+        docContentPreviousActiveElement = null;
+        docContentOpenerCardKey = null;
+        if (target && typeof target.focus === "function") {
+            try { target.focus(); } catch (_) {}
+        }
+    }
+
     function openDocumentContentViewer(entry) {
         if (!entry || !documentContentModal) return;
+        if (!isDocViewerModalOpen()) {
+            const activeEl = document.activeElement;
+            docContentPreviousActiveElement =
+                activeEl &&
+                activeEl !== document.body &&
+                !documentContentModal.contains?.(activeEl)
+                    ? activeEl
+                    : null;
+            docContentOpenerCardKey = entry.cardKey ? String(entry.cardKey) : null;
+        }
         currentInspectedAttachment = entry;
 
         const fname = entry.filename || "Tài liệu đính kèm";
@@ -2518,17 +2833,74 @@ document.addEventListener("DOMContentLoaded", () => {
 
         documentContentModal.style.display = "flex";
         documentContentModal.classList.add("active");
+        documentContentModal.setAttribute?.("aria-hidden", "false");
+        focusFirstDocViewerElement();
     }
 
     function closeDocumentContentViewer() {
+        const wasOpen = isDocViewerModalOpen();
         if (documentContentModal) {
             documentContentModal.style.display = "none";
             documentContentModal.classList.remove("active");
             documentContentModal.classList.remove("fullscreen");
+            documentContentModal.setAttribute?.("aria-hidden", "true");
+        }
+        if (wasOpen) {
+            restoreDocViewerFocus();
         }
     }
 
     btnCloseDocContentModal?.addEventListener("click", closeDocumentContentViewer);
+
+    document.addEventListener("keydown", (e) => {
+        if (!isDocViewerTopmostModal()) return;
+        if (e.key === "Escape") {
+            e.preventDefault?.();
+            e.stopPropagation?.();
+            e.stopImmediatePropagation?.();
+            closeDocumentContentViewer();
+            return;
+        }
+        if (e.key === "Tab") {
+            const focusables = getDocViewerFocusables();
+            if (!focusables.length) {
+                e.preventDefault?.();
+                e.stopPropagation?.();
+                if (typeof documentContentModal.focus === "function") {
+                    try { documentContentModal.focus(); } catch (_) {}
+                }
+                return;
+            }
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            const active = document.activeElement;
+            if (!documentContentModal.contains?.(active)) {
+                e.preventDefault?.();
+                e.stopPropagation?.();
+                try { (e.shiftKey ? last : first).focus(); } catch (_) {}
+                return;
+            }
+            if (e.shiftKey && (active === first || active === documentContentModal)) {
+                e.preventDefault?.();
+                e.stopPropagation?.();
+                try { last.focus(); } catch (_) {}
+            } else if (!e.shiftKey && active === last) {
+                e.preventDefault?.();
+                e.stopPropagation?.();
+                try { first.focus(); } catch (_) {}
+            }
+            return;
+        }
+        if (e.key === "Enter") {
+            const target = e.target || document.activeElement;
+            if (target && !documentContentModal.contains?.(target)) {
+                e.preventDefault?.();
+                e.stopPropagation?.();
+                e.stopImmediatePropagation?.();
+                focusFirstDocViewerElement();
+            }
+        }
+    }, true);
 
     docContentSearchInput?.addEventListener("input", (e) => {
         if (currentInspectedAttachment) {
@@ -2622,22 +2994,144 @@ document.addEventListener("DOMContentLoaded", () => {
         openLibraryPicker();
     });
 
-    // --- Loading Modal Helpers ---
-    function showStudyLoading(title, step) {
+    // --- Loading Modal Helpers (UX04 Leave-Waiting, Escape & Request-Owned In-Flight Handling) ---
+    let nextStudyRequestId = 0;
+    const activeGenerationRequests = new Map(); // requestId -> reqState
+    const inFlightGenerationFiles = new Set();  // Set of filenames currently generating
+    let currentModalRequestId = null;           // requestId currently displayed in studyLoadingModal
+    const completedMaterialsRegistry = new Map(); // filename -> material
+    let fallbackLastFocusedElement = null;
+
+    if (typeof window !== "undefined") {
+        window.completedMaterialsRegistry = completedMaterialsRegistry;
+    }
+
+    function showStudyLoading(arg1, arg2, arg3) {
+        let requestId = null;
+        let title = "";
+        let step = "";
+        if (typeof arg1 === "number") {
+            requestId = arg1;
+            title = arg2;
+            step = arg3;
+        } else {
+            title = arg1;
+            step = arg2;
+        }
+
+        currentModalRequestId = requestId;
+        const req = requestId ? activeGenerationRequests.get(requestId) : null;
+        if (req) {
+            req.initiatorElement = document.activeElement;
+            req.isExplicitlyWaiting = true;
+        } else {
+            fallbackLastFocusedElement = document.activeElement;
+        }
+
         if (studyLoadingTitle) studyLoadingTitle.textContent = title || "Đang xử lý tài liệu...";
         if (studyLoadingStep) studyLoadingStep.textContent = step || "Vui lòng chờ...";
         if (studyLoadingModal) {
             studyLoadingModal.style.display = "flex";
             studyLoadingModal.classList.add("active");
+            const leaveBtn = document.getElementById("btn-leave-study-loading");
+            if (leaveBtn) {
+                try { leaveBtn.focus(); } catch (_) {}
+            }
         }
     }
 
-    function hideStudyLoading() {
+    function dismissStudyLoading() {
+        if (!currentModalRequestId && (!studyLoadingModal || !studyLoadingModal.classList.contains("active"))) return;
+
+        const dismissedReqId = currentModalRequestId;
+        const dismissedReq = dismissedReqId ? activeGenerationRequests.get(dismissedReqId) : null;
+        if (dismissedReq) {
+            dismissedReq.isExplicitlyWaiting = false;
+        }
+
+        hideStudyLoading(dismissedReqId);
+        updateStudyToolStatusForInFlight();
+    }
+
+    function hideStudyLoading(requestId) {
+        if (requestId !== undefined && requestId !== null && currentModalRequestId && currentModalRequestId !== requestId) {
+            return; // Do NOT hide another request's modal!
+        }
+
+        const owningReqId = currentModalRequestId;
+        const req = owningReqId ? activeGenerationRequests.get(owningReqId) : null;
+        currentModalRequestId = null;
+
         if (studyLoadingModal) {
             studyLoadingModal.style.display = "none";
             studyLoadingModal.classList.remove("active");
         }
+
+        const targetFocusEl = (req && req.initiatorElement) || fallbackLastFocusedElement;
+        if (targetFocusEl && typeof targetFocusEl.focus === "function") {
+            try {
+                targetFocusEl.focus();
+            } catch (_) {}
+        }
+        fallbackLastFocusedElement = null;
     }
+
+    function updateStudyToolStatusForInFlight() {
+        if (!studyToolStatus) return;
+        const inFlightNames = Array.from(inFlightGenerationFiles);
+        if (inFlightNames.length > 0) {
+            const namesStr = inFlightNames.map(f => `"${escapeHtml(f)}"`).join(", ");
+            studyToolStatus.textContent = `⏳ Đang tiếp tục xử lý ${namesStr} trong nền... Bạn có thể tiếp tục sử dụng ứng dụng (yêu cầu duy trì tab trình duyệt này; làm mới trang sẽ ngắt kết nối tiến trình).`;
+        }
+    }
+
+    function renderCompletedMaterialsStatus(justCompletedFilename, material) {
+        if (!studyToolStatus) return;
+        const actualCount = (material.quiz || []).length;
+        const flashCount = (material.flashcards || []).length;
+        const inFlightNames = Array.from(inFlightGenerationFiles).filter(f => f !== justCompletedFilename);
+
+        let html = `✅ Đã tạo xong ${actualCount} câu trắc nghiệm & ${flashCount} flashcards cho "${escapeHtml(justCompletedFilename)}".`;
+
+        const completedFiles = Array.from(completedMaterialsRegistry.keys());
+        const orderedFiles = [justCompletedFilename, ...completedFiles.filter(f => f !== justCompletedFilename)];
+
+        const buttonsHtml = orderedFiles.map(fn => {
+            const safeKey = fn.replace(/[^a-zA-Z0-9_-]/g, "_");
+            const label = orderedFiles.length === 1 ? "📖 Mở xem kết quả" : `📖 Mở xem kết quả (${escapeHtml(fn)})`;
+            return `<button type="button" class="btn btn-sm btn-outline btn-open-completed-material" id="btn-open-completed-${safeKey}" data-filename="${escapeHtml(fn)}" style="margin-left: 8px; padding: 2px 8px;">${label}</button>`;
+        }).join(" ");
+
+        html += ` ${buttonsHtml}`;
+
+        if (inFlightNames.length > 0) {
+            const pendingStr = inFlightNames.map(f => `"${escapeHtml(f)}"`).join(", ");
+            html += ` <span style="margin-left: 10px; font-size: 0.85rem; color: var(--text-muted);">(⏳ Đang tiếp tục xử lý ${pendingStr} trong nền...)</span>`;
+        }
+
+        studyToolStatus.innerHTML = html;
+
+        orderedFiles.forEach(fn => {
+            const safeKey = fn.replace(/[^a-zA-Z0-9_-]/g, "_");
+            const btn = document.getElementById(`btn-open-completed-${safeKey}`);
+            if (btn) {
+                btn.addEventListener("click", () => {
+                    const mat = completedMaterialsRegistry.get(fn);
+                    if (mat) {
+                        openStudyMaterial(mat);
+                    }
+                });
+            }
+        });
+    }
+
+    document.getElementById("btn-leave-study-loading")?.addEventListener("click", dismissStudyLoading);
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && studyLoadingModal && (studyLoadingModal.classList.contains("active") || studyLoadingModal.style.display === "flex")) {
+            e.preventDefault();
+            dismissStudyLoading();
+        }
+    });
 
     // --- File Upload Handler (Ingests into src/ & attaches preview card without auto-opening Quiz/Flashcards) ---
     const ALLOWED_STUDY_EXTS = [".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown", ".png", ".jpg", ".jpeg", ".webp"];
@@ -3022,6 +3516,25 @@ document.addEventListener("DOMContentLoaded", () => {
             libraryPickerModal.classList.remove("active");
         }
 
+        if (inFlightGenerationFiles.has(filename)) {
+            const warnMsg = `Đang xử lý tạo câu hỏi cho "${filename}". Vui lòng chờ hoàn thành trước khi gửi lại.`;
+            if (studyToolStatus) studyToolStatus.textContent = `⏳ ${warnMsg}`;
+            alert(warnMsg);
+            return;
+        }
+
+        const requestId = ++nextStudyRequestId;
+        const currentReq = {
+            id: requestId,
+            filename: filename,
+            isExplicitlyWaiting: true,
+            initiatorElement: document.activeElement,
+            completed: false,
+            error: null,
+        };
+        activeGenerationRequests.set(requestId, currentReq);
+        inFlightGenerationFiles.add(filename);
+
         const existingUploadEntry = attachmentPreviewRegistry.get(`upload-${filename}`);
         const previewKey = existingUploadEntry ? `upload-${filename}` : `lib-${filename}`;
         upsertAttachmentPreviewCard({
@@ -3034,6 +3547,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         showStudyLoading(
+            requestId,
             `Đang xử lý "${filename}"...`,
             `AI đang tổng hợp nội dung và tạo ${quizCount} câu trắc nghiệm (độ khó: ${difficulty}) & ${flashcardCount} flashcards...`
         );
@@ -3054,7 +3568,16 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || "Không thể tạo từ tài liệu thư viện");
 
-            hideStudyLoading();
+            currentReq.completed = true;
+            completedMaterialsRegistry.set(filename, data.material);
+
+            const wasWaitingExplicitly = currentReq.isExplicitlyWaiting;
+
+            // Only hide loading modal if this request currently owns the modal!
+            if (currentModalRequestId === requestId) {
+                hideStudyLoading(requestId);
+            }
+
             upsertAttachmentPreviewCard({
                 cardKey: previewKey,
                 filename: (data.material && data.material.filename) || filename,
@@ -3064,21 +3587,38 @@ document.addEventListener("DOMContentLoaded", () => {
                 loading: false
             });
             appendStudyCardToChat(data.material);
-            openStudyMaterial(data.material);
             syncGenerateButtonState();
-            if (studyToolStatus) {
-                const isFallback = (data.material.generation && (data.material.generation.quiz === "extractive_fallback" || data.material.generation.flashcards === "extractive_fallback")) || Boolean(data.material.fallback_warning);
-                const provNotice = isFallback ? " [Nguồn: Trích xuất trực tiếp (fallback)]" : " [Nguồn: Mô hình AI]";
-                const actualCount = (data.material.quiz || []).length;
-                const reqCount = data.material.requested_quiz_count || data.material.requested_count || quizCount;
-                if (data.material.warning || actualCount < reqCount) {
-                    studyToolStatus.textContent = `⚠️ Đã tạo ${actualCount}/${reqCount} câu trắc nghiệm (độ khó ${data.material.difficulty || difficulty}) và ${(data.material.flashcards || []).length} flashcards cho "${filename}". ${data.material.warning || "Một số câu chưa đạt kiểm định đã bị loại."}`;
-                } else {
-                    studyToolStatus.textContent = `✅ Đã tạo thành công ${actualCount} câu trắc nghiệm (độ khó: ${data.material.difficulty || difficulty}) và ${(data.material.flashcards || []).length} flashcards cho "${filename}".${provNotice}`;
+
+            const isFallback = (data.material.generation && (data.material.generation.quiz === "extractive_fallback" || data.material.generation.flashcards === "extractive_fallback")) || Boolean(data.material.fallback_warning);
+            const provNotice = isFallback ? " [Nguồn: Trích xuất trực tiếp (fallback)]" : " [Nguồn: Mô hình AI]";
+            const actualCount = (data.material.quiz || []).length;
+            const reqCount = data.material.requested_quiz_count || data.material.requested_count || quizCount;
+
+            if (wasWaitingExplicitly) {
+                // User remained explicitly waiting: open the study material modal directly
+                openStudyMaterial(data.material);
+                if (studyToolStatus) {
+                    if (data.material.warning || actualCount < reqCount) {
+                        studyToolStatus.textContent = `⚠️ Đã tạo ${actualCount}/${reqCount} câu trắc nghiệm (độ khó ${data.material.difficulty || difficulty}) và ${(data.material.flashcards || []).length} flashcards cho "${filename}". ${data.material.warning || "Một số câu chưa đạt kiểm định đã bị loại."}`;
+                    } else {
+                        studyToolStatus.textContent = `✅ Đã tạo thành công ${actualCount} câu trắc nghiệm (độ khó: ${data.material.difficulty || difficulty}) và ${(data.material.flashcards || []).length} flashcards cho "${filename}".${provNotice}`;
+                    }
+                }
+            } else {
+                // User dismissed loading or navigated away: DO NOT steal focus, DO NOT reopen modal, DO NOT change mode!
+                // Only update status if no other request is currently explicitly waiting in the modal!
+                if (!currentModalRequestId) {
+                    renderCompletedMaterialsStatus(filename, data.material);
                 }
             }
         } catch (err) {
-            hideStudyLoading();
+            currentReq.error = err;
+            const wasWaiting = currentReq.isExplicitlyWaiting;
+
+            if (currentModalRequestId === requestId) {
+                hideStudyLoading(requestId);
+            }
+
             if (!existingUploadEntry) {
                 removeAttachmentPreviewCard(previewKey);
             } else {
@@ -3092,14 +3632,59 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
             console.error("Library generate error:", err);
-            if (studyToolStatus) {
-                studyToolStatus.textContent = `❌ Lỗi tạo bài học: ${err.message || err}`;
+            const errMsg = err.message || err;
+            if (!currentModalRequestId) {
+                if (completedMaterialsRegistry.size > 0) {
+                    const firstCompleted = Array.from(completedMaterialsRegistry.keys())[0];
+                    renderCompletedMaterialsStatus(firstCompleted, completedMaterialsRegistry.get(firstCompleted));
+                    studyToolStatus.innerHTML = `<span style="color: var(--danger); margin-right: 8px;">❌ Lỗi tạo bài học cho "${escapeHtml(filename)}": ${escapeHtml(errMsg)}</span> | ` + studyToolStatus.innerHTML;
+                    Array.from(completedMaterialsRegistry.keys()).forEach(fn => {
+                        const safeKey = fn.replace(/[^a-zA-Z0-9_-]/g, "_");
+                        const btn = document.getElementById(`btn-open-completed-${safeKey}`);
+                        if (btn) {
+                            btn.addEventListener("click", () => {
+                                const mat = completedMaterialsRegistry.get(fn);
+                                if (mat) openStudyMaterial(mat);
+                            });
+                        }
+                    });
+                } else if (studyToolStatus) {
+                    studyToolStatus.textContent = `❌ Lỗi tạo bài học cho "${filename}": ${errMsg}`;
+                }
             }
-            alert(`Lỗi tạo bài học: ${err.message || err}`);
+            if (wasWaiting) {
+                alert(`Lỗi tạo bài học: ${errMsg}`);
+            }
+        } finally {
+            inFlightGenerationFiles.delete(filename);
+            activeGenerationRequests.delete(requestId);
         }
     }
 
     // --- Study Material Modal Presentation ---
+    function isStudyMaterialVerified(material) {
+        if (!material) return false;
+        if (material.answers_verified === true || material.is_verified === true || material.semantically_verified === true) {
+            return true;
+        }
+        const quiz = material.quiz || [];
+        if (quiz.length > 0 && quiz.every(q => q && (q.is_verified === true || q.answer_verified === true || q.answer_status === "source_document" || q.answer_status === "model_verified"))) {
+            return true;
+        }
+        return false;
+    }
+
+    function isQuestionItemVerified(q, material) {
+        if (!q) return false;
+        if (q.is_verified === true || q.answer_verified === true || q.answer_status === "source_document" || q.answer_status === "model_verified") {
+            return true;
+        }
+        if (material && (material.answers_verified === true || material.is_verified === true || material.semantically_verified === true)) {
+            return true;
+        }
+        return false;
+    }
+
     function openStudyMaterial(material) {
         if (!material) return;
         currentStudyMaterial = material;
@@ -3122,11 +3707,16 @@ document.addEventListener("DOMContentLoaded", () => {
             ? "Trích xuất trực tiếp (fallback)"
             : (material.model ? `Mô hình AI: ${material.model}` : "Mô hình AI");
 
+        const isVerified = isStudyMaterialVerified(material);
+        const verifyNotice = isVerified
+            ? "· Đáp án đã đối chiếu nguồn"
+            : "· Chưa xác minh đáp án đúng (không xác minh ngữ nghĩa)";
+
         let subtitleText = "";
         if (requestedQuizCount && quizCount < requestedQuizCount) {
-            subtitleText = `${quizCount}/${requestedQuizCount} câu trắc nghiệm (độ khó: ${material.difficulty || "mặc định"}) · ${totalCards} flashcards · ${material.total_pages || 1} trang · Nguồn: ${provLabel} · Chưa xác minh đáp án đúng (không xác minh ngữ nghĩa)`;
+            subtitleText = `${quizCount}/${requestedQuizCount} câu trắc nghiệm (độ khó: ${material.difficulty || "mặc định"}) · ${totalCards} flashcards · ${material.total_pages || 1} trang · Nguồn: ${provLabel} ${verifyNotice}`;
         } else {
-            subtitleText = `${quizCount} câu trắc nghiệm · ${totalCards} flashcards · ${material.total_pages || 1} trang · Nguồn: ${provLabel} · Chưa xác minh đáp án đúng (không xác minh ngữ nghĩa)`;
+            subtitleText = `${quizCount} câu trắc nghiệm · ${totalCards} flashcards · ${material.total_pages || 1} trang · Nguồn: ${provLabel} ${verifyNotice}`;
         }
         if (studyMaterialSubtitle) {
             studyMaterialSubtitle.textContent = subtitleText;
@@ -3236,6 +3826,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (quizChoicesContainer) {
             quizChoicesContainer.innerHTML = "";
             const answered = quizUserAnswers[idx];
+            const isVerified = isQuestionItemVerified(q, currentStudyMaterial);
 
             (q.choices || []).forEach(choice => {
                 const btn = document.createElement("button");
@@ -3244,11 +3835,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 if (answered) {
                     btn.disabled = true;
-                    if (choice.label === q.correct_answer) {
-                        btn.classList.add("correct");
-                    }
-                    if (choice.label === answered.selected && !answered.isCorrect) {
-                        btn.classList.add("incorrect");
+                    if (isVerified) {
+                        if (choice.label === q.correct_answer) {
+                            btn.classList.add("correct");
+                        }
+                        if (choice.label === answered.selected && !answered.isCorrect) {
+                            btn.classList.add("incorrect");
+                        }
+                    } else {
+                        // Unverified: show truthful match or difference with proposed answer
+                        if (choice.label === q.correct_answer) {
+                            btn.classList.add("proposed-match");
+                        }
+                        if (choice.label === answered.selected && !answered.isCorrect) {
+                            btn.classList.add("proposed-diff");
+                        }
                     }
                     if (choice.label === answered.selected) {
                         btn.classList.add("selected");
@@ -3269,17 +3870,35 @@ document.addEventListener("DOMContentLoaded", () => {
             const answered = quizUserAnswers[idx];
             if (answered) {
                 quizFeedbackBox.hidden = false;
-                if (answered.isCorrect) {
-                    if (quizFeedbackIcon) quizFeedbackIcon.textContent = "✅";
-                    if (quizFeedbackTitle) {
-                        quizFeedbackTitle.textContent = "Chính xác!";
-                        quizFeedbackTitle.style.color = "#10b981";
+                const isVerified = isQuestionItemVerified(q, currentStudyMaterial);
+                if (isVerified) {
+                    if (answered.isCorrect) {
+                        if (quizFeedbackIcon) quizFeedbackIcon.textContent = "✅";
+                        if (quizFeedbackTitle) {
+                            quizFeedbackTitle.textContent = "Chính xác!";
+                            quizFeedbackTitle.style.color = "#10b981";
+                        }
+                    } else {
+                        if (quizFeedbackIcon) quizFeedbackIcon.textContent = "❌";
+                        if (quizFeedbackTitle) {
+                            quizFeedbackTitle.textContent = `Chưa đúng! Đáp án chính xác là ${q.correct_answer}`;
+                            quizFeedbackTitle.style.color = "#ef4444";
+                        }
                     }
                 } else {
-                    if (quizFeedbackIcon) quizFeedbackIcon.textContent = "❌";
-                    if (quizFeedbackTitle) {
-                        quizFeedbackTitle.textContent = `Chưa đúng! Đáp án chính xác là ${q.correct_answer}`;
-                        quizFeedbackTitle.style.color = "#ef4444";
+                    // Unverified: truthful match or difference with proposed answer
+                    if (answered.isCorrect) {
+                        if (quizFeedbackIcon) quizFeedbackIcon.textContent = "📋";
+                        if (quizFeedbackTitle) {
+                            quizFeedbackTitle.textContent = `Khớp với đáp án đề xuất (${q.correct_answer}) — Chưa xác minh ngữ nghĩa`;
+                            quizFeedbackTitle.style.color = "#38bdf8";
+                        }
+                    } else {
+                        if (quizFeedbackIcon) quizFeedbackIcon.textContent = "ℹ️";
+                        if (quizFeedbackTitle) {
+                            quizFeedbackTitle.textContent = `Khác với đáp án đề xuất (Đáp án đề xuất: ${q.correct_answer}) — Chưa xác minh ngữ nghĩa`;
+                            quizFeedbackTitle.style.color = "#f59e0b";
+                        }
                     }
                 }
 
@@ -3287,7 +3906,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (quizCitationPage) quizCitationPage.textContent = `Trang ${q.page_num || 1}`;
                 if (quizCitationQuote) {
                     const quoteText = q.evidence_quote ? `"${q.evidence_quote}"` : "(Tham khảo nội dung tổng quát từ tài liệu)";
-                    quizCitationQuote.textContent = `${quoteText} — (Đoạn trích hợp lệ đối chiếu nguồn, không là xác minh đáp án đúng)`;
+                    quizCitationQuote.textContent = `${quoteText} — (Đoạn trích đối chiếu nguồn, không khẳng định xác minh đáp án)`;
                 }
             } else {
                 quizFeedbackBox.hidden = true;
@@ -3333,7 +3952,12 @@ document.addEventListener("DOMContentLoaded", () => {
             if (i === currentQuizIndex) b.classList.add("active");
             const ans = quizUserAnswers[i];
             if (ans) {
-                b.classList.add(ans.isCorrect ? "correct" : "wrong");
+                const isVerified = isStudyMaterialVerified(currentStudyMaterial);
+                if (isVerified) {
+                    b.classList.add(ans.isCorrect ? "correct" : "wrong");
+                } else {
+                    b.classList.add(ans.isCorrect ? "proposed-match" : "proposed-diff");
+                }
             }
 
             b.addEventListener("click", () => renderQuizQuestion(i));
@@ -3346,7 +3970,12 @@ document.addEventListener("DOMContentLoaded", () => {
         const total = (currentStudyMaterial && currentStudyMaterial.quiz && currentStudyMaterial.quiz.length) || 0;
         const correctCount = Object.values(quizUserAnswers).filter(a => a.isCorrect).length;
         const answeredCount = Object.keys(quizUserAnswers).length;
-        quizScoreText.textContent = `${correctCount} / ${answeredCount} (Tổng ${total} câu)`;
+        const isVerified = isStudyMaterialVerified(currentStudyMaterial);
+        if (isVerified) {
+            quizScoreText.textContent = `Điểm: ${correctCount} / ${answeredCount} (Tổng ${total} câu)`;
+        } else {
+            quizScoreText.textContent = `Khớp đáp án đề xuất: ${correctCount} / ${answeredCount} (Chưa xác minh · Tổng ${total} câu)`;
+        }
     }
 
     btnQuizPrev?.addEventListener("click", () => {
@@ -3539,6 +4168,12 @@ document.addEventListener("DOMContentLoaded", () => {
             openStudyMaterial(material);
         });
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+        window.addEventListener("study:account-changed", () => {
+            loadSessions().catch(() => {});
+        });
     }
 });
 

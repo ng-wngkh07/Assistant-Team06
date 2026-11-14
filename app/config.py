@@ -84,10 +84,35 @@ ANSWER_MODE_MAX_TOKENS = {
     "compare": _positive_int_setting("ANSWER_COMPARE_MAX_TOKENS", 900),
 }
 
+def _bool_setting(name: str, default: bool = False, fallback_name: str = "") -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        raw = os.getenv(fallback_name) if fallback_name else None
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _positive_float_setting(name: str, default: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def is_src_auto_watch_enabled() -> bool:
+    """Return whether background watching of SRC_DIR is explicitly enabled."""
+    return _bool_setting("STUDY_SRC_AUTO_WATCH", False, fallback_name="AGENT_SRC_AUTO_WATCH")
+
+
 # Server settings
 SERVER_HOST = os.getenv("HOST", "127.0.0.1")
 SERVER_PORT = int(os.getenv("PORT", "8000"))
 VISION_TIMEOUT_SECONDS = float(_positive_int_setting("VISION_TIMEOUT_SECONDS", 360))
+SRC_AUTO_WATCH = is_src_auto_watch_enabled()
+SRC_WATCH_POLL_SECONDS = _positive_float_setting("STUDY_SRC_WATCH_POLL_SECONDS", 2.0)
+SRC_WATCH_DEBOUNCE_SECONDS = _positive_float_setting("STUDY_SRC_WATCH_DEBOUNCE_SECONDS", 1.5)
 
 # Emergency medical service in Vietnam. Do not add local counselling numbers
 # without checking their current availability and operating hours.

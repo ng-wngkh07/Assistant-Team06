@@ -16,7 +16,9 @@ Small chunks can isolate a useful fact but separate it from a definition, negati
 
 Changing boundaries requires a new index and revalidation of source mappings. Replacing an embedding model requires rebuilding all incompatible vectors. Equal dimensions or a matching model name do not make different vector spaces interchangeable.
 
-## Local distribution
+## Optional local distribution
+
+For hosted delivery, prepare retrieval on the operator host and preserve authenticated source access; end users do not install a pack or index the initial corpus. The following archive workflow remains supported for separately reviewed local distributions.
 
 Distribute three separately versioned components: application code, permitted model artifacts and a reviewed prebuilt knowledge pack. The pack contains approved originals, source passages and vectors bound to the exact embedding artifact. Its installer copies precomputed data and creates local keyword tables; recipients do not extract documents, run embedding inference or train the model to use that pack. Model installation remains a separate one-time requirement. See [knowledge packs](knowledge-packs.md) for the compatibility and installation contract.
 
@@ -28,9 +30,9 @@ If a future adapter is accepted, either distribute its small adapter files with 
 
 ## Answer access without distributing originals
 
-A future operator-hosted RAG service could keep originals, passages, vectors and source mappings on an operator-controlled machine. Clients would send questions and receive permitted answers rather than downloading the library. This would change the current local application architecture: the existing API has no per-user authorization and exposes document listing, previews and original downloads. Hiding a download button or source title would not secure those routes.
+The hosted architecture keeps originals, passages, vectors and source mappings on the configured backend host. The current account middleware authenticates non-loopback API access and private account storage separates uploads/history/planners. Authorized shared-library users can access its listings, previews and originals; hiding a download button or title is not access control. Public Git need not contain the real library. Hosted capability is distinct from actual deployed-service acceptance.
 
-Such a service would need authenticated access, authorization before retrieval, protected document routes, response and metadata policies, resource limits and tests for bulk extraction. Internal evidence mappings can remain available for audits even when a response uses a neutral source identifier. Answer content can still reveal sensitive facts or suggest a source's identity; hiding filenames does not guarantee confidentiality. The permitted audience and answer scope still require review. This is an architectural option, not a deployed service or permission to upload private sources.
+A public service still needs verified audience/source authorization, response and metadata policies, resource limits, recovery and tests for unintended cross-account or bulk access. Internal evidence mappings can remain available for audits even when a response uses a neutral source identifier. Answer content can still reveal sensitive facts or suggest a source's identity; hiding filenames does not guarantee confidentiality. The permitted audience and answer scope still require review. The single-host foundation is implemented; a deployed service and permission to expose private sources still require their own evidence.
 
 Training a model and distributing only its weights is another option for offline use. It does not require shipping the original training examples at inference time, but it does not guarantee complete and precise recall of a library. Research on supervised fine-tuning found limitations in acquiring new factual knowledge in the studied closed-book QA setting; its results do not establish a particular accuracy for this application. [Fine-tuning and new factual knowledge](https://aclanthology.org/2024.emnlp-main.444/).
 

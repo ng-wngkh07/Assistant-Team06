@@ -2,10 +2,20 @@
 import json
 import pytest
 
+
+def test_grounded_review_keeps_solution_independent_and_checks_semantic_duplicates():
+    from app.practice import build_grounded_review_prompt
+    prompt = build_grounded_review_prompt([])
+    assert 'Chỉ dùng source và question để viết independent_solution, chưa đọc choices' in prompt
+    assert 'Hai cách diễn đạt cùng một ý vẫn là hai đáp án đúng' in prompt
+    assert 'source tự nó không trả lời được question' in prompt
+    assert 'Đúng lời giải nhưng không có lựa chọn khớp vẫn explanation_supported=true' in prompt
+
 from app.practice import (
     PracticeService,
     build_practice_review_item,
     build_practice_review_prompt,
+    build_grounded_review_prompt,
     practice_review_schema,
 )
 from app.multitask_training_data import (
@@ -105,8 +115,11 @@ def test_pure_prompt_producer_parity_between_runtime_and_multitask():
         "difficulty": "medium",
     }
 
-    item = build_practice_review_item(q_dict, passage, index=1)
-    prompt_from_producer = build_practice_review_prompt([item], difficulty="medium")
+    quote = q_dict["evidence_quote"]
+    item = build_practice_review_item(q_dict, quote, index=1, context_text=passage)
+    prompt_from_producer = build_grounded_review_prompt([item], difficulty="medium")
+    assert item["source"] == quote
+    assert item["context"] == passage
 
     # In multitask training data:
     ctx = sample_context()
@@ -126,7 +139,8 @@ def test_verify_questions_fails_closed_on_missing_or_blank_audit_fields(monkeypa
     """If model omits or blanks out any audit field, _verify_questions must reject the question."""
     service = PracticeService(None, None)
     q = sample_question()
-    passage_dict = {10: {"text": "chia đôi không gian", "safe_text": "chia đôi không gian"}}
+    passage_text = "Tìm kiếm nhị phân chia đôi không gian tìm kiếm tại mỗi bước."
+    passage_dict = {10: {"text": passage_text, "safe_text": passage_text}}
 
     for missing_field in ("input_audit", "independent_solution", "choice_comparison", "explanation_audit"):
         bad_check = sample_valid_check()
@@ -155,7 +169,8 @@ def test_verify_questions_fails_closed_on_failed_boolean_gates(monkeypatch):
     """If any boolean gate is False or verified_answer differs, question is rejected."""
     service = PracticeService(None, None)
     q = sample_question()
-    passage_dict = {10: {"text": "chia đôi không gian", "safe_text": "chia đôi không gian"}}
+    passage_text = "Tìm kiếm nhị phân chia đôi không gian tìm kiếm tại mỗi bước."
+    passage_dict = {10: {"text": passage_text, "safe_text": passage_text}}
 
     for bool_gate in ("supported", "explanation_supported", "unique_answer", "qualifiers_preserved", "difficulty_matches"):
         bad_check = sample_valid_check()
@@ -184,7 +199,8 @@ def test_verify_questions_accepts_valid_audit_check(monkeypatch):
     """When all audit fields and boolean gates pass, question is accepted."""
     service = PracticeService(None, None)
     q = sample_question()
-    passage_dict = {10: {"text": "chia đôi không gian", "safe_text": "chia đôi không gian"}}
+    passage_text = "Tìm kiếm nhị phân chia đôi không gian tìm kiếm tại mỗi bước."
+    passage_dict = {10: {"text": passage_text, "safe_text": passage_text}}
     good_check = sample_valid_check()
 
     monkeypatch.setattr(
@@ -240,7 +256,8 @@ def test_reject_auditless_response(monkeypatch):
     """When checks response omits all mandatory audit fields, question must be rejected."""
     service = PracticeService(None, None)
     q = sample_question()
-    passage_dict = {10: {"text": "chia đôi không gian", "safe_text": "chia đôi không gian"}}
+    passage_text = "Tìm kiếm nhị phân chia đôi không gian tìm kiếm tại mỗi bước."
+    passage_dict = {10: {"text": passage_text, "safe_text": passage_text}}
     auditless_check = {
         "index": 1,
         "supported": True,
@@ -264,7 +281,8 @@ def test_reject_overlong_audit(monkeypatch, field):
     """When an audit field exceeds 1000 characters, question must be rejected."""
     service = PracticeService(None, None)
     q = sample_question()
-    passage_dict = {10: {"text": "chia đôi không gian", "safe_text": "chia đôi không gian"}}
+    passage_text = "Tìm kiếm nhị phân chia đôi không gian tìm kiếm tại mỗi bước."
+    passage_dict = {10: {"text": passage_text, "safe_text": passage_text}}
     overlong_check = sample_valid_check()
     overlong_check[field] = "x" * 1001
     monkeypatch.setattr(
@@ -320,3 +338,11 @@ def test_preparation_rejects_overlong_audit_fields(builder, field):
     }
     with pytest.raises(ValueError, match="exceeds 1000 characters"):
         builder(ctx, "Kiểm định", q_dict)
+
+
+def test_grounded_review_separates_input_sufficiency_and_checks_complete_options():
+    prompt = build_grounded_review_prompt(build_practice_review_item(sample_question(), 'Nguồn giả lập chỉ dùng cho kiểm tra hợp đồng.'))
+    assert 'source phải tự chứa quy tắc hoặc ví dụ đã giải cho question và toàn bộ explanation' not in prompt
+    assert 'Xét riêng question với source trước, rồi xét explanation' in prompt
+    assert 'khớp một từ không đủ' in prompt
+    assert 'Không có hoặc có nhiều lựa chọn đủ đúng' in prompt

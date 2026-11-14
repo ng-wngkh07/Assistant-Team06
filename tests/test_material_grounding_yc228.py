@@ -40,14 +40,20 @@ class Responses:
         if 'Kiểm định độc lập từng câu' in prompt:
             # Simulated reviewer boundary, never evidence of model quality.
             records = json.JSONDecoder().raw_decode(prompt.split('Dữ liệu cần kiểm định:\n',1)[1])[0]
+            def fixture_answer(item):
+                if item['question'].startswith('Chọn cụm điền vào trích đoạn:\n'):
+                    masked = item['question'].split('\n', 1)[1].rsplit('\nPhần […] là gì?', 1)[0]
+                    return next(label for label, text in item['choices'].items()
+                                if masked.replace('[…]', text, 1) == item['source'])
+                return 'A'
             return json.dumps({'checks':[{'index':item['index'],
                 'input_audit': 'Đầy đủ dữ kiện theo định nghĩa trong tài liệu nguồn.' if self.review_accepts else 'Question thiếu dữ kiện để giải.',
                 'independent_solution': 'Tra cứu định nghĩa khái niệm trong nguồn để xác định đáp án.' if self.review_accepts else 'Không đủ căn cứ xác định kết quả.',
-                'choice_comparison': f"Lựa chọn {item.get('proposed_answer', 'A')} khớp chính xác với kết quả tự giải." if self.review_accepts else 'Không có lựa chọn nào phù hợp.',
+                'choice_comparison': f"Lựa chọn {fixture_answer(item)} khớp chính xác với kết quả tự giải." if self.review_accepts else 'Không có lựa chọn nào phù hợp.',
                 'explanation_audit': 'Giải thích bám sát định nghĩa trong nguồn.' if self.review_accepts else 'Giải thích không có căn cứ trong tài liệu nguồn.',
                 'supported':self.review_accepts,'explanation_supported':self.review_accepts,
                 'unique_answer':self.review_accepts,'qualifiers_preserved':self.review_accepts,
-                'difficulty_matches':self.review_accepts,'verified_answer':(item.get('proposed_answer', 'A') if self.review_accepts else '')}
+                'difficulty_matches':self.review_accepts,'verified_answer':(fixture_answer(item) if self.review_accepts else '')}
                 for item in records]})
         return next(self.responses)
 
@@ -111,6 +117,9 @@ def test_valid_model_items_preserve_content_and_report_provenance():
 @pytest.mark.skipif(sys.platform != "darwin", reason="Native Mac MLX deployment")
 def test_local_model_uses_existing_mlx_client_even_if_ollama_chat_is_offline(monkeypatch, native_context_metadata):
     import app.trained_client as tc
+    import app.token_counter as token_counter
+    monkeypatch.setattr(token_counter, 'get_exact_token_counter',
+                        lambda: lambda messages: sum(len(m['content']) for m in messages))
     calls = []
     class Local:
         last_done_reason = 'stop'
@@ -120,6 +129,7 @@ def test_local_model_uses_existing_mlx_client_even_if_ollama_chat_is_offline(mon
             calls.append(kwargs)
             if len(calls) == 3:
                 return json.dumps({'checks':[{'index':1,
+                    'source_basis': TEXT, 'matching_choices': 'A',
                     'input_audit': 'Đầy đủ dữ kiện theo định nghĩa trong nguồn.',
                     'independent_solution': 'Tra cứu định nghĩa khái niệm trong nguồn.',
                     'choice_comparison': 'Khớp chính xác với lựa chọn A.',
