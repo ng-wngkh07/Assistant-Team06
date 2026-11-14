@@ -173,14 +173,16 @@ class VisionOCRManager:
         raw = f"{source_hash}:{page_num}:{backend}:{model_digest or ''}:{prompt_version or cls.PROMPT_VERSION}:{opts_str}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    def _validate_cache_path(self, cache_key: str) -> Path:
+    def _validate_cache_path(self, cache_key: str, suffix: str = ".json") -> Path:
         """Ensure cache_key is a valid 64-char hex string and does not escape CACHE_DIR."""
         if not isinstance(cache_key, str) or not re.fullmatch(r"[0-9a-f]{64}", cache_key):
             raise ValueError(f"cache_key không hợp lệ (phải là 64 ký tự hex sha256): '{cache_key}'")
+        if suffix not in (".json", ".png"):
+            raise ValueError("Định dạng tệp cache OCR không hợp lệ.")
         hex_alphabet = "0123456789abcdef"
         untainted_key = "".join(hex_alphabet[int(ch, 16)] for ch in cache_key)
         base_dir = os.path.normpath(os.fspath(self.cache_dir))
-        target_norm = os.path.normpath(os.path.join(base_dir, f"{untainted_key}.json"))
+        target_norm = os.path.normpath(os.path.join(base_dir, f"{untainted_key}{suffix}"))
         if not target_norm.startswith(base_dir + os.sep):
             raise PermissionError(f"Đường dẫn cache thoát khỏi CACHE_DIR: {target_norm}")
         return Path(target_norm)
@@ -609,7 +611,8 @@ class VisionOCRManager:
                     hashlib.sha256(image.read_bytes()).hexdigest() != expected_image_hash):
                 raise ValueError('Ảnh source image không còn khớp bản OCR')
         else:
-            cached_png = active_cache_dir / f"{parent.get('cache_key') or cache_key}.png"
+            png_key = str(parent.get('cache_key') or cache_key)
+            cached_png = mgr._validate_cache_path(png_key, suffix=".png")
             image_matched = False
             if cached_png.is_file() and hashlib.sha256(cached_png.read_bytes()).hexdigest() == expected_image_hash:
                 image_matched = True

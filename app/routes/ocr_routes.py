@@ -4,6 +4,8 @@ import asyncio
 import inspect
 import json
 import logging
+import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -58,12 +60,19 @@ def _candidate_cache_dirs(server_mod: Any) -> List[Path]:
 
 def _resolve_cache_dir_for_key(server_mod: Any, cache_key: str) -> Optional[Path]:
     from app.vision_ocr import CACHE_DIR
-    if isinstance(CACHE_DIR, Path) and (CACHE_DIR / f"{cache_key}.json").is_file():
-        return CACHE_DIR
     indexer_obj = getattr(server_mod, "indexer", None)
     idx_cache = getattr(indexer_obj, "ocr_cache_dir", None) if indexer_obj is not None else None
-    if isinstance(idx_cache, Path) and (idx_cache / f"{cache_key}.json").is_file():
-        return idx_cache
+    if not isinstance(cache_key, str) or not re.fullmatch(r"[0-9a-f]{64}", cache_key):
+        return CACHE_DIR if isinstance(CACHE_DIR, Path) else idx_cache
+    hex_alphabet = "0123456789abcdef"
+    untainted_key = "".join(hex_alphabet[int(ch, 16)] for ch in cache_key)
+    for cdir in (CACHE_DIR, idx_cache):
+        if not isinstance(cdir, Path):
+            continue
+        base_dir = os.path.normpath(os.fspath(cdir))
+        target_norm = os.path.normpath(os.path.join(base_dir, f"{untainted_key}.json"))
+        if target_norm.startswith(base_dir + os.sep) and os.path.isfile(target_norm):
+            return cdir
     return CACHE_DIR if isinstance(CACHE_DIR, Path) else idx_cache
 
 
@@ -138,7 +147,7 @@ async def submit_ocr_review(req: OCRReviewRequest):
             err_msg = (
                 "disk indexing failure"
                 if "disk indexing failure" in str(e).lower()
-                else sanitize_error_detail(str(e), fallback="Không thể cập nhật chỉ mục trang tài liệu.")
+                else "Không thể cập nhật chỉ mục trang tài liệu."
             )
             index_update = {"status": "failed", "error": err_msg}
 
@@ -193,9 +202,14 @@ async def submit_ocr_region_review(req: OCRRegionReviewRequest):
                 )
             except Exception as exc:
                 logger.warning("Lỗi cập nhật chunk vùng OCR: %s", exc)
+                err_msg = (
+                    "disk indexing failure"
+                    if "disk indexing failure" in str(exc).lower()
+                    else "Không thể cập nhật chỉ mục trang tài liệu."
+                )
                 index_update = {
                     "status": "failed",
-                    "error": sanitize_error_detail(str(exc), fallback="Không thể cập nhật chỉ mục trang tài liệu."),
+                    "error": err_msg,
                 }
 
         if getattr(_srv, "src_watcher", None) is not None:

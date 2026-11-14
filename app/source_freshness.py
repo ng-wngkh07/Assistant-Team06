@@ -86,6 +86,21 @@ def _stat_identity(st: os.stat_result) -> Tuple[int, int, int, int, int]:
     )
 
 
+def _same_open_and_path_stat(st_open: os.stat_result, st_path: os.stat_result) -> bool:
+    """Compare an open-descriptor fstat result against a path stat result across POSIX and Windows."""
+    if os.name != "nt":
+        return _stat_identity(st_open) == _stat_identity(st_path)
+    # On Windows Python 3.12+, os.fstat(fd) reports CreationTime in st_ctime_ns whereas
+    # Path.stat() reports ChangeTime in st_ctime_ns (and may differ in zero vs non-zero st_dev/st_ino).
+    if int(st_open.st_size) != int(st_path.st_size) or int(st_open.st_mtime_ns) != int(st_path.st_mtime_ns):
+        return False
+    if st_open.st_ino and st_path.st_ino and int(st_open.st_ino) != int(st_path.st_ino):
+        return False
+    if st_open.st_dev and st_path.st_dev and int(st_open.st_dev) != int(st_path.st_dev):
+        return False
+    return True
+
+
 def _evict_hash_cache_key(key: Tuple[str, int, int, int, int, int]) -> None:
     with _CACHE_LOCK:
         _FILE_HASH_CACHE.pop(key, None)
@@ -108,7 +123,10 @@ def _open_pinned_identity(filepath: Path) -> Tuple[Optional[int], str, Tuple[int
         if not stat_mod.S_ISREG(st_open.st_mode):
             raise FileIdentityChangedError("Tệp nguồn không phải tệp thông thường.")
         resolved_before = str(filepath.resolve(strict=True))
-        id_before = _stat_identity(st_open)
+        st_path = filepath.stat()
+        if not _same_open_and_path_stat(st_open, st_path):
+            raise FileIdentityChangedError("Tệp nguồn thay đổi trước khi đọc chỉ mục băm.")
+        id_before = _stat_identity(st_path)
         if _stat_identity(filepath.stat()) != id_before:
             raise FileIdentityChangedError("Tệp nguồn thay đổi trước khi đọc chỉ mục băm.")
     except Exception:
@@ -125,28 +143,38 @@ def _verify_pinned_identity(
     id_before: Tuple[int, int, int, int, int],
 ) -> None:
     """Ensure an opened descriptor and its filesystem path still refer to the exact same version."""
-    if pinned_fd is not None and _stat_identity(os.fstat(pinned_fd)) != id_before:
-        _evict_hash_cache_path(resolved_before)
-        raise FileIdentityChangedError("Tệp nguồn thay đổi trong lúc kiểm tra.")
     resolved_after = str(filepath.resolve(strict=True))
-    if resolved_after != resolved_before or _stat_identity(filepath.stat()) != id_before:
+    st_path_after = filepath.stat()
+    if resolved_after != resolved_before or _stat_identity(st_path_after) != id_before:
         _evict_hash_cache_path(resolved_before)
         raise FileIdentityChangedError("Tệp nguồn thay đổi sau khi kiểm tra.")
+    if pinned_fd is not None:
+        st_open_after = os.fstat(pinned_fd)
+        same_fd = (
+            _stat_identity(st_open_after) == id_before
+            if os.name != "nt"
+            else _same_open_and_path_stat(st_open_after, st_path_after)
+        )
+        if not same_fd:
+            _evict_hash_cache_path(resolved_before)
+            raise FileIdentityChangedError("Tệp nguồn thay đổi trong lúc kiểm tra.")
 
 
 def _compute_file_sha256(filepath: Path) -> str:
     hasher = hashlib.sha256()
+    st_path_before = filepath.stat()
+    path_id_before = _stat_identity(st_path_before)
     with filepath.open("rb") as stream:
         fd = stream.fileno()
         st_open = os.fstat(fd)
         if not stat_mod.S_ISREG(st_open.st_mode):
             raise FileIdentityChangedError("Tệp nguồn không phải tệp thông thường.")
-        before_open = _stat_identity(st_open)
-        if _stat_identity(filepath.stat()) != before_open:
+        fd_id_before = _stat_identity(st_open)
+        if not _same_open_and_path_stat(st_open, st_path_before):
             raise FileIdentityChangedError("Tệp nguồn thay đổi danh tính trước khi đọc.")
         while chunk := stream.read(65536):
             hasher.update(chunk)
-        if _stat_identity(os.fstat(fd)) != before_open or _stat_identity(filepath.stat()) != before_open:
+        if _stat_identity(os.fstat(fd)) != fd_id_before or _stat_identity(filepath.stat()) != path_id_before:
             raise FileIdentityChangedError("Tệp nguồn thay đổi trong lúc băm kiểm tra.")
     return hasher.hexdigest()
 

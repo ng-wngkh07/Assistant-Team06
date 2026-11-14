@@ -393,7 +393,7 @@ class SrcWatcher:
                     st = fpath.stat()
                 except OSError:
                     continue
-                rel = str(fpath.relative_to(self.src_dir))
+                rel = fpath.relative_to(self.src_dir).as_posix()
                 candidates[rel] = (fpath, int(st.st_size), int(st.st_mtime_ns))
         return candidates
 

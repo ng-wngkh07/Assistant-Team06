@@ -31,8 +31,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+import sys
+
 from app.accounts import COOKIE, account_id, connection, issue_session, password_hash, root_dir
 from app.config import DATA_DIR
+from app.ollama_client import OllamaClient
 import app.rag_agent as ra
 from app.server import app, requested_source_scope, ChatRequest, study_material_manager, document_lookup
 from app.trained_client import TrainedModelClient
@@ -50,8 +53,10 @@ def test_env(tmp_path, monkeypatch):
         study_material_manager._instances.clear()
 
     # Mock model boundary for isolated deterministic unit tests
+    monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr("app.rag_agent.context_capacity", lambda model: 8192)
     monkeypatch.setattr(TrainedModelClient, "available", classmethod(lambda cls, *a, **k: True))
+    monkeypatch.setattr(OllamaClient, "check_health", lambda self: True)
 
     def mock_chat_stream(self, messages=None, **kwargs):
         self.last_done_reason = "stop"
@@ -93,6 +98,7 @@ def test_env(tmp_path, monkeypatch):
             })
 
     monkeypatch.setattr(TrainedModelClient, "chat_stream", mock_chat_stream)
+    monkeypatch.setattr(OllamaClient, "chat_stream", mock_chat_stream)
     return acct_dir
 
 

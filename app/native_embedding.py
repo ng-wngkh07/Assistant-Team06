@@ -39,7 +39,18 @@ def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) 
         except OSError:
             kill_pg = False
     try:
-        if kill_pg:
+        if os.name == "nt":
+            try:
+                subprocess.run(  # nosec B603, B607
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=3.0,
+                )
+            except (OSError, subprocess.SubprocessError):
+                proc.terminate()
+        elif kill_pg:
             os.killpg(proc.pid, signal.SIGTERM)
         else:
             proc.terminate()

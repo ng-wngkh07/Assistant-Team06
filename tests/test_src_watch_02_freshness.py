@@ -399,6 +399,7 @@ def test_watcher_stop_cooperatively_cancels_owned_subprocess_and_releases_locks(
     )
 
     from app.native_embedding import BGE_NATIVE_IDENTITY
+    monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr("app.indexer.gpu_coordinator", gpu_lock)
     monkeypatch.setattr("app.native_embedding.gpu_coordinator", gpu_lock)
     monkeypatch.setattr(NativeEmbeddingClient, "available", classmethod(lambda cls, *a, **kw: True))
@@ -437,7 +438,7 @@ def test_watcher_stop_cooperatively_cancels_owned_subprocess_and_releases_locks(
             try:
                 os.kill(pid, 0)
                 time.sleep(0.02)
-            except ProcessLookupError:
+            except (ProcessLookupError, OSError):
                 alive = False
                 break
         assert alive is False, f"Orphan worker PID {pid} survived shutdown"
@@ -482,6 +483,7 @@ def test_watcher_cancels_while_waiting_on_writer_lock_and_gpu_lock(tmp_path, mon
         assert watcher.get_status()["running"] is False
 
     # Case B: blocked waiting on gpu_coordinator.acquire_for_inference
+    monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr("app.indexer.gpu_coordinator", gpu_lock)
     monkeypatch.setattr("app.native_embedding.gpu_coordinator", gpu_lock)
     monkeypatch.setattr(NativeEmbeddingClient, "available", classmethod(lambda cls, *a, **kw: True))

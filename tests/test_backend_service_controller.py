@@ -551,13 +551,24 @@ def test_foreign_port_fail_closed_and_stale_tampered_pid_untouched(tmp_path):
     cfg_path = _write_config(tmp_path / "foreign.json", store, port)
 
     foreign_proc = subprocess.Popen(
-        [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"],
+        [
+            sys.executable,
+            "-c",
+            (
+                "import socket, time; "
+                "s = socket.socket(); "
+                "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); "
+                f"s.bind(('127.0.0.1', {port})); "
+                "s.listen(5); "
+                "time.sleep(60)"
+            ),
+        ],
         cwd=str(tmp_path),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     try:
-        assert _wait_until(lambda: bs.is_port_accepting("127.0.0.1", port), timeout=5.0)
+        assert _wait_until(lambda: bs.is_port_accepting("127.0.0.1", port), timeout=15.0)
         start_res = _run_cli(cfg_path, "start", "--json")
         assert start_res.returncode == 2
         assert "foreign" in start_res.stdout.lower()

@@ -251,8 +251,26 @@ class KnowledgeIndexer:
                 continue
         return candidates
 
+    class _ClosingConnection(sqlite3.Connection):
+        """sqlite3.Connection that closes on outermost context-manager exit."""
+
+        _ctx_depth = 0
+
+        def __enter__(self):
+            entered = super().__enter__()
+            self._ctx_depth += 1
+            return entered
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            try:
+                return super().__exit__(exc_type, exc_val, exc_tb)
+            finally:
+                self._ctx_depth = max(0, self._ctx_depth - 1)
+                if self._ctx_depth == 0:
+                    self.close()
+
     def get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), factory=self._ClosingConnection)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
@@ -800,7 +818,7 @@ class KnowledgeIndexer:
         if not file_path.exists() or not file_path.is_file():
             raise FileNotFoundError("Không tìm thấy tệp nguồn.")
 
-        rel_path = str(file_path.relative_to(self.src_dir))
+        rel_path = file_path.relative_to(self.src_dir).as_posix()
         force_ocr_set = force_ocr_files or set()
         reviews = (
             latest_page_review_states
@@ -1063,7 +1081,7 @@ class KnowledgeIndexer:
 
             indexed_map = self.get_indexed_files_map()
             force_ocr_files = force_ocr_files or set()
-            current_keys = {str(p.relative_to(self.src_dir)) for p in source_files}
+            current_keys = {p.relative_to(self.src_dir).as_posix() for p in source_files}
 
             obsolete_filenames = set(indexed_map) - current_keys
             if obsolete_filenames:
@@ -1077,7 +1095,7 @@ class KnowledgeIndexer:
             latest_page_review_states = self._load_verified_page_reviews()
 
             for idx, file_path in enumerate(source_files, 1):
-                rel_path = str(file_path.relative_to(self.src_dir))
+                rel_path = file_path.relative_to(self.src_dir).as_posix()
                 file_hash = PDFExtractor.calculate_file_hash(file_path)
                 current_abs_path = str(file_path.resolve())
 

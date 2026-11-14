@@ -107,6 +107,7 @@ def _wire_isolated_server(tmp_path: Path, monkeypatch, *, auto_ocr: bool = True,
     practice_db = data_dir / "practice.db"
     timetable_db = data_dir / "timetable.db"
 
+    monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setenv("STUDY_SRC_AUTO_WATCH", "1")
     monkeypatch.setenv("STUDY_SRC_AUTO_OCR", "1" if auto_ocr else "0")
     monkeypatch.setenv("PRACTICE_DB_PATH", str(practice_db))

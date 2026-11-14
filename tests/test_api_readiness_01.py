@@ -7,6 +7,7 @@ no real course sources, serving databases, or local model weights are used.
 import base64
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -99,8 +100,9 @@ def isolated_readiness_env(tmp_path, monkeypatch):
 
 
 def test_upload_generate_missing_model_returns_503_retains_extraction_and_keeps_health_unready(
-    isolated_readiness_env,
+    isolated_readiness_env, monkeypatch
 ):
+    monkeypatch.setattr(sys, "platform", "darwin")
     client = TestClient(server.app, raise_server_exceptions=False)
     tmp_path = isolated_readiness_env["tmp_path"]
     local_mgr = isolated_readiness_env["local_mgr"]
@@ -157,6 +159,7 @@ def test_upload_generate_missing_model_returns_503_retains_extraction_and_keeps_
 def test_upload_generate_persist_to_src_and_account_private_retain_on_503(
     isolated_readiness_env, monkeypatch
 ):
+    monkeypatch.setattr(sys, "platform", "darwin")
     tmp_path = isolated_readiness_env["tmp_path"]
     src_dir = isolated_readiness_env["src_dir"]
     local_mgr = isolated_readiness_env["local_mgr"]
@@ -226,6 +229,7 @@ def test_upload_generate_persist_to_src_and_account_private_retain_on_503(
 def test_library_generate_missing_model_returns_503_and_invalid_input_stays_422(
     isolated_readiness_env, monkeypatch
 ):
+    monkeypatch.setattr(sys, "platform", "darwin")
     tmp_path = isolated_readiness_env["tmp_path"]
     src_dir = isolated_readiness_env["src_dir"]
     local_mgr = isolated_readiness_env["local_mgr"]

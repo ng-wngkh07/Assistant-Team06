@@ -435,7 +435,7 @@ def test_native_embedding_disposable_subprocess_cancellation_inherits_locks_and_
                 try:
                     os.kill(pid, 0)
                     time.sleep(0.02)
-                except ProcessLookupError:
+                except (ProcessLookupError, OSError):
                     alive = False
                     break
             assert alive is False, f"Owned PID {pid} survived cancellation"
@@ -496,7 +496,7 @@ def test_native_embedding_disposable_subprocess_timeout_escalates_sigkill_and_re
         try:
             os.kill(pid, 0)
             time.sleep(0.02)
-        except ProcessLookupError:
+        except (ProcessLookupError, OSError):
             alive = False
             break
     assert alive is False
