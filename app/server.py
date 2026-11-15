@@ -61,9 +61,18 @@ async def lifespan(_app: FastAPI):
     if watcher is not None and (is_src_auto_watch_enabled() or watcher.is_enabled()):
         if not watcher.start():
             logger.warning("Managed SrcWatcher could not start because a previous worker is still draining.")
+    start_warmup = getattr(TrainedModelClient, "start_startup_warmup", None)
+    if callable(start_warmup):
+        start_warmup()
     try:
         yield
     finally:
+        stop_warmup = getattr(TrainedModelClient, "stop_startup_warmup", None)
+        if callable(stop_warmup):
+            stop_warmup(timeout=2.0)
+        evict_worker = getattr(TrainedModelClient, "evict_stream_worker", None)
+        if callable(evict_worker):
+            evict_worker()
         if watcher is not None:
             stopped = watcher.stop(timeout=5.0)
             if not stopped:

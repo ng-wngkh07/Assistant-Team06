@@ -1,18 +1,20 @@
 """Bridge the main app to the local Qwen3.5 9B MLX base."""
 
+import inspect
 import json
 import logging
 import os
 import sys
 import subprocess
 import tempfile
+import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Generator, Optional
 
 from app.config import BASE_DIR, TRAINED_MODEL_NAME
-from app.gpu_lock import gpu_coordinator
+from app.gpu_lock import GPUBusyError, IndexingCancelledError, gpu_coordinator
 from app.model_resolver import (
     MLX_9B_NAME,
     resolve_mlx_model_dir,
@@ -49,6 +51,12 @@ def native_review_session():
 
 class TrainedModelClient:
     """Client for the current unadapted local Qwen3.5 9B base."""
+
+    _warmup_lock = threading.Lock()
+    _warmup_done = threading.Event()
+    _warmup_done.set()
+    _startup_warmup_thread: Optional[threading.Thread] = None
+    _startup_warmup_cancel = threading.Event()
 
     @staticmethod
     def _verify_weights(model_dir: Path) -> bool:
@@ -138,6 +146,114 @@ class TrainedModelClient:
     def evict_stream_worker(cls) -> None:
         """Stop any idle resident native MLX inference worker to free unified memory."""
         _INFER_STREAM_WORKER.evict()
+
+    @classmethod
+    def _default_warmup_prompts(cls) -> list[str]:
+        from app.rag_agent import MLX_SOURCE_PROMPT
+        return [MLX_SOURCE_PROMPT]
+
+    @classmethod
+    def warm_prefix_caches(
+        cls,
+        system_prompts: Optional[list[str]] = None,
+        model_name: Optional[str] = None,
+        *,
+        timeout_sec: float = 120.0,
+        gpu_wait_timeout: float = 0.25,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> dict:
+        """Pre-load the resident MLX worker and warm immutable system-prefix KV caches."""
+        if cancel_event is not None and cancel_event.is_set():
+            return {"warmed": False, "skipped": "cancelled"}
+        target_model = model_name or (MLX_9B_NAME if sys.platform == "darwin" else TRAINED_MODEL_NAME)
+        if not cls.available(target_model):
+            return {"warmed": False, "skipped": "unavailable"}
+        model_dir = resolve_mlx_model_dir(target_model)
+        prompts = list(cls._default_warmup_prompts() if system_prompts is None else system_prompts)
+        prompts = [p for p in prompts if isinstance(p, str) and p.strip()]
+        if not prompts:
+            return {"warmed": False, "skipped": "no_prompts"}
+
+        acquire_fn = gpu_coordinator.acquire_for_inference
+        acq_kwargs = {}
+        try:
+            params = inspect.signature(acquire_fn).parameters
+            if "timeout" in params:
+                acq_kwargs["timeout"] = float(gpu_wait_timeout)
+            if "cancel_event" in params:
+                acq_kwargs["cancel_event"] = cancel_event
+        except (TypeError, ValueError):
+            acq_kwargs = {}
+
+        request = {
+            "op": "warmup",
+            "model_path": str(model_dir),
+            "adapter_path": None,
+            "system_prompts": prompts,
+            "num_ctx": get_model_context_capacity(target_model),
+        }
+
+        try:
+            with acquire_fn(**acq_kwargs):
+                cls._warmup_done.clear()
+                try:
+                    return _INFER_STREAM_WORKER.request_json(
+                        request,
+                        timeout=float(timeout_sec),
+                        cancel_event=cancel_event,
+                    )
+                finally:
+                    cls._warmup_done.set()
+        except (GPUBusyError, IndexingCancelledError):
+            return {"warmed": False, "skipped": "gpu_busy_or_cancelled"}
+
+    @classmethod
+    def start_startup_warmup(
+        cls,
+        *,
+        delay_seconds: float = 1.5,
+        model_name: Optional[str] = None,
+    ) -> bool:
+        """Schedule non-blocking resident prefix warmup once after server startup."""
+        disabled = os.getenv("STUDY_DISABLE_STARTUP_WARMUP", "").strip().lower() in {"1", "true", "yes", "on"}
+        if disabled or os.getenv("PYTEST_CURRENT_TEST") or sys.platform != "darwin":
+            return False
+        if not cls.available(model_name):
+            return False
+        with cls._warmup_lock:
+            existing = cls._startup_warmup_thread
+            if existing is not None and existing.is_alive():
+                return False
+            cancel_evt = threading.Event()
+            cls._startup_warmup_cancel = cancel_evt
+
+            def _runner():
+                if delay_seconds > 0 and cancel_evt.wait(timeout=float(delay_seconds)):
+                    return
+                try:
+                    result = cls.warm_prefix_caches(
+                        model_name=model_name,
+                        cancel_event=cancel_evt,
+                    )
+                    logger.info("Native MLX startup prefix warmup finished: %s", result.get("timings") or result.get("skipped"))
+                except Exception as exc:
+                    logger.debug("Native MLX startup prefix warmup skipped/failed: %s", exc)
+
+            thread = threading.Thread(target=_runner, name="mlx-prefix-warmup", daemon=True)
+            cls._startup_warmup_thread = thread
+            thread.start()
+            return True
+
+    @classmethod
+    def stop_startup_warmup(cls, timeout: float = 2.0) -> None:
+        """Cancel any pending or active startup warmup thread during shutdown."""
+        with cls._warmup_lock:
+            cancel_evt = cls._startup_warmup_cancel
+            thread = cls._startup_warmup_thread
+        cancel_evt.set()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=max(0.0, float(timeout)))
+        cls._warmup_done.set()
 
     def _record_result_metrics(
         self,
@@ -245,6 +361,9 @@ class TrainedModelClient:
             or subprocess.Popen is not _STDLIB_POPEN
             or type(self)._stream_worker_command is not TrainedModelClient._stream_worker_command
         )
+
+        if not type(self)._warmup_done.is_set():
+            type(self)._warmup_done.wait(timeout=90.0)
 
         # Serialize model workloads through exclusive native worker admission and training lock inheritance
         with gpu_coordinator.acquire_for_inference() as lock_fds:

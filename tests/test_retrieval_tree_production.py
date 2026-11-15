@@ -403,3 +403,53 @@ def test_stale_sidecar_memoized_and_auto_refreshed_on_index_all(synthetic_kb, mo
     assert len(calls) == 2
     assert searcher.last_topic_routing["applied"] is True
     assert searcher.last_topic_routing["fallback_to_global"] is False
+
+
+def test_inspect_retrieval_tree_health_reports_missing_ready_and_stale(synthetic_kb, monkeypatch):
+    """inspect_retrieval_tree_health distinguishes missing, ready, and stale sidecars without mutating files."""
+    from app import config as app_config
+    from app.retrieval_tree import inspect_retrieval_tree_health
+    from app.runtime_health import inspect_infrastructure_health
+
+    source_db, tmp_path = synthetic_kb
+    sidecar_db = tmp_path / "retrieval_tree.db"
+
+    missing_src = inspect_retrieval_tree_health(tmp_path / "nonexistent.db")
+    assert missing_src["status"] == "source_missing"
+    assert missing_src["present"] is False
+    assert missing_src["valid"] is False
+
+    missing_sidecar = inspect_retrieval_tree_health(source_db)
+    assert missing_sidecar["status"] == "missing"
+    assert missing_sidecar["present"] is False
+    assert missing_sidecar["valid"] is False
+    assert missing_sidecar["reason"] == "sidecar_missing"
+
+    build_tree(source_db, sidecar_db)
+    ready = inspect_retrieval_tree_health(source_db)
+    assert ready["status"] == "ready"
+    assert ready["present"] is True
+    assert ready["valid"] is True
+    assert ready["stale"] is False
+    assert ready["reason"] is None
+    assert ready["doc_count"] >= 1
+    assert ready["chunk_count"] >= 1
+
+    with sqlite3.connect(source_db) as conn:
+        conn.execute("UPDATE chunks SET text = 'Nội dung thay đổi sau khi dựng sidecar.' WHERE id = 1")
+        conn.commit()
+
+    stale = inspect_retrieval_tree_health(source_db)
+    assert stale["status"] == "stale"
+    assert stale["present"] is True
+    assert stale["valid"] is False
+    assert stale["stale"] is True
+    assert stale["reason"] == "source_db_modified"
+
+    monkeypatch.setattr(app_config, "DB_PATH", source_db)
+    monkeypatch.setenv("STUDY_ACCOUNTS_DIR", str(tmp_path / "accounts"))
+    (tmp_path / "accounts").mkdir(exist_ok=True)
+    infra = inspect_infrastructure_health()
+    assert infra["knowledge_base_readable"] is True
+    assert infra["retrieval_tree"]["status"] == "stale"
+    assert infra["retrieval_tree"]["reason"] == "source_db_modified"

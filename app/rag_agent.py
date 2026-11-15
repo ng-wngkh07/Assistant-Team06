@@ -35,19 +35,23 @@ from app.source_consistency import differing_value_reference_signatures, inconsi
 logger = logging.getLogger(__name__)
 
 
-def _supports_response_schema(generator) -> bool:
-    """Return True when generator.chat_stream accepts response_schema."""
-    chat_fn = getattr(generator, "chat_stream", None)
-    if not callable(chat_fn):
+def _accepts_params(fn, *param_names: str) -> bool:
+    """Return True when callable accepts all named parameters or **kwargs."""
+    if not callable(fn):
         return False
     try:
-        sig = inspect.signature(chat_fn)
+        sig = inspect.signature(fn)
     except (TypeError, ValueError):
         return False
-    return any(
-        p.kind == inspect.Parameter.VAR_KEYWORD or p.name == "response_schema"
-        for p in sig.parameters.values()
-    )
+    params = sig.parameters
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return True
+    return all(name in params for name in param_names)
+
+
+def _supports_response_schema(generator) -> bool:
+    """Return True when generator.chat_stream accepts response_schema."""
+    return _accepts_params(getattr(generator, "chat_stream", None), "response_schema")
 
 
 def _max_source_line_count(retrieved_chunks: List[Dict[str, Any]], admitted_ids: set[str] | Dict[str, Any]) -> int:
@@ -790,6 +794,14 @@ class PsychologyAgent:
             )
         )
         resolved_level = resolve_processing_level(processing_level, query, compare_concepts)
+        is_focused_fast = (
+            resolved_level == "standard"
+            and not is_broad
+            and not compare_concepts
+            and answer_mode != "compare"
+            and not source_page
+            and not is_attached_doc_query
+        )
         complexity = classify_query_complexity(query, compare_concepts)
         suggest_careful = bool(complexity.get("is_complex")) and resolved_level == "standard"
         careful_suggestion = complexity.get("suggestion") if suggest_careful else None
@@ -1027,10 +1039,43 @@ class PsychologyAgent:
             and callable(getattr(self.searcher, "expand_page_context"))
         ):
             try:
-                retrieved_chunks = self.searcher.expand_page_context(retrieved_chunks)
+                expand_fn = getattr(self.searcher, "expand_page_context")
                 expand_answers = getattr(self.searcher, "expand_markdown_answers", None)
-                if callable(expand_answers):
-                    retrieved_chunks = expand_answers(retrieved_chunks)
+                if is_focused_fast:
+                    fast_seed = list(retrieved_chunks[:3])
+                    fast_tail = list(retrieved_chunks[3:])
+                    seed_pair_chars = sum(len(c.get("text", "")) for c in fast_seed[:2])
+                    fast_expand_chunks = min(6, max(len(fast_seed) + 2, 4))
+                    fast_expand_chars = max(4800, seed_pair_chars + 1600)
+                    if _accepts_params(expand_fn, "max_chunks", "max_chars"):
+                        expanded_seed = expand_fn(
+                            fast_seed,
+                            max_chunks=fast_expand_chunks,
+                            max_chars=fast_expand_chars,
+                        )
+                    else:
+                        expanded_seed = expand_fn(fast_seed)
+                    if callable(expand_answers):
+                        if _accepts_params(expand_answers, "max_chunks", "max_chars"):
+                            expanded_seed = expand_answers(
+                                expanded_seed,
+                                max_chunks=fast_expand_chunks,
+                                max_chars=fast_expand_chars,
+                            )
+                        else:
+                            expanded_seed = expand_answers(expanded_seed)
+                    seen_seed_ids = {
+                        c.get("chunk_id") if c.get("chunk_id") is not None else c.get("id")
+                        for c in expanded_seed
+                    }
+                    retrieved_chunks = list(expanded_seed) + [
+                        c for c in fast_tail
+                        if (c.get("chunk_id") if c.get("chunk_id") is not None else c.get("id")) not in seen_seed_ids
+                    ]
+                else:
+                    retrieved_chunks = expand_fn(retrieved_chunks)
+                    if callable(expand_answers):
+                        retrieved_chunks = expand_answers(retrieved_chunks)
             except Exception as ex:
                 logger.warning("Neighboring context expansion failed, keeping anchors: %s", ex)
 
@@ -1145,12 +1190,30 @@ class PsychologyAgent:
             if " ".join(c.get("exercise_question", "").casefold().split()) == normalized_query
         }
         # A verified answer linked to this exact exercise takes priority over
-        # general theory during packing. Keep original source IDs and scope.
-        ordered_context = sorted(enumerate(retrieved_chunks, 1), key=lambda pair: (
-            " ".join(pair[1].get("exercise_question", "").casefold().split()) != normalized_query
-        ))
+        # general theory during packing. In focused Fast mode, keep top-2 anchors
+        # and their same-page neighbors ahead of lower-ranked tail hits under a
+        # tighter prompt prefill budget while leaving chunks intact for line IDs.
+        primary_anchor_pages = set()
+        for c in retrieved_chunks:
+            if c.get("source_type") not in ("neighboring_context", "exercise_answer_context"):
+                primary_anchor_pages.add((c.get("doc_id"), c.get("page_num")))
+                if len(primary_anchor_pages) >= 2:
+                    break
+
+        def _pack_priority(pair):
+            idx, chunk = pair
+            if " ".join(chunk.get("exercise_question", "").casefold().split()) == normalized_query:
+                return (0, idx)
+            if chunk.get("source_type") == "exercise_answer_context":
+                return (0, idx)
+            if is_focused_fast and (chunk.get("doc_id"), chunk.get("page_num")) in primary_anchor_pages:
+                return (1, idx)
+            return (2 if is_focused_fast else 1, idx)
+
+        ordered_context = sorted(enumerate(retrieved_chunks, 1), key=_pack_priority)
         from app.model_resolver import is_mlx_model, is_9b_model
         use_source_lines = is_9b_model(model)
+        fast_packed_chars = 0
         for idx, c in ordered_context:
             if is_unanswered_calculation_source(c.get("text", "")):
                 continue
@@ -1159,7 +1222,16 @@ class PsychologyAgent:
                 # question cannot substantiate a generated answer or result.
                 continue
             safe_text = c['safe_text']
+            tier = _pack_priority((idx, c))[0]
+            if (
+                is_focused_fast
+                and tier > 0
+                and len(context_parts) >= 3
+                and (fast_packed_chars + len(safe_text) > 3800 or len(context_parts) >= 5)
+            ):
+                continue
             safe_texts_budgeted[f"S{idx}"] = safe_text
+            fast_packed_chars += len(safe_text)
             prompt_text = "\n".join(f"L{line_no}|{line}" for line_no, line in enumerate(c['text'].split('\n'), 1)) if use_source_lines else safe_text
             context_parts.append(
                 f"<document id=\"S{idx}\" book=\"{escape(c['book_title'], {'\"': '&quot;'})}\" page=\"{c['page_num']}\">\n"

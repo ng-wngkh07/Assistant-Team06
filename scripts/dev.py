@@ -34,7 +34,7 @@ ENV_KEYS = {
     "STUDY_RATE_LIMIT_ENABLED", "STUDY_API_RATE_LIMIT_PER_MINUTE",
     "STUDY_INFERENCE_RATE_LIMIT_PER_MINUTE", "STUDY_RATE_LIMIT_WINDOW_SECONDS",
     "STUDY_ACCOUNT_MAX_FILES", "STUDY_ACCOUNT_MAX_STORAGE_MB",
-    "STUDY_MIN_FREE_DISK_MB", "FORWARDED_ALLOW_IPS",
+    "STUDY_MIN_FREE_DISK_MB", "STUDY_DISABLE_STARTUP_WARMUP", "FORWARDED_ALLOW_IPS",
 }
 
 
@@ -368,6 +368,19 @@ def check_environment(allow_wait: bool = False) -> bool:
         print(f"Library: EMPTY (0 indexed documents in {DB_PATH})")
     else:
         print(f"Library: OK ({indexed_docs} indexed documents)")
+        from app.retrieval_tree import inspect_retrieval_tree_health
+
+        tree_health = inspect_retrieval_tree_health(DB_PATH)
+        if tree_health["status"] == "ready":
+            print(
+                f"Retrieval tree: OK (classified_docs={tree_health['classified_documents']}/{tree_health['doc_count']}, "
+                f"classified_chunks={tree_health['classified_chunks']}/{tree_health['chunk_count']})"
+            )
+        elif tree_health["status"] != "source_missing":
+            print(
+                f"Retrieval tree: {tree_health['status'].upper()} ({tree_health['reason']}; "
+                "fallback active — rebuild with scripts/build_retrieval_tree.py --replace)"
+            )
     print(f"{app_status} | SQLite FTS5: OK | PDF: {fitz.VersionBind}")
     from app.model_resolver import is_mlx_model, reject_retired_model
     reject_retired_model(DEFAULT_CHAT_MODEL)

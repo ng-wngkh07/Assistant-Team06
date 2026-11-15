@@ -1179,3 +1179,72 @@ def test_repair_uses_remaining_budget_headroom_and_skips_below_minimum(searcher,
     )
     assert res_skip["response_kind"] == "generation_failed"
     assert len(model_skip.calls) == 1
+
+
+def test_fast_mode_budgets_tail_chunks_while_keeping_anchor_neighbors(tmp_path):
+    """Focused Fast mode trims low-ranked tail passages while keeping top anchors and their same-page neighbors."""
+    from app.rag_agent import PsychologyAgent
+
+    path = tmp_path / "fast_budget.db"
+    long_filler = "Binary search algorithm steps. " * 14  # ~434 chars each; all 7 fit Careful byte budget, trimmed by Fast 5-chunk/3800-char cap
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE chunks(id INTEGER PRIMARY KEY, doc_id INTEGER, book_title TEXT, filename TEXT, page_num INTEGER, chunk_index INTEGER, text TEXT)"
+        )
+        rows = [
+            (1, 10, "Algorithms", "algo.pdf", 2, 0, "Định lý Bayes: P(A|B)=P(B|A)P(A)/P(B). " + long_filler),
+            (2, 10, "Algorithms", "algo.pdf", 2, 1, "Điều kiện bắt buộc là P(B)>0."),
+            (3, 10, "Algorithms", "algo.pdf", 5, 0, "Biến cố độc lập: " + long_filler),
+            (4, 10, "Algorithms", "algo.pdf", 9, 0, "TAIL_CHUNK_ALPHA: " + long_filler),
+            (5, 10, "Algorithms", "algo.pdf", 12, 0, "TAIL_CHUNK_BETA: " + long_filler),
+            (6, 10, "Algorithms", "algo.pdf", 15, 0, "TAIL_CHUNK_GAMMA: " + long_filler),
+            (7, 10, "Algorithms", "algo.pdf", 18, 0, "TAIL_CHUNK_DELTA: " + long_filler),
+        ]
+        db.executemany("INSERT INTO chunks VALUES(?,?,?,?,?,?,?)", rows)
+
+    s = HybridSearcher(path)
+    expand_calls = []
+    orig_expand = s.expand_page_context
+
+    def wrap_expand(chunks, **kwargs):
+        expand_calls.append(kwargs)
+        return orig_expand(chunks, **kwargs)
+
+    hits = []
+    for cid in (1, 3, 4, 5, 6, 7):
+        row = s.source_page_chunks(10, {1: 2, 3: 5, 4: 9, 5: 12, 6: 15, 7: 18}[cid])[0]
+        row["hybrid_score"] = 0.05
+        hits.append(row)
+
+    s.search_hybrid = lambda **kwargs: [dict(h) for h in hits]
+    s.expand_page_context = wrap_expand
+    translator = type("Translator", (), {"translate": lambda self, chunks: {}})()
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            yield "Định lý Bayes P(A|B)=P(B|A)P(A)/P(B) [S1]. Điều kiện bắt buộc P(B)>0 [S4]."
+
+    # Fast mode: tight expansion kwargs + keeps anchor 1, anchor 2, and anchor 1's page-2 neighbor while dropping tails
+    fast_model = Model()
+    res_fast = PsychologyAgent(s, fast_model, translator).process_query_sync(
+        "Định lý Bayes là gì?", model="test-ollama", embed_model=None, processing_level="standard"
+    )
+    assert expand_calls[-1] == {"max_chunks": 5, "max_chars": 4800}
+    fast_prompt = "\n".join(m["content"] for m in fast_model.calls[0]["messages"])
+    assert "Định lý Bayes: P(A|B)=P(B|A)P(A)/P(B)." in fast_prompt
+    assert "Điều kiện bắt buộc là P(B)&amp;gt;0." in fast_prompt
+    assert "TAIL_CHUNK_GAMMA" not in fast_prompt and "TAIL_CHUNK_DELTA" not in fast_prompt
+    assert res_fast["response_kind"] == "answer"
+
+    # Careful mode: no Fast cap on expansion or context chunks
+    careful_model = Model()
+    PsychologyAgent(s, careful_model, translator).process_query_sync(
+        "Định lý Bayes là gì?", model="test-ollama", embed_model=None, processing_level="careful"
+    )
+    assert expand_calls[-1] == {}
+    careful_prompt = "\n".join(m["content"] for m in careful_model.calls[0]["messages"])
+    assert "TAIL_CHUNK_DELTA" in careful_prompt

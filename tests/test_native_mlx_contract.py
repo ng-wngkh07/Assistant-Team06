@@ -910,3 +910,134 @@ def test_native_vision_uses_resident_stream_worker_and_evicts_on_cancel(monkeypa
 
     native_vision.cancel_active_vision_workers()
     assert len(evict_calls) == 1
+
+
+def test_mlx_infer_stream_warmup_prepopulates_prefix_cache_before_first_query(tmp_path, monkeypatch, capsys):
+    """op='warmup' pre-loads model and builds system prefix KV caches without running generation."""
+    import runpy
+    import socket
+
+    model_dir = tmp_path / 'qwen9b'
+    model_dir.mkdir()
+    (model_dir / 'config.json').write_text(
+        json.dumps({
+            'model_type': 'qwen3_5',
+            'architectures': ['Qwen3_5ForConditionalGeneration'],
+            'text_config': {
+                'model_type': 'qwen3_5_text',
+                'hidden_size': 4096,
+                'num_hidden_layers': 32,
+                'num_attention_heads': 16,
+                'max_position_embeddings': 262144,
+            },
+            'quantization': {'bits': 4, 'group_size': 64, 'mode': 'affine'},
+        }),
+        encoding='utf-8',
+    )
+
+    monkeypatch.setattr(socket.socket, 'connect', socket.socket.connect)
+    monkeypatch.setattr(socket, 'create_connection', socket.create_connection)
+    monkeypatch.setenv('HF_HUB_OFFLINE', os.environ.get('HF_HUB_OFFLINE', '0'))
+    monkeypatch.setenv('TRANSFORMERS_OFFLINE', os.environ.get('TRANSFORMERS_OFFLINE', '0'))
+    monkeypatch.setenv('HF_DATASETS_OFFLINE', os.environ.get('HF_DATASETS_OFFLINE', '0'))
+
+    class FakeArray:
+        def __init__(self, data):
+            self.data = list(data.data) if isinstance(data, FakeArray) else list(data)
+
+        def __getitem__(self, item):
+            if item is None:
+                return self
+            return self.data[item]
+
+    class FakeLayer:
+        def __init__(self, state):
+            self.state = state
+
+    class Tokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            sys_txt = messages[0]['content']
+            user_txt = messages[-1]['content']
+            return f'<|im_start|>system\n{sys_txt}<|im_end|>\n<|im_start|>user\n{user_txt}<|im_end|>\n<|im_start|>assistant\n'
+
+        def encode(self, text):
+            return [ord(ch) for ch in text]
+
+    tokenizer = Tokenizer()
+
+    class AutoTokenizer:
+        @staticmethod
+        def from_pretrained(path, **kwargs):
+            return tokenizer
+
+    load_calls = []
+    prefill_calls = []
+    gen_calls = []
+
+    class FakeModel:
+        def __call__(self, arr, cache=None):
+            prefill_calls.append(len(arr.data))
+            cache[0].state = [FakeArray([1, 2]), FakeArray([3, 4])]
+
+    lm = types.ModuleType('mlx_lm')
+    lm.load = lambda path, **kw: load_calls.append(path) or (FakeModel(), tokenizer)
+    lm.generate = lambda *a, **k: 'OK'
+
+    def stream_generate(model, active_tok, *, prompt=None, prompt_cache=None, **kwargs):
+        gen_calls.append({'prefill_count': len(prefill_calls), 'has_cache': prompt_cache is not None})
+        yield types.SimpleNamespace(
+            text='OK.', finish_reason='stop', prompt_tokens=10, generation_tokens=1,
+            prompt_tps=40.0, generation_tps=18.0, peak_memory=5.4,
+        )
+
+    lm.stream_generate = stream_generate
+    sampling = types.ModuleType('mlx_lm.sample_utils')
+    sampling.make_sampler = lambda **kw: kw
+    sampling.make_logits_processors = lambda **kw: [kw]
+    cache_mod = types.ModuleType('mlx_lm.models.cache')
+    cache_mod.make_prompt_cache = lambda _m: [FakeLayer([])]
+    models_mod = types.ModuleType('mlx_lm.models')
+    models_mod.cache = cache_mod
+    core = types.ModuleType('mlx.core')
+    core.array = FakeArray
+    core.eval = lambda *a, **kw: None
+    core.clear_cache = lambda: None
+    core.random = types.SimpleNamespace(seed=lambda value: None)
+    mlx = types.ModuleType('mlx')
+    mlx.core = core
+    transformers = types.ModuleType('transformers')
+    transformers.AutoTokenizer = AutoTokenizer
+    for name, mod in [
+        ('mlx_lm', lm),
+        ('mlx_lm.sample_utils', sampling),
+        ('mlx_lm.models', models_mod),
+        ('mlx_lm.models.cache', cache_mod),
+        ('mlx', mlx),
+        ('mlx.core', core),
+        ('transformers', transformers),
+    ]:
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    sys_1 = 'SYSTEM PROMPT ONE ' + ('B' * 80)
+    sys_2 = 'SYSTEM PROMPT TWO ' + ('C' * 80)
+    reqs = [
+        {'op': 'warmup', 'model_path': str(model_dir), 'system_prompts': [sys_1, sys_2, sys_1], 'num_ctx': 8192},
+        {'model_path': str(model_dir), 'messages': [{'role': 'system', 'content': sys_1}, {'role': 'user', 'content': 'First question?'}], 'max_tokens': 16},
+    ]
+    monkeypatch.setattr(sys, 'argv', ['mlx_infer.py', '--stream'])
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('\n'.join(json.dumps(r) for r in reqs) + '\n'))
+
+    runpy.run_path(str(ROOT / 'app/mlx_infer.py'), run_name='__main__')
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line.strip()]
+    done_events = [evt for evt in events if evt.get('done')]
+    assert len(done_events) == 2
+
+    warmup_evt, query_evt = done_events
+    assert warmup_evt['op'] == 'warmup'
+    assert warmup_evt['ok'] is True
+    assert len(warmup_evt['warmed_prefixes']) == 2
+    assert len(load_calls) == 1
+    assert len(gen_calls) == 1  # Warmup never invoked stream_generate
+    assert query_evt['timings']['load_seconds'] == 0.0
+    assert query_evt['review_cache']['reused_tokens'] == warmup_evt['warmed_prefixes'][0]['prefix_tokens']
+    assert gen_calls[0]['prefill_count'] == len(prefill_calls)  # Zero extra prefill during first user query
