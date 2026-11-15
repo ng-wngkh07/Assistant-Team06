@@ -271,3 +271,218 @@ def test_pipeline_evidence_unparsed_boundary(monkeypatch, source_text, claim_tex
         assert model.calls == 1
     else:
         assert len(result["citations"]) == 0
+
+
+def test_written_number_words_in_quote_substantiate_claim_digits(monkeypatch):
+    from app.rag_evidence_validator import extract_quote_written_numbers
+
+    assert extract_quote_written_numbers("mỗi người bị giam một năm tù hoặc hai năm tù") >= {1.0, 2.0}
+    assert extract_quote_written_numbers("giam giữ năm năm tù nhưng nếu cả hai chối tội thì chỉ bị một năm") >= {1.0, 5.0}
+    assert extract_quote_written_numbers("tất cả bị giam ten years và không ai chịu zero years") >= {0.0, 10.0}
+    # Ambiguous Vietnamese phrases containing 'một' / 'không' must NOT emit bogus numerals
+    assert extract_quote_written_numbers("một số trường hợp không chỉ có một phần nhỏ mà không những thế") == set()
+
+    monkeypatch.setattr("app.rag_agent.context_capacity", lambda m: 8192)
+    monkeypatch.setattr("app.rag_agent.get_exact_token_counter", lambda *a: lambda messages: 100)
+
+    source_text = "Nếu cả hai cùng im lặng thì mỗi người chỉ chịu một năm tù; nếu một người khai và người kia im lặng thì người im lặng chịu hai năm tù."
+    claim_text = "Nếu cùng im lặng, mỗi người chịu 1 năm tù; nếu chỉ một người im lặng, người đó chịu 2 năm tù."
+    model = DummyModel(claim_text)
+    agent = PsychologyAgent(
+        searcher=DummySearcher(source_text),
+        ollama=model,
+        translator=DummyTranslator(),
+    )
+    result = agent.process_query_sync(
+        "Kết quả án tù trong từng trường hợp là gì?",
+        model="qwen3.5-9b-4bit",
+        embed_model=None,
+        isolate_context=True,
+        processing_level="standard",
+    )
+    assert result["response_kind"] == "answer", result
+    assert len(result["citations"]) == 1
+    assert model.calls == 1, "Written number words in source quote must not trigger repair pass"
+
+
+def test_ocr_glued_vietnamese_math_numbers_in_quote_substantiate_claim_digits(monkeypatch):
+    from app.rag_evidence_validator import extract_quote_ocr_glued_numbers
+
+    glued = "1.Kiểm tra0∈W:nếu0∉W,dừng; nếu0∈W,tiếp. x0∈W, u1=2, H2O, W1,W2"
+    assert extract_quote_ocr_glued_numbers("1.Kiểm tra0∈W:nếu0∉W,dừng; nếu0∈W,tiếp.") == {Decimal("0")}
+    # Must never extract subscripted math variables, source IDs, or chemical formulas
+    assert extract_quote_ocr_glued_numbers("x0∈W, u1=2, H2O, CO2, W1,W2, S1") == set()
+
+    monkeypatch.setattr("app.rag_agent.context_capacity", lambda m: 8192)
+    monkeypatch.setattr("app.rag_agent.get_exact_token_counter", lambda *a: lambda messages: 100)
+
+    source_text = "1.Kiểm tra0∈W:nếu0∉W,dừng;nếu0∈W,tiếp."
+    claim_text = "1. Kiểm tra 0∈W: nếu 0∉W thì dừng; nếu 0∈W thì tiếp tục."
+    model = DummyModel(claim_text)
+    agent = PsychologyAgent(
+        searcher=DummySearcher(source_text),
+        ollama=model,
+        translator=DummyTranslator(),
+    )
+    result = agent.process_query_sync(
+        "Trình bày phương pháp kiểm tra không gian con W.",
+        model="qwen3.5-9b-4bit",
+        embed_model=None,
+        isolate_context=True,
+        processing_level="standard",
+    )
+    assert result["response_kind"] == "answer", result
+    assert len(result["citations"]) == 1
+    assert model.calls == 1, f"Expected 1 call on glued quote 'nếu0∉W', got {model.calls}"
+
+
+def test_numeric_mismatch_feedback_names_missing_digits_lines_and_peer_sources(monkeypatch):
+    monkeypatch.setattr("app.rag_agent.context_capacity", lambda m: 8192)
+    monkeypatch.setattr("app.rag_agent.get_exact_token_counter", lambda *a: lambda messages: 100)
+
+    class TwoChunkSearcher:
+        def search_hybrid(self, **kwargs):
+            return [
+                {
+                    "book_title": "Sách A",
+                    "filename": "book_a.pdf",
+                    "page_num": 38,
+                    "chunk_index": 0,
+                    "text": "Khai báo = 0 là thuần ảo.\nLớp không có thân nên là abstract class, phản bội chịu 5 năm tù.",
+                    "safe_text": "Khai báo = 0 là thuần ảo.\nLớp không có thân nên là abstract class, phản bội chịu 5 năm tù.",
+                    "hybrid_score": 1.0,
+                    "semantic_score": 0.9,
+                },
+                {
+                    "book_title": "Sách A",
+                    "filename": "book_a.pdf",
+                    "page_num": 51,
+                    "chunk_index": 0,
+                    "text": "Nếu cả hai cùng chối tội thì mỗi người chỉ chịu 1 năm tù.",
+                    "safe_text": "Nếu cả hai cùng chối tội thì mỗi người chỉ chịu 1 năm tù.",
+                    "hybrid_score": 0.9,
+                    "semantic_score": 0.85,
+                },
+            ]
+
+    class SpyRepairModel:
+        def __init__(self):
+            self.calls = 0
+            self.prompts = []
+
+        def chat_stream(self, **kwargs):
+            self.calls += 1
+            msgs = kwargs.get("messages") or []
+            self.prompts.append(msgs[-1]["content"] if msgs else "")
+            if self.calls == 1:
+                yield json.dumps({
+                    "claims": [{
+                        "text": "Khai báo = 0 là abstract class, chịu 5 năm thay vì 1 năm.",
+                        "source_ids": ["S1"],
+                        "evidence_lines": [2, 2],
+                    }]
+                }, ensure_ascii=False)
+            else:
+                yield json.dumps({
+                    "claims": [
+                        {"text": "Khai báo = 0 là thuần ảo, lớp là abstract class và phản bội chịu 5 năm tù.", "source_ids": ["S1"], "evidence_lines": [1, 2]},
+                        {"text": "Nếu cả hai cùng chối tội thì mỗi người chỉ chịu 1 năm tù.", "source_ids": ["S2"], "evidence_lines": [1, 1]},
+                    ]
+                }, ensure_ascii=False)
+
+    model = SpyRepairModel()
+    agent = PsychologyAgent(
+        searcher=TwoChunkSearcher(),
+        ollama=model,
+        translator=DummyTranslator(),
+    )
+    result = agent.process_query_sync(
+        "Tại sao phản bội 5 năm thay vì 1 năm và = 0 nghĩa là gì?",
+        model="qwen3.5-9b-4bit",
+        embed_model=None,
+        isolate_context=True,
+        processing_level="standard",
+    )
+    assert result["response_kind"] == "answer", result
+    assert model.calls == 2
+    repair_prompt = model.prompts[1]
+    assert "Thiếu số: 0, 1" in repair_prompt
+    assert "S1" in repair_prompt and "L1" in repair_prompt
+    assert "S2" in repair_prompt
+
+
+def test_numeric_mismatch_feedback_warns_not_to_copy_query_number_when_peer_sources_also_have_it():
+    from decimal import Decimal
+    from app.rag_evidence_validator import format_numeric_mismatch_feedback
+
+    feedback = format_numeric_mismatch_feedback(
+        "S3",
+        {Decimal("1"), Decimal("5")},
+        {Decimal("1")},
+        set(),
+        set(),
+        {
+            "S1": "Hai người nhận tội, mỗi người lĩnh án 5 năm tù giam.",
+            "S2": "Nếu đồng bọn nhận tội thì ngồi tù 5 năm.",
+            "S3": "Cho dù anh không nhận tội chúng tôi cũng có thể phán anh án 1 năm tù giam.",
+        },
+        use_source_lines=True,
+        query="Tại sao hai tên tội phạm chịu 5 năm tù thay vì cùng chối tội để chỉ chịu 1 năm?",
+    )
+
+    assert "Thiếu số: 5" in feedback
+    assert "S1" in feedback and "S2" in feedback
+    assert "câu hỏi" in feedback
+    assert "KHÔNG chép" in feedback
+
+
+def test_numeric_mismatch_feedback_prefers_complete_peer_and_forbids_question_echo():
+    from decimal import Decimal
+    from app.rag_evidence_validator import format_numeric_mismatch_feedback
+
+    feedback = format_numeric_mismatch_feedback(
+        "S3",
+        {Decimal("1"), Decimal("5")},
+        {Decimal("1")},
+        set(),
+        set(),
+        {
+            "S1": "Nếu cả hai cùng phản bội thì mỗi người ngồi tù 5 năm.",
+            "S2": "Nếu cả hai giữ im lặng thì mỗi người tù 1 năm; nếu cùng phản bội thì 5 năm.",
+            "S3": "Cho dù anh không nhận tội chúng tôi cũng có thể phán anh án 1 năm tù giam.",
+        },
+        use_source_lines=True,
+        query="Tại sao hai tên tội phạm chịu 5 năm tù thay vì cùng chối tội để chỉ chịu 1 năm?",
+    )
+
+    assert "Thiếu số: 5" in feedback
+    assert "S2" in feedback
+    assert "S1" not in feedback
+    assert "KHÔNG lặp lại" in feedback
+    assert "KHÔNG chép" in feedback
+    assert "BỎ hoàn toàn" in feedback
+
+
+def test_numeric_mismatch_feedback_calls_out_same_page_sibling_chunks():
+    from app.rag_evidence_validator import format_numeric_mismatch_feedback
+
+    feedback = format_numeric_mismatch_feedback(
+        "S7",
+        {Decimal("5")},
+        set(),
+        set(),
+        set(),
+        {
+            "S1": "Nếu cả hai cùng phản bội thì mỗi người nhận án 5 năm tù giam.",
+            "S6": "Nội dung chương khác hoàn toàn không liên quan.",
+            "S7": "Cân bằng Nash được coi là cân bằng phi hợp tác giữa hai bên.",
+        },
+        use_source_lines=True,
+        query="Tại sao hai tên trộm chịu án 5 năm tù?",
+        source_meta={"S1": ("doc:22", 48), "S6": ("doc:22", 143), "S7": ("doc:22", 48)},
+    )
+
+    assert "CÙNG TRANG" in feedback
+    assert "48" in feedback
+    assert "S1" in feedback
+    assert "S6" not in feedback

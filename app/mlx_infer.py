@@ -67,6 +67,19 @@ def _system_prefix_tokens(tokenizer, messages, full_prompt: str, full_tokens: li
     return list(full_tokens[:matched])
 
 
+def _resolve_prefill_step_size(request: dict | None = None) -> int:
+    raw = request.get("prefill_step_size") if isinstance(request, dict) else None
+    if raw is None:
+        raw = os.getenv("MLX_PREFILL_STEP_SIZE")
+    if raw is None or str(raw).strip() == "":
+        return 128
+    try:
+        step = int(raw)
+    except (TypeError, ValueError):
+        return 128
+    return max(64, min(1024, step))
+
+
 def _prepare_stream_prefix_cache(
     model,
     tokenizer,
@@ -76,6 +89,7 @@ def _prepare_stream_prefix_cache(
     prefix_cache_store: OrderedDict,
     *,
     clone: bool = True,
+    prefill_step_size: int = 128,
 ):
     pref_tokens = _system_prefix_tokens(tokenizer, request.get("messages"), prompt, tokens)
     if not pref_tokens:
@@ -98,8 +112,9 @@ def _prepare_stream_prefix_cache(
     else:
         snap = make_prompt_cache(model)
         n_pref = len(pref_tokens)
-        for off in range(0, n_pref, 128):
-            model(mx.array(pref_tokens[off:min(off + 128, n_pref)])[None], cache=snap)
+        step = max(64, int(prefill_step_size))
+        for off in range(0, n_pref, step):
+            model(mx.array(pref_tokens[off:min(off + step, n_pref)])[None], cache=snap)
             mx.eval([layer.state for layer in snap])
         prefix_cache_store[key] = snap
         prefix_cache_store.move_to_end(key)
@@ -213,6 +228,8 @@ def _ensure_loaded_model(model_path: Path, adapter_path: Path | None, state: dic
         state["loaded_tok"] = None
         state["model_key"] = None
         state["prefix_caches"].clear()
+        if "schema_processors" in state:
+            state["schema_processors"].clear()
         gc.collect()
         if hasattr(mx, "clear_cache"):
             mx.clear_cache()
@@ -269,6 +286,7 @@ def _run_warmup(request: dict, state: dict | None = None) -> dict:
     model, loaded_tokenizer, load_seconds = _ensure_loaded_model(model_path, adapter_path, state)
     active_tok = loaded_tokenizer or tokenizer
     prefix_cache_store = state["prefix_caches"] if state is not None else OrderedDict()
+    prefill_step_size = _resolve_prefill_step_size(request)
 
     cache_started = time.perf_counter()
     warmed_prefixes = []
@@ -286,6 +304,7 @@ def _run_warmup(request: dict, state: dict | None = None) -> dict:
             },
             prefix_cache_store,
             clone=False,
+            prefill_step_size=prefill_step_size,
         )
         warmed_prefixes.append(diag)
     cache_seconds = time.perf_counter() - cache_started
@@ -354,9 +373,10 @@ def _run_request(
         mx.random.seed(int(seed))
 
     temperature = request.get("temperature")
-    # Small prefill batches reduce transient Metal memory on the 16GB Mac.
+    prefill_step_size = _resolve_prefill_step_size(request)
+    # Bounded prefill step size keeps transient Metal activation memory low on 16GB Macs.
     # All prompt tokens remain present; this does not rotate or truncate context.
-    gen_kwargs = {"max_tokens": max_tokens, "prefill_step_size": 128}
+    gen_kwargs = {"max_tokens": max_tokens, "prefill_step_size": prefill_step_size}
     # Qwen3.5's non-thinking profile uses presence penalty 1.5 for ordinary QA.
     # For grammar-constrained structured schema generation, disable presence penalty
     # (zero) so recurring JSON keys and booleans are not penalized.
@@ -376,11 +396,33 @@ def _run_request(
     gen_kwargs["logits_processors"] = make_logits_processors(
         presence_penalty=presence_penalty, presence_context_size=2048,
     )
+    schema_compile_started = time.perf_counter()
     if response_schema is not None:
         from mlx_vlm.structured import build_json_schema_logits_processor
-        gen_kwargs["logits_processors"].append(
-            build_json_schema_logits_processor(tokenizer, response_schema)
-        )
+        schema_proc = None
+        schema_cache = state.get("schema_processors") if state is not None else None
+        schema_key = None
+        if schema_cache is not None:
+            schema_key = (
+                id(tokenizer),
+                json.dumps(response_schema, sort_keys=True, ensure_ascii=False),
+            )
+            cached_proc = schema_cache.get(schema_key)
+            if cached_proc is not None:
+                schema_cache.move_to_end(schema_key)
+                schema_proc = cached_proc.clone()
+        if schema_proc is None:
+            compiled = build_json_schema_logits_processor(tokenizer, response_schema)
+            if schema_cache is not None and callable(getattr(compiled, "clone", None)):
+                schema_cache[schema_key] = compiled
+                schema_cache.move_to_end(schema_key)
+                while len(schema_cache) > 8:
+                    schema_cache.popitem(last=False)
+                schema_proc = compiled.clone()
+            else:
+                schema_proc = compiled
+        gen_kwargs["logits_processors"].append(schema_proc)
+    schema_compile_seconds = time.perf_counter() - schema_compile_started
 
     cache_started = time.perf_counter()
     from app.mlx_review_cache import prepare_review_cache
@@ -403,6 +445,7 @@ def _run_request(
             active_prompt_tokens,
             request,
             state["prefix_caches"],
+            prefill_step_size=prefill_step_size,
         )
     gen_kwargs.update(cache_kwargs)
     cache_seconds = time.perf_counter() - cache_started
@@ -449,6 +492,7 @@ def _run_request(
         "generation_profile": {"presence_penalty": presence_penalty, "presence_context_size": 2048},
         "timings": {
             "load_seconds": load_seconds,
+            "schema_compile_seconds": schema_compile_seconds,
             "review_cache_seconds": cache_seconds,
             "adapter_validation_seconds": adapter_validation_seconds,
             "first_token_seconds": first_token_seconds,
@@ -469,6 +513,7 @@ def serve_stream():
         "model": None,
         "loaded_tok": None,
         "prefix_caches": OrderedDict(),
+        "schema_processors": OrderedDict(),
     }
     for line in sys.stdin:
         line = line.strip()

@@ -39,16 +39,22 @@ def is_broad_query(query: str) -> bool:
     """Detect whether a query seeks an overview, multi-theory comparison, or broad synthesis."""
     q = query.casefold()
     broad_indicators = [
-        "tổng quan", "các lý thuyết", "những lý thuyết", "so sánh", "phân loại",
+        "tổng quan", "tóm tắt", "tổng hợp",
+        "các lý thuyết", "những lý thuyết",
+        "các nguyên lý", "những nguyên lý",
+        "các đặc điểm", "những đặc điểm",
+        "các phương pháp", "những phương pháp",
+        "so sánh", "phân loại",
         "các yếu tố", "những yếu tố", "các kiểu", "những kiểu", "các giai đoạn",
-        "ảnh hưởng như thế nào đến", "mối liên hệ giữa", "overview", "compare",
+        "ảnh hưởng như thế nào đến", "tác động qua lại",
+        "mối liên hệ giữa", "mối quan hệ giữa", "tương quan giữa",
+        "khác biệt giữa", "khác nhau giữa", "sự khác nhau giữa",
+        "khác nhau thế nào", "khác nhau như thế nào", "giống và khác",
+        "overview", "compare",
         "theories", "khác gì với", "điểm khác biệt", "nguyên lý và", "vai trò của",
         "và ứng dụng", "những cơ chế", "những sai lầm",
     ]
-    if any(ind in q for ind in broad_indicators):
-        return True
-    words = [w for w in re.findall(r"\w+", q) if len(w) >= 2]
-    return len(words) >= 10 and (" và " in q or " giữa " in q)
+    return any(ind in q for ind in broad_indicators)
 
 
 def extract_query_facets(query: str, search_query: str) -> List[str]:

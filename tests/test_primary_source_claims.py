@@ -688,3 +688,534 @@ def test_native_formula_repair_keeps_transcription_instruction_separate_from_ran
     assert 'ln(1+u)' in result['answer']
     assert len(model.calls) == result['generation_calls'] == 2
     assert result['citations'][0]['evidence_quotes'] == [' '.join(source.split())]
+
+
+def test_disallowed_trailing_colon_claim_emits_actionable_repair_feedback():
+    source = (
+        "Phương pháp kiểm tra không gian con:\n"
+        "Bước 1. Kiểm tra vectơ 0 ∈ W.\n"
+        "Bước 2. Kiểm tra u+v ∈ W và α·u ∈ W với mọi u,v ∈ W, α ∈ ℝ."
+    )
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield json.dumps({
+                    'claims': [
+                        {'text': 'Để kiểm tra không gian con, ta thực hiện hai bước sau:', 'source_ids': ['S1'], 'evidence_lines': [1, 1]},
+                        {'text': 'Bước 1. Kiểm tra vectơ 0 ∈ W.', 'source_ids': ['S1'], 'evidence_lines': [2, 2]},
+                    ]
+                }, ensure_ascii=False)
+            else:
+                yield json.dumps({
+                    'claims': [
+                        {'text': 'Bước 1. Kiểm tra vectơ 0 ∈ W và Bước 2. Kiểm tra u+v ∈ W, α·u ∈ W.', 'source_ids': ['S1'], 'evidence_lines': [2, 3]},
+                    ]
+                }, ensure_ascii=False)
+
+    model = Model()
+    result = PsychologyAgent(
+        searcher=RecordingSearcher([make_chunk(source)]),
+        ollama=model,
+        translator=NoTranslation(),
+    ).process_query_sync(
+        'Trình bày phương pháp kiểm tra không gian con.',
+        model='qwen3.5-9b-4bit',
+        embed_model=None,
+        processing_level='standard',
+        isolate_context=True,
+    )
+    assert result['response_kind'] == 'answer'
+    assert len(model.calls) == 2
+    repair_user = model.calls[1]['messages'][-1]['content']
+    assert "dấu ':'" in repair_user
+
+
+def test_mlx_source_prompt_forbids_half_open_line_spans_and_colon_claims():
+    from app.rag_agent import MLX_SOURCE_PROMPT
+
+    assert "[n,n]" in MLX_SOURCE_PROMPT
+    assert "dấu ':'" in MLX_SOURCE_PROMPT
+
+
+def test_mlx_source_prompt_forbids_copying_user_query_numbers_into_unmatched_claims():
+    from app.rag_agent import MLX_SOURCE_PROMPT
+
+    assert "user_query" in MLX_SOURCE_PROMPT
+    assert "Không chép lại số từ user_query vào text" in MLX_SOURCE_PROMPT
+
+
+def test_reversed_evidence_lines_reports_order_feedback_and_repair_suffix_bans_query_numbers(monkeypatch):
+    import app.rag_agent as rag
+    monkeypatch.setattr(rag, 'get_exact_token_counter', lambda *args: lambda messages: 200)
+    source = 'Hai tên tội phạm bị nhốt ở hai phòng khác nhau.\nCả hai đều nhận tội nên mỗi người ngồi tù 5 năm.'
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            self.last_done_reason = 'stop'
+            if len(self.calls) == 1:
+                span = [2, 1]
+            else:
+                repair = kwargs['messages'][-1]['content']
+                assert 'bị ngược' in repair
+                assert '[1, 2]' in repair
+                assert 'user_query' in repair
+                span = [1, 2]
+            yield json.dumps({'claims': [{
+                'text': 'Hai người bị nhốt khác phòng và cùng nhận tội nên mỗi người ngồi tù 5 năm.',
+                'source_ids': ['S1'],
+                'evidence_lines': span,
+            }]}, ensure_ascii=False)
+
+    result = PsychologyAgent(
+        searcher=RecordingSearcher([make_chunk(source)]),
+        ollama=Model(),
+        translator=NoTranslation(),
+    ).process_query_sync(
+        'Tại sao cả hai chịu 5 năm tù?',
+        model='qwen3.5-9b-4bit',
+        embed_model=None,
+        processing_level='standard',
+        isolate_context=True,
+    )
+    assert result['response_kind'] == 'answer'
+    assert result['generation_calls'] == 2
+
+
+def test_careful_auditor_scopes_to_cited_sources_avoiding_sibling_drift(monkeypatch):
+    import app.rag_agent as rag
+    monkeypatch.setattr(rag, 'get_exact_token_counter', lambda *args: lambda messages: 200)
+    s1 = 'Chiến lược thống trị cho kết quả tốt hơn bất kể đối thủ chọn gì.'
+    s2 = 'Bảng hoàn trả tù nhân có thể dẫn tới cân bằng Nash với mức phạt cao.'
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+            self.last_done_reason = None
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            self.last_done_reason = 'stop'
+            if len(self.calls) == 1:
+                yield json.dumps({
+                    'claims': [{'text': s1, 'source_ids': ['S1'], 'evidence_lines': [1, 1]}]
+                }, ensure_ascii=False)
+            else:
+                all_text = '\n'.join(m.get('content', '') for m in kwargs['messages'])
+                assert s1 in all_text
+                assert s2 not in all_text
+                schema_json = json.dumps(kwargs.get('response_schema') or {}, ensure_ascii=False)
+                assert '"S1"' in schema_json
+                assert '"S2"' not in schema_json
+                yield json.dumps({
+                    'claims': [{'statement': s1, 'source_id': 'S1', 'evidence_quote': s1, 'verdict': 'supported'}],
+                    'overall_verdict': 'supported',
+                }, ensure_ascii=False)
+
+    model = Model()
+    result = PsychologyAgent(
+        searcher=RecordingSearcher([make_chunk(s1, doc_id=901), make_chunk(s2, doc_id=902)]),
+        ollama=model,
+        translator=NoTranslation(),
+    ).process_query_sync(
+        'Chiến lược thống trị là gì?',
+        model='qwen3.5-9b-4bit',
+        embed_model=None,
+        isolate_context=True,
+        processing_level='careful',
+    )
+    assert result['response_kind'] == 'answer'
+    assert result['check_status'] == 'verified'
+    assert len(model.calls) == 2
+    assert [c['doc_id'] for c in result['citations']] == [901]
+
+
+def test_blank_evidence_lines_span_emits_actionable_repair_feedback(monkeypatch):
+    import app.rag_agent as rag
+    monkeypatch.setattr(rag, 'get_exact_token_counter', lambda *args: lambda messages: 200)
+    source = 'Entropy đo độ bất định.\n\nDòng thứ ba.'
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield json.dumps({
+                    'claims': [{'text': 'Entropy đo độ bất định.', 'source_ids': ['S1'], 'evidence_lines': [2, 2]}]
+                }, ensure_ascii=False)
+            else:
+                repair = kwargs['messages'][-1]['content']
+                assert 'trống' in repair
+                assert 'L1' in repair
+                yield json.dumps({
+                    'claims': [{'text': 'Entropy đo độ bất định.', 'source_ids': ['S1'], 'evidence_lines': [1, 1]}]
+                }, ensure_ascii=False)
+
+    model = Model()
+    result = PsychologyAgent(
+        searcher=RecordingSearcher([make_chunk(source, doc_id=903)]),
+        ollama=model,
+        translator=NoTranslation(),
+    ).process_query_sync(
+        'Entropy đo gì?',
+        model='qwen3.5-9b-4bit',
+        embed_model=None,
+        isolate_context=True,
+        processing_level='standard',
+    )
+    assert result['response_kind'] == 'answer'
+    assert len(model.calls) == 2
+    assert result['citations'][0]['evidence_quotes'] == ['Entropy đo độ bất định.']
+
+
+def test_partial_claim_repair_preserves_valid_claims_and_merges_fixed_claim(monkeypatch):
+    import app.rag_agent as rag
+    monkeypatch.setattr(rag, 'get_exact_token_counter', lambda *args: lambda messages: 200)
+    s1 = 'Nếu cùng chối tội thì ngồi tù 1 năm, nếu phản bội thì ngồi tù 5 năm.'
+    s2 = 'Trạng thái cùng phản bội gọi là Cân bằng Nash.'
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield json.dumps({
+                    'claims': [
+                        {'text': 'Nếu cùng chối tội ngồi tù 1 năm, phản bội ngồi tù 5 năm.', 'source_ids': ['S1'], 'evidence_lines': [1, 1]},
+                        {'text': 'Trạng thái ngồi tù 5 năm gọi là Cân bằng Nash.', 'source_ids': ['S2'], 'evidence_lines': [1, 1]},
+                    ]
+                }, ensure_ascii=False)
+            else:
+                repair = kwargs['messages'][-1]['content']
+                assert 'S1 L1-L1' in repair
+                assert 'S2' in repair
+                yield json.dumps({
+                    'claims': [
+                        {'text': 'Trạng thái cùng phản bội gọi là Cân bằng Nash.', 'source_ids': ['S2'], 'evidence_lines': [1, 1]},
+                    ]
+                }, ensure_ascii=False)
+
+    model = Model()
+    result = PsychologyAgent(
+        searcher=RecordingSearcher([make_chunk(s1, doc_id=904), make_chunk(s2, doc_id=905)]),
+        ollama=model,
+        translator=NoTranslation(),
+    ).process_query_sync(
+        'Tại sao ngồi tù 5 năm thay vì 1 năm và gọi là cân bằng gì?',
+        model='qwen3.5-9b-4bit',
+        embed_model=None,
+        isolate_context=True,
+        processing_level='standard',
+    )
+    assert result['response_kind'] == 'answer'
+    assert len(model.calls) == 2
+    assert '1 năm' in result['answer']
+    assert 'Cân bằng Nash' in result['answer']
+    assert [c['doc_id'] for c in result['citations']] == [904, 905]
+
+
+def test_partial_claim_repair_reports_multiple_errors_and_clears_on_control_markup(monkeypatch):
+    import app.rag_agent as rag
+    monkeypatch.setattr(rag, 'get_exact_token_counter', lambda *args: lambda messages: 200)
+    s1 = 'Entropy đo độ bất định.\nDòng hai có giá trị 10.'
+    s2 = 'Định lý Bayes có P(B)>0.'
+
+    class MultiErrorModel:
+        def __init__(self):
+            self.calls = []
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield json.dumps({
+                    'claims': [
+                        {'text': 'Giá trị 10.', 'source_ids': ['S1'], 'evidence_lines': [1, 1]},
+                        {'text': 'Entropy đo độ bất định.', 'source_ids': ['S1'], 'evidence_lines': [1, 1]},
+                        {'text': 'Bayes dùng số 99.', 'source_ids': ['S2'], 'evidence_lines': [1, 1]},
+                    ]
+                }, ensure_ascii=False)
+            else:
+                repair = kwargs['messages'][-1]['content']
+                assert 'S1:' in repair and 'S2:' in repair
+                assert 'S1 L1-L1' in repair
+                yield json.dumps({
+                    'claims': [
+                        {'text': 'Giá trị 10.', 'source_ids': ['S1'], 'evidence_lines': [2, 2]},
+                        {'text': 'Định lý Bayes có P(B)>0.', 'source_ids': ['S2'], 'evidence_lines': [1, 1]},
+                    ]
+                }, ensure_ascii=False)
+
+    res_multi = PsychologyAgent(
+        searcher=RecordingSearcher([make_chunk(s1, doc_id=906), make_chunk(s2, doc_id=907)]),
+        ollama=MultiErrorModel(),
+        translator=NoTranslation(),
+    ).process_query_sync(
+        'Entropy, giá trị 10 và Bayes là gì?',
+        model='qwen3.5-9b-4bit',
+        embed_model=None,
+        isolate_context=True,
+        processing_level='standard',
+    )
+    assert res_multi['response_kind'] == 'answer'
+    assert '10' in res_multi['answer'] and 'Entropy' in res_multi['answer'] and 'Bayes' in res_multi['answer']
+
+    class UnsafeModel:
+        def __init__(self):
+            self.calls = []
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield json.dumps({
+                    'claims': [
+                        {'text': 'Entropy đo độ bất định.', 'source_ids': ['S1'], 'evidence_lines': [1, 1]},
+                        {'text': '<think>leak</think> Bayes.', 'source_ids': ['S2'], 'evidence_lines': [1, 1]},
+                    ]
+                }, ensure_ascii=False)
+            else:
+                repair = kwargs['messages'][-1]['content']
+                assert 'ĐÃ ĐẠT' not in repair
+                yield json.dumps({
+                    'claims': [
+                        {'text': 'Định lý Bayes có P(B)>0.', 'source_ids': ['S2'], 'evidence_lines': [1, 1]},
+                    ]
+                }, ensure_ascii=False)
+
+    unsafe_model = UnsafeModel()
+    res_unsafe = PsychologyAgent(
+        searcher=RecordingSearcher([make_chunk(s1, doc_id=906), make_chunk(s2, doc_id=907)]),
+        ollama=unsafe_model,
+        translator=NoTranslation(),
+    ).process_query_sync(
+        'Entropy và Bayes là gì?',
+        model='qwen3.5-9b-4bit',
+        embed_model=None,
+        isolate_context=True,
+        processing_level='standard',
+    )
+    assert res_unsafe['response_kind'] == 'answer'
+    assert 'Entropy' not in res_unsafe['answer']
+    assert 'Bayes' in res_unsafe['answer']
+
+
+def test_repair_prompt_forbids_question_echo_and_header_line_1_1_shortcut():
+    """Repair prompt must discourage copying query intro numbers and literal [1,1] header spans."""
+    src = (
+        "[NỘI DUNG NGUỒN ĐÃ ĐỐI CHIẾU ẢNH; KÝ HIỆU CHUẨN HÓA]\n"
+        "Cho dù anh không nhận tội chúng tôi cũng có thể phán anh án 1 năm tù giam.\n"
+        "Phản bội luôn mang lại lợi ích cá nhân cao hơn bất kể đối phương chọn gì."
+    )
+
+    class EchoThenFixedModel:
+        def __init__(self):
+            self.prompts = []
+            self.calls = 0
+
+        def chat_stream(self, **kwargs):
+            self.calls += 1
+            prompt = kwargs["messages"][-1]["content"]
+            self.prompts.append(prompt)
+            if self.calls == 1:
+                yield json.dumps({
+                    "claims": [
+                        {
+                            "text": "Hai tên tội phạm chịu 5 năm tù thay vì 1 năm là vì phản bội luôn lợi hơn.",
+                            "source_ids": ["S1"],
+                            "evidence_lines": [2, 3],
+                        }
+                    ]
+                }, ensure_ascii=False)
+            else:
+                yield json.dumps({
+                    "claims": [
+                        {
+                            "text": "Dù không nhận tội vẫn có thể lĩnh án 1 năm tù giam nên phản bội mang lại lợi ích cao hơn.",
+                            "source_ids": ["S1"],
+                            "evidence_lines": [2, 3],
+                        }
+                    ]
+                }, ensure_ascii=False)
+
+    model = EchoThenFixedModel()
+    res = PsychologyAgent(
+        searcher=RecordingSearcher([make_chunk(src, doc_id=908)]),
+        ollama=model,
+        translator=NoTranslation(),
+    ).process_query_sync(
+        "Tại sao hai tên tội phạm chịu 5 năm tù thay vì chỉ chịu 1 năm?",
+        model="qwen3.5-9b-4bit",
+        embed_model=None,
+        isolate_context=True,
+        processing_level="standard",
+    )
+
+    assert res["response_kind"] == "answer"
+    assert model.calls == 2
+    repair_prompt = model.prompts[1]
+    assert "never [1,1] when L1 is only a header or blank" in repair_prompt
+    assert "even for one line: [1,1]" not in repair_prompt
+    assert "KHÔNG lặp lại" in repair_prompt
+    assert "never echo opening clauses" in repair_prompt
+
+
+def test_careful_auditor_accepts_verified_answer_when_overlapping_cited_chunk_covers_statement():
+    """Careful mode must stay verified when all claims are supported inside cited sources."""
+    s1 = (
+        "Hai người đều phản bội nên mỗi người lĩnh 5 năm tù giam. "
+        "Trạng thái cùng phản bội này gọi là Cân bằng Nash, được coi là cân bằng phi hợp tác."
+    )
+    s2 = "Đoạn tiếp theo: được coi là cân bằng phi hợp tác trong thuyết trò chơi."
+
+    class OverlappingCitedAuditorModel:
+        def __init__(self):
+            self.calls = 0
+            self.last_done_reason = "stop"
+
+        def chat_stream(self, **kwargs):
+            self.calls += 1
+            self.last_done_reason = "stop"
+            if self.calls == 1:
+                yield json.dumps(
+                    {
+                        "claims": [
+                            {
+                                "text": "Hai người đều phản bội nên mỗi người lĩnh 5 năm tù giam.",
+                                "source_ids": ["S1"],
+                                "evidence_lines": [1, 1],
+                            },
+                            {
+                                "text": "Trạng thái này là Cân bằng Nash, được coi là cân bằng phi hợp tác.",
+                                "source_ids": ["S2"],
+                                "evidence_lines": [1, 1],
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            else:
+                yield json.dumps(
+                    {
+                        "claims": [
+                            {
+                                "statement": "Hai người đều phản bội nên mỗi người lĩnh 5 năm tù giam.",
+                                "source_id": "S1",
+                                "evidence_id": "E1",
+                                "verdict": "supported",
+                            },
+                            {
+                                "statement": "Trạng thái này là Cân bằng Nash, được coi là cân bằng phi hợp tác.",
+                                "source_id": "S1",
+                                "evidence_id": "E2",
+                                "verdict": "supported",
+                            },
+                        ],
+                        "overall_verdict": "supported",
+                    },
+                    ensure_ascii=False,
+                )
+
+    res = PsychologyAgent(
+        searcher=RecordingSearcher([make_chunk(s1, doc_id=909), make_chunk(s2, doc_id=910)]),
+        ollama=OverlappingCitedAuditorModel(),
+        translator=NoTranslation(),
+    ).process_query_sync(
+        "Tại sao hai người đều phản bội và gọi là cân bằng gì?",
+        model="qwen3.5-9b-4bit",
+        embed_model=None,
+        isolate_context=True,
+        processing_level="careful",
+    )
+
+    assert res["response_kind"] == "answer"
+    assert res["check_status"] == "verified"
+    assert "Cân bằng Nash" in res["answer"]
+
+
+def test_repair_prompt_ends_with_numeric_ban_and_same_page_chunk_warning():
+    import json
+    from app.rag_agent import PsychologyAgent
+
+    s1 = "Mỗi tên trộm đứng trước hai lựa chọn: phản bội hoặc im lặng."
+    s2 = "Nếu cả hai cùng phản bội thì mỗi người chịu án 5 năm tù giam.\nĐây là mức án tối ưu cá nhân."
+    s3 = "Cân bằng Nash được coi là cân bằng phi hợp tác.\nHai bên không đơn phương đổi lựa chọn."
+
+    class NumericMismatchThenFixedModel:
+        def __init__(self):
+            self.calls = []
+            self.last_done_reason = "stop"
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            self.last_done_reason = "stop"
+            if len(self.calls) == 1:
+                yield json.dumps(
+                    {
+                        "claims": [
+                            {
+                                "text": "Hai tên trộm cùng phản bội chịu án 5 năm và đạt cân bằng Nash.",
+                                "source_ids": ["S3"],
+                                "evidence_lines": [1, 2],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            else:
+                yield json.dumps(
+                    {
+                        "claims": [
+                            {
+                                "text": "Nếu cả hai cùng phản bội thì mỗi người chịu án 5 năm tù giam.",
+                                "source_ids": ["S2"],
+                                "evidence_lines": [1, 1],
+                            },
+                            {
+                                "text": "Cân bằng Nash được coi là cân bằng phi hợp tác.",
+                                "source_ids": ["S3"],
+                                "evidence_lines": [1, 1],
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+
+    model = NumericMismatchThenFixedModel()
+    res = PsychologyAgent(
+        searcher=RecordingSearcher(
+            [
+                make_chunk(s1, semantic_score=0.95, doc_id=22, page_num=47),
+                {**make_chunk(s2, semantic_score=0.90, doc_id=22, page_num=48), "chunk_index": 0},
+                {**make_chunk(s3, semantic_score=0.85, doc_id=22, page_num=48), "chunk_index": 1},
+            ]
+        ),
+        ollama=model,
+        translator=NoTranslation(),
+    ).process_query_sync(
+        "Tại sao hai tên trộm chịu án 5 năm và gọi là cân bằng gì?",
+        model="qwen3.5-9b-4bit",
+        embed_model=None,
+        isolate_context=True,
+        processing_level="fast",
+    )
+
+    assert res["response_kind"] == "answer"
+    assert len(model.calls) == 2
+    repair_prompt = model.calls[1]["messages"][0]["content"]
+    assert "CÙNG TRANG" in repair_prompt
+    assert "48" in repair_prompt
+    draft_pos = repair_prompt.index("Bản nháp bị từ chối") if "Bản nháp bị từ chối" in repair_prompt else repair_prompt.index("<user_query>")
+    tail = repair_prompt[draft_pos:]
+    assert "S3" in tail and "5" in tail and "S2" in tail
+    assert "48" in tail and "L1" in tail

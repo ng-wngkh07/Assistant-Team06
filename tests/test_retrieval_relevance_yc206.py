@@ -180,3 +180,119 @@ def test_search_hybrid_deduplicates_freshness_pass_within_request_only(tmp_path,
     doc1.unlink()
     out2 = hs.search_hybrid('Định lý Alpha', embed_model='bge-m3-mlx-fp16', top_k=4, enable_topic_routing=False)
     assert all(r['filename'] != 'alpha.txt' for r in out2)
+
+
+def test_hybrid_search_promotes_high_semantic_chunk_covering_all_query_numbers(tmp_path, monkeypatch):
+    from app.searcher import HybridSearcher
+
+    hs = HybridSearcher(tmp_path / "unused.db")
+    fts_rows = [
+        {"chunk_id": 1, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 48, "chunk_index": 0,
+         "text": "Lý thuyết trò chơi\n\nHai tên tội phạm đó đều chọn phản bội đối phương dẫn tới mỗi người phải ngồi tù 5 năm giam giữ.\nSự lựa chọn này được coi là kết quả của cân bằng Nash trong thuyết trò chơi hiện đại.\n48",
+         "fts_score": 18.0, "fts_rank": 1, "source_type": "fts"},
+        {"chunk_id": 2, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 51, "chunk_index": 0,
+         "text": "Lý thuyết trò chơi\n\nNếu hai người cùng giữ im lặng và từ chối nhận tội thì mỗi người chỉ cần ngồi tù một năm.\nNhưng không ai chủ động thay đổi chiến lược vì lo ngại rủi ro từ đối phương.\n51",
+         "fts_score": 17.5, "fts_rank": 2, "source_type": "fts"},
+        {"chunk_id": 3, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 53, "chunk_index": 0,
+         "text": "Lý thuyết trò chơi\n\nTình thế tiến thoái lưỡng nan của người tù xảy ra nhiều lần trong đời sống xã hội và kinh tế.\nHai bên đều chịu tác động từ động cơ ích kỷ ban đầu.\n53",
+         "fts_score": 17.0, "fts_rank": 3, "source_type": "fts"},
+        {"chunk_id": 4, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 46, "chunk_index": 0,
+         "text": "Lý thuyết trò chơi\n\nCâu chuyện tình thế tiến thoái lưỡng nan của người tù là bài toán kinh điển kể về hai tên trộm.\nBị cảnh sát bắt giữ và thẩm vấn tách biệt trong hai căn phòng khác nhau.\n46",
+         "fts_score": 16.5, "fts_rank": 4, "source_type": "fts"},
+    ]
+    # Page 47 covers BOTH query numbers (5 và 1) strongly in semantic space but lacked a keyword in FTS top-N;
+    # Page footer "5" in filler chunk must NOT falsely match query number 5.
+    sem_rows = [
+        {**fts_rows[0], "semantic_score": 0.78, "semantic_rank": 1, "source_type": "semantic"},
+        {**fts_rows[1], "semantic_score": 0.71, "semantic_rank": 2, "source_type": "semantic"},
+        {"chunk_id": 5, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 47, "chunk_index": 0,
+         "text": "Lý thuyết trò chơi\n\nCảnh sát đưa ra điều kiện: dù không nhận tội cũng chịu 1 năm tù giam.\nNếu chỉ một bên tố cáo thì được giảm còn hai tháng; nếu hai người đều nhận tội thì mỗi người ngồi tù 5 năm.\n47",
+         "semantic_score": 0.64, "semantic_rank": 3, "source_type": "semantic"},
+        {**fts_rows[2], "semantic_score": 0.63, "semantic_rank": 4, "source_type": "semantic"},
+        {**fts_rows[3], "semantic_score": 0.62, "semantic_rank": 5, "source_type": "semantic"},
+        {"chunk_id": 6, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 5, "chunk_index": 0,
+         "text": "Lý thuyết trò chơi\n\nTình thế tiến thoái lưỡng nan của người tù là khái niệm tổng quát phân tích xung đột.\nLợi ích cá nhân ngắn hạn thường dẫn tới kết quả kém cho nhóm.\n5",
+         "semantic_score": 0.60, "semantic_rank": 6, "source_type": "semantic"},
+    ]
+    monkeypatch.setattr(hs, "search_fts", lambda *a, **kw: list(fts_rows))
+    monkeypatch.setattr(hs, "search_semantic", lambda *a, **kw: list(sem_rows))
+    monkeypatch.setattr(hs, "_attach_page_quality_metadata", lambda chunks: None)
+
+    hits = hs.search_hybrid(
+        "Tại sao phản bội chịu 5 năm tù thay vì cùng chối tội chỉ chịu 1 năm?",
+        top_k=4,
+        embed_model="bge-m3-mlx-fp16",
+        enable_topic_routing=False,
+    )
+    pages = [h["page_num"] for h in hits]
+    assert 47 in pages, f"Expected page 47 (covering both 1 and 5) in top-4, got pages={pages}"
+    assert pages.index(47) < pages.index(53) if 53 in pages else True
+    assert 5 not in pages, f"Footer-only page number 5 must not promote filler chunk: {pages}"
+
+
+def test_hybrid_search_promotes_sem_full_numeric_coverage_over_dual_partial_hits(tmp_path, monkeypatch):
+    from app.searcher import HybridSearcher
+
+    hs = HybridSearcher(tmp_path / "unused.db")
+    base_kw = "Hai tên tội phạm phản bội trong thế tiến thoái lưỡng nan của một người tù"
+    # Five dual-hit (FTS+SEM) chunks with zero/partial numeric match beat 0.010 boost when
+    # the true full-numeric page (p.47) sits deeper in semantic-only ranks (e.g., rank 13).
+    fts_rows = [
+        {"chunk_id": 1, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 48, "chunk_index": 0,
+         "text": f"{base_kw} nên mỗi người phải ngồi tù 5 năm giam giữ và cân bằng Nash.",
+         "fts_score": 20.0, "fts_rank": 1, "source_type": "fts"},
+        {"chunk_id": 2, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 51, "chunk_index": 0,
+         "text": f"{base_kw} nếu im lặng thì mỗi người chỉ chịu một năm tù giam.",
+         "fts_score": 19.0, "fts_rank": 2, "source_type": "fts"},
+        {"chunk_id": 3, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 46, "chunk_index": 0,
+         "text": f"{base_kw} khi hai người bị nhốt thẩm vấn riêng tại đồn cảnh sát.",
+         "fts_score": 18.0, "fts_rank": 3, "source_type": "fts"},
+        {"chunk_id": 4, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 53, "chunk_index": 0,
+         "text": f"{base_kw} dễ lặp lại nhiều lần khiến đôi bên phải trả giá.",
+         "fts_score": 17.0, "fts_rank": 4, "source_type": "fts"},
+        {"chunk_id": 5, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 143, "chunk_index": 0,
+         "text": f"{base_kw} cũng thường được liên hệ trong tâm lý học tình cảm.",
+         "fts_score": 16.0, "fts_rank": 5, "source_type": "fts"},
+    ]
+    sem_rows = [
+        {**fts_rows[0], "semantic_score": 0.83, "semantic_rank": 1, "source_type": "semantic"},
+        {**fts_rows[1], "semantic_score": 0.71, "semantic_rank": 2, "source_type": "semantic"},
+        {**fts_rows[2], "semantic_score": 0.68, "semantic_rank": 3, "source_type": "semantic"},
+        {**fts_rows[3], "semantic_score": 0.67, "semantic_rank": 4, "source_type": "semantic"},
+        {**fts_rows[4], "semantic_score": 0.63, "semantic_rank": 5, "source_type": "semantic"},
+        # Ranks 6..12 filler chunks without query numbers; target p.47 sits at semantic_rank=13
+        *[
+            {"chunk_id": 100 + i, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 70 + i, "chunk_index": 0,
+             "text": f"{base_kw} mô tả thêm các biến thể thông thường của tình huống.",
+             "semantic_score": 0.629 - i * 0.001, "semantic_rank": 6 + i, "source_type": "semantic"}
+            for i in range(7)
+        ],
+        {"chunk_id": 47, "doc_id": 22, "book_title": "Game", "filename": "game.pdf", "page_num": 47, "chunk_index": 0,
+         "text": "Dù anh không nhận tội cũng án 1 năm tù giam; nếu tố cáo đồng bọn thì giảm còn 2 tháng và người kia 10 năm; cùng nhận tội thì mỗi người 5 năm.",
+         "semantic_score": 0.625, "semantic_rank": 13, "source_type": "semantic"},
+    ]
+    monkeypatch.setattr(hs, "search_fts", lambda *a, **kw: list(fts_rows))
+    monkeypatch.setattr(hs, "search_semantic", lambda *a, **kw: list(sem_rows))
+    monkeypatch.setattr(hs, "_attach_page_quality_metadata", lambda chunks: None)
+
+    hits = hs.search_hybrid(
+        "Tại sao hai tên tội phạm đều chọn phản bội chịu 5 năm tù thay vì cùng chối tội chịu 1 năm?",
+        top_k=4,
+        embed_model="bge-m3-mlx-fp16",
+        enable_topic_routing=False,
+    )
+    pages = [h["page_num"] for h in hits]
+    assert 47 in pages, f"Expected full-numeric semantic hit p.47 in top-4, got pages={pages}"
+
+
+def test_prefixed_ocr_table_of_contents_is_recognized_as_toc():
+    from app.lexical_search import is_heading_or_toc_chunk
+
+    toc = (
+        "[NỘI DUNG NGUỒN ĐÃ ĐỐI CHIẾU ẢNH; KÝ HIỆU CHUẨN HÓA]\n"
+        "MỤC LỤC\n\n"
+        "01 Chân tướng lý thuyết trò chơi 9\n"
+        "02 Tình thế tiến thoái lưỡng nan của người tù 45\n"
+        "05 Trò chơi tâm lý trong cuộc sống 163"
+    )
+    assert is_heading_or_toc_chunk(toc) is True

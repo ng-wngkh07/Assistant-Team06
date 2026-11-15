@@ -1041,3 +1041,136 @@ def test_mlx_infer_stream_warmup_prepopulates_prefix_cache_before_first_query(tm
     assert query_evt['timings']['load_seconds'] == 0.0
     assert query_evt['review_cache']['reused_tokens'] == warmup_evt['warmed_prefixes'][0]['prefix_tokens']
     assert gen_calls[0]['prefill_count'] == len(prefill_calls)  # Zero extra prefill during first user query
+
+
+def test_mlx_infer_stream_caches_compiled_schema_with_clone_and_supports_prefill_step_size(tmp_path, monkeypatch, capsys):
+    """Repeated structured stream requests compile schema once and clone per request; timings record schema compile time."""
+    import runpy
+    import socket
+
+    model_dir = tmp_path / 'qwen9b'
+    model_dir.mkdir()
+    (model_dir / 'config.json').write_text(
+        json.dumps({
+            'model_type': 'qwen3_5',
+            'architectures': ['Qwen3_5ForConditionalGeneration'],
+            'text_config': {
+                'model_type': 'qwen3_5_text',
+                'hidden_size': 4096,
+                'num_hidden_layers': 32,
+                'num_attention_heads': 16,
+                'max_position_embeddings': 262144,
+            },
+            'quantization': {'bits': 4, 'group_size': 64, 'mode': 'affine'},
+        }),
+        encoding='utf-8',
+    )
+
+    monkeypatch.setattr(socket.socket, 'connect', socket.socket.connect)
+    monkeypatch.setattr(socket, 'create_connection', socket.create_connection)
+    monkeypatch.setenv('HF_HUB_OFFLINE', os.environ.get('HF_HUB_OFFLINE', '0'))
+    monkeypatch.setenv('TRANSFORMERS_OFFLINE', os.environ.get('TRANSFORMERS_OFFLINE', '0'))
+    monkeypatch.setenv('HF_DATASETS_OFFLINE', os.environ.get('HF_DATASETS_OFFLINE', '0'))
+    monkeypatch.setenv('MLX_PREFILL_STEP_SIZE', '256')
+
+    class FakeArray:
+        def __init__(self, data):
+            self.data = list(data.data) if isinstance(data, FakeArray) else list(data)
+        def __getitem__(self, item):
+            return self if item is None else self.data[item]
+
+    class FakeLayer:
+        def __init__(self, state):
+            self.state = state
+
+    class Tokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            return f"<|im_start|>system\n{messages[0]['content']}<|im_end|>\n<|im_start|>user\n{messages[-1]['content']}<|im_end|>\n<|im_start|>assistant\n"
+        def encode(self, text):
+            return [ord(ch) for ch in text]
+
+    tokenizer = Tokenizer()
+    class AutoTokenizer:
+        @staticmethod
+        def from_pretrained(path, **kwargs):
+            return tokenizer
+
+    class FakeSchemaProc:
+        def __init__(self, tag):
+            self.tag = tag
+            self.clones = 0
+        def clone(self):
+            self.clones += 1
+            return FakeSchemaProc(f'{self.tag}-clone-{self.clones}')
+
+    compile_calls = []
+    gen_kwargs_seen = []
+
+    lm = types.ModuleType('mlx_lm')
+    lm.load = lambda path, **kw: (lambda arr, cache=None: setattr(cache[0], 'state', [FakeArray([1])]), tokenizer)
+    lm.generate = lambda *a, **k: '{}'
+
+    def stream_generate(model, active_tok, *, prompt=None, prompt_cache=None, **kwargs):
+        gen_kwargs_seen.append(kwargs)
+        yield types.SimpleNamespace(
+            text='{}', finish_reason='stop', prompt_tokens=10, generation_tokens=1,
+            prompt_tps=40.0, generation_tps=18.0, peak_memory=5.4,
+        )
+
+    lm.stream_generate = stream_generate
+    sampling = types.ModuleType('mlx_lm.sample_utils')
+    sampling.make_sampler = lambda **kw: kw
+    sampling.make_logits_processors = lambda **kw: [kw]
+    cache_mod = types.ModuleType('mlx_lm.models.cache')
+    cache_mod.make_prompt_cache = lambda _m: [FakeLayer([])]
+    models_mod = types.ModuleType('mlx_lm.models')
+    models_mod.cache = cache_mod
+    core = types.ModuleType('mlx.core')
+    core.array = FakeArray
+    core.eval = lambda *a, **kw: None
+    core.clear_cache = lambda: None
+    core.random = types.SimpleNamespace(seed=lambda value: None)
+    mlx = types.ModuleType('mlx')
+    mlx.core = core
+    transformers = types.ModuleType('transformers')
+    transformers.AutoTokenizer = AutoTokenizer
+    structured = types.ModuleType('mlx_vlm.structured')
+    def build_proc(tok, schema):
+        proc = FakeSchemaProc(f'compiled-{len(compile_calls)}')
+        compile_calls.append(proc)
+        return proc
+    structured.build_json_schema_logits_processor = build_proc
+    mlx_vlm = types.ModuleType('mlx_vlm')
+    mlx_vlm.structured = structured
+
+    for name, mod in [
+        ('mlx_lm', lm),
+        ('mlx_lm.sample_utils', sampling),
+        ('mlx_lm.models', models_mod),
+        ('mlx_lm.models.cache', cache_mod),
+        ('mlx', mlx),
+        ('mlx.core', core),
+        ('transformers', transformers),
+        ('mlx_vlm', mlx_vlm),
+        ('mlx_vlm.structured', structured),
+    ]:
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    schema = {'type': 'object', 'properties': {'claims': {'type': 'array'}}, 'required': ['claims']}
+    reqs = [
+        {'model_path': str(model_dir), 'messages': [{'role': 'system', 'content': 'SYS'}, {'role': 'user', 'content': 'Q1'}], 'max_tokens': 16, 'response_schema': schema},
+        {'model_path': str(model_dir), 'messages': [{'role': 'system', 'content': 'SYS'}, {'role': 'user', 'content': 'Q2'}], 'max_tokens': 16, 'response_schema': schema},
+    ]
+    monkeypatch.setattr(sys, 'argv', ['mlx_infer.py', '--stream'])
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('\n'.join(json.dumps(r) for r in reqs) + '\n'))
+
+    runpy.run_path(str(ROOT / 'app/mlx_infer.py'), run_name='__main__')
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line.strip()]
+    done_events = [evt for evt in events if evt.get('done')]
+    assert len(done_events) == 2
+    assert len(compile_calls) == 1, 'Identical schema should compile once and clone for subsequent requests'
+    assert done_events[0]['timings']['schema_compile_seconds'] >= 0.0
+    assert done_events[1]['timings']['schema_compile_seconds'] >= 0.0
+    assert gen_kwargs_seen[0]['prefill_step_size'] == 256
+    assert gen_kwargs_seen[0]['logits_processors'][-1].tag == 'compiled-0-clone-1'
+    assert gen_kwargs_seen[1]['logits_processors'][-1].tag == 'compiled-0-clone-2'

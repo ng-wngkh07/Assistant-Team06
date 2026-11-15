@@ -186,6 +186,76 @@ def extract_unparsed_numeric_tokens(text: str) -> set[str]:
     return extract_numeric_content(text)[1]
 
 
+_VN_UNITS = {
+    "một": 1, "mốt": 1, "hai": 2, "ba": 3, "bốn": 4,
+    "năm": 5, "lăm": 5, "sáu": 6, "bảy": 7, "bẩy": 7, "tám": 8, "chín": 9,
+}
+_VN_TENS = {
+    "hai mươi": 20, "ba mươi": 30, "bốn mươi": 40, "năm mươi": 50,
+    "sáu mươi": 60, "bảy mươi": 70, "tám mươi": 80, "chín mươi": 90,
+}
+_EN_TEENS_AND_SMALL = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+}
+_EN_TENS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+_WRITTEN_QUOTE_NUMBER_RE = re.compile(
+    r"(?<!\w)("
+    r"(?P<skip>một\s+(?:số|vài|ít|chút|đôi|nửa|phần|loạt|mặt|cách|khi|lúc|mình)|không\s+(?:chỉ|những|phải|ai|có|thể|được|bị|hề))"
+    r"|(?P<zero_phrase>(?:số|bằng|giá\s+trị|mức|điểm)\s+không)"
+    r"|(?P<vn_compound>(?:hai|ba|bốn|năm|sáu|bảy|tám|chín)\s+mươi(?:\s+(?:mốt|hai|ba|bốn|tư|lăm|sáu|bảy|tám|chín))?)"
+    r"|(?P<vn_teen>mười(?:\s+(?:một|hai|ba|bốn|lăm|sáu|bảy|tám|chín))?)"
+    r"|(?P<en_compound>(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s]+(?:one|two|three|four|five|six|seven|eight|nine))?)"
+    r"|(?P<en_small>zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|hundred)"
+    r"|(?P<vn_with_year>(?P<vn_pre_year>một|hai|ba|bốn|sáu|bảy|bẩy|tám|chín)\s+năm)"
+    r"|(?P<vn_five_unit>năm(?=\s+(?:năm|lần|người|bước|thành\s+phần|loại|trạng\s+thái|điểm|yếu\s+tố|khái\s+niệm|nguyên\s+tắc|nhóm|phần|phương\s+pháp|ngày|tuần|tháng|giờ|phút|giây|tầng|lớp|phần\s+tử|cạnh|đỉnh|mục|lựa\s+chọn)\b))"
+    r"|(?P<vn_small>một|hai|ba|bốn|sáu|bảy|bẩy|tám|chín)"
+    r")(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def extract_quote_written_numbers(text: str) -> set[Decimal]:
+    """Extract unambiguous written Vietnamese/English numbers from a cited quote."""
+    if not text:
+        return set()
+    found: set[Decimal] = set()
+    for match in _WRITTEN_QUOTE_NUMBER_RE.finditer(text.casefold()):
+        if match.group("skip"):
+            continue
+        if match.group("zero_phrase"):
+            found.add(Decimal(0))
+        elif match.group("vn_compound"):
+            parts = match.group("vn_compound").split()
+            base = _VN_TENS.get(f"{parts[0]} {parts[1]}", 0)
+            unit = _VN_UNITS.get(parts[2], 0) if len(parts) > 2 else 0
+            found.add(Decimal(base + unit))
+        elif match.group("vn_teen"):
+            parts = match.group("vn_teen").split()
+            unit = _VN_UNITS.get(parts[1], 0) if len(parts) > 1 else 0
+            found.add(Decimal(10 + unit))
+        elif match.group("en_compound"):
+            parts = re.split(r"[-\s]+", match.group("en_compound").strip())
+            base = _EN_TENS.get(parts[0], 0)
+            unit = _EN_TEENS_AND_SMALL.get(parts[1], 0) if len(parts) > 1 else 0
+            found.add(Decimal(base + unit))
+        elif match.group("en_small"):
+            tok = match.group("en_small")
+            found.add(Decimal(100 if tok == "hundred" else _EN_TEENS_AND_SMALL[tok]))
+        elif match.group("vn_with_year"):
+            found.add(Decimal(_VN_UNITS[match.group("vn_pre_year")]))
+        elif match.group("vn_five_unit"):
+            found.add(Decimal(5))
+        elif match.group("vn_small"):
+            found.add(Decimal(_VN_UNITS[match.group("vn_small")]))
+    return found
+
+
 def has_relevant_evidence(query: str, chunks: list[dict]) -> bool:
     if not chunks:
         return False
@@ -437,3 +507,389 @@ def insufficient_evidence_message(reason: str, scope: dict) -> str:
     elif reason == "unverified_scope":
         return "Tôi chưa tìm thấy đủ căn cứ trong kết quả hiện tại để trả lời câu hỏi. Bạn có thể thử diễn đạt lại câu hỏi hoặc chọn phạm vi tài liệu khác."
     return f"Tôi chưa tìm thấy đủ căn cứ trong {location} cho câu hỏi này. Bạn có thể thử diễn đạt lại câu hỏi hoặc chọn phạm vi tài liệu khác."
+
+
+_GENERIC_ASCII_TERMS = frozenset({
+    "model", "models", "system", "systems", "method", "methods", "process",
+    "processes", "result", "results", "table", "tables", "figure", "figures",
+    "example", "examples", "chapter", "chapters", "section", "sections",
+    "value", "values", "state", "states", "level", "levels", "factor", "factors",
+    "stage", "stages", "phase", "phases", "group", "groups", "class", "classes",
+    "object", "objects", "function", "functions", "input", "inputs", "output",
+    "outputs", "index", "indices", "score", "scores", "theory", "study", "studies",
+    "research", "human", "memory", "brain", "paper", "article", "question",
+    "answer", "source", "sources", "claim", "claims", "point", "points", "order",
+    "range", "scale", "ratio", "limit", "matrix", "vector", "linear", "space",
+    "graph", "array", "string", "number", "numbers", "logic", "rules", "effect",
+    "effects", "cause", "causes", "focus", "control", "data", "type", "types",
+    "step", "steps", "part", "parts", "case", "cases", "problem", "solution",
+    "approach", "concept", "principle", "definition", "property", "element",
+    "component", "components", "structure", "feature", "features", "action",
+    "return", "print", "public", "private", "static", "void", "boolean", "double",
+    "float", "integer", "while", "where", "which", "there", "these", "those",
+    "about", "after", "before", "between", "through", "other", "first", "second",
+    "third", "using", "based", "given", "within", "without", "because", "therefore",
+    "however", "although", "since", "under", "above", "below", "total", "mean",
+    "check", "valid", "error", "true", "false", "none", "null", "note", "notes",
+    "abstract", "interface", "algorithm", "algorithms", "theorem", "lemma",
+})
+
+
+def _fold_ascii_text(text: str) -> tuple[str, set[str], str]:
+    """Normalize ligatures, wrapped hyphens, and whitespace for ASCII term matching."""
+    cleaned = unicodedata.normalize("NFKC", text or "")
+    cleaned = re.sub(r"([A-Za-z])-\s+([A-Za-z])", r"\1\2", cleaned)
+    cleaned = re.sub(r"[-_/]+", " ", cleaned.casefold())
+    collapsed = re.sub(r"\s+", " ", cleaned).strip()
+    words = set(re.findall(r"[a-z]{2,}", collapsed))
+    nospace = re.sub(r"[^a-z0-9]", "", collapsed)
+    return collapsed, words, nospace
+
+
+def _ascii_word_present(word: str, words_set: set[str], nospace_text: str) -> bool:
+    if word in words_set:
+        return True
+    if word.endswith("s") and len(word) >= 5 and word[:-1] in words_set:
+        return True
+    if word.endswith("es") and len(word) >= 6 and word[:-2] in words_set:
+        return True
+    return len(word) >= 6 and word in nospace_text
+
+
+def _ascii_phrase_present(phrase: str, words_set: set[str], nospace_text: str) -> bool:
+    _, p_words, p_nospace = _fold_ascii_text(phrase)
+    if len(p_nospace) >= 6 and p_nospace in nospace_text:
+        return True
+    distinctive = [w for w in p_words if len(w) >= 4 and w not in _GENERIC_ASCII_TERMS]
+    candidates = distinctive or [w for w in p_words if len(w) >= 3]
+    return bool(candidates) and all(_ascii_word_present(w, words_set, nospace_text) for w in candidates)
+
+
+def _is_predominantly_ascii_source(text: str) -> bool:
+    letters = re.findall(r"[^\W\d_]", text or "", re.UNICODE)
+    if len(letters) < 80:
+        return False
+    ascii_letters = sum(1 for ch in letters if ch.isascii() and ch.isalpha())
+    return (ascii_letters / len(letters)) >= 0.75
+
+
+def find_ungrounded_technical_terms(
+    claim_text: str,
+    cited_sources: List[str],
+    query: str,
+    chat_history: List[Dict[str, Any]] | None = None,
+) -> List[str]:
+    """Detect ASCII technical terms copied from prior turns or fabricated in English sources."""
+    if not claim_text or not cited_sources:
+        return []
+    combined_source = " ".join(s for s in cited_sources if s)
+    if not combined_source.strip():
+        return []
+
+    _, source_words, source_nospace = _fold_ascii_text(combined_source)
+    _, query_words, query_nospace = _fold_ascii_text(query or "")
+    _, claim_words, claim_nospace = _fold_ascii_text(claim_text)
+
+    flagged: list[str] = []
+    seen_flagged: set[str] = set()
+
+    def _record(term: str) -> None:
+        key = term.casefold()
+        if key not in seen_flagged:
+            seen_flagged.add(key)
+            flagged.append(term)
+
+    if chat_history:
+        history_text = " ".join(
+            str(m.get("content", ""))
+            for m in chat_history
+            if isinstance(m, dict) and isinstance(m.get("content"), str)
+        )
+        if history_text.strip():
+            # Multi-word ASCII technical phrases shared between history and claim.
+            for match in re.finditer(r"\b([A-Za-z][A-Za-z\-]{2,}(?:\s+[A-Za-z][A-Za-z\-]{2,}){1,3})\b", history_text):
+                phrase = match.group(1)
+                p_tokens = [w.casefold() for w in re.findall(r"[A-Za-z]{2,}", phrase)]
+                if not any(len(w) >= 5 and w not in _GENERIC_ASCII_TERMS for w in p_tokens):
+                    continue
+                if not _ascii_phrase_present(phrase, claim_words, claim_nospace):
+                    continue
+                if _ascii_phrase_present(phrase, query_words, query_nospace):
+                    continue
+                if not _ascii_phrase_present(phrase, source_words, source_nospace):
+                    _record(phrase)
+
+            # Single long distinctive ASCII tokens or mid-text proper nouns shared between history and claim.
+            history_tokens = set(re.findall(r"\b[A-Za-z]{4,}\b", history_text))
+            claim_tokens_lower = set(re.findall(r"\b[a-z]{4,}\b", claim_text.casefold()))
+            for tok in history_tokens:
+                low = tok.casefold()
+                if low in _GENERIC_ASCII_TERMS:
+                    continue
+                is_long_tech = len(low) >= 8
+                is_proper = tok[0].isupper() and tok[1:].islower() and len(tok) >= 5
+                if not (is_long_tech or is_proper):
+                    continue
+                if low not in claim_tokens_lower:
+                    continue
+                if _ascii_word_present(low, query_words, query_nospace):
+                    continue
+                if not _ascii_word_present(low, source_words, source_nospace):
+                    _record(tok)
+
+    if _is_predominantly_ascii_source(combined_source):
+        for match in re.finditer(r"\(\s*([A-Za-z][A-Za-z0-9\-\s]{4,60})\s*\)", claim_text):
+            phrase = match.group(1).strip()
+            words = [w.casefold() for w in re.findall(r"[A-Za-z]{3,}", phrase)]
+            distinctive = [w for w in words if len(w) >= 4 and w not in _GENERIC_ASCII_TERMS]
+            if len(distinctive) < 2 or sum(len(w) for w in distinctive) < 10:
+                continue
+            if _ascii_phrase_present(phrase, query_words, query_nospace):
+                continue
+            if not _ascii_phrase_present(phrase, source_words, source_nospace):
+                _record(phrase)
+
+    return flagged
+
+
+_VI_DIACRITIC_CHARS = (
+    "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợ"
+    "ùúủũụưừứửữựỳýỷỹỵđ"
+    "ÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬÈÉẺẼẸÊỀẾỂỄỆÌÍỈĨỊÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢ"
+    "ÙÚỦŨỤƯỪỨỬỮỰỲÝỶỸỴĐ"
+)
+_OCR_GLUED_VI_NUM_RE = re.compile(
+    rf"[A-Za-z{_VI_DIACRITIC_CHARS}]*[{_VI_DIACRITIC_CHARS}](\d+(?:[.,]\d+)?)(?=[^0-9A-Za-z_]|$)"
+)
+_OCR_GLUED_REL_NUM_RE = re.compile(
+    r"(?<![A-Za-z0-9_])[a-z]{2,}(\d+(?:[.,]\d+)?)(?=[∈∉≤≥≠])"
+)
+
+
+def extract_quote_ocr_glued_numbers(text: str) -> set[Decimal]:
+    """Extract digits glued onto preceding words in OCR/PDF quotes without touching algebra variables."""
+    if not text:
+        return set()
+    normalized = unicodedata.normalize("NFKC", text)
+    found: set[Decimal] = set()
+    for pattern in (_OCR_GLUED_VI_NUM_RE, _OCR_GLUED_REL_NUM_RE):
+        for match in pattern.finditer(normalized):
+            raw_num = match.group(1).replace(",", ".")
+            try:
+                found.add(Decimal(raw_num))
+            except Exception:
+                continue
+    return found
+
+
+def extract_quote_supported_numbers(text: str) -> tuple[set[Decimal], set[str]]:
+    """Return numeric values and unparsed numeric tokens supported by a cited quote."""
+    nums, unparsed = extract_numeric_content(text)
+    supported = nums | extract_quote_written_numbers(text) | extract_quote_ocr_glued_numbers(text)
+    return supported, unparsed
+
+
+def _format_decimal_label(value: Decimal) -> str:
+    if value == value.to_integral_value():
+        return str(int(value))
+    return format(value.normalize(), "f")
+
+
+def _analyze_numeric_mismatch(
+    source_id: str,
+    claim_numbers: set[Decimal],
+    quote_numbers: set[Decimal],
+    claim_unparsed: set[str],
+    quote_unparsed: set[str],
+    raw_sources_map: dict[str, str],
+    *,
+    use_source_lines: bool,
+    query: str = "",
+    source_meta: dict[str, tuple[Any, Any]] | None = None,
+) -> tuple[list[str], list[int], list[str], list[str], list[str], Any, list[str]]:
+    """Classify missing claim numbers against lines of the selected source, peer chunks, and query."""
+    missing_nums = sorted(claim_numbers - quote_numbers)
+    missing_unparsed = sorted(claim_unparsed - quote_unparsed)
+    missing_labels = [_format_decimal_label(v) for v in missing_nums] + missing_unparsed
+    missing_set = set(missing_nums)
+    missing_unp_set = set(missing_unparsed)
+
+    same_source_lines: list[int] = []
+    if use_source_lines and source_id in raw_sources_map:
+        for line_no, line in enumerate(raw_sources_map[source_id].split("\n"), 1):
+            l_nums, l_unp = extract_quote_supported_numbers(line)
+            if (missing_set and (missing_set & l_nums)) or (missing_unp_set and (missing_unp_set & l_unp)):
+                same_source_lines.append(line_no)
+
+    peer_sources: list[str] = []
+    complete_peers: list[str] = []
+    for sid in sorted(
+        (k for k in raw_sources_map if k != source_id),
+        key=lambda k: (0, int(k[1:])) if k.startswith("S") and k[1:].isdigit() else (1, k),
+    ):
+        s_nums, s_unp = extract_quote_supported_numbers(raw_sources_map[sid])
+        if (missing_set and (missing_set & s_nums)) or (missing_unp_set and (missing_unp_set & s_unp)):
+            peer_sources.append(sid)
+            if (not claim_numbers or claim_numbers.issubset(s_nums)) and (
+                not claim_unparsed or claim_unparsed.issubset(s_unp)
+            ):
+                complete_peers.append(sid)
+
+    src_meta = source_meta.get(source_id) if source_meta else None
+    source_page = src_meta[1] if src_meta and len(src_meta) >= 2 else None
+    same_page_peers: list[str] = []
+    if src_meta and source_page is not None and source_meta is not None:
+        same_page_complete = [sid for sid in complete_peers if source_meta.get(sid) == src_meta]
+        same_page_partial = [sid for sid in peer_sources if source_meta.get(sid) == src_meta]
+        same_page_peers = same_page_complete or same_page_partial
+
+    q_nums, q_unp = extract_numeric_content(query) if query else (set(), set())
+    query_missing_labels = [_format_decimal_label(v) for v in sorted(missing_set & q_nums)] + sorted(
+        missing_unp_set & q_unp
+    )
+    return (
+        missing_labels,
+        same_source_lines,
+        peer_sources,
+        complete_peers,
+        same_page_peers,
+        source_page,
+        query_missing_labels,
+    )
+
+
+def format_numeric_mismatch_feedback(
+    source_id: str,
+    claim_numbers: set[Decimal],
+    quote_numbers: set[Decimal],
+    claim_unparsed: set[str],
+    quote_unparsed: set[str],
+    raw_sources_map: dict[str, str],
+    *,
+    use_source_lines: bool,
+    query: str = "",
+    source_meta: dict[str, tuple[Any, Any]] | None = None,
+) -> str:
+    """Build actionable repair feedback identifying missing numbers, matching lines, or peer sources."""
+    (
+        missing_labels,
+        same_source_lines,
+        peer_sources,
+        complete_peers,
+        same_page_peers,
+        source_page,
+        query_missing_labels,
+    ) = _analyze_numeric_mismatch(
+        source_id,
+        claim_numbers,
+        quote_numbers,
+        claim_unparsed,
+        quote_unparsed,
+        raw_sources_map,
+        use_source_lines=use_source_lines,
+        query=query,
+        source_meta=source_meta,
+    )
+    from_query = bool(query_missing_labels)
+    query_hint = (
+        f"KHÔNG lặp lại câu dẫn/bối cảnh mở đầu từ câu hỏi chứa số ({', '.join(query_missing_labels)}); "
+        if query_missing_labels
+        else ""
+    )
+
+    missing_summary = f" (Thiếu số: {', '.join(missing_labels)})" if missing_labels else ""
+    parts = [f"{source_id}: text có số không nằm trong đoạn đã chọn{missing_summary}."]
+    if same_source_lines:
+        line_refs = ", ".join(f"L{n}" for n in same_source_lines[:4])
+        parts.append(f"Trong {source_id}, số bị thiếu nằm ở {line_refs}; mở rộng evidence_lines bao gồm dòng đó hoặc bỏ số ngoài đoạn đã chọn.")
+    else:
+        if same_page_peers and source_page is not None:
+            same_page_refs = ", ".join(same_page_peers[:3])
+            parts.append(
+                f"CHÚ Ý CÙNG TRANG (tr.{source_page}): {source_id} chỉ là MỘT đoạn bị cắt trên trang này; "
+                f"đoạn cùng trang {same_page_refs} mới chứa số bị thiếu — đổi source_ids sang {same_page_refs} nếu trích nội dung đó."
+            )
+        if complete_peers:
+            complete_refs = ", ".join(complete_peers[:3])
+            if from_query:
+                q_list = ", ".join(query_missing_labels)
+                parts.append(
+                    f"Số {q_list} chỉ có trong câu hỏi hoặc nguồn {complete_refs} và KHÔNG có trong {source_id}; "
+                    f"{query_hint}KHÔNG chép lại số từ câu hỏi vào text của {source_id}; "
+                    f"BỎ hoàn toàn mọi chữ số ({q_list}) khỏi claim gắn với {source_id} (chỉ nêu nội dung/định nghĩa thực sự có trong {source_id}) "
+                    f"hoặc dùng nguồn chứa đủ các số ({complete_refs})."
+                )
+            else:
+                parts.append(
+                    f"Số bị thiếu không có trong {source_id} mà nằm ở nguồn chứa đủ các số ({complete_refs}); "
+                    f"dùng {complete_refs} hoặc tách riêng từng claim cho mỗi nguồn, không gộp số từ nhiều nguồn vào cùng một claim."
+                )
+        elif peer_sources:
+            peer_refs = ", ".join(peer_sources[:3])
+            if from_query:
+                q_list = ", ".join(query_missing_labels)
+                parts.append(
+                    f"Số bị thiếu không có trong {source_id} mà nằm ở {peer_refs} (hoặc đến từ câu hỏi); "
+                    f"{query_hint}KHÔNG chép lại số từ câu hỏi vào text nếu {source_id} không chứa chúng; "
+                    f"BỎ hoàn toàn mọi chữ số ({q_list}) khỏi claim gắn với {source_id} (hoặc tách riêng từng claim cho {peer_refs})."
+                )
+            else:
+                parts.append(f"Số bị thiếu không có trong {source_id} mà nằm ở {peer_refs}; tách riêng từng claim cho mỗi nguồn, không gộp số từ nhiều nguồn vào cùng một claim.")
+        elif from_query:
+            q_list = ", ".join(query_missing_labels)
+            parts.append(
+                f"Số {q_list} đến từ câu hỏi và KHÔNG có trong {source_id}; "
+                f"{query_hint}Không chép dữ kiện từ câu hỏi vào text nếu đoạn nguồn đã chọn không chứa chúng; "
+                f"KHÔNG chép số từ câu hỏi; BỎ hoàn toàn mọi chữ số ({q_list}) khỏi claim gắn với {source_id} và bắt đầu thẳng bằng dữ kiện thực sự có trong {source_id}."
+            )
+        else:
+            parts.append(
+                "Không thêm số thứ tự hoặc giá trị ngoài nguồn; chọn đoạn chứng minh đủ từng ý. "
+                "Không chép dữ kiện từ câu hỏi vào text nếu đoạn nguồn đã chọn không chứa chúng; "
+                "trả lời trực tiếp bằng phép tính và kết quả có trong nguồn lời giải."
+            )
+    return " ".join(parts)
+
+
+def format_numeric_ban_hint(
+    source_id: str,
+    claim_numbers: set[Decimal],
+    quote_numbers: set[Decimal],
+    claim_unparsed: set[str],
+    quote_unparsed: set[str],
+    raw_sources_map: dict[str, str],
+    *,
+    use_source_lines: bool,
+    query: str = "",
+    source_meta: dict[str, tuple[Any, Any]] | None = None,
+) -> str:
+    """Return a compact one-line numeric ban reminder placed at the end of repair instructions."""
+    (
+        missing_labels,
+        same_source_lines,
+        peer_sources,
+        complete_peers,
+        same_page_peers,
+        source_page,
+        _,
+    ) = _analyze_numeric_mismatch(
+        source_id,
+        claim_numbers,
+        quote_numbers,
+        claim_unparsed,
+        quote_unparsed,
+        raw_sources_map,
+        use_source_lines=use_source_lines,
+        query=query,
+        source_meta=source_meta,
+    )
+    if not missing_labels:
+        return ""
+    nums_str = ", ".join(missing_labels[:5])
+    if same_source_lines:
+        line_refs = ", ".join(f"L{n}" for n in same_source_lines[:4])
+        return f"{source_id}: thiếu ({nums_str}) ở dòng đã chọn — mở rộng evidence_lines tới {line_refs} hoặc BỎ ({nums_str})."
+    ordered_peers = list(dict.fromkeys([*same_page_peers, *complete_peers])) or peer_sources
+    peer_hint = f" -> dùng {', '.join(ordered_peers[:3])}" if ordered_peers else ""
+    page_hint = f" (tr.{source_page})" if source_page is not None else ""
+    return f"{source_id}{page_hint} KHÔNG có ({nums_str}){peer_hint} hoặc BỎ ({nums_str}) khỏi text."

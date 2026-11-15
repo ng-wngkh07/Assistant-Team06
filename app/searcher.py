@@ -1565,6 +1565,19 @@ class HybridSearcher:
 
         # Merge using Reciprocal Rank Fusion (RRF)
         # RRF_score(d) = sum( weight / (k + rank) )
+        from app.rag_evidence_validator import extract_numeric_content, extract_quote_supported_numbers
+        query_nums, _ = extract_numeric_content(query_clean)
+
+        def _query_number_coverage(text: str) -> float:
+            if not query_nums or is_heading_or_toc_chunk(text):
+                return 0.0
+            body = re.sub(r"(?:\n\s*\d{1,4}\s*)+$", "", text.rstrip())
+            if not body:
+                return 0.0
+            chunk_nums, _ = extract_quote_supported_numbers(body)
+            matched = query_nums & chunk_nums
+            return (len(matched) / len(query_nums)) if matched else 0.0
+
         chunk_map = {}
         rrf_scores = {}
 
@@ -1592,11 +1605,32 @@ class HybridSearcher:
 
         # If only FTS was available, use FTS results with content relevance
         if not semantic_results and fts_results:
-            combined = sorted(fts_results, key=lambda x: (x.get("fts_score", 0.0) + _content_relevance(x["text"]) * 10.0), reverse=True)
+            combined = sorted(
+                fts_results,
+                key=lambda x: (
+                    x.get("fts_score", 0.0)
+                    + _content_relevance(x["text"]) * 10.0
+                    + _query_number_coverage(x["text"]) * 3.0
+                ),
+                reverse=True,
+            )
         else:
+            def _hybrid_rank_score(cid: int) -> float:
+                item = chunk_map[cid]
+                base = rrf_scores[cid] * (1.0 + max(-0.8, _content_relevance(item["text"])))
+                if query_nums:
+                    has_strong_signal = (
+                        item.get("fts_rank") is not None
+                        or (item.get("semantic_score") or 0.0) >= 0.58
+                    )
+                    if has_strong_signal:
+                        cov = _query_number_coverage(item["text"])
+                        base += (cov * cov) * 0.032
+                return base
+
             sorted_cids = sorted(
                 rrf_scores.keys(),
-                key=lambda cid: (rrf_scores[cid] * (1.0 + max(-0.8, _content_relevance(chunk_map[cid]["text"])))),
+                key=_hybrid_rank_score,
                 reverse=True,
             )
             combined = []

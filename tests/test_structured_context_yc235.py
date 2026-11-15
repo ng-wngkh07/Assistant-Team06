@@ -1108,7 +1108,8 @@ def test_native_9b_passes_structured_response_schemas_for_primary_repair_and_aud
     auditor_schema = model.calls[2].get("response_schema")
     assert auditor_schema is not None
     auditor_item = auditor_schema["properties"]["claims"]["items"]
-    assert auditor_item["properties"]["source_id"]["enum"] == ["S1", "S2"]
+    # Careful Auditor scopes strictly to sources actually cited by Primary (S1).
+    assert auditor_item["properties"]["source_id"]["enum"] == ["S1"]
     assert set(auditor_item["properties"]["verdict"]["enum"]) == {"supported", "unsupported", "uncertain"}
 
 
@@ -1140,10 +1141,10 @@ def test_repair_uses_remaining_budget_headroom_and_skips_below_minimum(searcher,
     class Model:
         def __init__(self):
             self.calls = []
-            self.last_done_reason = "stop"
 
         def chat_stream(self, **kwargs):
             self.calls.append(kwargs)
+            self.last_done_reason = "stop"
             if len(self.calls) == 1:
                 yield "Bản nháp chưa có JSON"
             else:
@@ -1248,3 +1249,229 @@ def test_fast_mode_budgets_tail_chunks_while_keeping_anchor_neighbors(tmp_path):
     assert expand_calls[-1] == {}
     careful_prompt = "\n".join(m["content"] for m in careful_model.calls[0]["messages"])
     assert "TAIL_CHUNK_DELTA" in careful_prompt
+
+
+def test_fast_mode_promotes_tail_chunk_covering_uncovered_query_numbers(tmp_path):
+    """In focused Fast mode, a lower-ranked hit covering missing query numbers (e.g. 1 năm) is promoted into anchor packing."""
+    from app.rag_agent import PsychologyAgent
+
+    path = tmp_path / "fast_numeric_anchor.db"
+    filler = "Phân tích tình thế tiến thoái lưỡng nan của người tù trong trò chơi tổng quát. " * 8
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE chunks(id INTEGER PRIMARY KEY, doc_id INTEGER, book_title TEXT, filename TEXT, page_num INTEGER, chunk_index INTEGER, text TEXT)"
+        )
+        rows = [
+            (1, 22, "Game Theory", "pd.pdf", 48, 0, "Trong tình thế tiến thoái lưỡng nan của người tù, hai tên tội phạm chọn phản bội chịu 5 năm tù, tức Cân bằng Nash. " + filler),
+            (2, 22, "Game Theory", "pd.pdf", 48, 1, "Cân bằng Nash do John Nash đề xướng để nghiên cứu chiến thuật tối ưu."),
+            (3, 22, "Game Theory", "pd.pdf", 51, 0, "Nói vuốt đuôi: bàn luận về kết cục sau khi sự việc xảy ra. " + filler),
+            (4, 22, "Game Theory", "pd.pdf", 51, 1, "Chú thích thêm về cách ứng xử trong cuộc sống hằng ngày. " + filler),
+            (5, 22, "Game Theory", "pd.pdf", 49, 0, "Khái quát hóa các lựa chọn khó khăn trong đời sống xã hội. " + filler),
+            (6, 22, "Game Theory", "pd.pdf", 47, 0, "Nếu hai tên tội phạm cùng chối tội im lặng thì mỗi người chỉ bị 1 năm tù giam; cùng nhận tội chịu 5 năm."),
+        ]
+        db.executemany("INSERT INTO chunks VALUES(?,?,?,?,?,?,?)", rows)
+
+    s = HybridSearcher(path)
+    hits = [
+        {**s.source_page_chunks(22, 48)[0], "hybrid_score": 0.90, "semantic_score": 0.90},
+        {**s.source_page_chunks(22, 51)[0], "hybrid_score": 0.85, "semantic_score": 0.85},
+        {**s.source_page_chunks(22, 49)[0], "hybrid_score": 0.80, "semantic_score": 0.80},
+        {**s.source_page_chunks(22, 47)[0], "hybrid_score": 0.70, "semantic_score": 0.70},
+    ]
+    s.search_hybrid = lambda **kwargs: [dict(h) for h in hits]
+    translator = type("Translator", (), {"translate": lambda self, chunks: {}})()
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            import re
+            user_text = "\n".join(m["content"] for m in kwargs["messages"])
+            m = re.search(r'<document id="(S\d+)"[^>]*>[^<]*chỉ bị 1 năm tù giam', user_text)
+            sid_1yr = m.group(1) if m else "S4"
+            yield (
+                f"Nếu cả hai cùng im lặng thì mỗi người chỉ chịu 1 năm tù [{sid_1yr}], "
+                "còn cùng phản bội chịu 5 năm tù và là Cân bằng Nash [S1]."
+            )
+
+    model = Model()
+    query = (
+        "Trong tình thế tiến thoái lưỡng nan của người tù (Prisoner's Dilemma), "
+        "tại sao hai tên tội phạm đều chọn phản bội dẫn tới mỗi người chịu 5 năm tù "
+        "thay vì cùng chối tội để chỉ chịu 1 năm, và trạng thái cùng phản bội này gọi là cân bằng gì?"
+    )
+    res = PsychologyAgent(s, model, translator).process_query_sync(
+        query, model="test-ollama", embed_model=None, processing_level="standard", answer_mode="quick"
+    )
+    fast_prompt = "\n".join(m["content"] for m in model.calls[0]["messages"])
+    assert "chỉ bị 1 năm tù giam" in fast_prompt
+    assert res["response_kind"] == "answer"
+
+
+def test_method_procedure_query_uses_warmed_native_source_prompt():
+    from app.rag_agent import MLX_SOURCE_PROMPT, MLX_VERDICT_SOURCE_PROMPT, native_source_prompt
+    method_q = (
+        "Trình bày phương pháp từng bước kiểm tra xem tập con W có phải là "
+        "không gian con của không gian vectơ V hay không."
+    )
+    assert native_source_prompt(method_q) == MLX_SOURCE_PROMPT
+    verdict_q = "Cho W = {(x, y, 0)}, tập W có phải là không gian con của R^3 hay không?"
+    assert native_source_prompt(verdict_q) == MLX_VERDICT_SOURCE_PROMPT
+
+
+def test_9b_repair_preserves_system_prompt_and_auditor_scales_num_predict(monkeypatch, tmp_path):
+    import json
+    from app.rag_agent import MLX_SOURCE_PROMPT, PsychologyAgent
+    import app.dialogue as dialogue
+    import app.model_resolver as model_resolver
+
+    (tmp_path / "config.json").write_text('{"max_position_embeddings":8192}', encoding="utf-8")
+    monkeypatch.setattr(model_resolver.sys, "platform", "darwin")
+    monkeypatch.setattr(model_resolver, "MLX_9B_DIR", tmp_path)
+    monkeypatch.setattr(dialogue, "MLX_CONTEXT_TOKENS", 8192)
+
+    topics = [
+        "kiểm tra vectơ không thuộc tập hợp đang xét",
+        "xác minh phần tử đơn vị cộng nằm trong không gian con",
+        "đối chiếu đóng kín với phép cộng hai vectơ bất kỳ",
+        "bảo toàn kết hợp của phép cộng vectơ trong không gian mẹ",
+        "đảm bảo đóng kín với phép nhân vô hướng từ trường số thực",
+        "kiểm tra tính phân phối qua phép cộng của vô hướng",
+        "rút gọn điều kiện bằng tổ hợp tuyến tính tổng quát",
+        "áp dụng định lý về phần giao của hai không gian con",
+        "xét bao tuyến tính sinh bởi hệ hữu hạn vectơ cơ sở",
+        "kết luận rõ ràng từng tiêu chuẩn trước khi khẳng định",
+        "phân biệt hạng ma trận và số chiều không gian nghiệm",
+        "đọc kỹ giả thiết về trường số thực hoặc phức",
+    ]
+    lines_src = "\n".join(f"Bước {i}: Cần {topics[i - 1]}." for i in range(1, 13))
+    path = tmp_path / "careful_scale.db"
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE chunks(id INTEGER PRIMARY KEY, doc_id INTEGER, book_title TEXT, filename TEXT, page_num INTEGER, chunk_index INTEGER, text TEXT)"
+        )
+        db.execute("INSERT INTO chunks VALUES(1, 63, 'LinAlg', 'la.pdf', 47, 0, ?)", (lines_src,))
+    s = HybridSearcher(path)
+    hit = {**s.source_page_chunks(63, 47)[0], "hybrid_score": 0.95, "semantic_score": 0.95}
+    s.search_hybrid = lambda **kwargs: [dict(hit)]
+    translator = type("Translator", (), {"translate": lambda self, chunks: {}})()
+
+    repaired_claims = [
+        {"text": f"Cần {topics[i - 1]}.", "source_ids": ["S1"], "evidence_lines": [i, i]}
+        for i in range(1, 11)
+    ]
+    audit_claims = [
+        {"statement": c["text"], "source_id": "S1", "evidence_id": f"E{i}", "verdict": "supported"}
+        for i, c in enumerate(repaired_claims, 1)
+    ]
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            self.last_done_reason = "stop"
+            if len(self.calls) == 1:
+                yield "Bản nháp chưa đúng cấu trúc JSON."
+            elif len(self.calls) == 2:
+                yield json.dumps({"claims": repaired_claims}, ensure_ascii=False)
+            else:
+                yield json.dumps({"claims": audit_claims, "overall_verdict": "supported"}, ensure_ascii=False)
+
+    model = Model()
+    query = "Trình bày phương pháp từng bước kiểm tra tính chất không gian con của tập con W."
+    res = PsychologyAgent(s, model, translator).process_query_sync(
+        query, model="qwen3.5-9b-4bit", embed_model=None, processing_level="careful", isolate_context=True
+    )
+    assert res["response_kind"] == "answer"
+    assert len(model.calls) == 3
+    assert model.calls[0]["system_prompt"] == MLX_SOURCE_PROMPT
+    assert "Các source_ids được phép" not in model.calls[1]["system_prompt"]
+    assert "Các source_ids được phép: S1." in model.calls[1]["messages"][0]["content"]
+    assert model.calls[2]["num_predict"] > 600
+
+
+def test_careful_auditor_allocates_sufficient_num_predict_for_semicolon_claims(monkeypatch, tmp_path):
+    import json
+    from app.rag_agent import PsychologyAgent
+    import app.dialogue as dialogue
+    import app.model_resolver as model_resolver
+
+    (tmp_path / "config.json").write_text('{"max_position_embeddings":8192}', encoding="utf-8")
+    monkeypatch.setattr(model_resolver.sys, "platform", "darwin")
+    monkeypatch.setattr(model_resolver, "MLX_9B_DIR", tmp_path)
+    monkeypatch.setattr(dialogue, "MLX_CONTEXT_TOKENS", 8192)
+
+    lines_src = "\n".join([
+        "Hai tên trộm đứng trước hai lựa chọn: chống chế để hưởng khoan hồng hoặc cùng phản bội lẫn nhau.",
+        "Nếu A phản bội còn B im lặng thì A được thả tự do ngay và B chịu án 10 năm tù.",
+        "Nếu cả hai giữ im lặng thì mỗi người nhận án 1 năm tù và cả hai cùng phản bội chịu 5 năm tù.",
+        "Cân bằng Nash là kết quả cân bằng phi hợp tác khi mỗi bên tối ưu phản ứng của riêng mình.",
+    ])
+    path = tmp_path / "careful_semicolon.db"
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE chunks(id INTEGER PRIMARY KEY, doc_id INTEGER, book_title TEXT, filename TEXT, page_num INTEGER, chunk_index INTEGER, text TEXT)"
+        )
+        db.execute("INSERT INTO chunks VALUES(1, 22, 'GameTheory', 'gt.pdf', 47, 0, ?)", (lines_src,))
+    s = HybridSearcher(path)
+    hit = {**s.source_page_chunks(22, 47)[0], "hybrid_score": 0.95, "semantic_score": 0.95}
+    s.search_hybrid = lambda **kwargs: [dict(hit)]
+    translator = type("Translator", (), {"translate": lambda self, chunks: {}})()
+
+    claims = [
+        {
+            "text": "Hai tên trộm chọn chống chế để hưởng khoan hồng; hoặc cả hai phản bội lẫn nhau.",
+            "source_ids": ["S1"],
+            "evidence_lines": [1, 1],
+        },
+        {
+            "text": "Nếu A phản bội còn B im lặng thì A được thả tự do ngay; B chịu án 10 năm tù.",
+            "source_ids": ["S1"],
+            "evidence_lines": [2, 2],
+        },
+        {
+            "text": "Nếu cả hai giữ im lặng thì mỗi người nhận án 1 năm tù; nếu cùng phản bội thì chịu 5 năm tù.",
+            "source_ids": ["S1"],
+            "evidence_lines": [3, 3],
+        },
+        {
+            "text": "Cân bằng Nash là cân bằng phi hợp tác; mỗi bên tối ưu phản ứng riêng.",
+            "source_ids": ["S1"],
+            "evidence_lines": [4, 4],
+        },
+    ]
+    audit_claims = [
+        {"statement": c["text"], "source_id": "S1", "evidence_id": "E1", "verdict": "supported"}
+        for c in claims
+    ] + [
+        {"statement": c["text"], "source_id": "S1", "evidence_id": "E1", "verdict": "supported"}
+        for c in claims
+    ]
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            self.last_done_reason = "stop"
+            if len(self.calls) == 1:
+                yield json.dumps({"claims": claims}, ensure_ascii=False)
+            else:
+                yield json.dumps({"claims": audit_claims, "overall_verdict": "supported"}, ensure_ascii=False)
+
+    model = Model()
+    res = PsychologyAgent(s, model, translator).process_query_sync(
+        "Tại sao hai tên tội phạm chịu án 5 năm tù và đó là cân bằng gì?",
+        model="qwen3.5-9b-4bit",
+        embed_model=None,
+        processing_level="careful",
+        isolate_context=True,
+    )
+    assert res["response_kind"] == "answer"
+    assert len(model.calls) == 2
+    assert model.calls[1]["num_predict"] >= 1000

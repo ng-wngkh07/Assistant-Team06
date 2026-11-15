@@ -150,6 +150,55 @@ def test_followup_and_topic_switch_are_distinct():
     assert reply and 'khái niệm' in reply
     reply, search = dialogue_intent('Nó là gì?', [{'role': 'user', 'content': 'So sánh trí nhớ và chú ý'}])
     assert reply
+    # Bare demonstrative follow-ups without an in-query antecedent still resolve as follow-ups.
+    assert dialogue_intent('Công thức đó là gì?', [])[0]
+    assert dialogue_intent('Còn định lý này chứng minh như thế nào?', history)[1] != 'Còn định lý này chứng minh như thế nào?'
+
+
+def test_complementary_followup_resolves_without_breaking_ambiguous_conjunction():
+    baddeley_turn = (
+        'Theo Baddeley, bộ nhớ làm việc (working memory) gồm những thành phần nào '
+        'và vai trò của vòng lặp âm vị (phonological loop) là gì?'
+    )
+    reply, search = dialogue_intent(
+        'Còn hai thành phần kia đảm nhận chức năng gì?',
+        [{'role': 'user', 'content': baddeley_turn}],
+    )
+    assert reply is None
+    assert 'Baddeley' in search
+    assert 'Còn hai thành phần kia đảm nhận chức năng gì?' in search
+
+    # Plural complementary phrases with "còn lại" resolve as follow-ups too.
+    reply_rest, search_rest = dialogue_intent(
+        'Còn các bước còn lại hoạt động thế nào?',
+        [{'role': 'user', 'content': 'Thuật toán Quicksort chọn pivot ra sao?'}],
+    )
+    assert reply_rest is None
+    assert 'Quicksort' in search_rest
+
+    # Two-subject ambiguous questions followed by bare singular "Nó" must still clarify.
+    reply_ambig, _ = dialogue_intent('Nó là gì?', [{'role': 'user', 'content': 'Trí nhớ và chú ý là gì?'}])
+    assert reply_ambig is not None
+
+
+def test_self_contained_multi_clause_demonstrative_not_intercepted():
+    pd_query = (
+        "Trong tình thế tiến thoái lưỡng nan của người tù (Prisoner's Dilemma), "
+        "khi hai người chơi cùng chọn im lặng hay phản bội nhau, kết quả tù ở từng trường hợp là gì "
+        "và vì sao trạng thái cùng phản bội lại là cân bằng Nash dù dẫn đến kết quả đó?"
+    )
+    qual_query = (
+        "Nêu định nghĩa và ví dụ về phương pháp nghiên cứu định tính, "
+        "ưu điểm của phương pháp này là gì?"
+    )
+    unrelated_history = [
+        {'role': 'user', 'content': 'Trí nhớ làm việc là gì?'},
+        {'role': 'assistant', 'content': 'Theo sách...'},
+    ]
+    assert dialogue_intent(pd_query, []) == (None, pd_query)
+    assert dialogue_intent(pd_query, unrelated_history) == (None, pd_query)
+    assert dialogue_intent(qual_query, []) == (None, qual_query)
+    assert dialogue_intent(qual_query, unrelated_history) == (None, qual_query)
 
 
 def test_greeting_and_ambiguous_goal_do_not_need_llm():

@@ -149,8 +149,12 @@ class TrainedModelClient:
 
     @classmethod
     def _default_warmup_prompts(cls) -> list[str]:
-        from app.rag_agent import MLX_SOURCE_PROMPT
-        return [MLX_SOURCE_PROMPT]
+        from app.rag_agent import MLX_SOURCE_LINE_CONTRACT, MLX_SOURCE_PROMPT
+
+        return [
+            f"{MLX_SOURCE_PROMPT}\n{MLX_SOURCE_LINE_CONTRACT}",
+            MLX_SOURCE_PROMPT,
+        ]
 
     @classmethod
     def warm_prefix_caches(

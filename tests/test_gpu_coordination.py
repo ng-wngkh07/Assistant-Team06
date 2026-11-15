@@ -537,3 +537,70 @@ def test_role_scoped_resident_eviction_and_training_full_eviction(temp_gpu_lock)
     with mgr.acquire_for_training(timeout=5.0, evict_ollama=False):
         assert set(events) == {"mlx_embedding", "mlx_infer", "mlx_vision"}
         assert len(events) == 3
+
+
+def test_native_embedding_registers_mlx_embedding_role():
+    """NativeEmbeddingClient must register under 'mlx_embedding' so targeted eviction reaches it."""
+    import app.native_embedding  # noqa: F401
+    from app.gpu_lock import gpu_coordinator
+    from app.native_embedding import NativeEmbeddingClient
+
+    with gpu_coordinator._evictors_lock:
+        registered = list(gpu_coordinator._resident_evictors)
+    assert any(
+        cb == NativeEmbeddingClient.evict_stream_worker and role == "mlx_embedding"
+        for cb, role in registered
+    ), f"Missing mlx_embedding evictor registration in {registered}"
+
+
+def test_resident_stream_worker_evicts_peer_roles_on_oom_retry(monkeypatch):
+    """When attempt 0 fails with Metal OOM before any output, evict peer roles including mlx_embedding and retry."""
+    import json
+    from unittest.mock import MagicMock
+    from app import stream_worker
+
+    evict_calls = []
+    monkeypatch.setattr(
+        stream_worker.gpu_coordinator,
+        "evict_resident_workers",
+        lambda roles=None: evict_calls.append(set(roles) if roles is not None else None),
+    )
+
+    worker = stream_worker.ResidentStreamWorker(
+        role="mlx_infer",
+        evict_roles_on_use={"mlx_vision"},
+        command_fn=lambda: ["python", "-m", "dummy"],
+        env_fn=lambda: {},
+        error_prefix="MLX",
+        cancel_message="Cancelled",
+    )
+
+    attempts = [0]
+    responses = [
+        json.dumps({"error": "Metal out of memory: kIOGPUCommandBufferCallbackErrorOutOfMemory"}),
+        json.dumps({"answer": "ok", "done": True}),
+    ]
+
+    def fake_spawn_locked():
+        idx = attempts[0]
+        attempts[0] += 1
+        proc = MagicMock()
+        proc.poll.return_value = None
+        proc.pid = 9000 + idx
+        proc._idx = idx
+        worker._proc = proc
+        return proc
+
+    def fake_read_line_locked(proc, deadline, cancel_event=None):
+        return responses[proc._idx]
+
+    monkeypatch.setattr(worker, "_spawn_locked", fake_spawn_locked)
+    monkeypatch.setattr(worker, "_write_locked", lambda *a, **kw: None)
+    monkeypatch.setattr(worker, "_read_line_locked", fake_read_line_locked)
+    monkeypatch.setattr(worker, "_terminate_locked", lambda: setattr(worker, "_proc", None))
+
+    events = list(worker.stream_events({"messages": []}))
+    assert events == [{"answer": "ok", "done": True}]
+    assert attempts[0] == 2
+    assert evict_calls[0] == {"mlx_vision"}
+    assert len(evict_calls) >= 2 and {"mlx_embedding", "mlx_vision"}.issubset(evict_calls[1])

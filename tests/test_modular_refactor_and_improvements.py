@@ -198,3 +198,43 @@ def test_security_alerts_remediation(tmp_path: Path):
     _check("certifi>=2026.10.18" in req_txt)
     _check("certifi>=2026.10.18" in req_mlx)
     _check("filelock>=4.2.1" in req_mlx)
+
+
+def test_prisoner_dilemma_routes_without_frankl_false_match():
+    pd_query = (
+        "Trong tình thế tiến thoái lưỡng nan của người tù (Prisoner's Dilemma), "
+        "khi hai người chơi cùng chọn im lặng hay phản bội nhau, kết quả tù ở từng trường hợp là gì?"
+    )
+    inferred_pd = infer_query_topic_hierarchy(pd_query)
+    _check(inferred_pd is not None, "Prisoner's Dilemma query should infer Game Theory hierarchy")
+    _check("Lý thuyết trò chơi và ra quyết định" in (inferred_pd.get("child_topics") or []), f"Got {inferred_pd}")
+
+    frankl_query = "Tù nhân trong trại tập trung của Viktor Frankl tìm ý nghĩa cuộc sống thế nào?"
+    inferred_frankl = infer_query_topic_hierarchy(frankl_query)
+    topics_frankl = (inferred_frankl or {}).get("child_topics") or []
+    _check(
+        "Lý thuyết trò chơi và ra quyết định" not in topics_frankl,
+        f"Frankl query must not route to Game Theory: {inferred_frankl}",
+    )
+
+
+def test_is_broad_query_separates_focused_multipart_from_broad_synthesis():
+    from app.rag_query_analyzer import is_broad_query
+
+    focused_queries = [
+        "Theo mô hình trí nhớ làm việc (working memory) của Baddeley, ba thành phần chính gồm những gì và phonological loop đảm nhận loại thông tin nào?",
+        "Trong lớp NhanVien của giáo trình OOP, khai báo virtual double tinhLuong() = 0; và virtual ~NhanVien() {} có ý nghĩa gì?",
+        "Hàng đợi (Queue) hoạt động theo nguyên tắc nào và Deque bị giới hạn như thế nào để trở thành Stack hoặc FIFO Queue?",
+        "Trong tình thế tiến thoái lưỡng nan của người tù (Prisoner's Dilemma), khi hai người chơi cùng chọn im lặng hay phản bội nhau, kết quả tù ở từng trường hợp là gì và vì sao trạng thái cùng phản bội lại là cân bằng Nash dù dẫn đến kết quả đó?",
+    ]
+    for q in focused_queries:
+        _check(is_broad_query(q) is False, f"Focused query falsely marked broad: {q}")
+
+    broad_queries = [
+        "Tổng quan về trí nhớ và sự chú ý trong tâm lý học nhận thức",
+        "So sánh Hệ thống 1 và Hệ thống 2 theo Kahneman",
+        "Mối liên hệ giữa trí nhớ làm việc và khả năng chú ý là gì?",
+        "Các yếu tố nào ảnh hưởng đến quá trình hình thành thói quen và duy trì hành vi?",
+    ]
+    for q in broad_queries:
+        _check(is_broad_query(q) is True, f"Broad query should stay broad: {q}")
