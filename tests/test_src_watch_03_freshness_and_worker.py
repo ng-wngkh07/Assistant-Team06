@@ -17,10 +17,19 @@ import pytest
 
 from app import file_lock as fcntl
 from app import native_embedding, source_freshness
-from app.gpu_lock import GPULockManager, IndexingCancelledError
+from app.gpu_lock import GPULockManager, IndexingCancelledError, is_pid_alive
 from app.indexer import KnowledgeIndexer
 from app.native_embedding import BGE_NATIVE_IDENTITY, NativeEmbeddingClient
 from app.searcher import HybridSearcher
+
+
+def _wait_pid_dead(pid: int, attempts: int = 30, delay: float = 0.02) -> bool:
+    """Poll OS process liveness safely on both POSIX and Windows."""
+    for _ in range(attempts):
+        if not is_pid_alive(pid):
+            return True
+        time.sleep(delay)
+    return not is_pid_alive(pid)
 
 
 def _indexed_doc_fixture(tmp_path: Path, text: str = "The old approved original holds seventeen units.") -> dict:
@@ -433,15 +442,7 @@ def test_native_embedding_disposable_subprocess_cancellation_inherits_locks_and_
 
         # Child and grandchild must both be terminated and reaped (no zombies or orphans)
         for pid in (child_pid, grandchild_pid):
-            alive = True
-            for _ in range(30):
-                try:
-                    os.kill(pid, 0)
-                    time.sleep(0.02)
-                except (ProcessLookupError, OSError):
-                    alive = False
-                    break
-            assert alive is False, f"Owned PID {pid} survived cancellation"
+            assert _wait_pid_dead(pid), f"Owned PID {pid} survived cancellation"
 
         with native_embedding._ACTIVE_WORKERS_LOCK:
             assert len(native_embedding._ACTIVE_WORKERS) == 0
@@ -494,15 +495,7 @@ def test_native_embedding_disposable_subprocess_timeout_escalates_sigkill_and_re
 
     assert pid_file.exists()
     pid = int(pid_file.read_text().strip())
-    alive = True
-    for _ in range(30):
-        try:
-            os.kill(pid, 0)
-            time.sleep(0.02)
-        except (ProcessLookupError, OSError):
-            alive = False
-            break
-    assert alive is False
+    assert _wait_pid_dead(pid)
 
     with native_embedding._ACTIVE_WORKERS_LOCK:
         assert len(native_embedding._ACTIVE_WORKERS) == 0
@@ -597,15 +590,7 @@ def test_native_embedding_persistent_stream_worker_reuse_recovery_and_eviction(t
             assert NativeEmbeddingClient._stream_worker is None
 
         # Verify pid2 was terminated and gpu_coordinator can acquire exclusive/training state cleanly
-        alive = True
-        for _ in range(30):
-            try:
-                os.kill(pid2, 0)
-                time.sleep(0.02)
-            except (ProcessLookupError, OSError):
-                alive = False
-                break
-        assert alive is False
+        assert _wait_pid_dead(pid2)
 
         # 4. Eviction callback registered cleanly releases resident worker
         monkeypatch.setattr(NativeEmbeddingClient, "_STREAM_IDLE_TIMEOUT", 180.0)
@@ -616,13 +601,76 @@ def test_native_embedding_persistent_stream_worker_reuse_recovery_and_eviction(t
         NativeEmbeddingClient.evict_stream_worker()
         with NativeEmbeddingClient._stream_lock:
             assert NativeEmbeddingClient._stream_worker is None
-        for _ in range(30):
-            try:
-                os.kill(pid3, 0)
-                time.sleep(0.02)
-            except (ProcessLookupError, OSError):
-                break
+        assert _wait_pid_dead(pid3)
     finally:
         NativeEmbeddingClient.evict_stream_worker()
         with native_embedding._ACTIVE_WORKERS_LOCK:
             assert len(native_embedding._ACTIVE_WORKERS) == 0
+
+
+def test_native_embedding_evict_waits_for_inflight_idle_eviction(monkeypatch):
+    """Concurrent evict_stream_worker() must block until in-flight idle eviction finishes reaping and discarding proc."""
+    started = threading.Event()
+    release_term = threading.Event()
+    terminated = []
+
+    class FakeStdin:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeProc:
+        def __init__(self) -> None:
+            self.stdin = FakeStdin()
+
+        def poll(self):
+            return None
+
+    fake_proc = FakeProc()
+    state = {"proc": fake_proc}
+
+    def slow_terminate(proc, grace_seconds=0.5):
+        started.set()
+        assert release_term.wait(timeout=2.0)
+        terminated.append(proc)
+
+    monkeypatch.setattr(native_embedding, "_terminate_owned_worker", slow_terminate)
+    NativeEmbeddingClient.evict_stream_worker()
+    with native_embedding._ACTIVE_WORKERS_LOCK:
+        native_embedding._ACTIVE_WORKERS.add(fake_proc)  # type: ignore[arg-type]
+    with NativeEmbeddingClient._stream_lock:
+        NativeEmbeddingClient._stream_worker = state
+        NativeEmbeddingClient._stream_idle_timer = None
+        monkeypatch.setattr(NativeEmbeddingClient, "_STREAM_IDLE_TIMEOUT", 0.01)
+        NativeEmbeddingClient._schedule_idle_eviction_locked(state)
+
+    try:
+        assert started.wait(timeout=2.0)
+        concurrent_done = threading.Event()
+        observed_after_evict = []
+
+        def concurrent_evict():
+            NativeEmbeddingClient.evict_stream_worker()
+            with native_embedding._ACTIVE_WORKERS_LOCK:
+                observed_after_evict.append(len(native_embedding._ACTIVE_WORKERS))
+            concurrent_done.set()
+
+        t = threading.Thread(target=concurrent_evict, daemon=True)
+        t.start()
+        assert not concurrent_done.wait(timeout=0.05)
+
+        release_term.set()
+        assert concurrent_done.wait(timeout=2.0)
+        t.join(timeout=1.0)
+        assert fake_proc.stdin.closed is True
+        assert terminated == [fake_proc]
+        assert observed_after_evict == [0]
+    finally:
+        release_term.set()
+        with NativeEmbeddingClient._stream_lock:
+            NativeEmbeddingClient._stream_worker = None
+            NativeEmbeddingClient._stream_idle_timer = None
+        with native_embedding._ACTIVE_WORKERS_LOCK:
+            native_embedding._ACTIVE_WORKERS.discard(fake_proc)  # type: ignore[arg-type]

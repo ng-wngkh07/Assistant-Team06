@@ -431,20 +431,22 @@ class NativeEmbeddingClient:
         return None
 
     @classmethod
-    def evict_stream_worker(cls) -> None:
-        """Terminate any persistent embedding stream worker cleanly (safe to call repeatedly)."""
-        with cls._stream_lock:
-            timer = cls._stream_idle_timer
-            cls._stream_idle_timer = None
-            if timer is not None:
-                try:
-                    timer.cancel()
-                except Exception:
-                    pass
-            state = cls._stream_worker
-            cls._stream_worker = None
+    def _evict_stream_worker_locked(cls, *, expected_state: Optional[dict] = None) -> None:
+        state = cls._stream_worker
         if state is None:
             return
+        if expected_state is not None and state is not expected_state:
+            return
+        timer = cls._stream_idle_timer
+        cls._stream_idle_timer = None
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+        # Hold _stream_lock through termination and worker-set removal so concurrent callers
+        # or gpu_coordinator never observe eviction complete before the child is actually dead.
+        cls._stream_worker = None
         proc = state.get("proc")
         if proc is not None:
             try:
@@ -455,6 +457,12 @@ class NativeEmbeddingClient:
             _terminate_owned_worker(proc, grace_seconds=0.5)
             with _ACTIVE_WORKERS_LOCK:
                 _ACTIVE_WORKERS.discard(proc)
+
+    @classmethod
+    def evict_stream_worker(cls) -> None:
+        """Terminate any persistent embedding stream worker cleanly (safe to call repeatedly)."""
+        with cls._stream_lock:
+            cls._evict_stream_worker_locked()
 
     @classmethod
     def _schedule_idle_eviction_locked(cls, worker_state: dict) -> None:
@@ -470,10 +478,7 @@ class NativeEmbeddingClient:
 
         def _on_idle() -> None:
             with cls._stream_lock:
-                if cls._stream_worker is not worker_state:
-                    return
-                cls._stream_idle_timer = None
-            cls.evict_stream_worker()
+                cls._evict_stream_worker_locked(expected_state=worker_state)
 
         timer = threading.Timer(timeout_sec, _on_idle)
         timer.daemon = True
