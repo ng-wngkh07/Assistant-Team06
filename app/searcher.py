@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -5,9 +6,10 @@ import re
 import sqlite3
 import struct
 import sys
+import threading
 from contextlib import closing, contextmanager
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union, Collection
+from typing import List, Dict, Any, Optional, Union, Collection, Tuple
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -34,7 +36,12 @@ from app.semantic_search import (
     normalize_unit_vector,
     rrf_merge_scores,
 )
-from app.source_freshness import FreshnessResult, check_doc_freshness, get_fresh_doc_ids
+from app.source_freshness import (
+    FreshnessResult,
+    check_doc_freshness,
+    freshness_request_scope,
+    get_fresh_doc_ids,
+)
 
 
 class HybridSearcher:
@@ -50,6 +57,9 @@ class HybridSearcher:
         self.ollama = OllamaClient()
         self.topic_router = TopicRouter(self._db_path)
         self.last_topic_routing: Optional[Dict[str, Any]] = None
+        self._stale_sidecar_entry: Optional[tuple] = None
+        self._vec_cache_lock = threading.Lock()
+        self._semantic_matrix_cache: Optional[Dict[str, Any]] = None
 
     @property
     def db_path(self) -> Path:
@@ -61,8 +71,31 @@ class HybridSearcher:
     @db_path.setter
     def db_path(self, val: Optional[Union[Path, str]]):
         self._db_path = Path(val) if val is not None else None
+        self._stale_sidecar_entry = None
+        with self._vec_cache_lock:
+            self._semantic_matrix_cache = None
         if hasattr(self, "topic_router"):
             self.topic_router.db_path = self._db_path
+
+    @staticmethod
+    def _path_stat_sig(path: Path) -> Optional[Tuple[int, int, int, int]]:
+        try:
+            st = path.stat()
+            return (st.st_mtime_ns, st.st_ctime_ns, st.st_size, st.st_ino)
+        except OSError:
+            return None
+
+    def _sidecar_staleness_sig(self, sidecar_path: Path) -> tuple:
+        db_p = self.db_path
+        return (
+            str(db_p),
+            str(sidecar_path),
+            self._path_stat_sig(db_p),
+            self._path_stat_sig(Path(f"{db_p}-wal")),
+            self._path_stat_sig(Path(f"{db_p}-journal")),
+            self._path_stat_sig(sidecar_path),
+            self._path_stat_sig(Path(f"{sidecar_path}-wal")),
+        )
 
     def plan_topic_routing(self, query: str, document_id: Optional[int] = None) -> Dict[str, Any]:
         with self._connection() as conn:
@@ -1059,18 +1092,76 @@ class HybridSearcher:
         q_norm = np.linalg.norm(q_arr)
         if q_norm == 0 or not np.all(np.isfinite(q_arr)):
             return []
-        q_arr = q_arr / q_norm
+        q_arr = (q_arr / q_norm).astype(np.float32, copy=False)
+        if limit <= 0:
+            return []
 
-        import hashlib
-        results = []
+        min_sim = 0.50 if use_native else 0.45
+        dim = int(len(q_arr))
         with self._connection() as conn:
+            sig = self._semantic_matrix_sig(conn, expected_identity, dim, use_native)
+            if sig is not None:
+                vec_index = self._get_or_build_semantic_matrix(conn, sig, expected_identity, dim, use_native)
+                chunk_ids = vec_index["chunk_ids"]
+                doc_ids = vec_index["doc_ids"]
+                matrix = vec_index["matrix"]
+                if matrix.shape[0] == 0:
+                    return []
+                if eff_doc_id is not None:
+                    mask = doc_ids == int(eff_doc_id)
+                    sub_matrix = matrix[mask]
+                    sub_cids = chunk_ids[mask]
+                elif eff_doc_ids is not None:
+                    id_arr = np.fromiter((int(i) for i in eff_doc_ids), dtype=np.int64)
+                    if id_arr.size == 0:
+                        return []
+                    mask = np.isin(doc_ids, id_arr)
+                    sub_matrix = matrix[mask]
+                    sub_cids = chunk_ids[mask]
+                else:
+                    sub_matrix = matrix
+                    sub_cids = chunk_ids
+                if sub_matrix.shape[0] == 0:
+                    return []
+                sims = sub_matrix @ q_arr
+                valid_idx = np.flatnonzero(sims >= min_sim)
+                if valid_idx.size == 0:
+                    return []
+                order = valid_idx[np.argsort(-sims[valid_idx], kind="mergesort")[:limit]]
+                top_pairs = [(int(sub_cids[idx]), float(sims[idx])) for idx in order]
+                placeholders = ",".join("?" for _ in top_pairs)
+                meta_rows = conn.execute(
+                    f"SELECT id, doc_id, book_title, filename, page_num, chunk_index, text FROM chunks WHERE id IN ({placeholders})",
+                    [cid for cid, _ in top_pairs],
+                ).fetchall()
+                by_id = {int(r["id"]): r for r in meta_rows}
+                results = []
+                for rank_idx, (cid, sim) in enumerate(top_pairs):
+                    r = by_id.get(cid)
+                    if r is None:
+                        continue
+                    results.append({
+                        "chunk_id": r["id"],
+                        "doc_id": r["doc_id"],
+                        "book_title": r["book_title"],
+                        "filename": r["filename"],
+                        "page_num": r["page_num"],
+                        "chunk_index": r["chunk_index"],
+                        "text": r["text"],
+                        "semantic_rank": rank_idx + 1,
+                        "semantic_score": sim,
+                        "source_type": "semantic",
+                    })
+                return results
+
+            # Fallback when get_connection is mocked or DB is in-memory: run scoped SQL + vectorized scoring.
             sql = """
                 SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num, c.chunk_index, c.text, c.embedding,
                        p.text_sha256, p.model_digest, p.vector_sha256, p.dimensions, p.full_text
                 FROM chunks c JOIN corpus_vector_provenance p ON p.chunk_id = c.id
                 WHERE c.embedding IS NOT NULL AND p.model_digest = ? AND p.full_text = 1 AND p.dimensions = ?
             """
-            params = [expected_identity, len(q_arr)]
+            params: List[Any] = [expected_identity, dim]
             if eff_doc_id is not None:
                 sql += " AND c.doc_id = ?"
                 params.append(eff_doc_id)
@@ -1081,48 +1172,18 @@ class HybridSearcher:
                     params.extend(id_list)
                 else:
                     sql += " AND 0"
-            cursor = conn.execute(sql, params)
-            rows = cursor.fetchall()
-            
-            scored_rows = []
-            for r in rows:
-                blob = r["embedding"]
-                if not blob:
-                    continue
-
-                if r["model_digest"] != expected_identity:
-                    continue
-                if r["dimensions"] != len(q_arr):
-                    continue
-                if r["full_text"] != 1:
-                    continue
-                actual_text_sha = hashlib.sha256(r["text"].encode("utf-8")).hexdigest()
-                if r["text_sha256"] != actual_text_sha:
-                    continue
-                actual_vec_sha = hashlib.sha256(blob).hexdigest()
-                if r["vector_sha256"] != actual_vec_sha:
-                    continue
-
-                doc_vec = unpack_vector(blob)
-                if doc_vec.shape != q_arr.shape:
-                    continue
-                if not np.all(np.isfinite(doc_vec)):
-                    continue
-                d_norm = float(np.linalg.norm(doc_vec))
-                if d_norm <= 0 or not np.isfinite(d_norm):
-                    continue
-                if use_native and abs(d_norm - 1.0) > 1e-3:
-                    continue
-                sim = float(np.dot(q_arr, doc_vec / d_norm))
-                scored_rows.append((sim, r))
-
-            scored_rows.sort(key=lambda x: x[0], reverse=True)
-            min_sim = 0.50 if use_native else 0.45
-            for rank_idx, (sim, r) in enumerate(scored_rows):
-                if sim < min_sim:
-                    break
-                if len(results) >= limit:
-                    break
+            rows = conn.execute(sql, params).fetchall()
+            valid_rows, norm_matrix = self._validate_semantic_rows(rows, expected_identity, dim, use_native)
+            if norm_matrix.shape[0] == 0:
+                return []
+            sims = norm_matrix @ q_arr
+            valid_idx = np.flatnonzero(sims >= min_sim)
+            if valid_idx.size == 0:
+                return []
+            order = valid_idx[np.argsort(-sims[valid_idx], kind="mergesort")[:limit]]
+            results = []
+            for rank_idx, idx in enumerate(order):
+                r = valid_rows[int(idx)]
                 results.append({
                     "chunk_id": r["id"],
                     "doc_id": r["doc_id"],
@@ -1132,11 +1193,112 @@ class HybridSearcher:
                     "chunk_index": r["chunk_index"],
                     "text": r["text"],
                     "semantic_rank": rank_idx + 1,
-                    "semantic_score": sim,
-                    "source_type": "semantic"
+                    "semantic_score": float(sims[int(idx)]),
+                    "source_type": "semantic",
                 })
+            return results
 
-        return results
+    def _semantic_matrix_sig(
+        self,
+        conn: sqlite3.Connection,
+        expected_identity: str,
+        dim: int,
+        use_native: bool,
+    ) -> Optional[tuple]:
+        if (
+            type(self).get_connection is not HybridSearcher.get_connection
+            or "get_connection" in self.__dict__
+        ):
+            return None
+        db_p = self.db_path
+        if str(db_p) == ":memory:":
+            return None
+        try:
+            pv = conn.execute("PRAGMA data_version").fetchone()
+            data_ver = int(pv[0]) if pv else 0
+        except sqlite3.Error:
+            data_ver = 0
+        return (
+            str(db_p),
+            self._path_stat_sig(db_p),
+            self._path_stat_sig(Path(f"{db_p}-wal")),
+            self._path_stat_sig(Path(f"{db_p}-journal")),
+            data_ver,
+            expected_identity,
+            int(dim),
+            bool(use_native),
+        )
+
+    @staticmethod
+    def _validate_semantic_rows(
+        rows: List[sqlite3.Row],
+        expected_identity: str,
+        dim: int,
+        use_native: bool,
+    ) -> Tuple[List[sqlite3.Row], np.ndarray]:
+        valid_rows: List[sqlite3.Row] = []
+        vecs: List[np.ndarray] = []
+        for r in rows:
+            blob = r["embedding"]
+            if not blob:
+                continue
+            if r["model_digest"] != expected_identity or r["dimensions"] != dim or r["full_text"] != 1:
+                continue
+            actual_text_sha = hashlib.sha256(r["text"].encode("utf-8")).hexdigest()
+            if r["text_sha256"] != actual_text_sha:
+                continue
+            actual_vec_sha = hashlib.sha256(blob).hexdigest()
+            if r["vector_sha256"] != actual_vec_sha:
+                continue
+            doc_vec = unpack_vector(blob)
+            if doc_vec.shape != (dim,) or not np.all(np.isfinite(doc_vec)):
+                continue
+            d_norm = float(np.linalg.norm(doc_vec))
+            if d_norm <= 0 or not np.isfinite(d_norm):
+                continue
+            if use_native and abs(d_norm - 1.0) > 1e-3:
+                continue
+            valid_rows.append(r)
+            vecs.append((doc_vec / d_norm).astype(np.float32, copy=False))
+        if not vecs:
+            return [], np.empty((0, dim), dtype=np.float32)
+        return valid_rows, np.ascontiguousarray(np.vstack(vecs), dtype=np.float32)
+
+    def _get_or_build_semantic_matrix(
+        self,
+        conn: sqlite3.Connection,
+        sig: tuple,
+        expected_identity: str,
+        dim: int,
+        use_native: bool,
+    ) -> Dict[str, Any]:
+        # Match all parts except connection-local data_version unless DB stat differs;
+        # still require data_version to detect cross-connection changes immediately.
+        stat_key = sig[:4] + sig[5:]
+        with self._vec_cache_lock:
+            cached = self._semantic_matrix_cache
+            if cached is not None and cached["stat_key"] == stat_key and cached["data_ver"] == sig[4]:
+                return cached
+        rows = conn.execute(
+            """
+            SELECT c.id, c.doc_id, c.text, c.embedding,
+                   p.text_sha256, p.model_digest, p.vector_sha256, p.dimensions, p.full_text
+            FROM chunks c JOIN corpus_vector_provenance p ON p.chunk_id = c.id
+            WHERE c.embedding IS NOT NULL AND p.model_digest = ? AND p.full_text = 1 AND p.dimensions = ?
+            """,
+            (expected_identity, dim),
+        ).fetchall()
+        valid_rows, matrix = self._validate_semantic_rows(rows, expected_identity, dim, use_native)
+        entry = {
+            "stat_key": stat_key,
+            "data_ver": sig[4],
+            "chunk_ids": np.array([int(r["id"]) for r in valid_rows], dtype=np.int64),
+            "doc_ids": np.array([int(r["doc_id"]) for r in valid_rows], dtype=np.int64),
+            "matrix": matrix,
+        }
+        with self._vec_cache_lock:
+            self._semantic_matrix_cache = entry
+        return entry
 
     def search_hybrid(
         self,
@@ -1153,6 +1315,29 @@ class HybridSearcher:
         Execute Hybrid Search combining FTS5 and Vector Search via Reciprocal Rank Fusion (RRF).
         Supports topic routing into document candidates with global fallback when scoped evidence appears inadequate under heuristic check.
         """
+        with freshness_request_scope():
+            return self._search_hybrid_scoped(
+                query=query,
+                top_k=top_k,
+                embed_model=embed_model,
+                is_broad=is_broad,
+                max_per_book=max_per_book,
+                document_id=document_id,
+                document_ids=document_ids,
+                enable_topic_routing=enable_topic_routing,
+            )
+
+    def _search_hybrid_scoped(
+        self,
+        query: str,
+        top_k: int = DEFAULT_TOP_K,
+        embed_model: Optional[str] = DEFAULT_EMBED_MODEL,
+        is_broad: bool = False,
+        max_per_book: Optional[int] = None,
+        document_id: Optional[int] = None,
+        document_ids: Optional[Collection[int]] = None,
+        enable_topic_routing: bool = True,
+    ) -> List[Dict[str, Any]]:
         query_clean = normalize_vietnamese_text(query)
         if not query_clean:
             self.last_topic_routing = None
@@ -1192,6 +1377,19 @@ class HybridSearcher:
         # 1b. Use valid adjacent sidecar retrieval tree by default before legacy routing
         sidecar_path = self.db_path.with_name("retrieval_tree.db")
         if sidecar_path.is_file():
+            sig = self._sidecar_staleness_sig(sidecar_path)
+            cached_stale = self._stale_sidecar_entry
+            if cached_stale is not None and cached_stale[0] == sig:
+                self.last_topic_routing = dict(cached_stale[1])
+                return self._execute_hybrid_search(
+                    query_clean=query_clean,
+                    top_k=top_k,
+                    embed_model=embed_model,
+                    is_broad=is_broad,
+                    max_per_book=max_per_book,
+                    document_id=document_id,
+                    document_ids=document_ids,
+                )
             from app.retrieval_tree import TreeSearcher
             try:
                 tree_searcher = TreeSearcher(
@@ -1210,9 +1408,15 @@ class HybridSearcher:
                     document_ids=document_ids,
                     enable_topic_routing=enable_topic_routing,
                 )
-                self.last_topic_routing = tree_searcher.last_topic_routing
+                routing = dict(tree_searcher.last_topic_routing) if tree_searcher.last_topic_routing else None
+                self.last_topic_routing = routing
+                if routing and routing.get("fallback_reason") == "stale_or_invalid_tree":
+                    self._stale_sidecar_entry = (sig, dict(routing))
+                else:
+                    self._stale_sidecar_entry = None
                 return results
             except Exception as exc:
+                self._stale_sidecar_entry = None
                 if isinstance(exc, (RuntimeError, TimeoutError, ConnectionError)):
                     raise
                 logger.warning("Sidecar retrieval tree error (%s); falling back to legacy routing", exc)

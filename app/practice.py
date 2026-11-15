@@ -1,5 +1,6 @@
 """Source-grounded practice questions for a selected document page."""
 
+import hashlib
 import json
 import html
 import logging
@@ -648,6 +649,7 @@ class PracticeService:
         document_lookup,
         ollama: Optional[OllamaClient] = None,
         db_path: Optional[Path | str] = None,
+        enable_verified_bank: bool = False,
     ):
         self.searcher = searcher
         self.document_lookup = document_lookup
@@ -655,6 +657,7 @@ class PracticeService:
         self._sessions: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._lock = threading.Lock()
         self._explicit_db_path = Path(db_path) if db_path else None
+        self._enable_verified_bank = bool(enable_verified_bank)
 
     def _db_connection(self):
         target_path = self._explicit_db_path or get_practice_db_path()
@@ -665,6 +668,193 @@ class PracticeService:
     @staticmethod
     def _normalized(text: str) -> str:
         return re.sub(r"\s+", " ", text).strip().casefold()
+
+    @classmethod
+    def _passage_bank_digest(cls, passage: dict[str, Any]) -> str:
+        text_norm = cls._normalized(str(passage.get("text", "")))
+        safe_norm = cls._normalized(str(passage.get("safe_text", "")))
+        return hashlib.sha256(f"{text_norm}\0{safe_norm}".encode("utf-8")).hexdigest()
+
+    def _validate_bank_question(
+        self,
+        question: dict[str, Any],
+        passage_by_id: dict[int, dict[str, Any]],
+        chunk_hashes: dict[str, Any],
+        current_hashes: dict[int, str],
+    ) -> Optional[dict[str, Any]]:
+        """Re-verify structural and source-grounding invariants for a persisted bank item."""
+        if not isinstance(question, dict):
+            return None
+        source_info = question.get("source")
+        if not isinstance(source_info, dict):
+            return None
+        try:
+            chunk_id = int(source_info.get("chunk_id"))
+        except (TypeError, ValueError):
+            return None
+        passage = passage_by_id.get(chunk_id)
+        if not passage:
+            return None
+        expected_hash = current_hashes.get(chunk_id)
+        if not expected_hash or chunk_hashes.get(str(chunk_id)) != expected_hash:
+            return None
+
+        doc_id_for_source = int(passage.get("doc_id", 0))
+        page_num_for_source = int(passage.get("page_num", 1))
+        try:
+            stored_doc_id = int(source_info.get("doc_id", -1))
+            stored_page_num = int(source_info.get("page_num", -1))
+        except (TypeError, ValueError):
+            return None
+        if stored_doc_id != doc_id_for_source or stored_page_num != page_num_for_source:
+            return None
+
+        q_text = str(question.get("question", "")).strip()
+        expl = str(question.get("explanation", "")).strip()
+        quote = str(question.get("evidence_quote") or source_info.get("snippet") or "").strip()
+        if len(q_text) < 12 or len(q_text) > 600 or not expl or len(expl) > 1200 or len(quote) < 20:
+            return None
+
+        ans = str(question.get("answer", "")).strip().upper()
+        if ans not in ("A", "B", "C", "D"):
+            return None
+
+        raw_choices = question.get("choices")
+        if not isinstance(raw_choices, list) or len(raw_choices) != 4:
+            return None
+        choices: list[dict[str, str]] = []
+        for idx, item in enumerate(raw_choices):
+            if not isinstance(item, dict):
+                return None
+            label = str(item.get("label", "")).strip().upper()
+            text = str(item.get("text", "")).strip()
+            if label != "ABCD"[idx] or not text or len(text) > 400:
+                return None
+            choices.append({"label": label, "text": text})
+        if len({self._normalized(it["text"]) for it in choices}) != 4:
+            return None
+
+        from app.practice_proof import potential_choice_collision
+        if potential_choice_collision(choices) or equivalent_choice_pair(choices):
+            return None
+
+        passage_text = passage.get("safe_text", "")
+        supporting_source = self.extract_supporting_evidence(passage_text, quote)
+        if not supporting_source:
+            return None
+        if _demands_unbound_certainty(supporting_source, q_text):
+            return None
+        if _requires_explicit_causal_evidence(supporting_source, q_text):
+            return None
+        if unestablished_exponent_words(supporting_source, q_text, expl):
+            return None
+
+        source_filename = str(passage.get("filename", ""))
+        doc_record = self.document_lookup.document(doc_id_for_source) if doc_id_for_source else None
+        return {
+            "id": "",
+            "question": q_text,
+            "choices": choices,
+            "answer": ans,
+            "explanation": expl,
+            "source": {
+                "doc_id": doc_id_for_source,
+                "chunk_id": chunk_id,
+                "title": str(passage.get("book_title") or (doc_record.get("clean_title") if doc_record else None) or source_filename),
+                "page_num": page_num_for_source,
+                "snippet": quote,
+                "pdf_url": (
+                    f"/api/documents/{doc_id_for_source}/pdf#page={page_num_for_source}"
+                    if self.document_lookup.pdf_path(source_filename) else None
+                ),
+            },
+        }
+
+    def _collect_verified_bank_questions(
+        self,
+        passage_by_id: dict[int, dict[str, Any]],
+        *,
+        count: int,
+        model: str,
+        difficulty: str,
+        enforce_difficulty: bool,
+    ) -> list[dict[str, Any]]:
+        """Collect persisted verified questions matching current passage hashes."""
+        current_hashes = {
+            chunk_id: self._passage_bank_digest(passage)
+            for chunk_id, passage in passage_by_id.items()
+        }
+        try:
+            with closing(self._db_connection()) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT questions_json, answers_json, metadata_json
+                    FROM practice_sessions
+                    WHERE difficulty = ? AND processing_level = 'careful'
+                    ORDER BY created_at DESC
+                    LIMIT 200
+                    """,
+                    (difficulty,),
+                ).fetchall()
+        except Exception as exc:
+            logger.debug("Verified practice bank lookup skipped: %s", exc)
+            return []
+
+        candidates: list[dict[str, Any]] = []
+        answered_question_keys: set[str] = set()
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            bank_meta = metadata.get("verified_bank") if isinstance(metadata, dict) else None
+            if not isinstance(bank_meta, dict) or bank_meta.get("model") != model:
+                continue
+            if enforce_difficulty and bank_meta.get("enforce_difficulty") is not True:
+                continue
+            chunk_hashes = bank_meta.get("chunk_hashes")
+            if not isinstance(chunk_hashes, dict) or not any(
+                chunk_hashes.get(str(cid)) == digest for cid, digest in current_hashes.items()
+            ):
+                continue
+            try:
+                stored_questions = json.loads(row["questions_json"] or "[]")
+                stored_answers = json.loads(row["answers_json"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(stored_questions, list):
+                continue
+            if not isinstance(stored_answers, dict):
+                stored_answers = {}
+
+            for stored in stored_questions:
+                validated = self._validate_bank_question(
+                    stored, passage_by_id, chunk_hashes, current_hashes
+                )
+                if validated is None:
+                    continue
+                if str(stored.get("id", "")) in stored_answers:
+                    answered_question_keys.add(self._normalized(validated["question"]))
+                candidates.append(validated)
+
+        unanswered = [q for q in candidates if self._normalized(q["question"]) not in answered_question_keys]
+        answered = [q for q in candidates if self._normalized(q["question"]) in answered_question_keys]
+        selected: list[dict[str, Any]] = []
+        seen_questions: set[str] = set()
+        seen_answers: set[tuple[int, str]] = set()
+        for candidate in unanswered + answered:
+            key = self._normalized(candidate["question"])
+            answer_text = next(c["text"] for c in candidate["choices"] if c["label"] == candidate["answer"])
+            answer_key = (candidate["source"]["chunk_id"], self._normalized(answer_text))
+            if key in seen_questions or answer_key in seen_answers:
+                continue
+            seen_questions.add(key)
+            seen_answers.add(answer_key)
+            candidate["id"] = f"q{len(selected) + 1}"
+            selected.append(candidate)
+            if len(selected) >= count:
+                break
+        return selected
 
     @staticmethod
     def _parse_json(raw: str) -> dict:
@@ -996,6 +1186,7 @@ class PracticeService:
         allow_retry: bool = False,
         enforce_difficulty: bool = False,
         topic: Optional[str] = None,
+        reuse_verified_bank: Optional[bool] = None,
     ) -> dict[str, Any]:
         if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 10:
             raise PracticeGenerationError("Số câu phải là số nguyên từ 1 đến 10.")
@@ -1112,18 +1303,36 @@ class PracticeService:
                     break
             return valid
 
-        questions = []
-        had_candidates = False
-        seen_questions = set()
-        seen_answers = set()
-        base_attempts = max(1, (count + 2) // 3)
-        max_attempts = min(5, base_attempts + 2 if allow_retry else base_attempts)
-        preferred_batch = min(3, count)
+        should_use_bank = self._enable_verified_bank if reuse_verified_bank is None else bool(reuse_verified_bank)
+        bank_questions: list[dict[str, Any]] = []
+        if should_use_bank:
+            bank_questions = self._collect_verified_bank_questions(
+                passage_by_id,
+                count=count,
+                model=model,
+                difficulty=difficulty,
+                enforce_difficulty=enforce_difficulty,
+            )
+        questions = list(bank_questions)
+        bank_reused_count = len(questions)
+        had_candidates = bool(bank_questions)
+        seen_questions = {self._normalized(q["question"]) for q in questions}
+        seen_answers = {
+            (
+                q["source"]["chunk_id"],
+                self._normalized(next(c["text"] for c in q["choices"] if c["label"] == q["answer"])),
+            )
+            for q in questions
+        }
+        remaining_needed = max(0, count - len(questions))
+        base_attempts = max(1, (remaining_needed + 2) // 3) if remaining_needed else 0
+        max_attempts = min(5, base_attempts + 2 if allow_retry else base_attempts) if remaining_needed else 0
+        preferred_batch = min(3, remaining_needed) if remaining_needed else 0
         # Each additional batch needs its own generation and source review.
         # A fixed 180s total left only ~50s for batch two on the actual M1,
         # rejecting otherwise feasible 5/10-question requests. Individual calls
         # stay bounded; larger requests receive a proportional total budget.
-        total_deadline = 180.0 * base_attempts
+        total_deadline = 180.0 * max(1, base_attempts)
         start_time = time.monotonic()
         for attempt in range(max_attempts):
             elapsed = time.monotonic() - start_time
@@ -1225,6 +1434,25 @@ class PracticeService:
             "Các câu chưa đạt đã bị loại; bạn có thể đổi chủ đề hoặc giảm độ khó."
             if len(questions) < count else None
         )
+        cited_chunk_hashes: dict[str, str] = {}
+        for question in questions:
+            try:
+                cid = int((question.get("source") or {}).get("chunk_id"))
+            except (TypeError, ValueError):
+                continue
+            passage_item = passage_by_id.get(cid)
+            if passage_item is not None:
+                cited_chunk_hashes[str(cid)] = self._passage_bank_digest(passage_item)
+        session_metadata = {
+            "weak_topics": weak_topics or [],
+            "verified_bank": {
+                "version": 1,
+                "model": model,
+                "enforce_difficulty": bool(enforce_difficulty),
+                "chunk_hashes": cited_chunk_hashes,
+                "reused_count": bank_reused_count,
+            },
+        }
         # Persist session to SQLite BEFORE adding to in-memory cache or returning success
         try:
             with closing(self._db_connection()) as conn:
@@ -1249,7 +1477,7 @@ class PracticeService:
                             "careful",
                             json.dumps(questions, ensure_ascii=False),
                             json.dumps({}, ensure_ascii=False),
-                            json.dumps({"weak_topics": weak_topics or []}, ensure_ascii=False),
+                            json.dumps(session_metadata, ensure_ascii=False),
                         ),
                     )
         except Exception as exc:
@@ -1294,11 +1522,14 @@ class PracticeService:
             res["purpose"] = purpose
         if resolved_topic:
             res["topic"] = resolved_topic
+        if bank_reused_count > 0:
+            res["cached_from_bank"] = bank_reused_count
         return res
 
     def generate(self, doc_id: int, page_num: int, count: int = 3,
                  model: Optional[str] = None,
-                 source_chunk_id: Optional[int] = None) -> dict[str, Any]:
+                 source_chunk_id: Optional[int] = None,
+                 reuse_verified_bank: Optional[bool] = None) -> dict[str, Any]:
         inspect_fn = getattr(self.document_lookup, "inspect_document_status", None)
         if callable(inspect_fn):
             info = inspect_fn(doc_id=doc_id)
@@ -1317,7 +1548,13 @@ class PracticeService:
             raise PracticeGenerationError("Trang đã chọn chưa có đoạn văn bản để tạo câu hỏi.")
 
         doc_title = str(document.get("clean_title") or document.get("filename") or "")
-        return self.generate_from_passages(passages, count=count, model=model, topic=doc_title)
+        return self.generate_from_passages(
+            passages,
+            count=count,
+            model=model,
+            topic=doc_title,
+            reuse_verified_bank=reuse_verified_bank,
+        )
 
     def _expire_sessions(self) -> None:
         now = time.monotonic()

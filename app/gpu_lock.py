@@ -169,6 +169,32 @@ class GPULockManager:
         self.intent_path.parent.mkdir(parents=True, exist_ok=True)
         self.native_lock_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
+        self._evictors_lock = threading.Lock()
+        self._resident_evictors: list = []
+
+    def register_resident_evictor(self, callback, role: Optional[str] = None) -> None:
+        """Register a callback invoked to release resident workers before training or heavyweight swaps."""
+        if not callable(callback):
+            return
+        with self._evictors_lock:
+            for idx, (existing_cb, existing_role) in enumerate(self._resident_evictors):
+                if existing_cb == callback:
+                    if role is not None and existing_role != role:
+                        self._resident_evictors[idx] = (callback, role)
+                    return
+            self._resident_evictors.append((callback, role))
+
+    def evict_resident_workers(self, roles: Optional[set[str]] = None) -> None:
+        """Best-effort eviction of process-local persistent MLX workers to free unified memory."""
+        with self._evictors_lock:
+            entries = list(self._resident_evictors)
+        for cb, entry_role in entries:
+            if roles is not None and entry_role not in roles:
+                continue
+            try:
+                cb()
+            except Exception:
+                logger.warning("Resident worker eviction failed", exc_info=True)
 
     def get_status(self) -> Dict[str, Any]:
         """Return current GPU state, auto-healing stale state if all holder processes died.
@@ -409,6 +435,9 @@ class GPULockManager:
             _write_state_file(
                 STATE_TRAINING, pid=current_pid, extra=extra_info, state_path=self.state_path
             )
+
+            # Evict process-local persistent MLX workers so unified memory is freed before training
+            self.evict_resident_workers()
 
             # Evict resident Ollama models if enabled
             if evict_ollama:

@@ -5,12 +5,13 @@ import hashlib
 import json
 import math
 import os
+import queue
 import signal
 import subprocess
 import sys
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
@@ -26,6 +27,7 @@ _INITIAL_NE_MLX_BGE_DIR = Path(MLX_BGE_DIR)
 
 _ACTIVE_WORKERS_LOCK = threading.Lock()
 _ACTIVE_WORKERS: set[subprocess.Popen] = set()
+_STDLIB_POPEN = subprocess.Popen
 
 
 def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) -> None:
@@ -94,6 +96,7 @@ def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) 
 
 
 def _cleanup_active_workers() -> None:
+    NativeEmbeddingClient.evict_stream_worker()
     with _ACTIVE_WORKERS_LOCK:
         procs = list(_ACTIVE_WORKERS)
     for proc in procs:
@@ -135,6 +138,10 @@ class NativeEmbeddingClient:
     _status_identity_cache: "OrderedDict[str, Tuple[Tuple[Any, ...], str]]" = OrderedDict()
     _status_identity_lock = threading.Lock()
     _STATUS_IDENTITY_CACHE_MAX = 16
+    _stream_lock = threading.Lock()
+    _stream_worker: Optional[dict] = None
+    _stream_idle_timer: Optional[threading.Timer] = None
+    _STREAM_IDLE_TIMEOUT = 180.0
     _TRACKED_IDENTITY_FILES = (
         "config.json",
         "tokenizer.json",
@@ -291,6 +298,12 @@ class NativeEmbeddingClient:
 
     def get_status_identity(self) -> str:
         """Return verified status identity without rehashing unchanged verified artifacts."""
+        if (
+            type(self).get_identity is not NativeEmbeddingClient.get_identity
+            or type(self).verify_identity.__func__ is not NativeEmbeddingClient.verify_identity.__func__
+            or "get_identity" in self.__dict__
+        ):
+            return self.get_identity()
         try:
             resolved = self.model_dir.resolve()
         except OSError:
@@ -406,6 +419,271 @@ class NativeEmbeddingClient:
     def _worker_command(cls) -> List[str]:
         training_python = BASE_DIR / ".train-venv" / "bin" / "python"
         return [str(training_python), "-m", "app.mlx_embedding"]
+
+    @classmethod
+    def _stream_worker_command(cls) -> Optional[List[str]]:
+        """Return persistent --stream worker command unless tests inject mocks or custom scripts."""
+        if subprocess.Popen is not _STDLIB_POPEN:
+            return None
+        cmd = cls._worker_command()
+        if len(cmd) >= 2 and cmd[-2:] == ["-m", "app.mlx_embedding"]:
+            return list(cmd) + ["--stream"]
+        return None
+
+    @classmethod
+    def evict_stream_worker(cls) -> None:
+        """Terminate any persistent embedding stream worker cleanly (safe to call repeatedly)."""
+        with cls._stream_lock:
+            timer = cls._stream_idle_timer
+            cls._stream_idle_timer = None
+            if timer is not None:
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
+            state = cls._stream_worker
+            cls._stream_worker = None
+        if state is None:
+            return
+        proc = state.get("proc")
+        if proc is not None:
+            try:
+                if proc.stdin is not None:
+                    proc.stdin.close()
+            except OSError:
+                pass
+            _terminate_owned_worker(proc, grace_seconds=0.5)
+            with _ACTIVE_WORKERS_LOCK:
+                _ACTIVE_WORKERS.discard(proc)
+
+    @classmethod
+    def _schedule_idle_eviction_locked(cls, worker_state: dict) -> None:
+        if cls._stream_idle_timer is not None:
+            try:
+                cls._stream_idle_timer.cancel()
+            except Exception:
+                pass
+            cls._stream_idle_timer = None
+        timeout_sec = float(cls._STREAM_IDLE_TIMEOUT)
+        if timeout_sec <= 0:
+            return
+
+        def _on_idle() -> None:
+            with cls._stream_lock:
+                if cls._stream_worker is not worker_state:
+                    return
+                cls._stream_idle_timer = None
+            cls.evict_stream_worker()
+
+        timer = threading.Timer(timeout_sec, _on_idle)
+        timer.daemon = True
+        timer.start()
+        cls._stream_idle_timer = timer
+
+    @classmethod
+    def _spawn_stream_worker(
+        cls,
+        *,
+        cmd: List[str],
+        model_dir: str,
+        max_length: int,
+        cwd: Path,
+        env: dict,
+        timeout: float,
+        cancel_event: Optional[threading.Event],
+    ) -> dict:
+        popen_kwargs: dict = {
+            "cwd": cwd,
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "bufsize": 1,
+            "env": env,
+        }
+        if os.name == "posix":
+            popen_kwargs["start_new_session"] = True
+        proc = subprocess.Popen(cmd, **popen_kwargs)
+        with _ACTIVE_WORKERS_LOCK:
+            _ACTIVE_WORKERS.add(proc)
+
+        out_q: "queue.Queue[Optional[str]]" = queue.Queue()
+        stderr_tail: "deque[str]" = deque(maxlen=64)
+
+        def _read_stdout() -> None:
+            try:
+                if proc.stdout is not None:
+                    for line in proc.stdout:
+                        out_q.put(line)
+            except OSError:
+                pass
+            finally:
+                out_q.put(None)
+
+        def _read_stderr() -> None:
+            try:
+                if proc.stderr is not None:
+                    for line in proc.stderr:
+                        stderr_tail.append(line)
+            except OSError:
+                pass
+
+        t_out = threading.Thread(target=_read_stdout, daemon=True)
+        t_err = threading.Thread(target=_read_stderr, daemon=True)
+        t_out.start()
+        t_err.start()
+
+        state = {
+            "proc": proc,
+            "cmd": tuple(cmd),
+            "model_dir": model_dir,
+            "stdout_q": out_q,
+            "stderr_tail": stderr_tail,
+        }
+        try:
+            handshake = {"model_path": model_dir, "max_length": max_length}
+            if proc.stdin is None:
+                raise RuntimeError("Worker stdin unavailable")
+            proc.stdin.write(json.dumps(handshake, ensure_ascii=False) + "\n")
+            proc.stdin.flush()
+            ready_line = cls._read_stream_line(
+                state,
+                timeout=timeout,
+                cancel_event=cancel_event,
+                cmd=cmd,
+            )
+            ready_data = json.loads(ready_line)
+            if not ready_data.get("ready"):
+                raise RuntimeError(f"Native embedding stream handshake failed: {ready_data}")
+            state["model_identity"] = ready_data.get("model_identity")
+            return state
+        except Exception:
+            try:
+                if proc.stdin is not None:
+                    proc.stdin.close()
+            except OSError:
+                pass
+            _terminate_owned_worker(proc, grace_seconds=0.3)
+            with _ACTIVE_WORKERS_LOCK:
+                _ACTIVE_WORKERS.discard(proc)
+            raise
+
+    @classmethod
+    def _read_stream_line(
+        cls,
+        state: dict,
+        *,
+        timeout: float,
+        cancel_event: Optional[threading.Event],
+        cmd: List[str],
+    ) -> str:
+        proc = state["proc"]
+        out_q = state["stdout_q"]
+        deadline = time.monotonic() + float(timeout)
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise IndexingCancelledError("Đã hủy tiến trình embedding cục bộ theo yêu cầu dừng.")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            wait_slice = min(0.04, remaining)
+            try:
+                line = out_q.get(timeout=wait_slice)
+            except queue.Empty:
+                if proc.poll() is not None and out_q.empty():
+                    err = "".join(state["stderr_tail"])[-1000:]
+                    raise RuntimeError(f"Lỗi chạy native MLX embedding: {err}")
+                continue
+            if line is None:
+                err = "".join(state["stderr_tail"])[-1000:]
+                raise EOFError(f"Native MLX embedding worker closed stream: {err}")
+            stripped = line.strip()
+            if stripped:
+                return stripped
+
+    @classmethod
+    def _request_stream_worker(
+        cls,
+        *,
+        cmd: List[str],
+        model_dir: Path,
+        texts: List[str],
+        max_length: int,
+        cwd: Path,
+        env: dict,
+        timeout: float = 120.0,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> dict:
+        resolved_dir = str(model_dir)
+        cmd_tuple = tuple(cmd)
+        payload = json.dumps({"texts": texts, "max_length": max_length}, ensure_ascii=False) + "\n"
+        for attempt in range(2):
+            with cls._stream_lock:
+                if cls._stream_idle_timer is not None:
+                    try:
+                        cls._stream_idle_timer.cancel()
+                    except Exception:
+                        pass
+                    cls._stream_idle_timer = None
+                state = cls._stream_worker
+                if (
+                    state is None
+                    or state["cmd"] != cmd_tuple
+                    or state["model_dir"] != resolved_dir
+                    or state["proc"].poll() is not None
+                ):
+                    if state is not None:
+                        cls._stream_worker = None
+                        _terminate_owned_worker(state["proc"], grace_seconds=0.3)
+                        with _ACTIVE_WORKERS_LOCK:
+                            _ACTIVE_WORKERS.discard(state["proc"])
+                    state = cls._spawn_stream_worker(
+                        cmd=cmd,
+                        model_dir=resolved_dir,
+                        max_length=max_length,
+                        cwd=cwd,
+                        env=env,
+                        timeout=timeout,
+                        cancel_event=cancel_event,
+                    )
+                    cls._stream_worker = state
+
+                try:
+                    proc = state["proc"]
+                    if proc.stdin is None:
+                        raise EOFError("Stream worker stdin closed")
+                    proc.stdin.write(payload)
+                    proc.stdin.flush()
+                    resp_line = cls._read_stream_line(
+                        state,
+                        timeout=timeout,
+                        cancel_event=cancel_event,
+                        cmd=cmd,
+                    )
+                    data = json.loads(resp_line)
+                    cls._schedule_idle_eviction_locked(state)
+                    if "error" in data:
+                        raise RuntimeError(f"Lỗi chạy native MLX embedding: {data['error']}")
+                    return data
+                except (EOFError, BrokenPipeError, OSError) as exc:
+                    if cls._stream_worker is state:
+                        cls._stream_worker = None
+                    _terminate_owned_worker(state["proc"], grace_seconds=0.3)
+                    with _ACTIVE_WORKERS_LOCK:
+                        _ACTIVE_WORKERS.discard(state["proc"])
+                    if attempt == 0:
+                        continue
+                    raise RuntimeError(f"Lỗi chạy native MLX embedding: {exc}") from exc
+                except BaseException:
+                    if cls._stream_worker is state:
+                        cls._stream_worker = None
+                    _terminate_owned_worker(state["proc"], grace_seconds=0.3)
+                    with _ACTIVE_WORKERS_LOCK:
+                        _ACTIVE_WORKERS.discard(state["proc"])
+                    raise
+        raise RuntimeError("Lỗi chạy native MLX embedding stream worker")
 
     @staticmethod
     def _run_cancellable_popen(
@@ -545,33 +823,47 @@ class NativeEmbeddingClient:
             if cancel_event is not None
             else gpu_coordinator.acquire_for_inference()
         )
+        stream_cmd = self._stream_worker_command()
+        used_stream = bool(stream_cmd)
+        data = None
         with acq_ctx as lock_fds:
             if cancel_event is not None and cancel_event.is_set():
                 raise IndexingCancelledError("Đã hủy nhúng vector cục bộ theo yêu cầu dừng.")
-            raw_fds = getattr(lock_fds, "fds", lock_fds)
-            if sys.platform != "win32" and raw_fds is not None:
-                if isinstance(raw_fds, int) and not isinstance(raw_fds, bool):
-                    pass_fds = (raw_fds,)
-                elif isinstance(raw_fds, (tuple, list)):
-                    pass_fds = tuple(fd for fd in raw_fds if isinstance(fd, int) and not isinstance(fd, bool))
+            if used_stream:
+                data = self._request_stream_worker(
+                    cmd=stream_cmd,
+                    model_dir=self.model_dir,
+                    texts=texts,
+                    max_length=max_length,
+                    cwd=BASE_DIR,
+                    env=worker_env,
+                    timeout=120.0,
+                    cancel_event=cancel_event,
+                )
+            else:
+                raw_fds = getattr(lock_fds, "fds", lock_fds)
+                if sys.platform != "win32" and raw_fds is not None:
+                    if isinstance(raw_fds, int) and not isinstance(raw_fds, bool):
+                        pass_fds = (raw_fds,)
+                    elif isinstance(raw_fds, (tuple, list)):
+                        pass_fds = tuple(fd for fd in raw_fds if isinstance(fd, int) and not isinstance(fd, bool))
+                    else:
+                        pass_fds = ()
                 else:
                     pass_fds = ()
-            else:
-                pass_fds = ()
-            completed = self._run_cancellable_popen(
-                cmd,
-                input_text=payload_text,
-                cwd=BASE_DIR,
-                env=worker_env,
-                timeout=120.0,
-                cancel_event=cancel_event,
-                pass_fds=pass_fds,
-            )
+                completed = self._run_cancellable_popen(
+                    cmd,
+                    input_text=payload_text,
+                    cwd=BASE_DIR,
+                    env=worker_env,
+                    timeout=120.0,
+                    cancel_event=cancel_event,
+                    pass_fds=pass_fds,
+                )
+                if completed.returncode != 0:
+                    raise RuntimeError(f"Lỗi chạy native MLX embedding: {completed.stderr[-1000:]}")
+                data = json.loads(completed.stdout)
 
-        if completed.returncode != 0:
-            raise RuntimeError(f"Lỗi chạy native MLX embedding: {completed.stderr[-1000:]}")
-
-        data = json.loads(completed.stdout)
         vectors = data.get("vectors")
         if not isinstance(vectors, list) or len(vectors) != len(texts):
             raise RuntimeError(f"Native MLX embedding worker trả về số lượng vector ({len(vectors) if isinstance(vectors, list) else None}) không khớp số lượng yêu cầu ({len(texts)})")
@@ -579,6 +871,8 @@ class NativeEmbeddingClient:
         expected_identity = self.get_identity()
         reported_identity = data.get("model_identity")
         if reported_identity != expected_identity:
+            if used_stream:
+                self.evict_stream_worker()
             raise RuntimeError(f"Worker báo cáo identity ({reported_identity}) không khớp identity đã xác minh ({expected_identity})")
 
         for idx, vec in enumerate(vectors):
@@ -591,3 +885,6 @@ class NativeEmbeddingClient:
                 raise RuntimeError(f"Vector {idx} chưa được chuẩn hóa L2 hợp lệ (norm = {norm})")
 
         return _VerifiedBatchResult(vectors, verified_identity=expected_identity)
+
+
+gpu_coordinator.register_resident_evictor(NativeEmbeddingClient.evict_stream_worker)

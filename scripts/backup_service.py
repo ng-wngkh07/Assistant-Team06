@@ -201,7 +201,7 @@ def create_backup(
                             })
 
                 # Databases
-                for db_name in ("history.db", "timetable.db", "uploads.db"):
+                for db_name in ("history.db", "timetable.db", "uploads.db", "practice.db"):
                     db_file = item / db_name
                     if db_file.exists():
                         check_source_path_safety(db_file)

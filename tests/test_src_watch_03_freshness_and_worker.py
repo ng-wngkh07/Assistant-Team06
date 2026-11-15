@@ -509,3 +509,120 @@ def test_native_embedding_disposable_subprocess_timeout_escalates_sigkill_and_re
 
     with gpu_lock.acquire_for_inference(timeout=0.5):
         pass
+
+
+def test_native_embedding_persistent_stream_worker_reuse_recovery_and_eviction(tmp_path, monkeypatch):
+    """Persistent --stream worker reuses loaded process across max_lengths, recovers on crash, and evicts cleanly."""
+    import os
+    from contextlib import nullcontext
+
+    gpu_dir = tmp_path / "runtime"
+    gpu_dir.mkdir()
+    gpu_lock = GPULockManager(gpu_dir / "gpu.lock", gpu_dir / "gpu_state.json")
+
+    spawn_log = tmp_path / "spawns.jsonl"
+    crash_marker = tmp_path / "crashed.once"
+    stream_worker = tmp_path / "stream_worker.py"
+    stream_worker.write_text(
+        "import json, os, pathlib, sys\n"
+        f"log_path = pathlib.Path({json.dumps(str(spawn_log))})\n"
+        f"crash_marker = pathlib.Path({json.dumps(str(crash_marker))})\n"
+        "handshake = json.loads(sys.stdin.readline())\n"
+        "with log_path.open('a', encoding='utf-8') as f:\n"
+        "    f.write(json.dumps({'pid': os.getpid(), 'max_length': handshake.get('max_length')}) + '\\n')\n"
+        "print(json.dumps({'ready': True, 'model_identity': 'bge-m3-mlx-fp16@a37eddded9a6a1273a87fb8b0da0d1cdbd98aeec'}), flush=True)\n"
+        "for line in sys.stdin:\n"
+        "    line = line.strip()\n"
+        "    if not line:\n"
+        "        continue\n"
+        "    req = json.loads(line)\n"
+        "    texts = req.get('texts', [])\n"
+        "    if texts == ['__crash__'] and not crash_marker.exists():\n"
+        "        crash_marker.write_text('1', encoding='utf-8')\n"
+        "        os._exit(2)\n"
+        "    vecs = [[1.0] + [0.0] * 1023 for _ in texts]\n"
+        "    print(json.dumps({'vectors': vecs, 'count': len(vecs), 'dimensions': 1024, "
+        "'model_identity': 'bge-m3-mlx-fp16@a37eddded9a6a1273a87fb8b0da0d1cdbd98aeec', "
+        "'seen_max_length': req.get('max_length')}), flush=True)\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(native_embedding, "gpu_coordinator", gpu_lock)
+    monkeypatch.setattr(NativeEmbeddingClient, "available", classmethod(lambda cls, *a, **kw: True))
+    monkeypatch.setattr(NativeEmbeddingClient, "verify_identity", classmethod(lambda cls, *a, **kw: BGE_NATIVE_IDENTITY))
+    monkeypatch.setattr(
+        NativeEmbeddingClient,
+        "_stream_worker_command",
+        classmethod(lambda cls: [sys.executable, str(stream_worker)]),
+    )
+
+    NativeEmbeddingClient.evict_stream_worker()
+    with NativeEmbeddingClient._query_cache_lock:
+        NativeEmbeddingClient._query_cache.clear()
+
+    client = NativeEmbeddingClient(tmp_path)
+    try:
+        # 1. Multiple calls with distinct max_length reuse the single persistent worker process
+        res1 = client.get_batch_embeddings(["first query"], max_length=512)
+        res2 = client.get_batch_embeddings(["second chunk text"], max_length=2048)
+        assert len(res1) == 1 and len(res2) == 1
+        assert getattr(res2, "verified_identity", None) == BGE_NATIVE_IDENTITY
+
+        spawns = [json.loads(line) for line in spawn_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len(spawns) == 1
+        pid1 = spawns[0]["pid"]
+
+        # 2. Unexpected worker crash triggers transparent single-retry respawn
+        res3 = client.get_batch_embeddings(["__crash__"], max_length=512)
+        assert len(res3) == 1
+        spawns_after_crash = [
+            json.loads(line) for line in spawn_log.read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
+        assert len(spawns_after_crash) == 2
+        pid2 = spawns_after_crash[1]["pid"]
+        assert pid2 != pid1
+
+        # 3. Idle timeout reaps resident worker automatically
+        monkeypatch.setattr(NativeEmbeddingClient, "_STREAM_IDLE_TIMEOUT", 0.08)
+        with NativeEmbeddingClient._stream_lock:
+            if NativeEmbeddingClient._stream_worker is not None:
+                NativeEmbeddingClient._schedule_idle_eviction_locked(NativeEmbeddingClient._stream_worker)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            with NativeEmbeddingClient._stream_lock:
+                if NativeEmbeddingClient._stream_worker is None:
+                    break
+            time.sleep(0.02)
+        with NativeEmbeddingClient._stream_lock:
+            assert NativeEmbeddingClient._stream_worker is None
+
+        # Verify pid2 was terminated and gpu_coordinator can acquire exclusive/training state cleanly
+        alive = True
+        for _ in range(30):
+            try:
+                os.kill(pid2, 0)
+                time.sleep(0.02)
+            except (ProcessLookupError, OSError):
+                alive = False
+                break
+        assert alive is False
+
+        # 4. Eviction callback registered cleanly releases resident worker
+        monkeypatch.setattr(NativeEmbeddingClient, "_STREAM_IDLE_TIMEOUT", 180.0)
+        res4 = client.get_batch_embeddings(["warm again"], max_length=512)
+        assert len(res4) == 1
+        with NativeEmbeddingClient._stream_lock:
+            pid3 = NativeEmbeddingClient._stream_worker["proc"].pid
+        NativeEmbeddingClient.evict_stream_worker()
+        with NativeEmbeddingClient._stream_lock:
+            assert NativeEmbeddingClient._stream_worker is None
+        for _ in range(30):
+            try:
+                os.kill(pid3, 0)
+                time.sleep(0.02)
+            except (ProcessLookupError, OSError):
+                break
+    finally:
+        NativeEmbeddingClient.evict_stream_worker()
+        with native_embedding._ACTIVE_WORKERS_LOCK:
+            assert len(native_embedding._ACTIVE_WORKERS) == 0

@@ -19,8 +19,12 @@ from app.model_resolver import (
     get_model_context_capacity,
     validate_native_model_config,
 )
+from app.stream_worker import ResidentStreamWorker
 
 logger = logging.getLogger(__name__)
+
+_STDLIB_RUN = subprocess.run
+_STDLIB_POPEN = subprocess.Popen
 
 
 _review_cache_dir = ContextVar("native_review_cache_dir", default=None)
@@ -116,6 +120,53 @@ class TrainedModelClient:
         self.last_diagnostics = {}
         self.last_usage = {}
 
+    @staticmethod
+    def _stream_worker_command() -> list[str]:
+        training_python = BASE_DIR / ".train-venv" / "bin" / "python"
+        return [str(training_python), "-m", "app.mlx_infer", "--stream"]
+
+    @staticmethod
+    def _worker_env() -> dict[str, str]:
+        env = os.environ.copy()
+        env["HF_HUB_OFFLINE"] = "1"
+        env["TRANSFORMERS_OFFLINE"] = "1"
+        env["HF_DATASETS_OFFLINE"] = "1"
+        env["TOKENIZERS_PARALLELISM"] = "false"
+        return env
+
+    @classmethod
+    def evict_stream_worker(cls) -> None:
+        """Stop any idle resident native MLX inference worker to free unified memory."""
+        _INFER_STREAM_WORKER.evict()
+
+    def _record_result_metrics(
+        self,
+        result_data: dict,
+        *,
+        compact_review: bool,
+        grounded_review: bool,
+    ) -> str:
+        if compact_review:
+            from app.practice_adapter import COMPACT_REVIEW_PROFILE
+            result_data["practice_review_profile"] = COMPACT_REVIEW_PROFILE
+        elif grounded_review:
+            from app.practice_adapter import GROUNDED_REVIEW_PROFILE
+            result_data["practice_review_profile"] = GROUNDED_REVIEW_PROFILE
+        answer = result_data.get("answer", "")
+        reason = result_data.get("done_reason")
+        self.last_done_reason = reason if reason in {"stop", "length"} else None
+        self.last_usage = {
+            "input_tokens": result_data.get("input_tokens"),
+            "output_tokens": result_data.get("output_tokens"),
+            "prompt_tokens": result_data.get("input_tokens"),
+            "generation_tokens": result_data.get("output_tokens"),
+            "prompt_eval_count": result_data.get("input_tokens"),
+            "eval_count": result_data.get("output_tokens"),
+            "total_tokens": (result_data.get("input_tokens") or 0) + (result_data.get("output_tokens") or 0),
+        }
+        self.last_diagnostics = result_data
+        return answer
+
     def chat_stream(
         self,
         messages: list[dict[str, str]],
@@ -188,44 +239,53 @@ class TrainedModelClient:
         if grounded_review and current_review_cache_dir() is not None:
             request["review_cache_dir"] = current_review_cache_dir()
 
+        timeout_sec = int(kwargs.get("timeout") or 600)
+        use_oneshot = (
+            subprocess.run is not _STDLIB_RUN
+            or subprocess.Popen is not _STDLIB_POPEN
+            or type(self)._stream_worker_command is not TrainedModelClient._stream_worker_command
+        )
+
         # Serialize model workloads through exclusive native worker admission and training lock inheritance
         with gpu_coordinator.acquire_for_inference() as lock_fds:
-            kwargs_run = {
-                "cwd": BASE_DIR,
-                "input": json.dumps(request, ensure_ascii=False),
-                "capture_output": True,
-                "text": True,
-                "timeout": int(kwargs.get("timeout") or 600),
-                "check": False,
-            }
-            if sys.platform != "win32" and lock_fds and isinstance(lock_fds, (tuple, list)):
-                kwargs_run["pass_fds"] = tuple(fd for fd in lock_fds if isinstance(fd, int))
+            if use_oneshot:
+                kwargs_run = {
+                    "cwd": BASE_DIR,
+                    "input": json.dumps(request, ensure_ascii=False),
+                    "capture_output": True,
+                    "text": True,
+                    "timeout": timeout_sec,
+                    "check": False,
+                }
+                if sys.platform != "win32" and lock_fds and isinstance(lock_fds, (tuple, list)):
+                    kwargs_run["pass_fds"] = tuple(fd for fd in lock_fds if isinstance(fd, int))
 
-            completed = subprocess.run(
-                [str(training_python), "-m", "app.mlx_infer"],
-                **kwargs_run,
-            )
-        if completed.returncode != 0:
-            raise RuntimeError(f"Không thể chạy mô hình MLX: {completed.stderr[-1000:]}")
-        result_data = json.loads(completed.stdout)
-        if compact_review:
-            result_data["practice_review_profile"] = COMPACT_REVIEW_PROFILE
-        elif grounded_review:
-            result_data["practice_review_profile"] = GROUNDED_REVIEW_PROFILE
-        answer = result_data["answer"]
-        reason = result_data.get("done_reason")
-        self.last_done_reason = reason if reason in {"stop", "length"} else None
-        self.last_usage = {
-            "input_tokens": result_data.get("input_tokens"),
-            "output_tokens": result_data.get("output_tokens"),
-            "prompt_tokens": result_data.get("input_tokens"),
-            "generation_tokens": result_data.get("output_tokens"),
-            "prompt_eval_count": result_data.get("input_tokens"),
-            "eval_count": result_data.get("output_tokens"),
-            "total_tokens": (result_data.get("input_tokens") or 0) + (result_data.get("output_tokens") or 0),
-        }
-        self.last_diagnostics = result_data
-        yield answer
+                completed = subprocess.run(
+                    [str(training_python), "-m", "app.mlx_infer"],
+                    **kwargs_run,
+                )
+                if completed.returncode != 0:
+                    raise RuntimeError(f"Không thể chạy mô hình MLX: {completed.stderr[-1000:]}")
+                result_data = json.loads(completed.stdout)
+                answer = self._record_result_metrics(
+                    result_data,
+                    compact_review=compact_review,
+                    grounded_review=grounded_review,
+                )
+                yield answer
+                return
+
+            for evt in _INFER_STREAM_WORKER.stream_events(request, timeout=float(timeout_sec)):
+                if "token" in evt:
+                    tok = evt["token"]
+                    if tok:
+                        yield tok
+                elif evt.get("done"):
+                    self._record_result_metrics(
+                        evt,
+                        compact_review=compact_review,
+                        grounded_review=grounded_review,
+                    )
 
     def chat_complete(
         self,
@@ -248,3 +308,13 @@ class TrainedModelClient:
             **kwargs
         ))
         return "".join(tokens)
+
+
+_INFER_STREAM_WORKER = ResidentStreamWorker(
+    command_fn=TrainedModelClient._stream_worker_command,
+    env_fn=TrainedModelClient._worker_env,
+    idle_ttl=180.0,
+    role="mlx_infer",
+    evict_roles_on_use={"mlx_vision"},
+    error_prefix="Không thể chạy mô hình MLX",
+)

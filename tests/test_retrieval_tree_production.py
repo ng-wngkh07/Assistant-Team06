@@ -343,3 +343,63 @@ def test_build_retrieval_tree_cli(synthetic_kb, tmp_path):
     data = json.loads(proc.stdout)
     assert data["status"] == "success"
     assert output_db.is_file()
+
+    # Running again without --replace must fail closed (no-clobber preserved)
+    proc_noclobber = subprocess.run(cmd, capture_output=True, text=True)
+    assert proc_noclobber.returncode != 0
+
+    # Mutate source and rebuild with --replace atomically
+    with sqlite3.connect(source_db) as conn:
+        conn.execute("UPDATE chunks SET text = 'Đại số tuyến tính: Ma trận vuông và giá trị riêng mới.' WHERE id = 1")
+        conn.commit()
+    proc_replace = subprocess.run(cmd + ["--replace"], capture_output=True, text=True)
+    assert proc_replace.returncode == 0, f"CLI --replace failed: {proc_replace.stderr}"
+    replaced_data = json.loads(proc_replace.stdout)
+    assert replaced_data["status"] == "success"
+    assert replaced_data["shadow_db"] == str(output_db.resolve())
+
+
+def test_stale_sidecar_memoized_and_auto_refreshed_on_index_all(synthetic_kb, monkeypatch):
+    """HybridSearcher skips repeated stale sidecar verification until source/sidecar changes; index_all refreshes sidecar."""
+    from app import retrieval_tree as rt_mod
+
+    source_db, tmp_path = synthetic_kb
+    sidecar_db = tmp_path / "retrieval_tree.db"
+    build_tree(source_db, sidecar_db)
+
+    # Make sidecar stale via direct SQLite mutation
+    with sqlite3.connect(source_db) as conn:
+        conn.execute("UPDATE chunks SET text = 'Đại số tuyến tính: Ma trận vuông và giá trị riêng chưa đồng bộ sidecar.' WHERE id = 1")
+        conn.commit()
+
+    calls = []
+    orig_tree_searcher = rt_mod.TreeSearcher
+
+    class CountingTreeSearcher(orig_tree_searcher):
+        def __init__(self, *args, **kwargs):
+            calls.append(1)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(rt_mod, "TreeSearcher", CountingTreeSearcher)
+
+    searcher = HybridSearcher(db_path=source_db, src_dir=tmp_path / "src", data_dir=tmp_path)
+    # First query verifies and detects stale sidecar
+    searcher.search_hybrid("ma trận vuông", top_k=3, embed_model=None)
+    assert len(calls) == 1
+    assert searcher.last_topic_routing["fallback_reason"] == "stale_or_invalid_tree"
+
+    # Subsequent unchanged query skips reconstructing TreeSearcher / reopening stale sidecar
+    searcher.search_hybrid("ma trận vuông", top_k=3, embed_model=None)
+    assert len(calls) == 1
+    assert searcher.last_topic_routing["fallback_reason"] == "stale_or_invalid_tree"
+
+    # Re-indexing via index_all detects and atomically refreshes existing sidecar
+    indexer = KnowledgeIndexer(db_path=source_db, src_dir=tmp_path / "src")
+    rep = indexer.index_all(ocr=False, embed_model=None)
+    assert rep.get("retrieval_tree_refreshed") is True
+
+    # After refresh, HybridSearcher invalidates stale memo and uses valid sidecar
+    searcher.search_hybrid("ma trận vuông", top_k=3, embed_model=None)
+    assert len(calls) == 2
+    assert searcher.last_topic_routing["applied"] is True
+    assert searcher.last_topic_routing["fallback_to_global"] is False

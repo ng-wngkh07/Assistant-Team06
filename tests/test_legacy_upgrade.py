@@ -436,3 +436,69 @@ def test_migrate_legacy_preserves_planner_and_session_turn_metadata_fields(tmp_p
         assert row["answer_mode"] == "detailed"
         assert row["search_scope_json"] == '{"course": "physics"}'
         assert row["legacy_search_id"] == 42
+
+
+def test_migrate_legacy_preserves_practice_db_and_rejects_collision(tmp_path):
+    """Legacy practice.db sessions are copied idempotently without modifying source, failing closed on collision."""
+    from app.db import practice_migrations
+
+    accounts_dir = tmp_path / "accounts"
+    accounts_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    source_dir = tmp_path / "source_practice"
+    source_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    target_acc = "ff" * 16
+    with managed_sqlite(accounts_dir / "accounts.db") as db:
+        auth_migrations.apply(db)
+        db.execute("INSERT INTO accounts VALUES (?, 'prac_user', 's', 'h')", (target_acc,))
+
+    src_practice = source_dir / "practice.db"
+    with managed_sqlite(src_practice) as db:
+        practice_migrations.apply(db)
+        db.execute(
+            """
+            INSERT INTO practice_sessions (
+                practice_id, created_at, count, requested_count, difficulty,
+                purpose, topic, warning, processing_level,
+                questions_json, answers_json, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-prac-1",
+                1731650000.0,
+                1,
+                1,
+                "hard",
+                "exam_prep",
+                "GDP",
+                None,
+                "careful",
+                '[{"question_id":"q1","stem":"Explain GDP","correct":"B"}]',
+                '{"q1":{"selected":"B","correct":true}}',
+                '{"origin":"legacy"}',
+            ),
+        )
+
+    sha_before = compute_sha256(src_practice)
+    res = migrate_legacy(source_dir, accounts_dir, target_acc)
+    assert res["status"] == "success"
+    assert res["migrated_practice"]["practice_sessions"] == 1
+    assert compute_sha256(src_practice) == sha_before
+
+    # Idempotent repeat does not re-insert
+    res2 = migrate_legacy(source_dir, accounts_dir, target_acc)
+    assert res2["migrated_practice"]["practice_sessions"] == 0
+
+    target_practice = accounts_dir / target_acc / "practice.db"
+    with managed_sqlite(target_practice) as db:
+        row = db.execute("SELECT * FROM practice_sessions WHERE practice_id = 'legacy-prac-1'").fetchone()
+        assert row is not None
+        assert row["difficulty"] == "hard"
+        assert row["topic"] == "GDP"
+
+    # Mutate target row to force conflict on same practice_id and assert fail-closed ValueError
+    with managed_sqlite(target_practice) as db:
+        db.execute("UPDATE practice_sessions SET topic = 'Inflation' WHERE practice_id = 'legacy-prac-1'")
+
+    with pytest.raises(ValueError, match="ID collision detected in 'practice_sessions'"):
+        migrate_legacy(source_dir, accounts_dir, target_acc)

@@ -115,8 +115,11 @@ searcher = HybridSearcher()
 document_lookup = DocumentLookup()
 agent = PsychologyAgent(searcher=searcher)
 src_watcher = SrcWatcher(src_dir=SRC_DIR, db_path=DB_PATH, data_dir=DATA_DIR)
-practice_service = PracticeService(searcher=searcher, document_lookup=document_lookup)
-practice_service = AccountService(practice_service, lambda: PracticeService(searcher=searcher, document_lookup=document_lookup))
+practice_service = PracticeService(searcher=searcher, document_lookup=document_lookup, enable_verified_bank=True)
+practice_service = AccountService(
+    practice_service,
+    lambda: PracticeService(searcher=searcher, document_lookup=document_lookup, enable_verified_bank=True),
+)
 learning_service = AccountService(LearningService(document_lookup=document_lookup, practice_service=practice_service, searcher=searcher), lambda: LearningService(document_lookup=document_lookup, practice_service=practice_service.current(), searcher=searcher))
 study_material_manager = AccountService(study_material_manager, make_material_manager)
 import os
@@ -366,7 +369,7 @@ async def locked_history_mutation(method, *args):
     try:
         return await run_in_threadpool(mutate)
     except DialogueBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
+        raise HTTPException(status_code=409, detail=sanitize_error_detail(str(exc)), headers={"Retry-After": "2"})
 
 
 from app.routes.learning_routes import (
@@ -678,7 +681,7 @@ async def check_local_model():
     try:
         return await run_in_threadpool(run_check)
     except (DialogueBusyError, GPUBusyError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"}) from exc
+        raise HTTPException(status_code=409, detail=sanitize_error_detail(str(exc)), headers={"Retry-After": "2"}) from exc
     except Exception as exc:
         logger.exception("Local model self-check failed")
         return {"ready": False, "model": DEFAULT_CHAT_MODEL, "code": "inference_failed", "message": runtime_failure_message(exc)}
@@ -860,19 +863,19 @@ async def trigger_indexing(req: IndexRequest):
         report = await run_in_threadpool(run_index)
         return {"status": "success", "report": report}
     except DialogueBusyError as e:
-        raise HTTPException(status_code=409, detail=str(e), headers={"Retry-After": "2"})
+        raise HTTPException(status_code=409, detail=sanitize_error_detail(str(e)), headers={"Retry-After": "2"})
     except GPUBusyError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=sanitize_error_detail(str(e)))
     except Exception as e:
         logger.exception("Error during indexing")
-        raise HTTPException(status_code=500, detail=runtime_failure_message(e))
+        raise HTTPException(status_code=500, detail=sanitize_error_detail(runtime_failure_message(e)))
 
 @app.post("/api/chat")
 async def chat_sync(req: ChatRequest):
     try:
         return await run_in_threadpool(_chat_sync_locked, req)
     except DialogueBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
+        raise HTTPException(status_code=409, detail=sanitize_error_detail(str(exc)), headers={"Retry-After": "2"})
 
 
 def _chat_sync_locked(req):

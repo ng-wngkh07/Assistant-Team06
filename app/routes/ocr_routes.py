@@ -260,14 +260,16 @@ async def get_ocr_page_image(filename: str = Query(...), page_num: int = Query(1
     ext = file_path.suffix.lower()
     if ext == ".pdf":
         try:
-            doc = pymupdf.open(str(file_path))
-            if page_num < 1 or page_num > len(doc):
-                doc.close()
-                raise HTTPException(status_code=400, detail=f"Trang {page_num} không hợp lệ (tổng số trang: {len(doc)})")
-            page = doc[page_num - 1]
-            pix = page.get_pixmap(dpi=150)
-            img_bytes = pix.tobytes("png")
-            doc.close()
+            with pymupdf.open(str(file_path)) as doc:
+                total_pages = len(doc)
+                if page_num < 1 or page_num > total_pages:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Trang {page_num} không hợp lệ (tổng số trang: {total_pages})",
+                    )
+                page = doc[page_num - 1]
+                pix = page.get_pixmap(dpi=150)
+                img_bytes = pix.tobytes("png")
             return Response(content=img_bytes, media_type="image/png")
         except HTTPException:
             raise

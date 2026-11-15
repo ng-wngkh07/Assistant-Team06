@@ -391,3 +391,522 @@ def test_native_grounded_adapter_cannot_cross_review_profiles(tmp_path, monkeypa
         assert result['adapter_loaded'] is True
         assert result['adapter_review_profile'] == practice_adapter.GROUNDED_REVIEW_PROFILE
         assert calls['loads'][0][1]['adapter_path'] == str(adapter)
+
+
+def test_native_vision_worker_applies_response_schema_and_repetition_penalty(tmp_path, monkeypatch):
+    """app.mlx_vision installs JSON schema logits processor and repetition penalty into mlx_vlm.generate."""
+    model = tmp_path / 'vision_model'
+    model.mkdir()
+    (model / 'config.json').write_text('{}', encoding='utf-8')
+    img_file = tmp_path / 'page.png'
+    img_file.write_bytes(b'png-bytes')
+
+    observed = {'generate': [], 'schema': []}
+    tok = object()
+    processor = types.SimpleNamespace(tokenizer=tok)
+    schema_proc = object()
+
+    def load(path, **kwargs):
+        return object(), processor
+
+    def generate(mdl, proc, **kwargs):
+        observed['generate'].append((proc, kwargs))
+        return types.SimpleNamespace(
+            text='{"text":"Quote \\"x\\" and \\\\frac{a}{b}"}',
+            finish_reason='stop',
+            generation_tokens=12,
+            prompt_tokens=20,
+        )
+
+    vlm_mod = types.ModuleType('mlx_vlm')
+    vlm_mod.load = load
+    vlm_mod.generate = generate
+    prompt_mod = types.ModuleType('mlx_vlm.prompt_utils')
+    prompt_mod.apply_chat_template = lambda proc, cfg, text, **kw: f'templated:{text}'
+    struct_mod = types.ModuleType('mlx_vlm.structured')
+    struct_mod.build_json_schema_logits_processor = (
+        lambda active_tok, schema: observed['schema'].append((active_tok, schema)) or schema_proc
+    )
+    core = types.ModuleType('mlx.core')
+    core.random = types.SimpleNamespace(seed=lambda value: None)
+    mlx = types.ModuleType('mlx')
+    mlx.core = core
+    for mod_name, mod_obj in [
+        ('mlx_vlm', vlm_mod),
+        ('mlx_vlm.prompt_utils', prompt_mod),
+        ('mlx_vlm.structured', struct_mod),
+        ('mlx', mlx),
+        ('mlx.core', core),
+    ]:
+        monkeypatch.setitem(sys.modules, mod_name, mod_obj)
+
+    import socket
+    monkeypatch.setattr(socket.socket, 'connect', socket.socket.connect)
+    monkeypatch.setattr(socket, 'create_connection', socket.create_connection)
+    spec = importlib.util.spec_from_file_location('_native_vision_worker', ROOT / 'app/mlx_vision.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    schema = {
+        'type': 'object',
+        'properties': {'text': {'type': 'string'}},
+        'required': ['text'],
+        'additionalProperties': False,
+    }
+    req = {
+        'model_path': str(model),
+        'image_path': str(img_file),
+        'prompt': 'OCR page',
+        'max_tokens': 2048,
+        'temperature': 0.0,
+        'response_schema': schema,
+        'repetition_penalty': 1.05,
+        'repetition_context_size': 64,
+    }
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(req)))
+    out = io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', out)
+    module.main()
+
+    result = json.loads(out.getvalue())
+    assert result['finish_reason'] == 'stop'
+    assert observed['schema'] == [(tok, schema)]
+    gen_proc, gen_kw = observed['generate'][0]
+    assert gen_proc is processor
+    assert gen_kw['logits_processors'] == [schema_proc]
+    assert gen_kw['repetition_penalty'] == 1.05
+    assert gen_kw['repetition_context_size'] == 64
+
+
+def test_native_ocr_passes_transcript_schema_and_retries_length_up_to_4096(tmp_path, monkeypatch):
+    """Dense native OCR pages pass JSON schema + repetition penalty and retry once up to 4096 on length truncation."""
+    import hashlib
+    from contextlib import nullcontext
+    from PIL import Image, ImageDraw
+    from app import vision_ocr
+    from app.native_vision import NativeVisionClient
+
+    img = Image.new('RGB', (120, 60), 'white')
+    ImageDraw.Draw(img).text((8, 8), 'GDP = C + I + G', fill='black')
+    buf = io.BytesIO()
+    img.save(buf, 'PNG')
+    raw = buf.getvalue()
+
+    monkeypatch.setattr(vision_ocr, 'sys', types.SimpleNamespace(platform='darwin'))
+    monkeypatch.setattr(vision_ocr, 'CACHE_DIR', tmp_path / 'ocr_cache')
+    monkeypatch.setattr(vision_ocr.gpu_coordinator, 'acquire_for_inference', lambda **kw: nullcontext())
+    monkeypatch.setattr(NativeVisionClient, 'available', classmethod(lambda cls, *a, **kw: True))
+    monkeypatch.setattr(NativeVisionClient, 'get_identity', lambda self: 'native-ocr-digest')
+
+    calls = []
+
+    def fake_gen(self, image_bytes, prompt, max_tokens=2048, response_schema=None, repetition_penalty=None, repetition_context_size=None, **kw):
+        calls.append({
+            'max_tokens': max_tokens,
+            'response_schema': response_schema,
+            'repetition_penalty': repetition_penalty,
+            'repetition_context_size': repetition_context_size,
+        })
+        if max_tokens <= 2048:
+            return {'text': '{"text":"truncated', 'finish_reason': 'length', 'is_truncated': True}
+        return {
+            'text': json.dumps({'text': 'Quote "GDP" and \\frac{Y}{P}'}),
+            'finish_reason': 'stop',
+            'is_truncated': False,
+        }
+
+    monkeypatch.setattr(NativeVisionClient, 'generate_from_image', fake_gen)
+    mgr = vision_ocr.VisionOCRManager(cache_dir=tmp_path / 'ocr_cache')
+    rec = mgr.ocr_image_bytes(raw, hashlib.sha256(raw).hexdigest(), 'dense.pdf', 1)
+
+    assert len(calls) == 2
+    assert calls[0]['max_tokens'] == 2048
+    assert calls[1]['max_tokens'] == 4096
+    assert calls[0]['response_schema'] == vision_ocr.TRANSCRIPT_JSON_SCHEMA
+    assert calls[0]['repetition_penalty'] == 1.05
+    assert calls[0]['repetition_context_size'] == 64
+    assert rec['raw_text'] == 'Quote "GDP" and \\frac{Y}{P}'
+
+
+def test_native_vision_status_identity_caches_stat_signature_and_detects_mutation(
+    tmp_path, monkeypatch, current_native_config
+):
+    """NativeVisionClient.get_status_identity reuses stat-bound digest while get_identity keeps byte checks."""
+    from app import native_vision
+    from app.trained_client import TrainedModelClient
+
+    model_dir = tmp_path / 'vision-model'
+    model_dir.mkdir()
+    shard1 = model_dir / 'model-00001-of-00002.safetensors'
+    shard2 = model_dir / 'model-00002-of-00002.safetensors'
+    index_data = {
+        'weight_map': {
+            'a': shard1.name,
+            'b': shard2.name,
+        }
+    }
+    (model_dir / 'config.json').write_text(json.dumps(current_native_config), encoding='utf-8')
+    (model_dir / 'model.safetensors.index.json').write_text(json.dumps(index_data), encoding='utf-8')
+    (model_dir / 'tokenizer.json').write_text('{}', encoding='utf-8')
+    (model_dir / 'processor_config.json').write_text('{}', encoding='utf-8')
+    (model_dir / 'preprocessor_config.json').write_text('{}', encoding='utf-8')
+    shard1.write_bytes(b'SHARD1_V1_' + b'\x01' * 1024)
+    shard2.write_bytes(b'SHARD2_V1_' + b'\x02' * 1024)
+
+    monkeypatch.setattr(TrainedModelClient, '_verify_weights', staticmethod(lambda path: True))
+    native_vision.NativeVisionClient.clear_status_identity_cache()
+    client = native_vision.NativeVisionClient(model_dir=model_dir)
+
+    shard_reads = 0
+    orig_open = Path.open
+
+    def counted_open(self, mode='r', *args, **kwargs):
+        nonlocal shard_reads
+        handle = orig_open(self, mode, *args, **kwargs)
+        if 'rb' in str(mode) and self.resolve() == shard1.resolve():
+            shard_reads += 1
+        return handle
+
+    monkeypatch.setattr(Path, 'open', counted_open)
+
+    try:
+        cold = client.get_status_identity()
+        assert cold.startswith('mlx-vision-sha256:')
+        assert shard_reads == 1
+
+        for _ in range(3):
+            assert client.get_status_identity() == cold
+        assert shard_reads == 1
+
+        # Explicit get_identity() always reads actual bytes.
+        assert client.get_identity() == cold
+        assert shard_reads == 2
+
+        # Replacing shard1 with identical byte length must invalidate stat cache immediately.
+        staging = tmp_path / 'shard1.tmp'
+        staging.write_bytes(b'SHARD1_V2_' + b'\x03' * 1024)
+        staging.replace(shard1)
+
+        updated = client.get_status_identity()
+        assert updated != cold
+        assert shard_reads == 3
+        assert client.get_status_identity() == updated
+        assert shard_reads == 3
+    finally:
+        native_vision.NativeVisionClient.clear_status_identity_cache()
+
+
+def test_ocr_image_bytes_reuses_preverified_model_digest_via_status_identity(tmp_path, monkeypatch):
+    """Multi-page OCR passes preverified digest to reuse stat-bound verification without extra full-shard hashes."""
+    import hashlib
+    from contextlib import nullcontext
+    from PIL import Image, ImageDraw
+    from app import vision_ocr
+    from app.native_vision import NativeVisionClient
+
+    img = Image.new('RGB', (100, 50), 'white')
+    ImageDraw.Draw(img).text((6, 6), 'Page content', fill='black')
+    buf = io.BytesIO()
+    img.save(buf, 'PNG')
+    raw = buf.getvalue()
+
+    monkeypatch.setattr(vision_ocr, 'sys', types.SimpleNamespace(platform='darwin'))
+    monkeypatch.setattr(vision_ocr, 'CACHE_DIR', tmp_path / 'ocr_cache')
+    monkeypatch.setattr(vision_ocr.gpu_coordinator, 'acquire_for_inference', lambda **kw: nullcontext())
+    monkeypatch.setattr(NativeVisionClient, 'available', classmethod(lambda cls, *a, **kw: True))
+
+    full_calls = []
+    status_calls = []
+
+    def fake_get_identity(self):
+        full_calls.append(1)
+        return 'vision-digest-A'
+
+    def fake_status_identity(self):
+        status_calls.append(1)
+        return 'vision-digest-A'
+
+    monkeypatch.setattr(NativeVisionClient, 'get_identity', fake_get_identity)
+    monkeypatch.setattr(NativeVisionClient, 'get_status_identity', fake_status_identity)
+    monkeypatch.setattr(
+        NativeVisionClient,
+        'generate_from_image',
+        lambda self, *a, **kw: {'text': '{"text":"Page content"}', 'finish_reason': 'stop', 'is_truncated': False},
+    )
+
+    mgr = vision_ocr.VisionOCRManager(cache_dir=tmp_path / 'ocr_cache')
+    rec1 = mgr.ocr_image_bytes(
+        raw, hashlib.sha256(raw).hexdigest(), 'doc.pdf', 1, preverified_model_digest='vision-digest-A'
+    )
+    assert rec1['model_digest'] == 'vision-digest-A'
+    assert len(status_calls) == 1
+    assert len(full_calls) == 0
+
+    # Mismatched preverified digest forces full byte re-verification.
+    rec2 = mgr.ocr_image_bytes(
+        raw, hashlib.sha256(raw).hexdigest(), 'doc.pdf', 2, preverified_model_digest='stale-digest'
+    )
+    assert rec2['model_digest'] == 'vision-digest-A'
+    assert len(status_calls) == 2
+    assert len(full_calls) == 1
+
+
+def test_mlx_infer_stream_reuses_model_and_deep_clones_hybrid_prefix_cache(tmp_path, monkeypatch, capsys):
+    """app/mlx_infer.py --stream keeps model resident, streams token NDJSON, and deep-clones hybrid caches."""
+    import runpy
+    import socket
+
+    model_dir = tmp_path / 'qwen9b'
+    model_dir.mkdir()
+    (model_dir / 'config.json').write_text(
+        json.dumps({
+            'model_type': 'qwen3_5',
+            'architectures': ['Qwen3_5ForConditionalGeneration'],
+            'text_config': {
+                'model_type': 'qwen3_5_text',
+                'hidden_size': 4096,
+                'num_hidden_layers': 32,
+                'num_attention_heads': 16,
+                'max_position_embeddings': 262144,
+            },
+            'quantization': {'bits': 4, 'group_size': 64, 'mode': 'affine'},
+        }),
+        encoding='utf-8',
+    )
+
+    monkeypatch.setattr(socket.socket, 'connect', socket.socket.connect)
+    monkeypatch.setattr(socket, 'create_connection', socket.create_connection)
+    monkeypatch.setenv('HF_HUB_OFFLINE', os.environ.get('HF_HUB_OFFLINE', '0'))
+    monkeypatch.setenv('TRANSFORMERS_OFFLINE', os.environ.get('TRANSFORMERS_OFFLINE', '0'))
+    monkeypatch.setenv('HF_DATASETS_OFFLINE', os.environ.get('HF_DATASETS_OFFLINE', '0'))
+
+    class FakeArray:
+        def __init__(self, data):
+            self.data = list(data.data) if isinstance(data, FakeArray) else list(data)
+
+        def __getitem__(self, item):
+            if item is None:
+                return self
+            return self.data[item]
+
+    class FakeLayer:
+        def __init__(self, state):
+            self.state = state
+
+    class Tokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            sys_txt = messages[0]['content']
+            user_txt = messages[-1]['content']
+            return f'<|im_start|>system\n{sys_txt}<|im_end|>\n<|im_start|>user\n{user_txt}<|im_end|>\n<|im_start|>assistant\n'
+
+        def encode(self, text):
+            # Deterministic 1-token-per-char encoding (>= 64 tokens for system prefix marker)
+            return [ord(ch) for ch in text]
+
+    tokenizer = Tokenizer()
+
+    class AutoTokenizer:
+        @staticmethod
+        def from_pretrained(path, **kwargs):
+            return tokenizer
+
+    load_calls = []
+    prefill_calls = []
+    prefill_counts_at_gen = []
+    gen_calls = []
+    observed_layer1_states = []
+
+    class FakeModel:
+        def __call__(self, arr, cache=None):
+            prefill_calls.append(len(arr.data))
+            # Layer 0 resembles KVCache [k, v]; Layer 1 resembles hybrid ArraysCache [conv_state]
+            cache[0].state = [FakeArray([1, 2]), FakeArray([3, 4])]
+            cache[1].state = [FakeArray([9, 9])]
+
+    def load(path, **kwargs):
+        load_calls.append(path)
+        return FakeModel(), tokenizer
+
+    def make_prompt_cache(_model):
+        return [FakeLayer([]), FakeLayer([])]
+
+    def stream_generate(model, active_tok, *, prompt=None, prompt_cache=None, **kwargs):
+        prefill_counts_at_gen.append(len(prefill_calls))
+        gen_calls.append({'prompt': prompt, 'has_cache': prompt_cache is not None})
+        observed_layer1_states.append(prompt_cache[1].state[0].data.copy())
+        # Simulate in-place mutation during decoding as MLX ArraysCache / KVCache performs
+        prompt_cache[1].state[0].data[0] = 999
+        prompt_cache[1].state[0] = FakeArray([888])
+        yield types.SimpleNamespace(
+            text='Trả ', finish_reason=None, prompt_tokens=10, generation_tokens=1,
+            prompt_tps=40.0, generation_tps=18.0, peak_memory=5.4,
+        )
+        yield types.SimpleNamespace(
+            text='lời.', finish_reason='stop', prompt_tokens=10, generation_tokens=2,
+            prompt_tps=40.0, generation_tps=18.0, peak_memory=5.4,
+        )
+
+    lm = types.ModuleType('mlx_lm')
+    lm.load = load
+    lm.stream_generate = stream_generate
+    lm.generate = lambda *a, **k: 'Trả lời.'
+    sampling = types.ModuleType('mlx_lm.sample_utils')
+    sampling.make_sampler = lambda **kw: kw
+    sampling.make_logits_processors = lambda **kw: [kw]
+    cache_mod = types.ModuleType('mlx_lm.models.cache')
+    cache_mod.make_prompt_cache = make_prompt_cache
+    models_mod = types.ModuleType('mlx_lm.models')
+    models_mod.cache = cache_mod
+    core = types.ModuleType('mlx.core')
+    core.array = FakeArray
+    core.eval = lambda *a, **kw: None
+    core.clear_cache = lambda: None
+    core.random = types.SimpleNamespace(seed=lambda value: None)
+    mlx = types.ModuleType('mlx')
+    mlx.core = core
+    transformers = types.ModuleType('transformers')
+    transformers.AutoTokenizer = AutoTokenizer
+    for name, mod in [
+        ('mlx_lm', lm),
+        ('mlx_lm.sample_utils', sampling),
+        ('mlx_lm.models', models_mod),
+        ('mlx_lm.models.cache', cache_mod),
+        ('mlx', mlx),
+        ('mlx.core', core),
+        ('transformers', transformers),
+    ]:
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    sys_msg = 'SYSTEM PREFIX ' + ('A' * 80)
+    reqs = [
+        {'model_path': str(model_dir), 'messages': [{'role': 'system', 'content': sys_msg}, {'role': 'user', 'content': 'Q1?'}], 'max_tokens': 16},
+        {'model_path': str(model_dir), 'messages': [{'role': 'system', 'content': sys_msg}, {'role': 'user', 'content': 'Q2?'}], 'max_tokens': 16},
+    ]
+    monkeypatch.setattr(sys, 'argv', ['mlx_infer.py', '--stream'])
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('\n'.join(json.dumps(r) for r in reqs) + '\n'))
+
+    runpy.run_path(str(ROOT / 'app/mlx_infer.py'), run_name='__main__')
+    lines = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line.strip()]
+    assert not [evt for evt in lines if 'error' in evt], f'Unexpected error events: {lines}'
+    done_events = [evt for evt in lines if evt.get('done')]
+    token_events = [evt for evt in lines if 'token' in evt]
+
+    assert len(load_calls) == 1
+    assert sum(prefill_calls) == done_events[0]['review_cache']['prefix_tokens']
+    assert prefill_counts_at_gen == [len(prefill_calls), len(prefill_calls)]  # Req 2 reused cached prefix without prefill
+    assert len(token_events) == 4  # 2 streamed token chunks per request
+    assert len(done_events) == 2
+    assert done_events[0]['answer'] == 'Trả lời.'
+    assert done_events[0]['review_cache']['reused_tokens'] == 0
+    assert done_events[0]['review_cache']['prefix_tokens'] >= 64
+    assert done_events[1]['timings']['load_seconds'] == 0.0
+    assert done_events[1]['review_cache']['reused_tokens'] == done_events[0]['review_cache']['prefix_tokens']
+    assert isinstance(gen_calls[1]['prompt'], list)  # Suffix tokens only after prompt_cache
+    assert observed_layer1_states == [[9, 9], [9, 9]]  # In-place mutation did not corrupt snapshot
+
+
+def test_mlx_vision_stream_reuses_loaded_model_and_schema_processor(tmp_path, monkeypatch, capsys):
+    """app/mlx_vision.py --stream keeps model and processor warm across pages."""
+    import runpy
+    import socket
+
+    model_dir = tmp_path / 'vision9b'
+    model_dir.mkdir()
+    (model_dir / 'config.json').write_text(json.dumps({'model_type': 'qwen3_5'}), encoding='utf-8')
+    img_path = tmp_path / 'page.png'
+    img_path.write_bytes(b'fake')
+
+    monkeypatch.setattr(socket.socket, 'connect', socket.socket.connect)
+    monkeypatch.setattr(socket, 'create_connection', socket.create_connection)
+    monkeypatch.setenv('HF_HUB_OFFLINE', os.environ.get('HF_HUB_OFFLINE', '0'))
+    monkeypatch.setenv('TRANSFORMERS_OFFLINE', os.environ.get('TRANSFORMERS_OFFLINE', '0'))
+    monkeypatch.setenv('HF_HUB_DISABLE_TELEMETRY', os.environ.get('HF_HUB_DISABLE_TELEMETRY', '0'))
+    monkeypatch.setenv('HF_DATASETS_OFFLINE', os.environ.get('HF_DATASETS_OFFLINE', '0'))
+
+    load_calls = []
+    schema_calls = []
+    tok = object()
+    processor = types.SimpleNamespace(tokenizer=tok)
+    schema_proc = object()
+
+    vlm = types.ModuleType('mlx_vlm')
+    vlm.load = lambda path, **kw: load_calls.append(path) or (object(), processor)
+    vlm.generate = lambda *a, **kw: types.SimpleNamespace(
+        text='{"text":"Page text"}', finish_reason='stop', generation_tokens=4, prompt_tokens=12
+    )
+    prompt_utils = types.ModuleType('mlx_vlm.prompt_utils')
+    prompt_utils.apply_chat_template = lambda *a, **kw: 'vision prompt'
+    structured = types.ModuleType('mlx_vlm.structured')
+    structured.build_json_schema_logits_processor = lambda t, s: schema_calls.append((t, s)) or schema_proc
+    core = types.ModuleType('mlx.core')
+    core.clear_cache = lambda: None
+    core.random = types.SimpleNamespace(seed=lambda value: None)
+    mlx = types.ModuleType('mlx')
+    mlx.core = core
+    for name, mod in [
+        ('mlx_vlm', vlm),
+        ('mlx_vlm.prompt_utils', prompt_utils),
+        ('mlx_vlm.structured', structured),
+        ('mlx', mlx),
+        ('mlx.core', core),
+    ]:
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    schema = {'type': 'object', 'properties': {'text': {'type': 'string'}}, 'required': ['text']}
+    req = {
+        'model_path': str(model_dir),
+        'image_path': str(img_path),
+        'prompt': 'OCR page',
+        'response_schema': schema,
+    }
+    monkeypatch.setattr(sys, 'argv', ['mlx_vision.py', '--stream'])
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('\n'.join([json.dumps(req), json.dumps(req)]) + '\n'))
+
+    runpy.run_path(str(ROOT / 'app/mlx_vision.py'), run_name='__main__')
+    results = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line.strip()]
+
+    assert len(results) == 2
+    assert len(load_calls) == 1
+    assert len(schema_calls) == 2
+    assert all(r['text'] == '{"text":"Page text"}' and r['finish_reason'] == 'stop' for r in results)
+
+
+def test_native_vision_uses_resident_stream_worker_and_evicts_on_cancel(monkeypatch, tmp_path):
+    """NativeVisionClient uses ResidentStreamWorker by default and evicts it when cancelled."""
+    from contextlib import nullcontext
+    from PIL import Image
+    from app import native_vision
+
+    img_dir = tmp_path / 'imgs'
+    img_dir.mkdir()
+    img = Image.new('RGB', (64, 64), 'white')
+    buf = io.BytesIO()
+    img.save(buf, 'PNG')
+    raw = buf.getvalue()
+
+    model_dir = tmp_path / 'vision9b'
+    model_dir.mkdir()
+    client = native_vision.NativeVisionClient(model_dir=model_dir)
+
+    seen_requests = []
+    evict_calls = []
+    monkeypatch.setattr(native_vision.NativeVisionClient, 'available', classmethod(lambda cls, *a, **kw: True))
+    monkeypatch.setattr(native_vision, '_acquire_inference_lock', lambda **kw: nullcontext())
+    monkeypatch.setattr(
+        native_vision._VISION_STREAM_WORKER,
+        'request_json',
+        lambda payload, **kw: seen_requests.append(payload) or {'text': 'OK', 'finish_reason': 'stop', 'is_truncated': False},
+    )
+    monkeypatch.setattr(
+        native_vision._VISION_STREAM_WORKER,
+        'evict',
+        lambda: evict_calls.append(True),
+    )
+
+    out = client.generate_from_image(raw, 'OCR page', max_tokens=256)
+    assert out['text'] == 'OK'
+    assert len(seen_requests) == 1
+    assert seen_requests[0]['prompt'] == 'OCR page'
+
+    native_vision.cancel_active_vision_workers()
+    assert len(evict_calls) == 1

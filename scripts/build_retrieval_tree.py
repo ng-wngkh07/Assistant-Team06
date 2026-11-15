@@ -17,7 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from app.retrieval_tree import build_tree
+from app.retrieval_tree import build_tree, rebuild_tree
 
 
 def main() -> int:
@@ -34,12 +34,17 @@ def main() -> int:
         "--output",
         required=True,
         type=Path,
-        help="Path to new destination sidecar database (e.g., retrieval_tree.db). Must not exist.",
+        help="Path to destination sidecar database (e.g., retrieval_tree.db). Must not exist unless --replace is set.",
+    )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Atomically rebuild and replace an existing sidecar retrieval_tree.db.",
     )
     args = parser.parse_args()
 
     try:
-        stats = build_tree(args.source_db, args.output)
+        stats = rebuild_tree(args.source_db, args.output) if args.replace else build_tree(args.source_db, args.output)
         print(json.dumps(stats, indent=2, ensure_ascii=False))
         return 0
     except Exception as exc:

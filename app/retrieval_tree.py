@@ -536,6 +536,42 @@ def build_tree(source_db: Union[Path, str], shadow_db: Union[Path, str]) -> Dict
             src_conn.close()
 
 
+def rebuild_tree(source_db: Union[Path, str], shadow_db: Union[Path, str]) -> Dict[str, Any]:
+    """Atomically rebuild and replace an existing source-bound retrieval tree sidecar."""
+    dest_input = Path(shadow_db)
+    if dest_input.is_symlink():
+        raise ValueError(f"shadow_db must not be a symlink: {dest_input}")
+    src_path = Path(source_db).resolve()
+    dest_path = dest_input.resolve()
+    if dest_path.is_symlink():
+        raise ValueError(f"shadow_db must not be a symlink: {dest_path}")
+    if dest_path == src_path:
+        raise ValueError(f"shadow_db cannot overwrite source_db: {dest_path}")
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    stage_path = dest_path.parent / f".{dest_path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.stage.db"
+    try:
+        result = build_tree(src_path, stage_path)
+        for journal_suffix in ("-wal", "-shm"):
+            side_journal = Path(f"{dest_path}{journal_suffix}")
+            if side_journal.exists() and not side_journal.is_symlink():
+                try:
+                    side_journal.unlink()
+                except OSError:
+                    pass
+        os.replace(str(stage_path), str(dest_path))
+        result["shadow_db"] = str(dest_path)
+        return result
+    finally:
+        for suffix in ("", "-wal", "-shm"):
+            leftover = Path(f"{stage_path}{suffix}")
+            if leftover.exists() and not leftover.is_symlink():
+                try:
+                    leftover.unlink()
+                except OSError:
+                    pass
+
+
 class TreeSearcher:
     """Retrieval searcher on persistent tree with read-only query connections.
 

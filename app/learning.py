@@ -507,6 +507,7 @@ class LearningService:
         purpose: str = "practice",
         weak_topics: Optional[list[str]] = None,
         model: Optional[str] = None,
+        reuse_verified_bank: Optional[bool] = None,
     ) -> dict[str, Any]:
         matching_docs = self._matching_documents(topic)
         inspect_fn = getattr(self.document_lookup, "inspect_document_status", None)
@@ -630,6 +631,11 @@ class LearningService:
 
         selected_passages = matching_scored[:6]
 
+        extra_kwargs = (
+            {"reuse_verified_bank": reuse_verified_bank}
+            if reuse_verified_bank is not None
+            else {}
+        )
         return self.practice_service.generate_from_passages(
             passages=selected_passages,
             count=count,
@@ -640,6 +646,7 @@ class LearningService:
             allow_retry=True,
             enforce_difficulty=True,
             topic=topic,
+            **extra_kwargs,
         )
 
     def _extract_exercises_and_answers(

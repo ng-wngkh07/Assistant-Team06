@@ -618,6 +618,61 @@ def build_auditor_messages(
     ]
 
 
+def build_auditor_response_schema(
+    admitted_source_ids: List[str] | set[str],
+    evidence_catalog: Optional[Dict[str, Dict[str, str]]] = None,
+) -> Dict[str, Any]:
+    """Build strict JSON schema for grounded careful-mode auditor output."""
+    source_ids = sorted(
+        {str(sid) for sid in (admitted_source_ids or []) if str(sid).strip()},
+        key=lambda sid: (0, int(sid[1:])) if sid.startswith("S") and sid[1:].isdigit() else (1, sid),
+    )
+    evidence_ids: List[str] = []
+    if isinstance(evidence_catalog, dict):
+        seen_eids: set[str] = set()
+        for src_id, per_src in evidence_catalog.items():
+            if source_ids and src_id not in source_ids:
+                continue
+            if isinstance(per_src, dict):
+                for eid in per_src:
+                    if isinstance(eid, str) and eid.strip():
+                        seen_eids.add(eid.strip())
+        evidence_ids = sorted(
+            seen_eids,
+            key=lambda eid: (0, int(eid[1:])) if eid.startswith("E") and eid[1:].isdigit() else (1, eid),
+        )
+
+    item_props: Dict[str, Any] = {
+        "statement": {"type": "string"},
+        "source_id": {"type": "string", "enum": source_ids} if source_ids else {"type": "string"},
+        "evidence_id": {"type": "string", "enum": evidence_ids} if evidence_ids else {"type": "string"},
+        "evidence_quote": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["supported", "unsupported", "uncertain"]},
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "claims": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": item_props,
+                    "required": ["statement", "source_id", "verdict"],
+                    "anyOf": [
+                        {"required": ["evidence_id"]},
+                        {"required": ["evidence_quote"]},
+                    ],
+                    "additionalProperties": False,
+                },
+                "minItems": 1,
+            },
+            "overall_verdict": {"type": "string", "enum": ["supported", "unsupported", "uncertain"]},
+        },
+        "required": ["claims", "overall_verdict"],
+        "additionalProperties": False,
+    }
+
+
 def _quote_matches_source(quote: str, source_text: str) -> bool:
     """Return True when quote matches a continuous slice of source_text (allowing indented line wraps)."""
     if not quote or not source_text:
