@@ -142,3 +142,59 @@ def test_unreviewed_machine_translation_is_not_answer_evidence():
     assert original in prompt
     assert translated not in prompt
     assert result['citations'][0]['snippet_vi']==translated
+
+
+def test_cross_history_technical_terms_not_in_cited_source_are_rejected(monkeypatch, tmp_path):
+    import json
+    _configure_stub_context(tmp_path, monkeypatch)
+    forebrain = (
+        'The brain consists of three main components: the forebrain, the midbrain and the hindbrain.\n'
+        'The forebrain is responsible for sensory information, thinking, language and motor function.'
+    )
+    baddeley = (
+        'Working memory accomplishes manipulation of information through three components:\n'
+        'the phonological loop, the visuospatial sketch pad, and the central executive.'
+    )
+    history = [
+        {'role': 'user', 'content': 'Theo Baddeley, bộ nhớ làm việc gồm những thành phần nào và vai trò của vòng lặp âm vị là gì?'},
+        {'role': 'assistant', 'content': 'Ba thành phần gồm phonological loop, visuospatial sketchpad và central executive.'},
+    ]
+    hallucinated_payload = json.dumps({
+        'claims': [{
+            'text': 'Hai thành phần kia là bộ đệm không gian thị giác (visuospatial sketchpad) và bộ điều hành trung tâm (central executive).',
+            'source_ids': ['S1'],
+            'evidence_lines': [1, 2],
+        }]
+    }, ensure_ascii=False)
+
+    # Citing forebrain while repeating visuospatial sketchpad / central executive from history must fail validation.
+    rejected = PsychologyAgent(
+        searcher=RecordingSearcher([make_chunk(forebrain)]),
+        ollama=RecordingModel(hallucinated_payload),
+        translator=NoTranslation(),
+    ).process_query_sync(
+        'Còn hai thành phần kia đảm nhận chức năng gì?',
+        model='qwen3.5-9b-4bit',
+        embed_model=None,
+        chat_history=history,
+        isolate_context=False,
+        processing_level='standard',
+    )
+    assert rejected['response_kind'] == 'generation_failed'
+    assert rejected['failure_reason'] == 'citation_invalid'
+
+    # Citing Baddeley source that contains "visuospatial sketch pad" and "central executive" must succeed.
+    accepted = PsychologyAgent(
+        searcher=RecordingSearcher([make_chunk(baddeley)]),
+        ollama=RecordingModel(hallucinated_payload),
+        translator=NoTranslation(),
+    ).process_query_sync(
+        'Còn hai thành phần kia đảm nhận chức năng gì?',
+        model='qwen3.5-9b-4bit',
+        embed_model=None,
+        chat_history=history,
+        isolate_context=False,
+        processing_level='standard',
+    )
+    assert accepted['response_kind'] == 'answer'
+    assert accepted['citations']

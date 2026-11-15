@@ -283,10 +283,27 @@ def dialogue_intent(query, history):
         return "Rất vui được giúp bạn. Bạn có thể hỏi tiếp hoặc chuyển sang chủ đề khác.", query
     if q in {"giúp tôi", "giúp mình", "tư vấn", "tư vấn giúp tôi", "làm thế nào", "tôi nên làm gì", "cách giải quyết"}:
         return "Bạn muốn tìm hiểu vấn đề nào, và mục đích là học kiến thức hay áp dụng vào một tình huống cụ thể?", query
-    demonstrative = bool(re.search(
-        r"(?:^|\b)(?:công\s+thức|định\s+lý|định\s+nghĩa|định\s+luật|khái\s+niệm|nguyên\s+lý|mô\s+hình|thuật\s+toán|phương\s+pháp|quy\s+tắc|bài\s+toán|nội\s+dung|vấn\s+đề|kết\s+quả|điều|cái)\s+(?:này|đó|kia|ấy|trên)\b",
+    demo_match = re.search(
+        r"(?:^|\b)(?:công\s+thức|định\s+lý|định\s+nghĩa|định\s+luật|khái\s+niệm|nguyên\s+lý|mô\s+hình|thuật\s+toán|phương\s+pháp|quy\s+tắc|bài\s+toán|nội\s+dung|vấn\s+đề|kết\s+quả|thành\s+phần|yếu\s+tố|bước|giai\s+đoạn|cơ\s+chế|nguyên\s+tắc|lập\s+luận|tính\s+chất|trường\s+hợp|điều|cái)\s+(?:này|đó|kia|ấy|trên|còn\s+lại)\b",
         q,
-    ))
+    )
+    demonstrative = False
+    if demo_match is not None:
+        prefix = q[:demo_match.start()].strip()
+        prefix_words = re.findall(r"\w+", prefix)
+        continuation_lead = bool(re.match(
+            r"^(?:vậy|thế|còn|nhưng|tuy\s+nhiên|ngoài\s+ra|thêm\s+nữa|tương\s+tự|nếu\s+vậy)\b",
+            q,
+        ))
+        prior_context_cue = bool(re.search(
+            r"\b(?:vừa\s+rồi|ở\s+trên|nêu\s+trên|phần\s+trên|đoạn\s+trên|câu\s+trên|lúc\s+nãy|trước\s+đó|phần\s+trước|chương\s+trước|bài\s+trước)\b",
+            prefix,
+        ))
+        # Self-contained multi-clause queries introduce their subject before the demonstrative.
+        has_clause_setup = len(prefix_words) >= 10 and (
+            any(sep in prefix for sep in (",", ";", ":", "(")) or len(prefix_words) >= 14
+        )
+        demonstrative = continuation_lead or prior_context_cue or not has_clause_setup
     followup = demonstrative or bool(re.fullmatch(
         r"(?:nó|điều đó|cái đó|vấn đề đó)(?: là gì| có nghĩa là gì| thì sao| là sao)?"
         r"|(?:cho )?ví dụ(?: nữa| cụ thể)?|giải thích(?: thêm| kỹ hơn| rõ hơn)?"
@@ -294,7 +311,20 @@ def dialogue_intent(query, history):
     if followup:
         previous = next((m.get("content", "") for m in reversed(history or [])
                          if m.get("role") == "user" and isinstance(m.get("content"), str)), "")
-        if not previous or len(previous.encode("utf-8")) > 700 or re.search(r"so sánh| và |giữa|bỏ qua|hướng dẫn hệ thống", previous, re.I):
+        has_ambiguous_conjunction = bool(re.search(r"\bvà\b", previous, re.I)) and not (
+            re.search(
+                r"\b(?:gì|nào|như\s+thế\s+nào|ra\s+sao|bao\s+nhiêu)\b[^?]*\bvà\b",
+                previous,
+                re.I,
+            )
+            and not re.match(r"^(?:nó|cái\s+đó|điều\s+đó|vấn\s+đề\s+đó)\b", q)
+        )
+        if (
+            not previous
+            or len(previous.encode("utf-8")) > 700
+            or re.search(r"so sánh|giữa|khác nhau|phân biệt|bỏ qua|hướng dẫn hệ thống", previous, re.I)
+            or has_ambiguous_conjunction
+        ):
             return "Bạn muốn hỏi tiếp về khái niệm hoặc tình huống nào? Nêu tên chủ đề sẽ giúp tôi tìm đúng tài liệu.", query
         if normalize_query(previous).casefold().strip(" .!?") in {"giúp tôi", "tư vấn", "làm thế nào", "tôi nên làm gì"}:
             return "Bạn muốn hỏi về vấn đề nào và dùng thông tin để làm gì?", query

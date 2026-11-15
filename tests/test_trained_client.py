@@ -192,3 +192,13 @@ def test_start_startup_warmup_respects_disable_and_pytest_guards(monkeypatch):
     monkeypatch.delenv('PYTEST_CURRENT_TEST', raising=False)
     monkeypatch.setenv('STUDY_DISABLE_STARTUP_WARMUP', '1')
     assert trained_client.TrainedModelClient.start_startup_warmup() is False
+
+
+def test_default_warmup_prompts_include_repair_prefix_and_keep_primary_last():
+    from app.rag_agent import MLX_SOURCE_LINE_CONTRACT, MLX_SOURCE_PROMPT
+
+    prompts = trained_client.TrainedModelClient._default_warmup_prompts()
+    assert prompts == [
+        f"{MLX_SOURCE_PROMPT}\n{MLX_SOURCE_LINE_CONTRACT}",
+        MLX_SOURCE_PROMPT,
+    ]

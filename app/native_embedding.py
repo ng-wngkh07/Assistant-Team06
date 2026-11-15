@@ -892,4 +892,4 @@ class NativeEmbeddingClient:
         return _VerifiedBatchResult(vectors, verified_identity=expected_identity)
 
 
-gpu_coordinator.register_resident_evictor(NativeEmbeddingClient.evict_stream_worker)
+gpu_coordinator.register_resident_evictor(NativeEmbeddingClient.evict_stream_worker, role="mlx_embedding")

@@ -282,6 +282,13 @@ TOPIC_TREE: Tuple[Dict[str, Any], ...] = (
                     "nash equilibrium",
                     "thiên kiến nhận thức",
                     "cognitive bias",
+                    "tiến thoái lưỡng nan",
+                    "thế lưỡng nan của người tù",
+                    "thế lưỡng nan của tù nhân",
+                    "lưỡng nan của người tù",
+                    "lưỡng nan của tù nhân",
+                    "prisoner's dilemma",
+                    "prisoners dilemma",
                 ),
             ),
             (
@@ -385,7 +392,7 @@ TOPICS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("Nhân cách và tâm lý học phân tích", ("nhân cách", "personality", "carl jung", "c. g. jung", "archetype", "cái bóng")),
     ("Tâm lý học xã hội và gắn bó", ("tâm lý học xã hội", "social psychology", "gắn bó", "attachment theory", "dissonance", "ảnh hưởng xã hội")),
     ("Cảm xúc và sức khỏe tâm lý", ("cảm xúc", "emotion regulation", "sang chấn", "trauma", "rối loạn tâm lý", "mental health")),
-    ("Lý thuyết trò chơi và ra quyết định", ("lý thuyết trò chơi", "game theory", "cân bằng nash", "nash equilibrium", "thiên kiến nhận thức", "cognitive bias")),
+    ("Lý thuyết trò chơi và ra quyết định", ("lý thuyết trò chơi", "game theory", "cân bằng nash", "nash equilibrium", "thiên kiến nhận thức", "cognitive bias", "tiến thoái lưỡng nan", "thế lưỡng nan của người tù", "thế lưỡng nan của tù nhân", "lưỡng nan của người tù", "lưỡng nan của tù nhân", "prisoner's dilemma", "prisoners dilemma")),
     ("Tiếng Anh và kỹ năng giao tiếp", ("ielts", "cue card", "english vocabulary", "kỹ năng giao tiếp", "public speaking")),
 )
 

@@ -250,3 +250,28 @@ def test_compact_auditor_skeleton_resolves_exact_catalog_evidence_and_rejects_un
     status, _ = audit_draft_answer(json.dumps(report), {'S1'}, {'S1': SOURCE},
                                    draft=statement, evidence_catalog=payload['evidence_catalog'])
     assert status != 'verified'
+
+
+def test_extract_draft_claims_strips_and_skips_step_headers():
+    from app.reasoning_policy import extract_draft_claims
+    draft = "Bước 1. Kiểm tra vectơ không thuộc W.\nBước 2.\nKiểm tra đóng kín với phép cộng."
+    assert extract_draft_claims(draft) == [
+        "Kiểm tra vectơ không thuộc W.",
+        "Kiểm tra đóng kín với phép cộng.",
+    ]
+
+
+def test_build_auditor_messages_avoids_duplicating_cataloged_sources():
+    from app.reasoning_policy import build_auditor_messages
+    short_src = "Điều kiện 1 là vectơ 0 thuộc W. Điều kiện 2 là đóng kín với phép cộng."
+    msgs = build_auditor_messages("Kiểm tra không gian con?", "Vectơ 0 thuộc W.", "", sources_map={"S1": short_src})
+    payload_text = msgs[-1]["content"].split(":\n", 1)[1]
+    payload = json.loads(payload_text)
+    assert "S1" in payload["evidence_catalog"]
+    assert "sources" not in payload
+
+    # Sources exceeding the 30-sentence catalog cap keep full raw text for tail evidence_quote fallback.
+    long_src = " ".join(f"Câu số {i}." for i in range(1, 36))
+    msgs_long = build_auditor_messages("Kiểm tra?", "Câu số 35.", "", sources_map={"S1": long_src})
+    payload_long = json.loads(msgs_long[-1]["content"].split(":\n", 1)[1])
+    assert "S1" in payload_long.get("sources", {})

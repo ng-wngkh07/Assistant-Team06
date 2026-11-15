@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import atexit
+import gc
 import os
 import select
 import signal
@@ -251,10 +252,35 @@ class ResidentStreamWorker:
                                 completed = True
                                 break
                         break
-                    except (BrokenPipeError, EOFError) as exc:
+                    except (BrokenPipeError, EOFError, RuntimeError) as exc:
+                        is_oom_retry = (
+                            attempt == 0
+                            and not emitted_any
+                            and (
+                                isinstance(exc, (BrokenPipeError, EOFError))
+                                or any(
+                                    marker in str(exc).casefold()
+                                    for marker in (
+                                        "out of memory",
+                                        "outofmemory",
+                                        "kiogpu",
+                                        "insufficient memory",
+                                        "metal",
+                                    )
+                                )
+                            )
+                        )
+                        if isinstance(exc, RuntimeError) and not is_oom_retry:
+                            raise
                         stderr_tail = self._read_stderr_tail(proc)
                         self._terminate_locked()
-                        if attempt == 0 and not emitted_any:
+                        if is_oom_retry:
+                            peer_roles = {"mlx_embedding", "mlx_infer", "mlx_vision"}
+                            if self.role:
+                                peer_roles.discard(self.role)
+                            if peer_roles:
+                                gpu_coordinator.evict_resident_workers(roles=peer_roles)
+                            gc.collect()
                             continue
                         detail = stderr_tail or str(exc)
                         raise RuntimeError(f"{self._error_prefix}: {detail}") from exc

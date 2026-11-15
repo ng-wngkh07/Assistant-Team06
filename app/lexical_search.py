@@ -188,6 +188,8 @@ def is_heading_or_toc_chunk(text: str) -> bool:
     lines = [line.strip() for line in t.split("\n") if line.strip()]
     if not lines:
         return True
+    content_lines = [line for line in lines if not (line.startswith("[") and line.endswith("]"))]
+    top_tl = content_lines[0].lower() if content_lines else tl
 
     leader_pat = re.compile(r"((?:\.\s*){4,}|…{2,}|_{4,}|-{4,})\s*\d*\s*$")
     dot_leader_lines = sum(1 for line in lines if leader_pat.search(line))
@@ -196,11 +198,14 @@ def is_heading_or_toc_chunk(text: str) -> bool:
         if prose_lines < 2:
             return True
 
-    has_toc_header = any(tl.startswith(prefix) for prefix in ("mục lục", "table of contents")) or (
-        tl.startswith("nội dung") and any(w in tl for w in ("chương trình", "mục lục", "chi tiết", "bài giảng", "khóa học"))
+    has_toc_header = any(top_tl.startswith(prefix) for prefix in ("mục lục", "table of contents")) or (
+        top_tl.startswith("nội dung") and any(w in tl for w in ("chương trình", "mục lục", "chi tiết", "bài giảng", "khóa học"))
     )
     if has_toc_header:
-        substantive = [l for l in lines if len(l) > 60 and not re.match(r"^(\d+[\.\)]|[A-ZĐ\.\-\s]{3,})", l)]
+        substantive = [
+            l for l in content_lines
+            if len(l) > 60 and not re.match(r"^(\d+(?:[\.\)]|\s+)|[A-ZĐ\.\-\s]{3,})", l)
+        ]
         if not substantive or len(" ".join(substantive)) < 150:
             return True
 
