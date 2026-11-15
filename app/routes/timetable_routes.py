@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app import study_planner
 from app.gpu_lock import GPUBusyError
+from app.response_projection import sanitize_error_detail
 
 logger = logging.getLogger("psychology_agent")
 
@@ -130,7 +131,7 @@ async def extract_timetable(payload: TimetableExtractRequest):
             payload.image_base64,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=sanitize_error_detail(str(e)))
 
     try:
         result = await run_in_threadpool(
@@ -141,11 +142,11 @@ async def extract_timetable(payload: TimetableExtractRequest):
         )
         return result
     except GPUBusyError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=sanitize_error_detail(str(e)))
     except _srv.timetable_vision.VLMUnavailableError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise HTTPException(status_code=503, detail=sanitize_error_detail(str(e)))
     except _srv.timetable_vision.VLMOutputInvalidError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(e)))
     except HTTPException:
         raise
     except Exception:
@@ -168,7 +169,7 @@ async def confirm_timetable(payload: TimetableConfirmRequest):
         )
         return {"status": "ok", "saved_entries": saved_count, "entries": entries_data}
     except ValueError as e:
-        msg = str(e)
+        msg = sanitize_error_detail(str(e))
         if "Draft not found" in msg:
             raise HTTPException(status_code=404, detail=msg)
         if "Xung đột" in msg or "Trùng lịch" in msg:
@@ -216,7 +217,7 @@ async def add_timetable_manual_entry(payload: TimetableManualEntryRequest):
         )
         return {"status": "ok", "id": entry_id}
     except ValueError as e:
-        msg = str(e)
+        msg = sanitize_error_detail(str(e))
         if "Xung đột" in msg or "Trùng lịch" in msg:
             raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=422, detail=msg)
@@ -239,7 +240,7 @@ async def update_timetable_entry(entry_id: int, payload: TimetableManualEntryReq
             raise HTTPException(status_code=404, detail="Entry not found")
         return {"status": "ok", "id": entry_id}
     except ValueError as e:
-        msg = str(e)
+        msg = sanitize_error_detail(str(e))
         if "Xung đột" in msg or "Trùng lịch" in msg:
             raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=422, detail=msg)
@@ -328,7 +329,7 @@ async def export_timetable_ics(
     except HTTPException:
         raise
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(e)))
     except Exception:
         logger.exception("Lỗi xuất lịch sang ICS")
         raise HTTPException(status_code=500, detail="Lỗi xuất tệp lịch .ics.")
@@ -450,7 +451,7 @@ async def create_planner_routine(payload: RoutineItemPayload):
         res = await run_in_threadpool(study_planner.add_routine, payload.model_dump())
         return {"status": "ok", **res}
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(e)))
 
 
 @router.put("/api/timetable/planner/routines/bulk")
@@ -460,7 +461,7 @@ async def replace_planner_routines_bulk(payload: RoutineBulkPayload):
         res = await run_in_threadpool(study_planner.replace_routines_bulk, items)
         return {"status": "ok", **res}
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(e)))
 
 
 @router.put("/api/timetable/planner/routines/{routine_id}")
@@ -469,9 +470,9 @@ async def update_planner_routine(routine_id: int, payload: RoutineItemPayload):
         res = await run_in_threadpool(study_planner.update_routine, routine_id, payload.model_dump())
         return {"status": "ok", **res}
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=sanitize_error_detail(str(e)))
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(e)))
 
 
 @router.delete("/api/timetable/planner/routines/{routine_id}")
@@ -495,7 +496,7 @@ async def save_planner_preferences(payload: StudyPreferencesPayload):
         prefs = await run_in_threadpool(study_planner.update_preferences, clean)
         return {"status": "ok", "preferences": prefs}
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(e)))
 
 
 @router.get("/api/timetable/planner/tasks")
@@ -510,7 +511,7 @@ async def create_planner_task(payload: StudyTaskCreatePayload):
         task = await run_in_threadpool(study_planner.add_task, payload.model_dump())
         return {"status": "ok", "task": task}
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(e)))
 
 
 @router.put("/api/timetable/planner/tasks/{task_id}")
@@ -520,9 +521,9 @@ async def update_planner_task(task_id: int, payload: StudyTaskUpdatePayload):
         task = await run_in_threadpool(study_planner.update_task, task_id, clean)
         return {"status": "ok", "task": task}
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=sanitize_error_detail(str(e)))
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(e)))
 
 
 @router.delete("/api/timetable/planner/tasks/{task_id}")
@@ -553,7 +554,7 @@ async def generate_planner_schedule(payload: Optional[StudyPlanGeneratePayload] 
         )
         return {"status": "ok", "draft": draft}
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(e)))
 
 
 @router.get("/api/timetable/planner/drafts/{plan_id}")
@@ -582,9 +583,9 @@ async def confirm_planner_draft_endpoint(payload: StudyPlanConfirmPayload):
         )
         return res
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=sanitize_error_detail(str(e)))
     except ValueError as e:
-        msg = str(e)
+        msg = sanitize_error_detail(str(e))
         if any(kw in msg for kw in (
             "trùng giờ", "xâm phạm", "lỗi thời", "xung đột", "không còn hợp lệ",
             "giới hạn", "vượt quá", "ngoài khung giờ", "hạn nộp", "bắt đầu trước",
@@ -601,9 +602,9 @@ async def apply_planner_suggestion_endpoint(payload: Dict[str, Any]):
         res = await run_in_threadpool(study_planner.apply_planner_suggestion, payload)
         return res
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=sanitize_error_detail(str(e)))
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(e)))
 
 
 @router.get("/api/timetable/planner/sessions")
@@ -618,7 +619,7 @@ async def add_planner_session(payload: StudySessionPayload):
         session = await run_in_threadpool(study_planner.add_manual_study_session, payload.model_dump())
         return {"status": "ok", "session": session}
     except ValueError as e:
-        msg = str(e)
+        msg = sanitize_error_detail(str(e))
         if any(kw in msg for kw in (
             "trùng giờ", "xâm phạm", "lỗi thời", "xung đột", "không còn hợp lệ",
             "giới hạn", "vượt quá", "ngoài khung giờ", "hạn nộp", "bắt đầu trước",
@@ -636,9 +637,9 @@ async def update_planner_session(session_id: int, payload: StudySessionUpdatePay
         session = await run_in_threadpool(study_planner.update_study_session, session_id, clean)
         return {"status": "ok", "session": session}
     except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=sanitize_error_detail(str(e)))
     except ValueError as e:
-        msg = str(e)
+        msg = sanitize_error_detail(str(e))
         if any(kw in msg for kw in (
             "trùng giờ", "xâm phạm", "lỗi thời", "xung đột", "không còn hợp lệ",
             "giới hạn", "vượt quá", "ngoài khung giờ", "hạn nộp", "bắt đầu trước",
@@ -700,7 +701,7 @@ async def create_weekly_lesson_endpoint(payload: WeeklyLessonCreatePayload):
         )
         return {"status": "ok", "lesson": lesson}
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(exc)))
 
 
 @router.delete("/api/timetable/planner/weekly-lessons/{lesson_id}")
@@ -730,7 +731,7 @@ async def auto_schedule_courses_90m_endpoint(payload: Optional[AutoSchedule90mPa
         )
         return result
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(exc)))
 
 
 @router.get("/api/timetable/planner/sessions/{session_id}/exercise")
@@ -849,9 +850,9 @@ async def generate_session_exercise_endpoint(session_id: int):
             "practice": gen_result,
         }
     except DialogueBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
+        raise HTTPException(status_code=409, detail=sanitize_error_detail(str(exc)), headers={"Retry-After": "2"})
     except GPUBusyError as exc:
-        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
+        raise HTTPException(status_code=503, detail=sanitize_error_detail(str(exc)), headers={"Retry-After": "2"})
     except PracticeGenerationError as exc:
         await run_in_threadpool(
             study_planner.update_session_practice,
@@ -859,7 +860,7 @@ async def generate_session_exercise_endpoint(session_id: int):
             "",
             exercise_status="unavailable",
         )
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(exc)))
 
 
 @router.post("/api/timetable/planner/weekly-lessons/{lesson_id}/exercise/generate")
@@ -942,9 +943,9 @@ async def generate_weekly_lesson_exercise_endpoint(lesson_id: int):
             "practice": gen_result,
         }
     except DialogueBusyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc), headers={"Retry-After": "2"})
+        raise HTTPException(status_code=409, detail=sanitize_error_detail(str(exc)), headers={"Retry-After": "2"})
     except GPUBusyError as exc:
-        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "2"})
+        raise HTTPException(status_code=503, detail=sanitize_error_detail(str(exc)), headers={"Retry-After": "2"})
     except PracticeGenerationError as exc:
         def _mark_unavailable():
             with _connect(None) as conn:
@@ -956,7 +957,7 @@ async def generate_weekly_lesson_exercise_endpoint(lesson_id: int):
                     )
                     conn.commit()
         await run_in_threadpool(_mark_unavailable)
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(exc)))
 
 
 @router.get("/api/timetable/worksheets/{worksheet_id}.pdf")
@@ -1056,7 +1057,7 @@ async def export_timetable_bundle_zip(
     except HTTPException:
         raise
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(exc)))
     except Exception as exc:
         logger.exception("Lỗi xuất gói lịch .zip kèm PDF bài tập")
         raise HTTPException(status_code=500, detail="Không thể tạo gói lịch .zip lúc này.") from exc

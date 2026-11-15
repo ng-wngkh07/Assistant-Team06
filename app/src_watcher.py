@@ -673,11 +673,24 @@ class SrcWatcher:
         prev_prog = item.get("ocr_progress") or {}
         if prev_prog.get("source_hash") == current_hash and isinstance(prev_prog.get("page_states"), dict):
             page_states: Dict[str, Dict[str, Any]] = dict(prev_prog["page_states"])
+            if ocr_available:
+                for _pk, _ps in list(page_states.items()):
+                    if (
+                        isinstance(_ps, dict)
+                        and _ps.get("status") == "needs_ocr"
+                        and _ps.get("reason_code") == "ocr_unavailable"
+                    ):
+                        page_states[_pk] = {
+                            "status": "ocr_queued",
+                            "reason_code": "queued",
+                            "updated_at": _utc_now_iso(),
+                        }
         else:
             page_states = {}
 
         mgr = VisionOCRManager(backend=self.ocr_backend, cache_dir=self._ocr_cache_dir())
         waiting_gpu = False
+        batch_model_digest: Optional[str] = None
 
         for p_num in pages_needing_ocr:
             if self._stop_event.is_set():
@@ -721,7 +734,7 @@ class SrcWatcher:
                 continue
 
             if ocr_budget_remaining <= 0 or waiting_gpu:
-                if p_key not in page_states or page_states[p_key].get("status") == "ocr_running":
+                if p_key not in page_states or page_states[p_key].get("status") in ("ocr_running", "needs_ocr"):
                     page_states[p_key] = {
                         "status": "ocr_queued",
                         "reason_code": "queued",
@@ -749,6 +762,13 @@ class SrcWatcher:
 
             ocr_budget_remaining -= 1
             try:
+                if (
+                    batch_model_digest is None
+                    and sys.platform == "darwin"
+                    and getattr(mgr, "backend", None) == BACKEND_OLLAMA_VISION
+                ):
+                    from app.native_vision import NativeVisionClient
+                    batch_model_digest = NativeVisionClient().get_identity()
                 img_bytes = self._render_single_page_bytes(fpath, p_num)
                 ocr_kwargs: Dict[str, Any] = {
                     "image_bytes": img_bytes,
@@ -763,6 +783,8 @@ class SrcWatcher:
                         ocr_kwargs["cancel_event"] = self._stop_event
                     if has_kw or "gpu_timeout" in sig_p:
                         ocr_kwargs["gpu_timeout"] = 0.5
+                    if batch_model_digest and (has_kw or "preverified_model_digest" in sig_p):
+                        ocr_kwargs["preverified_model_digest"] = batch_model_digest
                 except (TypeError, ValueError):
                     pass
                 entry = mgr.ocr_image_bytes(**ocr_kwargs)

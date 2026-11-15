@@ -493,3 +493,109 @@ def test_sanitize_error_detail_linear_time_and_suffix_trimming():
     elapsed = time.monotonic() - start
     assert cleaned == "Lỗi."
     assert elapsed < 0.25
+
+
+def test_learning_and_timetable_route_errors_sanitize_host_paths(monkeypatch):
+    """Learning and timetable HTTP exception details must strip host paths before returning to clients."""
+    from fastapi.testclient import TestClient
+    import app.server as srv
+    from app import study_planner
+    from app.practice import PracticeSessionNotFound
+
+    monkeypatch.setattr(
+        srv.practice_service,
+        "get_session_questions_with_answers",
+        lambda pid: (_ for _ in ()).throw(PracticeSessionNotFound("Missing session at /Users/secret/practice.db")),
+    )
+    monkeypatch.setattr(
+        study_planner,
+        "add_routine",
+        lambda payload: (_ for _ in ()).throw(ValueError("Routine error at /Users/secret/timetable.db")),
+    )
+    monkeypatch.setattr(
+        srv.timetable_store,
+        "get_confirmed_entries",
+        lambda: (_ for _ in ()).throw(ValueError("Export error at /Users/secret/timetable.db")),
+    )
+
+    with TestClient(srv.app) as client:
+        r_pdf = client.get("/api/learning/export-pdf/missing-id")
+        assert r_pdf.status_code == 404
+        assert "/Users/secret" not in r_pdf.json()["detail"]
+
+        r_routine = client.post(
+            "/api/timetable/planner/routines",
+            json={
+                "title": "Sleep",
+                "activity_type": "sleep",
+                "weekday": 1,
+                "start_time": "22:00",
+                "end_time": "23:00",
+                "flexibility": "fixed",
+            },
+        )
+        assert r_routine.status_code == 422
+        assert "/Users/secret" not in r_routine.json()["detail"]
+
+        r_ics = client.get("/api/timetable/export.ics?start_date=2026-11-01&end_date=2026-12-01")
+        assert r_ics.status_code == 422
+        assert "/Users/secret" not in r_ics.json()["detail"]
+
+        r_zip = client.get("/api/timetable/export-bundle.zip?start_date=2026-11-01&end_date=2026-12-01")
+        assert r_zip.status_code == 422
+        assert "/Users/secret" not in r_zip.json()["detail"]
+
+
+def test_ocr_page_image_and_locator_endpoints(tmp_path, monkeypatch):
+    """OCR locator and page-image endpoints return valid locators/PNGs and clean 400/404 status codes."""
+    import pymupdf
+    from fastapi.testclient import TestClient
+    import app.server as srv
+
+    pdf_path = tmp_path / "sample.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=200, height=200)
+    page.insert_text((20, 40), "OCR locator sample page")
+    doc.save(str(pdf_path))
+    doc.close()
+
+    txt_path = tmp_path / "notes.txt"
+    txt_path.write_text("plain text", encoding="utf-8")
+
+    def fake_file_path(filename: str):
+        if filename == "sample.pdf":
+            return pdf_path
+        if filename == "notes.txt":
+            return txt_path
+        return None
+
+    monkeypatch.setattr(srv.document_lookup, "file_path", fake_file_path)
+
+    with TestClient(srv.app) as client:
+        loc_pdf = client.get("/api/ocr/locator", params={"filename": "sample.pdf", "page_num": 3})
+        assert loc_pdf.status_code == 200
+        assert loc_pdf.json() == {
+            "type": "pdf_page",
+            "source_relpath": "sample.pdf",
+            "page_num": 3,
+            "locator_str": "sample.pdf#page=3",
+            "unit": "trang",
+        }
+
+        loc_docx = client.get("/api/ocr/locator", params={"filename": "slides.docx", "page_num": 2})
+        assert loc_docx.status_code == 200
+        assert loc_docx.json()["type"] == "docx_paragraph"
+
+        img_ok = client.get("/api/ocr/page-image", params={"filename": "sample.pdf", "page_num": 1})
+        assert img_ok.status_code == 200
+        assert img_ok.headers["content-type"].startswith("image/png")
+        assert img_ok.content.startswith(b"\x89PNG")
+
+        img_bad_page = client.get("/api/ocr/page-image", params={"filename": "sample.pdf", "page_num": 9})
+        assert img_bad_page.status_code == 400
+
+        img_bad_fmt = client.get("/api/ocr/page-image", params={"filename": "notes.txt", "page_num": 1})
+        assert img_bad_fmt.status_code == 400
+
+        img_missing = client.get("/api/ocr/page-image", params={"filename": "missing.pdf", "page_num": 1})
+        assert img_missing.status_code == 404

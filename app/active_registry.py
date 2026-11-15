@@ -9,6 +9,8 @@ records remain auditable and are never automatically applied to that base.
 import json
 import hashlib
 import logging
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
@@ -19,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 REGISTRY_FILE = DATA_DIR / "adapters" / "active_registry.json"
 
-_FILE_HASH_CACHE: Dict[Tuple[str, int, int, int, int, int], str] = {}
+_FILE_HASH_LOCK = threading.Lock()
+_FILE_HASH_CACHE: "OrderedDict[Tuple[str, int, int, int, int, int], str]" = OrderedDict()
+_FILE_HASH_CACHE_MAX = 128
 
 
 def get_file_sha256_cached(path: Path) -> str:
@@ -27,15 +31,22 @@ def get_file_sha256_cached(path: Path) -> str:
     p = Path(path).resolve()
     stat = p.stat()
     key = (str(p), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-    if key in _FILE_HASH_CACHE:
-        return _FILE_HASH_CACHE[key]
+    with _FILE_HASH_LOCK:
+        cached = _FILE_HASH_CACHE.get(key)
+        if cached is not None:
+            _FILE_HASH_CACHE.move_to_end(key)
+            return cached
 
     h = hashlib.sha256()
     with open(p, "rb") as f:
         while chunk := f.read(1024 * 1024):
             h.update(chunk)
     digest = h.hexdigest()
-    _FILE_HASH_CACHE[key] = digest
+    with _FILE_HASH_LOCK:
+        _FILE_HASH_CACHE[key] = digest
+        _FILE_HASH_CACHE.move_to_end(key)
+        while len(_FILE_HASH_CACHE) > _FILE_HASH_CACHE_MAX:
+            _FILE_HASH_CACHE.popitem(last=False)
     return digest
 
 

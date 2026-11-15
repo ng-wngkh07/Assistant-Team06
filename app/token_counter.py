@@ -6,6 +6,8 @@ used in mlx_infer.
 """
 
 import atexit
+from collections import OrderedDict
+import hashlib
 import json
 import logging
 import os
@@ -43,6 +45,8 @@ def _find_train_python() -> Optional[Path]:
 class TokenizerWorkerClient:
     """Persistent, thread-safe helper client to communicate with tokenizer worker."""
 
+    _MAX_CACHE_ENTRIES = 512
+
     def __init__(self, model_dir: Path, python_path: Path):
         self.model_dir = model_dir
         self.python_path = python_path
@@ -50,7 +54,25 @@ class TokenizerWorkerClient:
         self._proc: Optional[subprocess.Popen] = None
         self._lock = threading.RLock()
         self._read_buffer: bytes = b""
+        self._count_cache: "OrderedDict[str, int]" = OrderedDict()
         atexit.register(self.close)
+
+    @staticmethod
+    def _cache_key(messages: List[Dict[str, str]]) -> str:
+        serialized = json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def _cache_get(self, key: str) -> Optional[int]:
+        cached = self._count_cache.get(key)
+        if cached is not None:
+            self._count_cache.move_to_end(key)
+        return cached
+
+    def _cache_set(self, key: str, count: int) -> None:
+        self._count_cache[key] = int(count)
+        self._count_cache.move_to_end(key)
+        while len(self._count_cache) > self._MAX_CACHE_ENTRIES:
+            self._count_cache.popitem(last=False)
 
     def _start_worker(self) -> None:
         if self._proc is not None and self._proc.poll() is None:
@@ -125,6 +147,15 @@ class TokenizerWorkerClient:
 
     def count(self, messages: List[Dict[str, str]]) -> int:
         with self._lock:
+            cache_key = None
+            try:
+                cache_key = self._cache_key(messages)
+            except (TypeError, ValueError):
+                cache_key = None
+            if cache_key is not None:
+                cached = self._cache_get(cache_key)
+                if cached is not None:
+                    return cached
             try:
                 payload = json.dumps({"messages": messages}, ensure_ascii=False)
                 resp_line = self._communicate(payload)
@@ -141,16 +172,41 @@ class TokenizerWorkerClient:
                 count_val = resp["count"]
                 if isinstance(count_val, bool) or not isinstance(count_val, int) or count_val < 0:
                     raise ValueError(f"Invalid count received: {count_val!r}")
-                return int(count_val)
+                result = int(count_val)
+                if cache_key is not None:
+                    self._cache_set(cache_key, result)
+                return result
             except Exception as exc:
                 self.close()
                 logger.warning("Tokenizer worker count failed, restarting on next call: %s", exc)
                 raise
 
     def count_batch(self, batch: List[List[Dict[str, str]]]) -> List[int]:
+        if not batch:
+            return []
         with self._lock:
+            results: List[Optional[int]] = [None] * len(batch)
+            miss_indices: List[int] = []
+            miss_keys: List[Optional[str]] = []
+            miss_payload: List[List[Dict[str, str]]] = []
+            for idx, msgs in enumerate(batch):
+                key: Optional[str]
+                try:
+                    key = self._cache_key(msgs)
+                except (TypeError, ValueError):
+                    key = None
+                if key is not None:
+                    cached = self._cache_get(key)
+                    if cached is not None:
+                        results[idx] = cached
+                        continue
+                miss_indices.append(idx)
+                miss_keys.append(key)
+                miss_payload.append(msgs)
+            if not miss_payload:
+                return [int(r) for r in results]  # type: ignore[arg-type]
             try:
-                payload = json.dumps({"batch": batch}, ensure_ascii=False)
+                payload = json.dumps({"batch": miss_payload}, ensure_ascii=False)
                 resp_line = self._communicate(payload)
                 try:
                     resp = json.loads(resp_line)
@@ -163,15 +219,20 @@ class TokenizerWorkerClient:
                 if "counts" not in resp:
                     raise ValueError("Missing 'counts' in worker response")
                 counts_val = resp["counts"]
-                if not isinstance(counts_val, (list, tuple)) or len(counts_val) != len(batch):
+                if not isinstance(counts_val, (list, tuple)) or len(counts_val) != len(miss_payload):
                     raise ValueError(
-                        f"Batch cardinality mismatch: expected {len(batch)}, "
+                        f"Batch cardinality mismatch: expected {len(miss_payload)}, "
                         f"got {len(counts_val) if isinstance(counts_val, (list, tuple)) else 'non-sequence'}"
                     )
                 for c in counts_val:
                     if isinstance(c, bool) or not isinstance(c, int) or c < 0:
                         raise ValueError(f"Invalid count in batch response: {c!r}")
-                return [int(c) for c in counts_val]
+                for idx, key, c in zip(miss_indices, miss_keys, counts_val):
+                    val = int(c)
+                    results[idx] = val
+                    if key is not None:
+                        self._cache_set(key, val)
+                return [int(r) for r in results]  # type: ignore[arg-type]
             except Exception as exc:
                 self.close()
                 logger.warning("Tokenizer worker batch failed: %s", exc)
@@ -227,6 +288,7 @@ def get_exact_token_counter(model_name: Optional[str] = None) -> Optional[Callab
     def counter(messages: List[Dict[str, str]]) -> int:
         return worker.count(messages)
 
+    counter.count_batch = worker.count_batch  # type: ignore[attr-defined]
     return counter
 
 

@@ -54,6 +54,13 @@ PRINT_ONLY_DISCLAIMER = (
     "Tesseract chỉ là OCR chữ in, không được quảng cáo là chứng minh chữ viết tay."
 )
 
+TRANSCRIPT_JSON_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {"text": {"type": "string"}},
+    "required": ["text"],
+    "additionalProperties": False,
+}
+
 
 def get_ollama_model_digest(model_name: str = OLLAMA_AUX_CHAT_MODEL) -> Optional[str]:
     """Retrieve official model digest from local Ollama /api/tags endpoint."""
@@ -237,6 +244,7 @@ class VisionOCRManager:
         is_handwriting_suspected: bool = False,
         cancel_event: Optional[threading.Event] = None,
         gpu_timeout: float = 30.0,
+        preverified_model_digest: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Perform OCR under GPU lock and cache results. Never disguises Tesseract as vision."""
         if cancel_event is not None and cancel_event.is_set():
@@ -256,7 +264,16 @@ class VisionOCRManager:
                 from app.native_vision import NativeVisionClient
                 if not NativeVisionClient.available():
                     raise RuntimeError("Mô hình Native MLX Vision chưa sẵn sàng trên Mac.")
-                model_digest = NativeVisionClient().get_identity()
+                nv_client = NativeVisionClient()
+                if preverified_model_digest:
+                    status_digest = nv_client.get_status_identity()
+                    model_digest = (
+                        status_digest
+                        if status_digest == preverified_model_digest
+                        else nv_client.get_identity()
+                    )
+                else:
+                    model_digest = nv_client.get_identity()
                 model_name = "qwen3.5-9b-4bit-mlx"
                 max_tokens = 2048
             else:
@@ -334,12 +351,27 @@ class VisionOCRManager:
                                 gen_kwargs["cancel_event"] = cancel_event
                             if has_kw or "gpu_timeout" in params:
                                 gen_kwargs["gpu_timeout"] = gpu_timeout
+                            if has_kw or "response_schema" in params:
+                                gen_kwargs["response_schema"] = TRANSCRIPT_JSON_SCHEMA
+                            if has_kw or "repetition_penalty" in params:
+                                gen_kwargs["repetition_penalty"] = 1.05
+                            if has_kw or "repetition_context_size" in params:
+                                gen_kwargs["repetition_context_size"] = 64
                         except (TypeError, ValueError):
                             pass
                         res = native_client.generate_from_image(
                             image_bytes,
                             **gen_kwargs,
                         )
+                        if (res.get("finish_reason") == "length" or res.get("is_truncated")) and gen_kwargs.get("max_tokens", 2048) < 4096:
+                            if cancel_event is not None and cancel_event.is_set():
+                                raise IndexingCancelledError("Đã hủy tác vụ OCR theo yêu cầu dừng.")
+                            retry_kwargs = dict(gen_kwargs)
+                            retry_kwargs["max_tokens"] = 4096
+                            res = native_client.generate_from_image(
+                                image_bytes,
+                                **retry_kwargs,
+                            )
                         raw_text = res.get("text", "").strip()
                         if res.get("finish_reason") == "length" or res.get("is_truncated"):
                             raise RuntimeError("Phản hồi của mô hình chạm giới hạn độ dài token (length); kết quả bị cắt cụt.")

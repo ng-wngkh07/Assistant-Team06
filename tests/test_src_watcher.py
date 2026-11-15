@@ -743,3 +743,78 @@ def test_watch06_dual_watchers_and_manual_index_compatible(tmp_path, monkeypatch
     assert kb["stale_documents"] == 0
 
 
+def test_stale_ocr_unavailable_transitions_to_ocr_queued_when_available(tmp_path, monkeypatch):
+    """Pages previously marked needs_ocr/ocr_unavailable must transition to ocr_queued once OCR becomes available."""
+    import types
+    import pymupdf
+    from contextlib import nullcontext
+    from app import vision_ocr
+    from app.native_vision import NativeVisionClient
+    from app.src_watcher import SrcWatcher
+    from app.vision_ocr import VisionOCRManager
+
+    src_dir = tmp_path / "src"
+    data_dir = tmp_path / "data"
+    src_dir.mkdir()
+    data_dir.mkdir()
+    db_path = data_dir / "knowledge_base.db"
+
+    scan_pdf = src_dir / "scanned_two_pages.pdf"
+    doc = pymupdf.open()
+    for idx in range(2):
+        tmp_render = pymupdf.open()
+        p = tmp_render.new_page(width=200, height=200)
+        p.insert_text((20, 40), f"Scanned page {idx + 1}")
+        img_bytes = p.get_pixmap(alpha=False).tobytes("png")
+        tmp_render.close()
+        out_p = doc.new_page(width=200, height=200)
+        out_p.insert_image(out_p.rect, stream=img_bytes)
+    doc.save(str(scan_pdf))
+    doc.close()
+
+    avail_flag = {"ready": False}
+    monkeypatch.setattr(vision_ocr, "sys", types.SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(vision_ocr, "CACHE_DIR", data_dir / "ocr_cache")
+    monkeypatch.setattr(vision_ocr.gpu_coordinator, "acquire_for_inference", lambda **kw: nullcontext())
+    monkeypatch.setattr(vision_ocr.gpu_coordinator, "check_inference_allowed", lambda: (True, ""))
+    monkeypatch.setattr(NativeVisionClient, "available", classmethod(lambda cls, *a, **kw: avail_flag["ready"]))
+    monkeypatch.setattr(NativeVisionClient, "get_identity", lambda self: "mock-vlm-digest")
+    monkeypatch.setattr(
+        NativeVisionClient,
+        "generate_from_image",
+        lambda self, image_bytes, prompt="", **kw: {
+            "text": json.dumps({"text": "Transcribed scanned page"}),
+            "finish_reason": "stop",
+            "is_truncated": False,
+        },
+    )
+
+    watcher = SrcWatcher(
+        src_dir=src_dir,
+        db_path=db_path,
+        data_dir=data_dir,
+        debounce_seconds=0.0,
+        ocr_batch_pages=1,
+        auto_ocr=True,
+        embed_model=None,
+    )
+
+    # Pass 1: OCR unavailable -> both pages marked ocr_unavailable
+    watcher.scan_once()
+    item1 = watcher.get_status()["items"][0]
+    pstates1 = watcher._items["scanned_two_pages.pdf"]["ocr_progress"]["page_states"]
+    assert pstates1["1"]["reason_code"] == "ocr_unavailable"
+    assert pstates1["2"]["reason_code"] == "ocr_unavailable"
+    assert item1["reason_code"] == "ocr_unavailable"
+
+    # Pass 2: OCR becomes available with batch budget 1 -> page 1 captured, page 2 refreshed to ocr_queued
+    avail_flag["ready"] = True
+    watcher.scan_once()
+    item2 = watcher.get_status()["items"][0]
+    pstates2 = watcher._items["scanned_two_pages.pdf"]["ocr_progress"]["page_states"]
+    assert pstates2["1"]["status"] == "captured_pending_review"
+    assert pstates2["2"]["status"] == "ocr_queued"
+    assert pstates2["2"]["reason_code"] == "queued"
+    assert item2["reason_code"] == "ocr_queued"
+
+

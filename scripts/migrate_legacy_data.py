@@ -17,6 +17,7 @@ from app.db import (
     atomic_transaction,
     history_migrations,
     open_sqlite,
+    practice_migrations,
     secure_dir_permissions,
     secure_file_permissions,
     timetable_migrations,
@@ -333,6 +334,77 @@ def migrate_legacy_timetable(source_db_path: Path, target_db_path: Path) -> Dict
     return counts
 
 
+def migrate_legacy_practice(source_db_path: Path, target_db_path: Path) -> Dict[str, int]:
+    """Migrate legacy practice sessions into target practice.db."""
+    counts = {"practice_sessions": 0}
+    if not source_db_path.exists():
+        return counts
+
+    dst_init = open_sqlite(target_db_path, timeout=10.0, wal=True, synchronous_full=True, foreign_keys=True)
+    try:
+        practice_migrations.apply(dst_init)
+    finally:
+        dst_init.close()
+
+    src = sqlite3.connect(f"file:{source_db_path.resolve()}?mode=ro", uri=True, timeout=10.0)
+    dst = open_sqlite(target_db_path, timeout=10.0, wal=True, synchronous_full=True, foreign_keys=True)
+    try:
+        src.row_factory = sqlite3.Row
+        dst.row_factory = sqlite3.Row
+        src.execute("BEGIN")
+
+        defaults = {
+            "purpose": "practice",
+            "topic": "",
+            "warning": None,
+            "processing_level": "careful",
+            "answers_json": "{}",
+            "metadata_json": "{}",
+        }
+
+        with atomic_transaction(dst):
+            cur = src.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='practice_sessions'")
+            if cur.fetchone():
+                dst_cols = {c[1] for c in dst.execute("PRAGMA table_info(practice_sessions)").fetchall()}
+                src_cols = [c[1] for c in src.execute("PRAGMA table_info(practice_sessions)").fetchall() if c[1] in dst_cols]
+                src_rows = src.execute("SELECT * FROM practice_sessions").fetchall()
+                existing_count = 0
+                for r in src_rows:
+                    existing = dst.execute(
+                        "SELECT * FROM practice_sessions WHERE practice_id = ?",
+                        (r["practice_id"],),
+                    ).fetchone()
+                    if existing:
+                        if not _rows_equal(r, existing, defaults=defaults):
+                            raise ValueError(
+                                f"ID collision detected in 'practice_sessions' for practice_id='{r['practice_id']}': target contains conflicting data. Migration aborted to prevent data loss."
+                            )
+                        existing_count += 1
+                    else:
+                        placeholders = ", ".join(["?"] * len(src_cols))
+                        col_names = ", ".join(src_cols)
+                        values = [r[c] for c in src_cols]
+                        ins_cur = dst.execute(
+                            f"INSERT INTO practice_sessions ({col_names}) VALUES ({placeholders})",
+                            values,
+                        )
+                        if ins_cur.rowcount > 0:
+                            counts["practice_sessions"] += 1
+                if counts["practice_sessions"] + existing_count != len(src_rows):
+                    raise RuntimeError(
+                        f"Unexpected row drop in practice_sessions: inserted {counts['practice_sessions']}, existing {existing_count}, total {len(src_rows)}"
+                    )
+
+            fk_violations = dst.execute("PRAGMA foreign_key_check").fetchall()
+            if fk_violations:
+                raise RuntimeError(f"Foreign key violations in practice.db after migration: {fk_violations}")
+    finally:
+        dst.close()
+        src.close()
+
+    return counts
+
+
 def migrate_legacy(
     source_dir: Union[str, Path],
     accounts_dir: Union[str, Path],
@@ -373,6 +445,8 @@ def migrate_legacy(
         raise ValueError("Source history.db and target history.db cannot be the same file.")
     if (src_res / "timetable.db").resolve() == (target_account_dir / "timetable.db").resolve():
         raise ValueError("Source timetable.db and target timetable.db cannot be the same file.")
+    if (src_res / "practice.db").resolve() == (target_account_dir / "practice.db").resolve():
+        raise ValueError("Source practice.db and target practice.db cannot be the same file.")
 
     target_account_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     secure_dir_permissions(target_account_dir)
@@ -381,6 +455,7 @@ def migrate_legacy(
     source_hashes_before: Dict[str, str] = {}
     src_history = src_res / "history.db"
     src_timetable = src_res / "timetable.db"
+    src_practice = src_res / "practice.db"
     if src_history.exists():
         if src_history.is_symlink():
             raise ValueError(f"Source history.db cannot be a symlink: '{src_history}'")
@@ -389,10 +464,15 @@ def migrate_legacy(
         if src_timetable.is_symlink():
             raise ValueError(f"Source timetable.db cannot be a symlink: '{src_timetable}'")
         source_hashes_before["timetable.db"] = compute_sha256(src_timetable)
+    if src_practice.exists():
+        if src_practice.is_symlink():
+            raise ValueError(f"Source practice.db cannot be a symlink: '{src_practice}'")
+        source_hashes_before["practice.db"] = compute_sha256(src_practice)
 
     # 3. Migrate data
     h_counts = migrate_legacy_history(src_history, target_account_dir / "history.db")
     t_counts = migrate_legacy_timetable(src_timetable, target_account_dir / "timetable.db")
+    p_counts = migrate_legacy_practice(src_practice, target_account_dir / "practice.db")
 
     # 4. Verify source hashes after migration (assert zero byte modification)
     for name, expected_sha in source_hashes_before.items():
@@ -405,8 +485,9 @@ def migrate_legacy(
         "target_account": target_account_id,
         "migrated_history": h_counts,
         "migrated_timetable": t_counts,
+        "migrated_practice": p_counts,
         "source_preservation_verified": True,
-        "cross_db_atomicity": "history.db and timetable.db are migrated as independent atomic SQLite transactions. True cross-database atomicity across multiple SQLite files is not supported by single-file WAL transactions.",
+        "cross_db_atomicity": "history.db, timetable.db and practice.db are migrated as independent atomic SQLite transactions. True cross-database atomicity across multiple SQLite files is not supported by single-file WAL transactions.",
     }
 
 

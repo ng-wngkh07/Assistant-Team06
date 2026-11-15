@@ -512,7 +512,10 @@ class KnowledgeIndexer:
                             vectors = native_client.get_batch_embeddings(
                                 [row["text"] for row in batch], max_length=2048
                             )
-                        if native_client.get_identity() != resolved_model:
+                        post_identity = str(getattr(vectors, "verified_identity", "") or "").strip()
+                        if not post_identity:
+                            post_identity = str(native_client.get_identity() or "").strip()
+                        if post_identity != resolved_model:
                             raise RuntimeError("Embedding artifact changed during backfill")
                     else:
                         vectors = self.ollama.get_batch_embeddings(
@@ -1203,6 +1206,21 @@ class KnowledgeIndexer:
                 )
                 report["embeddings_backfilled"] = backfilled
 
+            sidecar_db = self.db_path.with_name("retrieval_tree.db")
+            if sidecar_db.is_file() and not sidecar_db.is_symlink():
+                needs_tree_refresh = bool(
+                    report["indexed_files"] > 0
+                    or report["removed_files"] > 0
+                    or report["embeddings_backfilled"] > 0
+                )
+                if not needs_tree_refresh:
+                    from app.retrieval_tree import read_source_bound_tree_memberships
+                    needs_tree_refresh = read_source_bound_tree_memberships(self.db_path, sidecar_db) is None
+                if needs_tree_refresh:
+                    from app.retrieval_tree import rebuild_tree
+                    rebuild_tree(self.db_path, sidecar_db)
+                    report["retrieval_tree_refreshed"] = True
+
         from app.source_freshness import clear_freshness_cache
         clear_freshness_cache()
         return report
@@ -1394,7 +1412,9 @@ class KnowledgeIndexer:
                         )
                     else:
                         vectors = native_client.get_batch_embeddings([c["text"] for c in batch], max_length=2048)
-                    model_digest = str(getattr(native_client, "get_identity", lambda: BGE_NATIVE_IDENTITY)() or "").strip()
+                    model_digest = str(getattr(vectors, "verified_identity", "") or "").strip()
+                    if not model_digest:
+                        model_digest = str(getattr(native_client, "get_identity", lambda: BGE_NATIVE_IDENTITY)() or "").strip()
                     if native_identity and model_digest != native_identity:
                         raise RuntimeError("Mô hình native embedding đã thay đổi trong khi lập chỉ mục.")
                 else:

@@ -303,6 +303,10 @@ def dialogue_intent(query, history):
     return None, query
 
 
+_CONTEXT_CAPACITY_LOCK = threading.Lock()
+_CONTEXT_CAPACITY_CACHE: dict[tuple, int] = {}
+
+
 def context_capacity(model):
     from app.model_resolver import is_mlx_model, resolve_mlx_model_dir
     if not is_mlx_model(model):
@@ -316,6 +320,17 @@ def context_capacity(model):
         config_path = Path(model_dir) / "config.json"
         if not config_path.is_file():
             raise ContextLimitError(f"Không tìm thấy tệp cấu hình mô hình tại {config_path}")
+        st = config_path.stat()
+        setting = globals().get("MLX_CONTEXT_TOKENS", MLX_CONTEXT_TOKENS)
+        try:
+            setting_key = int(setting)
+        except (TypeError, ValueError):
+            setting_key = None
+        cache_key = (str(config_path), int(getattr(st, "st_mtime_ns", 0)), int(st.st_size), setting_key)
+        with _CONTEXT_CAPACITY_LOCK:
+            cached = _CONTEXT_CAPACITY_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
         config = json.loads(config_path.read_text(encoding="utf-8"))
         text_cfg = config.get("text_config") if isinstance(config.get("text_config"), dict) else {}
         limit_val = (
@@ -329,14 +344,16 @@ def context_capacity(model):
         limit = int(limit_val)
         if limit < 2048:
             raise ContextLimitError("insufficient window")
-        setting = globals().get("MLX_CONTEXT_TOKENS", MLX_CONTEXT_TOKENS)
-        try:
-            req = int(setting)
-            if not (2048 <= req <= 32768):
-                req = 8192
-        except (TypeError, ValueError):
+        if setting_key is not None and 2048 <= setting_key <= 32768:
+            req = setting_key
+        else:
             req = 8192
-        return min(req, limit)
+        resolved_cap = min(req, limit)
+        with _CONTEXT_CAPACITY_LOCK:
+            if len(_CONTEXT_CAPACITY_CACHE) >= 64:
+                _CONTEXT_CAPACITY_CACHE.clear()
+            _CONTEXT_CAPACITY_CACHE[cache_key] = resolved_cap
+        return resolved_cap
     except ContextLimitError:
         raise
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -400,35 +417,97 @@ def build_context(system, current, passages, history, capacity=8192, output_rese
                 ]
 
             base_messages = full_dialogue_messages([], [])
-            base_tokens = token_counter(base_messages)
-            if base_tokens + output_reserve > capacity:
-                raise ContextLimitError("Câu hỏi quá dài cho cửa sổ ngữ cảnh. Hãy chia thành các câu hỏi ngắn hơn; câu hỏi chưa được xử lý.")
+            sanitized_passages = [_sanitize_passage(raw_passage) for raw_passage in passages]
+            recent_pair = pairs[-1:] if pairs else []
+            count_batch = getattr(token_counter, "count_batch", None)
 
             selected = []
-            recent_pair = pairs[-1:] if pairs else []
-            for raw_passage in passages:
-                passage = _sanitize_passage(raw_passage)
+            measured_pair = None
+            measured_tokens = None
+
+            if callable(count_batch) and sanitized_passages:
+                prefix_batch = [base_messages] + [
+                    full_dialogue_messages(sanitized_passages[:idx], recent_pair)
+                    for idx in range(1, len(sanitized_passages) + 1)
+                ]
+                prefix_counts = count_batch(prefix_batch)
+                base_tokens = prefix_counts[0]
+                if base_tokens + output_reserve > capacity:
+                    raise ContextLimitError("Câu hỏi quá dài cho cửa sổ ngữ cảnh. Hãy chia thành các câu hỏi ngắn hơn; câu hỏi chưa được xử lý.")
+                if not recent_pair:
+                    measured_pair = (0, 0)
+                    measured_tokens = base_tokens
+                fit_prefix = 0
+                for idx in range(1, len(prefix_counts)):
+                    if prefix_counts[idx] + output_reserve <= capacity:
+                        fit_prefix = idx
+                        measured_pair = (idx, len(recent_pair))
+                        measured_tokens = prefix_counts[idx]
+                    else:
+                        break
+                selected = list(sanitized_passages[:fit_prefix])
+                tail_passages = sanitized_passages[fit_prefix:]
+            else:
+                base_tokens = token_counter(base_messages)
+                if base_tokens + output_reserve > capacity:
+                    raise ContextLimitError("Câu hỏi quá dài cho cửa sổ ngữ cảnh. Hãy chia thành các câu hỏi ngắn hơn; câu hỏi chưa được xử lý.")
+                if not recent_pair:
+                    measured_pair = (0, 0)
+                    measured_tokens = base_tokens
+                tail_passages = sanitized_passages
+
+            for passage in tail_passages:
                 cand_msgs = full_dialogue_messages(selected + [passage], recent_pair)
-                if token_counter(cand_msgs) + output_reserve <= capacity:
+                cand_tokens = token_counter(cand_msgs)
+                if cand_tokens + output_reserve <= capacity:
                     selected.append(passage)
+                    measured_pair = (len(selected), len(recent_pair))
+                    measured_tokens = cand_tokens
                 elif recent_pair:
                     cand_no_hist = full_dialogue_messages(selected + [passage], [])
-                    if token_counter(cand_no_hist) + output_reserve <= capacity:
+                    no_hist_tokens = token_counter(cand_no_hist)
+                    if no_hist_tokens + output_reserve <= capacity:
                         selected.append(passage)
                         recent_pair = []
+                        measured_pair = (len(selected), 0)
+                        measured_tokens = no_hist_tokens
 
             kept = []
-            for pair in reversed(pairs):
-                cand_msgs = full_dialogue_messages(selected, [pair] + kept)
-                if token_counter(cand_msgs) + output_reserve <= capacity:
-                    kept.insert(0, pair)
-                else:
-                    break
+            if len(pairs) >= 2 and callable(count_batch):
+                suffix_batch = [
+                    full_dialogue_messages(selected, pairs[len(pairs) - idx:])
+                    for idx in range(1, len(pairs) + 1)
+                ]
+                suffix_counts = count_batch(suffix_batch)
+                fit_hist = 0
+                for idx, tok in enumerate(suffix_counts, 1):
+                    if tok + output_reserve <= capacity:
+                        fit_hist = idx
+                        measured_pair = (len(selected), idx)
+                        measured_tokens = tok
+                    else:
+                        break
+                if fit_hist:
+                    kept = list(pairs[len(pairs) - fit_hist:])
+            else:
+                for pair in reversed(pairs):
+                    cand_kept = [pair] + kept
+                    cand_msgs = full_dialogue_messages(selected, cand_kept)
+                    cand_tokens = token_counter(cand_msgs)
+                    if cand_tokens + output_reserve <= capacity:
+                        kept = cand_kept
+                        measured_pair = (len(selected), len(kept))
+                        measured_tokens = cand_tokens
+                    else:
+                        break
 
             final_prompt = format_prompt(selected, kept)
             final_user_messages = [{"role": "user", "content": final_prompt}]
-            full_final = [{"role": "system", "content": system}] + final_user_messages
-            exact_input_tokens = token_counter(full_final)
+            if measured_pair == (len(selected), len(kept)) and measured_tokens is not None:
+                exact_input_tokens = measured_tokens
+            else:
+                full_final = [{"role": "system", "content": system}] + final_user_messages
+                exact_input_tokens = token_counter(full_final)
 
             return final_user_messages, {
                 "history_turns_used": len(kept), "history_turns_omitted": total_pairs - len(kept),

@@ -103,9 +103,18 @@ def main():
     if streaming:
         print(json.dumps({"ready": True, "model_identity": model_identity}), flush=True)
         for line in sys.stdin:
-            batch = json.loads(line)
-            result = embed_texts(model, tokenizer, batch["texts"], max_length, model_identity)
-            print(json.dumps(result), flush=True)
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                batch = json.loads(line)
+                batch_max_len = int(batch.get("max_length", max_length))
+                if not 1 <= batch_max_len <= 8192:
+                    raise ValueError("Embedding max_length must be in [1, 8192]")
+                result = embed_texts(model, tokenizer, batch["texts"], batch_max_len, model_identity)
+                print(json.dumps(result), flush=True)
+            except Exception as exc:
+                print(json.dumps({"error": f"{type(exc).__name__}: {exc}"}), flush=True)
     else:
         print(json.dumps(embed_texts(model, tokenizer, request.get("texts", []), max_length, model_identity)))
 

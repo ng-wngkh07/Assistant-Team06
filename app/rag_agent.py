@@ -1,3 +1,4 @@
+import inspect
 import json
 import logging
 import re
@@ -32,6 +33,90 @@ from app.token_counter import get_exact_token_counter
 from app.source_consistency import differing_value_reference_signatures, inconsistent_prime_extraction_example
 
 logger = logging.getLogger(__name__)
+
+
+def _accepts_params(fn, *param_names: str) -> bool:
+    """Return True when callable accepts all named parameters or **kwargs."""
+    if not callable(fn):
+        return False
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    params = sig.parameters
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return True
+    return all(name in params for name in param_names)
+
+
+def _supports_response_schema(generator) -> bool:
+    """Return True when generator.chat_stream accepts response_schema."""
+    return _accepts_params(getattr(generator, "chat_stream", None), "response_schema")
+
+
+def _max_source_line_count(retrieved_chunks: List[Dict[str, Any]], admitted_ids: set[str] | Dict[str, Any]) -> int:
+    max_lines = 1
+    for idx, chunk in enumerate(retrieved_chunks, 1):
+        if f"S{idx}" not in admitted_ids:
+            continue
+        text = chunk.get("text")
+        if isinstance(text, str) and text:
+            max_lines = max(max_lines, len(text.split("\n")))
+    return max_lines
+
+
+def _build_qa_response_schema(
+    admitted_keys: List[str],
+    *,
+    use_source_lines: bool,
+    max_line: int = 1,
+    require_quote: bool = False,
+    min_claims: int = 0,
+    max_claims: int = 8,
+) -> Dict[str, Any]:
+    """Build grammar-constrained JSON Schema matching _parse_structured_repair."""
+    source_enum = [k for k in admitted_keys if k]
+    single_source = bool(use_source_lines or require_quote)
+    item_props: Dict[str, Any] = {
+        "text": {"type": "string"},
+        "source_ids": {
+            "type": "array",
+            "items": {"type": "string", "enum": source_enum} if source_enum else {"type": "string"},
+            "minItems": 1,
+            "maxItems": 1 if single_source else max(1, len(source_enum)),
+        },
+    }
+    required_fields = ["text", "source_ids"]
+    if use_source_lines:
+        item_props["evidence_lines"] = {
+            "type": "array",
+            "items": {"type": "integer", "minimum": 1, "maximum": max(1, int(max_line))},
+            "minItems": 2,
+            "maxItems": 2,
+        }
+        required_fields.append("evidence_lines")
+    elif require_quote:
+        item_props["evidence_quote"] = {"type": "string"}
+        required_fields.append("evidence_quote")
+
+    return {
+        "type": "object",
+        "properties": {
+            "claims": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": item_props,
+                    "required": required_fields,
+                    "additionalProperties": False,
+                },
+                "minItems": max(0, int(min_claims)),
+                "maxItems": max(1, int(max_claims)),
+            }
+        },
+        "required": ["claims"],
+        "additionalProperties": False,
+    }
 
 from app.rag_query_analyzer import (
     DIRECTIVE_STOPWORDS,
@@ -692,6 +777,7 @@ class PsychologyAgent:
             resolve_processing_level,
             classify_query_complexity,
             build_auditor_messages,
+            build_auditor_response_schema,
             audit_draft_answer,
             check_positional_sequence_contradiction,
             _escape_data_content,
@@ -708,6 +794,14 @@ class PsychologyAgent:
             )
         )
         resolved_level = resolve_processing_level(processing_level, query, compare_concepts)
+        is_focused_fast = (
+            resolved_level == "standard"
+            and not is_broad
+            and not compare_concepts
+            and answer_mode != "compare"
+            and not source_page
+            and not is_attached_doc_query
+        )
         complexity = classify_query_complexity(query, compare_concepts)
         suggest_careful = bool(complexity.get("is_complex")) and resolved_level == "standard"
         careful_suggestion = complexity.get("suggestion") if suggest_careful else None
@@ -945,10 +1039,43 @@ class PsychologyAgent:
             and callable(getattr(self.searcher, "expand_page_context"))
         ):
             try:
-                retrieved_chunks = self.searcher.expand_page_context(retrieved_chunks)
+                expand_fn = getattr(self.searcher, "expand_page_context")
                 expand_answers = getattr(self.searcher, "expand_markdown_answers", None)
-                if callable(expand_answers):
-                    retrieved_chunks = expand_answers(retrieved_chunks)
+                if is_focused_fast:
+                    fast_seed = list(retrieved_chunks[:3])
+                    fast_tail = list(retrieved_chunks[3:])
+                    seed_pair_chars = sum(len(c.get("text", "")) for c in fast_seed[:2])
+                    fast_expand_chunks = min(6, max(len(fast_seed) + 2, 4))
+                    fast_expand_chars = max(4800, seed_pair_chars + 1600)
+                    if _accepts_params(expand_fn, "max_chunks", "max_chars"):
+                        expanded_seed = expand_fn(
+                            fast_seed,
+                            max_chunks=fast_expand_chunks,
+                            max_chars=fast_expand_chars,
+                        )
+                    else:
+                        expanded_seed = expand_fn(fast_seed)
+                    if callable(expand_answers):
+                        if _accepts_params(expand_answers, "max_chunks", "max_chars"):
+                            expanded_seed = expand_answers(
+                                expanded_seed,
+                                max_chunks=fast_expand_chunks,
+                                max_chars=fast_expand_chars,
+                            )
+                        else:
+                            expanded_seed = expand_answers(expanded_seed)
+                    seen_seed_ids = {
+                        c.get("chunk_id") if c.get("chunk_id") is not None else c.get("id")
+                        for c in expanded_seed
+                    }
+                    retrieved_chunks = list(expanded_seed) + [
+                        c for c in fast_tail
+                        if (c.get("chunk_id") if c.get("chunk_id") is not None else c.get("id")) not in seen_seed_ids
+                    ]
+                else:
+                    retrieved_chunks = expand_fn(retrieved_chunks)
+                    if callable(expand_answers):
+                        retrieved_chunks = expand_answers(retrieved_chunks)
             except Exception as ex:
                 logger.warning("Neighboring context expansion failed, keeping anchors: %s", ex)
 
@@ -1063,12 +1190,30 @@ class PsychologyAgent:
             if " ".join(c.get("exercise_question", "").casefold().split()) == normalized_query
         }
         # A verified answer linked to this exact exercise takes priority over
-        # general theory during packing. Keep original source IDs and scope.
-        ordered_context = sorted(enumerate(retrieved_chunks, 1), key=lambda pair: (
-            " ".join(pair[1].get("exercise_question", "").casefold().split()) != normalized_query
-        ))
+        # general theory during packing. In focused Fast mode, keep top-2 anchors
+        # and their same-page neighbors ahead of lower-ranked tail hits under a
+        # tighter prompt prefill budget while leaving chunks intact for line IDs.
+        primary_anchor_pages = set()
+        for c in retrieved_chunks:
+            if c.get("source_type") not in ("neighboring_context", "exercise_answer_context"):
+                primary_anchor_pages.add((c.get("doc_id"), c.get("page_num")))
+                if len(primary_anchor_pages) >= 2:
+                    break
+
+        def _pack_priority(pair):
+            idx, chunk = pair
+            if " ".join(chunk.get("exercise_question", "").casefold().split()) == normalized_query:
+                return (0, idx)
+            if chunk.get("source_type") == "exercise_answer_context":
+                return (0, idx)
+            if is_focused_fast and (chunk.get("doc_id"), chunk.get("page_num")) in primary_anchor_pages:
+                return (1, idx)
+            return (2 if is_focused_fast else 1, idx)
+
+        ordered_context = sorted(enumerate(retrieved_chunks, 1), key=_pack_priority)
         from app.model_resolver import is_mlx_model, is_9b_model
         use_source_lines = is_9b_model(model)
+        fast_packed_chars = 0
         for idx, c in ordered_context:
             if is_unanswered_calculation_source(c.get("text", "")):
                 continue
@@ -1077,7 +1222,16 @@ class PsychologyAgent:
                 # question cannot substantiate a generated answer or result.
                 continue
             safe_text = c['safe_text']
+            tier = _pack_priority((idx, c))[0]
+            if (
+                is_focused_fast
+                and tier > 0
+                and len(context_parts) >= 3
+                and (fast_packed_chars + len(safe_text) > 3800 or len(context_parts) >= 5)
+            ):
+                continue
             safe_texts_budgeted[f"S{idx}"] = safe_text
+            fast_packed_chars += len(safe_text)
             prompt_text = "\n".join(f"L{line_no}|{line}" for line_no, line in enumerate(c['text'].split('\n'), 1)) if use_source_lines else safe_text
             context_parts.append(
                 f"<document id=\"S{idx}\" book=\"{escape(c['book_title'], {'\"': '&quot;'})}\" page=\"{c['page_num']}\">\n"
@@ -1159,16 +1313,34 @@ class PsychologyAgent:
         else:
             generator = self.ollama if isinstance(self.ollama, OllamaClient) else OllamaClient()
 
+        admitted_primary_keys = sorted(
+            citations_by_id.keys(),
+            key=lambda x: int(x[1:]) if x.startswith("S") and x[1:].isdigit() else x,
+        )
+        max_source_lines = _max_source_line_count(retrieved_chunks, citations_by_id)
+        schema_max_claims = 12 if (is_broad or is_attached_doc_query) else 8
+        supports_schema = _supports_response_schema(generator)
+
+        primary_kwargs = {
+            "messages": messages,
+            "model": model,
+            "temperature": temperature,
+            "system_prompt": source_system_prompt,
+            "num_predict": max_gen_tokens,
+            "num_ctx": capacity,
+        }
+        if use_source_lines and supports_schema and admitted_primary_keys:
+            primary_kwargs["response_schema"] = _build_qa_response_schema(
+                admitted_primary_keys,
+                use_source_lines=True,
+                max_line=max_source_lines,
+                min_claims=0,
+                max_claims=schema_max_claims,
+            )
+
         gen_calls = 1
         try:
-            raw_answer = "".join(generator.chat_stream(
-                messages=messages,
-                model=model,
-                temperature=temperature,
-                system_prompt=source_system_prompt,
-                num_predict=max_gen_tokens,
-                num_ctx=capacity
-            ))
+            raw_answer = "".join(generator.chat_stream(**primary_kwargs))
         except Exception as e:
             logger.error("Inference exception during primary generation: %s", e)
             yield {
@@ -1180,6 +1352,7 @@ class PsychologyAgent:
                 "search_scope": search_scope,
             }
             return
+        primary_done_reason = getattr(generator, "last_done_reason", None)
 
         if raw_answer.startswith(("❌", "Lỗi từ Ollama")):
             yield {
@@ -1758,29 +1931,50 @@ class PsychologyAgent:
                 return len(repair_system_prompt.encode("utf-8")) + len(p_str.encode("utf-8")) + 256
 
             selected_repair_prompt = None
-            cand_prompt = _build_repair_content()
-            if _repair_prompt_tokens(cand_prompt) + max_gen_tokens > capacity:
+            repair_max_tokens = max_gen_tokens
+            # Compact oversized or length-truncated rejected drafts upfront so repair
+            # preserves prefill latency and source headroom.
+            prefer_draft = (primary_done_reason != "length" and len(raw_answer) <= 2000)
+            cand_prompt = _build_repair_content(include_draft=prefer_draft)
+            cand_tokens = _repair_prompt_tokens(cand_prompt)
+            if prefer_draft and cand_tokens + max_gen_tokens > capacity:
                 # Keep the admitted sources and answer reserve ahead of an
                 # optional unaccepted draft; never truncate either silently.
                 cand_prompt = _build_repair_content(include_draft=False)
-            if _repair_prompt_tokens(cand_prompt) + max_gen_tokens <= capacity:
+                cand_tokens = _repair_prompt_tokens(cand_prompt)
+
+            min_repair_output = min(256, max_gen_tokens)
+            headroom = capacity - cand_tokens
+            if headroom >= min_repair_output:
                 selected_repair_prompt = cand_prompt
+                repair_max_tokens = min(max_gen_tokens, headroom)
 
             if selected_repair_prompt is not None:
                 repair_messages = [{"role": "user", "content": selected_repair_prompt}]
                 if hasattr(generator, "last_done_reason"):
                     generator.last_done_reason = None
 
+                repair_kwargs = {
+                    "messages": repair_messages,
+                    "model": model,
+                    "temperature": temperature,
+                    "system_prompt": repair_system_prompt,
+                    "num_predict": repair_max_tokens,
+                    "num_ctx": capacity,
+                }
+                if supports_schema and admitted_keys:
+                    repair_kwargs["response_schema"] = _build_qa_response_schema(
+                        admitted_keys,
+                        use_source_lines=bool(use_source_lines),
+                        max_line=max_source_lines,
+                        require_quote=bool(is_json_primary and not use_source_lines),
+                        min_claims=2 if compare_concepts else 1,
+                        max_claims=schema_max_claims,
+                    )
+
                 gen_calls = 2
                 try:
-                    repair_raw = "".join(generator.chat_stream(
-                        messages=repair_messages,
-                        model=model,
-                        temperature=temperature,
-                        system_prompt=repair_system_prompt,
-                        num_predict=max_gen_tokens,
-                        num_ctx=capacity,
-                    ))
+                    repair_raw = "".join(generator.chat_stream(**repair_kwargs))
                 except Exception as e:
                     logger.error("Inference exception during repair generation: %s", e)
                     yield {
@@ -2006,15 +2200,21 @@ class PsychologyAgent:
                 if auditor_tokens + 600 <= capacity:
                     if hasattr(generator, "last_done_reason"):
                         generator.last_done_reason = None
+                    auditor_kwargs = {
+                        "messages": auditor_messages,
+                        "model": model,
+                        "temperature": 0,
+                        "system_prompt": "",
+                        "num_predict": 600,
+                        "num_ctx": capacity,
+                    }
+                    if supports_schema and citations_by_id:
+                        auditor_kwargs["response_schema"] = build_auditor_response_schema(
+                            set(citations_by_id.keys()),
+                            evidence_catalog=catalog,
+                        )
                     gen_calls += 1
-                    auditor_raw = "".join(generator.chat_stream(
-                        messages=auditor_messages,
-                        model=model,
-                        temperature=0,
-                        system_prompt="",
-                        num_predict=600,
-                        num_ctx=capacity,
-                    ))
+                    auditor_raw = "".join(generator.chat_stream(**auditor_kwargs))
                     if getattr(generator, "last_done_reason", None) != "stop":
                         check_status = "unverified"
                     else:

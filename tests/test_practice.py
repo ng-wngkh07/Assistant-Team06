@@ -842,3 +842,287 @@ def test_generated_duplicate_distractors_are_repaired_before_source_review(monke
     else:
         with pytest.raises(PracticeGenerationError, match='đạt kiểm tra'):
             service.generate(1, 4, count=1, model='test-model')
+
+
+def _bank_test_deps(passages, page_quality=None):
+    class BankSearcher:
+        def __init__(self, items):
+            self._items = items
+        def source_page_chunks(self, doc_id, page_num, limit=6):
+            return [dict(item) for item in self._items]
+        def _attach_page_quality_metadata(self, items):
+            if page_quality is not None:
+                for item in items:
+                    item["page_quality"] = dict(page_quality)
+
+    class BankDocLookup:
+        def document(self, doc_id):
+            return {"id": doc_id, "clean_title": "Toán rời rạc", "filename": "toan.pdf"}
+        def inspect_document_status(self, doc_id):
+            return {"fresh": True, "doc": self.document(doc_id)}
+        def pdf_path(self, filename):
+            return None
+
+    return BankSearcher(passages), BankDocLookup()
+
+
+def _wire_fake_practice_llm(service, generated_batches):
+    gen_calls = []
+    verify_calls = []
+
+    def fake_generate(passages, batch_size, model, difficulty="medium", purpose="practice",
+                      weak_topics=None, exclude_questions=None, timeout=None):
+        idx = min(len(gen_calls), len(generated_batches) - 1)
+        gen_calls.append({
+            "batch_size": batch_size,
+            "model": model,
+            "difficulty": difficulty,
+            "exclude_questions": list(exclude_questions or []),
+        })
+        return json.dumps({"questions": generated_batches[idx]})
+
+    def fake_verify(questions, passages_by_id, model, difficulty=None, timeout=None, stop_after=None):
+        verify_calls.append({"count": len(questions), "model": model, "difficulty": difficulty})
+        return [dict(q) for q in questions]
+
+    service._generate_text = fake_generate
+    service._verify_questions = fake_verify
+    return gen_calls, verify_calls
+
+
+def test_verified_practice_bank_reuses_exact_chunk_without_llm_and_resets_answers(tmp_path):
+    db_file = tmp_path / "bank_reuse.db"
+    quote = "Ngăn xếp hoạt động theo nguyên tắc vào sau ra trước (LIFO) với hai phép toán cơ bản là push và pop."
+    passage_item = {"chunk_id": 21, "doc_id": 1, "page_num": 4, "text": quote, "filename": "toan.pdf"}
+    q1 = {
+        "question": "Ngăn xếp hoạt động theo nguyên tắc nào trong đoạn trích?",
+        "choices": {"A": "LIFO", "B": "FIFO", "C": "Ngẫu nhiên", "D": "Ưu tiên"},
+        "answer": "A",
+        "explanation": "Nguồn nêu rõ ngăn xếp hoạt động theo nguyên tắc vào sau ra trước (LIFO).",
+        "source_chunk_id": 21,
+        "evidence_quote": quote,
+    }
+    searcher, doc_lookup = _bank_test_deps([passage_item])
+    service1 = PracticeService(searcher, doc_lookup, db_path=db_file, enable_verified_bank=True)
+    gen_calls1, verify_calls1 = _wire_fake_practice_llm(service1, [[q1]])
+
+    res1 = service1.generate(1, 4, count=1, model="test-model")
+    assert len(gen_calls1) == 1
+    assert len(verify_calls1) == 1
+    assert "cached_from_bank" not in res1
+    assert "answer" not in res1["questions"][0]
+    assert "snippet" not in res1["questions"][0]["source"]
+
+    submitted = service1.answer(res1["practice_id"], res1["questions"][0]["id"], "A")
+    assert submitted["is_correct"] is True
+
+    # Simulate fresh service/restart against the same SQLite DB
+    service2 = PracticeService(searcher, doc_lookup, db_path=db_file, enable_verified_bank=True)
+    gen_calls2, verify_calls2 = _wire_fake_practice_llm(service2, [[q1]])
+    res2 = service2.generate(1, 4, count=1, model="test-model")
+
+    assert gen_calls2 == []
+    assert verify_calls2 == []
+    assert res2["practice_id"] != res1["practice_id"]
+    assert res2["cached_from_bank"] == 1
+    assert "answer" not in res2["questions"][0]
+    assert "snippet" not in res2["questions"][0]["source"]
+    assert service2.get_session(res2["practice_id"])["answers"] == {}
+    assert service2.answer(res2["practice_id"], res2["questions"][0]["id"], "A")["is_correct"] is True
+
+
+def test_verified_practice_bank_prefers_unanswered_and_supports_refresh_bypass(tmp_path):
+    db_file = tmp_path / "bank_priority.db"
+    quote = "Hàng đợi hoạt động theo nguyên tắc vào trước ra trước (FIFO), trong đó enqueue thêm vào cuối và dequeue lấy ở đầu."
+    passage_item = {"chunk_id": 22, "doc_id": 1, "page_num": 5, "text": quote, "filename": "toan.pdf"}
+    q1 = {
+        "question": "Hàng đợi hoạt động theo nguyên tắc nào?",
+        "choices": {"A": "FIFO", "B": "LIFO", "C": "FILO", "D": "Cây nhị phân"},
+        "answer": "A",
+        "explanation": "Nguồn nêu rõ hàng đợi hoạt động theo nguyên tắc FIFO.",
+        "source_chunk_id": 22,
+        "evidence_quote": quote,
+    }
+    q2 = {
+        "question": "Thao tác dequeue trên hàng đợi thực hiện ở vị trí nào?",
+        "choices": {"A": "Lấy ở đầu", "B": "Thêm vào đầu", "C": "Thêm vào giữa", "D": "Lấy ở cuối"},
+        "answer": "A",
+        "explanation": "Nguồn nêu rõ thao tác dequeue lấy ở đầu hàng đợi.",
+        "source_chunk_id": 22,
+        "evidence_quote": quote,
+    }
+    q3 = {
+        "question": "Thao tác enqueue trên hàng đợi thực hiện việc gì?",
+        "choices": {"A": "Thêm vào cuối", "B": "Xóa ở đầu", "C": "Đảo ngược", "D": "Sắp xếp"},
+        "answer": "A",
+        "explanation": "Nguồn nêu rõ thao tác enqueue thêm vào cuối hàng đợi.",
+        "source_chunk_id": 22,
+        "evidence_quote": quote,
+    }
+    searcher, doc_lookup = _bank_test_deps([passage_item])
+    service1 = PracticeService(searcher, doc_lookup, db_path=db_file, enable_verified_bank=True)
+    _wire_fake_practice_llm(service1, [[q1, q2]])
+    res_pair = service1.generate(1, 5, count=2, model="test-model")
+    service1.answer(res_pair["practice_id"], "q1", "A")
+
+    service2 = PracticeService(searcher, doc_lookup, db_path=db_file, enable_verified_bank=True)
+    gen_calls2, verify_calls2 = _wire_fake_practice_llm(service2, [[q3]])
+    reused_single = service2.generate(1, 5, count=1, model="test-model")
+    assert gen_calls2 == []
+    assert verify_calls2 == []
+    assert reused_single["cached_from_bank"] == 1
+    assert reused_single["questions"][0]["question"] == q2["question"]
+
+    refreshed = service2.generate(1, 5, count=1, model="test-model", reuse_verified_bank=False)
+    assert len(gen_calls2) == 1
+    assert "cached_from_bank" not in refreshed
+    assert refreshed["questions"][0]["question"] == q3["question"]
+
+
+def test_verified_practice_bank_invalidates_on_drift_and_fails_closed_on_needs_review(tmp_path):
+    db_file = tmp_path / "bank_invalidation.db"
+    quote_v1 = "Đệ quy trực tiếp xảy ra khi một hàm gọi lại chính nó trong phần thân định nghĩa."
+    quote_v2 = "Đệ quy gián tiếp xảy ra khi hàm A gọi hàm B và hàm B gọi ngược lại hàm A."
+    q1 = {
+        "question": "Đệ quy trực tiếp xảy ra trong điều kiện nào?",
+        "choices": {"A": "Hàm gọi chính nó", "B": "Hai hàm độc lập", "C": "Chỉ dùng vòng lặp", "D": "Không có điều kiện dừng"},
+        "answer": "A",
+        "explanation": "Nguồn nêu rõ đệ quy trực tiếp xảy ra khi một hàm gọi lại chính nó.",
+        "source_chunk_id": 23,
+        "evidence_quote": quote_v1,
+    }
+    q2 = {
+        "question": "Khi nào xuất hiện đệ quy gián tiếp giữa hai hàm A và B?",
+        "choices": {"A": "A gọi B rồi B gọi A", "B": "A chỉ gọi chính A", "C": "B chỉ trả về hằng", "D": "Cả hai hàm rỗng"},
+        "answer": "A",
+        "explanation": "Nguồn nêu rõ hàm A gọi hàm B và hàm B gọi ngược lại hàm A.",
+        "source_chunk_id": 23,
+        "evidence_quote": quote_v2,
+    }
+    passage_v1 = {"chunk_id": 23, "doc_id": 1, "page_num": 6, "text": quote_v1, "filename": "toan.pdf"}
+    s1, d1 = _bank_test_deps([passage_v1])
+    svc1 = PracticeService(s1, d1, db_path=db_file, enable_verified_bank=True)
+    _wire_fake_practice_llm(svc1, [[q1]])
+    svc1.generate(1, 6, count=1, model="model-a")
+
+    # enforce_difficulty=True must NOT reuse enforce_difficulty=False entry
+    gen_diff, _ = _wire_fake_practice_llm(svc1, [[q1]])
+    svc1.generate_from_passages([dict(passage_v1)], count=1, model="model-a", enforce_difficulty=True)
+    assert len(gen_diff) == 1
+
+    # Different model must NOT reuse model-a entry
+    gen_model, _ = _wire_fake_practice_llm(svc1, [[q1]])
+    svc1.generate(1, 6, count=1, model="model-b")
+    assert len(gen_model) == 1
+
+    # Altered passage text invalidates SHA-256 chunk hash
+    passage_v2 = {"chunk_id": 23, "doc_id": 1, "page_num": 6, "text": quote_v2, "filename": "toan.pdf"}
+    s2, d2 = _bank_test_deps([passage_v2])
+    svc2 = PracticeService(s2, d2, db_path=db_file, enable_verified_bank=True)
+    gen_drift, _ = _wire_fake_practice_llm(svc2, [[q2]])
+    res_drift = svc2.generate(1, 6, count=1, model="model-a")
+    assert len(gen_drift) == 1
+    assert "cached_from_bank" not in res_drift
+    assert res_drift["questions"][0]["question"] == q2["question"]
+
+    # Legacy sessions without verified_bank metadata must never be reused
+    legacy_db = tmp_path / "legacy_only.db"
+    s_leg, d_leg = _bank_test_deps([passage_v1])
+    svc_leg = PracticeService(s_leg, d_leg, db_path=legacy_db, enable_verified_bank=True)
+    with svc_leg._db_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO practice_sessions (
+                practice_id, created_at, count, requested_count, difficulty,
+                purpose, topic, warning, processing_level, questions_json,
+                answers_json, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-id", 9999999999.0, 1, 1, "medium", "practice", "legacy",
+                None, "careful",
+                json.dumps([{
+                    "id": "q1",
+                    "question": q1["question"],
+                    "choices": [{"label": k, "text": v} for k, v in q1["choices"].items()],
+                    "answer": q1["answer"],
+                    "explanation": q1["explanation"],
+                    "source": {"doc_id": 1, "chunk_id": 23, "page_num": 6, "snippet": quote_v1},
+                }]),
+                "{}",
+                "{}",
+            ),
+        )
+        conn.commit()
+    gen_leg, _ = _wire_fake_practice_llm(svc_leg, [[q1]])
+    svc_leg.generate(1, 6, count=1, model="model-a")
+    assert len(gen_leg) == 1
+
+    # needs_review with unrepresented formula/diagram MUST still fail closed before bank lookup
+    s_flagged, d_flagged = _bank_test_deps(
+        [passage_v1],
+        page_quality={"needs_review": True, "warnings": ["unrepresented_formula_or_diagram_suspected"]},
+    )
+    svc_flagged = PracticeService(s_flagged, d_flagged, db_path=db_file, enable_verified_bank=True)
+    with pytest.raises(PracticeGenerationError, match="thiếu công thức"):
+        svc_flagged.generate(1, 6, count=1, model="model-a")
+
+
+def test_verified_practice_bank_partial_hit_only_generates_remaining(tmp_path):
+    db_file = tmp_path / "bank_partial.db"
+    quote = "Cây nhị phân tìm kiếm thỏa điều kiện khóa ở cây con trái nhỏ hơn nút gốc và khóa ở cây con phải lớn hơn nút gốc."
+    passage_item = {"chunk_id": 24, "doc_id": 1, "page_num": 7, "text": quote, "filename": "toan.pdf"}
+    q1 = {
+        "question": "Các khóa ở cây con trái của cây nhị phân tìm kiếm có quan hệ gì với nút gốc?",
+        "choices": {"A": "Nhỏ hơn nút gốc", "B": "Lớn hơn nút gốc", "C": "Luôn bằng 0", "D": "Bất kỳ"},
+        "answer": "A",
+        "explanation": "Nguồn nêu rõ khóa ở cây con trái nhỏ hơn nút gốc.",
+        "source_chunk_id": 24,
+        "evidence_quote": quote,
+    }
+    q2 = {
+        "question": "Các khóa ở cây con phải của cây nhị phân tìm kiếm có quan hệ gì với nút gốc?",
+        "choices": {"A": "Lớn hơn nút gốc", "B": "Nhỏ hơn nút gốc", "C": "Bằng âm vô cực", "D": "Không so sánh"},
+        "answer": "A",
+        "explanation": "Nguồn nêu rõ khóa ở cây con phải lớn hơn nút gốc.",
+        "source_chunk_id": 24,
+        "evidence_quote": quote,
+    }
+    searcher, doc_lookup = _bank_test_deps([passage_item])
+    svc1 = PracticeService(searcher, doc_lookup, db_path=db_file, enable_verified_bank=True)
+    _wire_fake_practice_llm(svc1, [[q1]])
+    svc1.generate(1, 7, count=1, model="test-model")
+
+    svc2 = PracticeService(searcher, doc_lookup, db_path=db_file, enable_verified_bank=True)
+    gen_calls, _ = _wire_fake_practice_llm(svc2, [[q2]])
+    res = svc2.generate(1, 7, count=2, model="test-model")
+    assert len(gen_calls) == 1
+    assert gen_calls[0]["batch_size"] == 1
+    assert q1["question"] in gen_calls[0]["exclude_questions"]
+    assert res["count"] == 2
+    assert res["cached_from_bank"] == 1
+    assert [q["question"] for q in res["questions"]] == [q1["question"], q2["question"]]
+
+
+def test_learning_routes_refresh_flag_forwarding_respects_spies():
+    from app.routes.learning_routes import (
+        LearningGenerateRequest,
+        PracticeGenerateRequest,
+        _bank_refresh_kwargs,
+    )
+
+    class LegacySpy:
+        def generate(self, topic, count=3):
+            return {}
+
+    def bank_aware_generate(topic, count=3, reuse_verified_bank=None):
+        return {}
+
+    assert PracticeGenerateRequest(source_document_id=1, source_page_num=2).refresh is False
+    assert PracticeGenerateRequest(source_document_id=1, source_page_num=2, refresh=True).refresh is True
+    assert LearningGenerateRequest(topic="Toán").refresh is False
+    assert LearningGenerateRequest(topic="Toán", refresh=True).refresh is True
+
+    assert _bank_refresh_kwargs(bank_aware_generate, False) == {}
+    assert _bank_refresh_kwargs(bank_aware_generate, True) == {"reuse_verified_bank": False}
+    assert _bank_refresh_kwargs(LegacySpy().generate, True) == {}

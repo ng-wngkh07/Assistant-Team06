@@ -10,9 +10,11 @@ import stat as stat_mod
 import threading
 import unicodedata
 from collections import OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Set, Tuple
 
 from app.material_storage import SUPPORTED_EXTENSIONS, resolve_safe_source_file
 
@@ -24,6 +26,23 @@ _MAX_HASH_CACHE_ENTRIES = 4096
 _CACHE_LOCK = threading.Lock()
 _FILE_HASH_CACHE: "OrderedDict[Tuple[str, int, int, int, int, int], str]" = OrderedDict()
 _WATCHER_STATE_CACHE: "OrderedDict[str, Tuple[int, int, Dict[str, Dict[str, Any]]]]" = OrderedDict()
+_NO_DOCS_TABLE = object()
+_FRESHNESS_SCOPE: ContextVar[Optional[Dict[Tuple[Any, ...], Any]]] = ContextVar(
+    "study_freshness_request_scope", default=None
+)
+
+
+@contextmanager
+def freshness_request_scope() -> Iterator[None]:
+    """Deduplicate repeated get_fresh_doc_ids scans within a single search request."""
+    if _FRESHNESS_SCOPE.get() is not None:
+        yield
+        return
+    token = _FRESHNESS_SCOPE.set({})
+    try:
+        yield
+    finally:
+        _FRESHNESS_SCOPE.reset(token)
 
 
 @dataclass(frozen=True)
@@ -691,8 +710,36 @@ def get_fresh_doc_ids(
     require_disk_if_unhashed: bool = True,
 ) -> Optional[List[int]]:
     """Return sorted fresh indexed doc_ids, or None when DB has no documents table."""
+    scope_cache = _FRESHNESS_SCOPE.get()
+    base_key = (
+        str(db_path) if db_path is not None else "",
+        str(src_dir) if src_dir is not None else "",
+        str(data_dir) if data_dir is not None else "",
+        bool(require_disk_if_unhashed),
+    )
+    cand_tuple: Optional[Tuple[int, ...]] = None
+    if candidate_doc_ids is not None:
+        cand_tuple = tuple(int(i) for i in candidate_doc_ids)
+        if not cand_tuple:
+            return []
+    if scope_cache is not None and (db_path is not None or cand_tuple is None):
+        full_entry = scope_cache.get((*base_key, None))
+        if full_entry is not None:
+            if full_entry is _NO_DOCS_TABLE:
+                return None
+            if cand_tuple is None:
+                return list(full_entry[0])
+            fresh_set = full_entry[1]
+            return sorted(i for i in cand_tuple if i in fresh_set)
+        if cand_tuple is not None:
+            sub_entry = scope_cache.get((*base_key, ("sub", tuple(sorted(set(cand_tuple))))))
+            if sub_entry is not None:
+                return None if sub_entry is _NO_DOCS_TABLE else list(sub_entry)
+
     cols = table_columns(conn, "documents")
     if not cols or "id" not in cols:
+        if scope_cache is not None and db_path is not None:
+            scope_cache[(*base_key, None)] = _NO_DOCS_TABLE
         return None
     wanted = [c for c in ("id", "filename", "clean_title", "filepath", "file_size", "file_hash", "total_pages", "status") if c in cols]
     sql = f"SELECT {', '.join(wanted)} FROM documents"
@@ -700,10 +747,8 @@ def get_fresh_doc_ids(
     params: List[Any] = []
     if "status" in cols:
         clauses.append("status IN ('indexed', 'ocr_partial_reviewed')")
-    if candidate_doc_ids is not None:
-        ids_list = [int(i) for i in candidate_doc_ids]
-        if not ids_list:
-            return []
+    if cand_tuple is not None:
+        ids_list = list(cand_tuple)
         placeholders = ",".join("?" for _ in ids_list)
         clauses.append(f"id IN ({placeholders})")
         params.extend(ids_list)
@@ -726,4 +771,9 @@ def get_fresh_doc_ids(
         )
         if res.fresh and res.doc_id is not None:
             fresh_ids.append(int(res.doc_id))
+    if scope_cache is not None and db_path is not None:
+        if cand_tuple is None:
+            scope_cache[(*base_key, None)] = (list(fresh_ids), set(fresh_ids))
+        else:
+            scope_cache[(*base_key, ("sub", tuple(sorted(set(cand_tuple)))))] = list(fresh_ids)
     return fresh_ids

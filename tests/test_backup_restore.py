@@ -529,3 +529,63 @@ def test_backup_archive_posix_permissions(tmp_path, monkeypatch):
     import stat
     mode = stat.S_IMODE(archive_path.stat().st_mode)
     assert mode & 0o777 == 0o600
+
+
+def test_full_backup_and_restore_preserves_practice_db(tmp_path):
+    """Backup and restore must preserve account-scoped practice.db sessions, answers, and citations."""
+    from app.db import practice_migrations
+
+    src_dir = tmp_path / "practice_src"
+    acc_id = "e1" * 16
+    acc_dir = src_dir / acc_id
+    acc_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    with open_sqlite(src_dir / "accounts.db") as db:
+        auth_migrations.apply(db)
+        db.execute("INSERT INTO accounts VALUES (?, 'practice_user', 's', 'h')", (acc_id,))
+
+    with open_sqlite(acc_dir / "practice.db") as db:
+        practice_migrations.apply(db)
+        db.execute(
+            """
+            INSERT INTO practice_sessions (
+                practice_id, created_at, count, requested_count, difficulty,
+                purpose, topic, warning, processing_level,
+                questions_json, answers_json, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "prac-123",
+                1731650000.0,
+                1,
+                1,
+                "medium",
+                "practice",
+                "Macroeconomics",
+                None,
+                "careful",
+                '[{"question_id":"q1","stem":"Define GDP","options":["A","B","C","D"],"correct":"A","citations":[{"doc":"Macroeconomics.pdf","page":1}]}]',
+                '{"q1":{"selected":"A","correct":true}}',
+                '{"source":"verified"}',
+            ),
+        )
+        db.commit()
+
+    archive_path = tmp_path / "practice_backup.tar.gz"
+    created = create_backup(src_dir, archive_path)
+    assert created.exists()
+
+    restored_dest = tmp_path / "restored_practice"
+    res_restore = restore_backup(archive_path, restored_dest)
+    assert res_restore["status"] == "success"
+
+    restored_db = restored_dest / acc_id / "practice.db"
+    assert restored_db.exists(), "Restored account directory is missing practice.db"
+    with open_sqlite(restored_db) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute("SELECT * FROM practice_sessions WHERE practice_id = 'prac-123'").fetchone()
+        assert row is not None
+        assert row["topic"] == "Macroeconomics"
+        assert '"correct":"A"' in row["questions_json"]
+        assert '"selected":"A"' in row["answers_json"]
+        assert '"source":"verified"' in row["metadata_json"]

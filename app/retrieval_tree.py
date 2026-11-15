@@ -536,6 +536,42 @@ def build_tree(source_db: Union[Path, str], shadow_db: Union[Path, str]) -> Dict
             src_conn.close()
 
 
+def rebuild_tree(source_db: Union[Path, str], shadow_db: Union[Path, str]) -> Dict[str, Any]:
+    """Atomically rebuild and replace an existing source-bound retrieval tree sidecar."""
+    dest_input = Path(shadow_db)
+    if dest_input.is_symlink():
+        raise ValueError(f"shadow_db must not be a symlink: {dest_input}")
+    src_path = Path(source_db).resolve()
+    dest_path = dest_input.resolve()
+    if dest_path.is_symlink():
+        raise ValueError(f"shadow_db must not be a symlink: {dest_path}")
+    if dest_path == src_path:
+        raise ValueError(f"shadow_db cannot overwrite source_db: {dest_path}")
+
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    stage_path = dest_path.parent / f".{dest_path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.stage.db"
+    try:
+        result = build_tree(src_path, stage_path)
+        for journal_suffix in ("-wal", "-shm"):
+            side_journal = Path(f"{dest_path}{journal_suffix}")
+            if side_journal.exists() and not side_journal.is_symlink():
+                try:
+                    side_journal.unlink()
+                except OSError:
+                    pass
+        os.replace(str(stage_path), str(dest_path))
+        result["shadow_db"] = str(dest_path)
+        return result
+    finally:
+        for suffix in ("", "-wal", "-shm"):
+            leftover = Path(f"{stage_path}{suffix}")
+            if leftover.exists() and not leftover.is_symlink():
+                try:
+                    leftover.unlink()
+                except OSError:
+                    pass
+
+
 class TreeSearcher:
     """Retrieval searcher on persistent tree with read-only query connections.
 
@@ -927,6 +963,135 @@ class TreeSearcher:
             }
 
 
+def _safe_meta_int(meta: Dict[str, str], key: str) -> Optional[int]:
+    """Parse an integer metadata field defensively without raising."""
+    raw = meta.get(key)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _validate_sidecar_connection(
+    conn: sqlite3.Connection,
+    src_p: Path,
+    *,
+    required_tables: Set[str],
+    check_taxonomy_nodes: bool = False,
+) -> Tuple[Optional[str], Dict[str, str]]:
+    """Verify sidecar tables, metadata, taxonomy hash, and source DB fingerprint.
+
+    Returns ``(failure_reason, metadata_dict)`` where ``failure_reason is None``
+    indicates the sidecar is valid and fresh for ``src_p``.
+    """
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if not required_tables.issubset(tables):
+        return "missing_tables", {}
+
+    meta = dict(conn.execute("SELECT key, value FROM tree_metadata").fetchall())
+    if meta.get("is_valid") != "1":
+        return "invalid_flag", meta
+    if meta.get("taxonomy_version") != TAXONOMY_VERSION:
+        return "taxonomy_version_mismatch", meta
+
+    expected_tax_hash = compute_taxonomy_hash()
+    stored_tax_hash = meta.get("taxonomy_hash")
+    if stored_tax_hash and stored_tax_hash != expected_tax_hash:
+        return "taxonomy_hash_mismatch", meta
+    if check_taxonomy_nodes and compute_taxonomy_hash_from_db(conn) != expected_tax_hash:
+        return "taxonomy_nodes_mismatch", meta
+
+    stored_src = meta.get("source_db_path")
+    stored_fp = meta.get("source_db_fingerprint")
+    if not stored_src or not stored_fp:
+        return "source_binding_missing", meta
+    if Path(stored_src).resolve() != src_p:
+        return "source_path_mismatch", meta
+
+    current_fp = get_source_binding_fingerprint(src_p)
+    try:
+        expected_fp = json.loads(stored_fp)
+    except (TypeError, ValueError):
+        return "source_binding_invalid", meta
+    if _normalize_fp(current_fp) != _normalize_fp(expected_fp):
+        return "source_db_modified", meta
+
+    return None, meta
+
+
+def inspect_retrieval_tree_health(
+    source_db_path: Union[Path, str],
+    sidecar_path: Optional[Union[Path, str]] = None,
+) -> Dict[str, Any]:
+    """Inspect whether the derived retrieval_tree sidecar exists and matches source_db_path."""
+    src_p = Path(source_db_path).resolve()
+    base_result: Dict[str, Any] = {
+        "status": "source_missing",
+        "present": False,
+        "valid": False,
+        "stale": False,
+        "reason": "source_db_missing",
+        "taxonomy_version": None,
+        "doc_count": None,
+        "chunk_count": None,
+        "classified_documents": None,
+        "classified_chunks": None,
+        "built_at": None,
+    }
+    if not src_p.is_file() or src_p.stat().st_size == 0:
+        return base_result
+
+    sc_p = Path(sidecar_path).resolve() if sidecar_path is not None else src_p.with_name("retrieval_tree.db")
+    if not sc_p.is_file() or sc_p.stat().st_size == 0:
+        base_result.update({"status": "missing", "reason": "sidecar_missing"})
+        return base_result
+
+    try:
+        uri = f"file:{sc_p}?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, timeout=1.5)) as conn:
+            conn.row_factory = sqlite3.Row
+            reason, meta = _validate_sidecar_connection(
+                conn,
+                src_p,
+                required_tables={"taxonomy_nodes", "doc_topics", "chunk_topics", "retrieval_tree_nodes", "tree_metadata"},
+                check_taxonomy_nodes=True,
+            )
+    except Exception as exc:
+        logger.debug("Failed to inspect retrieval tree sidecar health: %s", exc)
+        base_result.update({
+            "status": "invalid",
+            "present": True,
+            "valid": False,
+            "stale": True,
+            "reason": "unreadable_sidecar",
+        })
+        return base_result
+
+    status = "ready" if reason is None else (
+        "stale" if reason in {
+            "source_db_modified",
+            "invalid_flag",
+            "taxonomy_version_mismatch",
+            "taxonomy_hash_mismatch",
+        } else "invalid"
+    )
+    return {
+        "status": status,
+        "present": True,
+        "valid": reason is None,
+        "stale": reason is not None,
+        "reason": reason,
+        "taxonomy_version": meta.get("taxonomy_version"),
+        "doc_count": _safe_meta_int(meta, "doc_count"),
+        "chunk_count": _safe_meta_int(meta, "chunk_count"),
+        "classified_documents": _safe_meta_int(meta, "classified_docs_count"),
+        "classified_chunks": _safe_meta_int(meta, "classified_chunks_count"),
+        "built_at": meta.get("built_at"),
+    }
+
+
 def read_source_bound_tree_memberships(
     source_db_path: Union[Path, str],
     sidecar_path: Optional[Union[Path, str]] = None,
@@ -951,25 +1116,13 @@ def read_source_bound_tree_memberships(
         uri = f"file:{sc_p}?mode=ro"
         with closing(sqlite3.connect(uri, uri=True)) as conn:
             conn.row_factory = sqlite3.Row
-            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-            if not {"doc_topics", "tree_metadata", "taxonomy_nodes"}.issubset(tables):
-                return None
-
-            meta = dict(conn.execute("SELECT key, value FROM tree_metadata").fetchall())
-            if meta.get("is_valid") != "1" or meta.get("taxonomy_version") != TAXONOMY_VERSION:
-                return None
-
-            # Verify binding to source_db_path
-            stored_src = meta.get("source_db_path")
-            stored_fp = meta.get("source_db_fingerprint")
-            if not stored_src or not stored_fp:
-                return None
-            if Path(stored_src).resolve() != src_p:
-                return None
-
-            current_fp = get_source_binding_fingerprint(src_p)
-            expected_fp = json.loads(stored_fp)
-            if _normalize_fp(current_fp) != _normalize_fp(expected_fp):
+            reason, _ = _validate_sidecar_connection(
+                conn,
+                src_p,
+                required_tables={"doc_topics", "tree_metadata", "taxonomy_nodes"},
+                check_taxonomy_nodes=False,
+            )
+            if reason is not None:
                 return None
 
             # Read memberships: topic_label -> set(doc_ids)

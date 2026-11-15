@@ -149,3 +149,46 @@ def test_grounded_review_loads_only_separately_accepted_profile(monkeypatch, qua
     assert profiles == [practice_adapter.GROUNDED_REVIEW_PROFILE]
     assert requests[-1]['adapter_path'] == (accepted['path'] if qualified else None)
     assert requests[-1]['seed'] == 42
+
+
+def test_warm_prefix_caches_handles_busy_unavailable_and_success(tmp_path, monkeypatch):
+    model_dir = tmp_path / 'qwen9b'
+    model_dir.mkdir()
+    monkeypatch.setattr(trained_client, 'resolve_mlx_model_dir', lambda *a: model_dir)
+    monkeypatch.setattr(trained_client, 'get_model_context_capacity', lambda *a: 8192)
+
+    monkeypatch.setattr(trained_client.TrainedModelClient, 'available', classmethod(lambda cls, *a: False))
+    assert trained_client.TrainedModelClient.warm_prefix_caches() == {'warmed': False, 'skipped': 'unavailable'}
+
+    monkeypatch.setattr(trained_client.TrainedModelClient, 'available', classmethod(lambda cls, *a: True))
+
+    def busy_acquire(**kw):
+        raise trained_client.GPUBusyError('GPU busy')
+
+    monkeypatch.setattr(trained_client.gpu_coordinator, 'acquire_for_inference', busy_acquire)
+    res_busy = trained_client.TrainedModelClient.warm_prefix_caches(system_prompts=['SYS'])
+    assert res_busy == {'warmed': False, 'skipped': 'gpu_busy_or_cancelled'}
+    assert trained_client.TrainedModelClient._warmup_done.is_set()
+
+    seen = []
+    monkeypatch.setattr(trained_client.gpu_coordinator, 'acquire_for_inference', lambda **kw: nullcontext())
+    monkeypatch.setattr(
+        trained_client._INFER_STREAM_WORKER,
+        'request_json',
+        lambda payload, **kw: seen.append(payload) or {'op': 'warmup', 'ok': True, 'warmed': True},
+    )
+    res_ok = trained_client.TrainedModelClient.warm_prefix_caches(system_prompts=['SYS A', 'SYS B'])
+    assert res_ok['warmed'] is True
+    assert len(seen) == 1
+    assert seen[0]['op'] == 'warmup'
+    assert seen[0]['system_prompts'] == ['SYS A', 'SYS B']
+    assert trained_client.TrainedModelClient._warmup_done.is_set()
+
+
+def test_start_startup_warmup_respects_disable_and_pytest_guards(monkeypatch):
+    monkeypatch.setattr(trained_client.TrainedModelClient, 'available', classmethod(lambda cls, *a: True))
+    assert trained_client.TrainedModelClient.start_startup_warmup() is False  # PYTEST_CURRENT_TEST active
+
+    monkeypatch.delenv('PYTEST_CURRENT_TEST', raising=False)
+    monkeypatch.setenv('STUDY_DISABLE_STARTUP_WARMUP', '1')
+    assert trained_client.TrainedModelClient.start_startup_warmup() is False

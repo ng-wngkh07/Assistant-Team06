@@ -515,3 +515,25 @@ def test_inference_wrapper_exit_keeps_live_child_locks(tmp_path, lock_name):
     finally:
         if child is not None:
             child.communicate(input='', timeout=5)
+
+
+def test_role_scoped_resident_eviction_and_training_full_eviction(temp_gpu_lock):
+    """Heavyweight MLX roles evict only requested peers while training evicts all resident roles."""
+    mgr, _, _ = temp_gpu_lock
+    events = []
+
+    mgr.register_resident_evictor(lambda: events.append("mlx_embedding"), role="mlx_embedding")
+    mgr.register_resident_evictor(lambda: events.append("mlx_infer"), role="mlx_infer")
+    mgr.register_resident_evictor(lambda: events.append("mlx_vision"), role="mlx_vision")
+
+    mgr.evict_resident_workers(roles={"mlx_vision"})
+    assert events == ["mlx_vision"]
+
+    events.clear()
+    mgr.evict_resident_workers(roles={"mlx_infer"})
+    assert events == ["mlx_infer"]
+
+    events.clear()
+    with mgr.acquire_for_training(timeout=5.0, evict_ollama=False):
+        assert set(events) == {"mlx_embedding", "mlx_infer", "mlx_vision"}
+        assert len(events) == 3

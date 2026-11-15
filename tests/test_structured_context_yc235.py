@@ -1026,3 +1026,225 @@ def test_named_limit_quotient_guard_rejects_a_different_operand(answer):
 def test_limit_operand_guard_preserves_wrapped_answer_short_result_and_multiple_requests(answer, query):
     from app.rag_agent import has_erased_function_quotient
     assert not has_erased_function_quotient(answer, query, ["ln(1+u)/u → 1; (e^u-1)/u → 1"])
+
+
+def test_native_9b_passes_structured_response_schemas_for_primary_repair_and_auditor(searcher, monkeypatch, tmp_path):
+    import json
+    import app.dialogue as dialogue
+    import app.model_resolver as model_resolver
+    import app.rag_agent as rag
+    from app.rag_agent import PsychologyAgent
+
+    (tmp_path / "config.json").write_text('{"max_position_embeddings":8192}', encoding="utf-8")
+    monkeypatch.setattr(model_resolver.sys, "platform", "darwin")
+    monkeypatch.setattr(model_resolver, "MLX_9B_DIR", tmp_path)
+    monkeypatch.setattr(dialogue, "MLX_CONTEXT_TOKENS", 8192)
+    monkeypatch.setattr(rag, "get_exact_token_counter", lambda *a: lambda msgs: 400)
+
+    source = "Dòng 1: Stack hoạt động theo nguyên tắc LIFO.\nDòng 2: Phần tử vào sau ra trước."
+    with searcher.connect() as db:
+        db.execute("UPDATE chunks SET text=? WHERE id=1", (source,))
+    searcher.search_hybrid = lambda **kwargs: [anchor(searcher)]
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+            self.last_done_reason = None
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                self.last_done_reason = "stop"
+                # Oversized unaccepted draft is compacted out of repair prompt upfront.
+                filler = " ".join(f"khái_niệm_{i}" for i in range(250))
+                yield json.dumps({
+                    "claims": [{"text": f"Bản nháp dài {filler}", "source_ids": ["S99"], "evidence_lines": [1, 1]}]
+                }, ensure_ascii=False)
+            elif len(self.calls) == 2:
+                self.last_done_reason = "stop"
+                yield json.dumps({
+                    "claims": [{
+                        "text": "Stack hoạt động theo nguyên tắc LIFO.",
+                        "source_ids": ["S1"],
+                        "evidence_lines": [1, 1],
+                    }]
+                }, ensure_ascii=False)
+            else:
+                self.last_done_reason = "stop"
+                yield json.dumps({
+                    "claims": [{
+                        "statement": "Stack hoạt động theo nguyên tắc LIFO.",
+                        "source_id": "S1",
+                        "evidence_id": "E1",
+                        "verdict": "supported",
+                    }],
+                    "overall_verdict": "supported",
+                }, ensure_ascii=False)
+
+    model = Model()
+    translator = type("Translator", (), {"translate": lambda self, chunks: {}})()
+    result = PsychologyAgent(searcher, model, translator).process_query_sync(
+        "Stack hoạt động theo nguyên tắc nào?",
+        model="qwen3.5-9b-4bit",
+        embed_model=None,
+        processing_level="careful",
+        isolate_context=True,
+    )
+    assert result["response_kind"] == "answer"
+    assert len(model.calls) == 3
+
+    primary_schema = model.calls[0].get("response_schema")
+    assert primary_schema is not None
+    assert primary_schema["properties"]["claims"]["items"]["properties"]["source_ids"]["items"]["enum"] == ["S1", "S2"]
+    assert primary_schema["properties"]["claims"]["items"]["properties"]["evidence_lines"]["items"]["maximum"] == 2
+
+    # Oversized primary draft (>2000 chars) is compacted out of repair prompt upfront.
+    repair_msg = model.calls[1]["messages"][0]["content"]
+    assert "<rejected_draft>" not in repair_msg
+    repair_schema = model.calls[1].get("response_schema")
+    assert repair_schema is not None
+    assert repair_schema["properties"]["claims"]["minItems"] == 1
+
+    auditor_schema = model.calls[2].get("response_schema")
+    assert auditor_schema is not None
+    auditor_item = auditor_schema["properties"]["claims"]["items"]
+    assert auditor_item["properties"]["source_id"]["enum"] == ["S1", "S2"]
+    assert set(auditor_item["properties"]["verdict"]["enum"]) == {"supported", "unsupported", "uncertain"}
+
+
+def test_repair_uses_remaining_budget_headroom_and_skips_below_minimum(searcher, monkeypatch, tmp_path):
+    import json
+    import app.dialogue as dialogue
+    import app.model_resolver as model_resolver
+    import app.rag_agent as rag
+    from app.rag_agent import PsychologyAgent
+
+    (tmp_path / "config.json").write_text('{"max_position_embeddings":8192}', encoding="utf-8")
+    monkeypatch.setattr(model_resolver.sys, "platform", "darwin")
+    monkeypatch.setattr(model_resolver, "MLX_9B_DIR", tmp_path)
+    monkeypatch.setattr(dialogue, "MLX_CONTEXT_TOKENS", 8192)
+
+    source = "Stack dùng LIFO."
+    with searcher.connect() as db:
+        db.execute("UPDATE chunks SET text=? WHERE id=1", (source,))
+    searcher.search_hybrid = lambda **kwargs: [anchor(searcher)]
+    translator = type("Translator", (), {"translate": lambda self, chunks: {}})()
+
+    # Case 1: 7800 repair input leaves 392 output tokens (>=256 minimum) -> runs bounded repair
+    monkeypatch.setattr(
+        rag,
+        "get_exact_token_counter",
+        lambda *a: lambda msgs: 7800 if any("đầy đủ từ <context>" in m["content"] for m in msgs) else 400,
+    )
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+            self.last_done_reason = "stop"
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                yield "Bản nháp chưa có JSON"
+            else:
+                yield json.dumps({
+                    "claims": [{"text": "Stack dùng LIFO.", "source_ids": ["S1"], "evidence_lines": [1, 1]}]
+                }, ensure_ascii=False)
+
+    model_ok = Model()
+    res_ok = PsychologyAgent(searcher, model_ok, translator).process_query_sync(
+        "Stack dùng gì?",
+        model="qwen3.5-9b-4bit",
+        embed_model=None,
+        processing_level="standard",
+        isolate_context=True,
+    )
+    assert res_ok["response_kind"] == "answer"
+    assert len(model_ok.calls) == 2
+    assert model_ok.calls[1]["num_predict"] == 392
+
+    # Case 2: 8000 repair input leaves only 192 (<256 minimum) -> skips repair cleanly
+    monkeypatch.setattr(
+        rag,
+        "get_exact_token_counter",
+        lambda *a: lambda msgs: 8000 if any("đầy đủ từ <context>" in m["content"] for m in msgs) else 400,
+    )
+    model_skip = Model()
+    res_skip = PsychologyAgent(searcher, model_skip, translator).process_query_sync(
+        "Stack dùng gì?",
+        model="qwen3.5-9b-4bit",
+        embed_model=None,
+        processing_level="standard",
+        isolate_context=True,
+    )
+    assert res_skip["response_kind"] == "generation_failed"
+    assert len(model_skip.calls) == 1
+
+
+def test_fast_mode_budgets_tail_chunks_while_keeping_anchor_neighbors(tmp_path):
+    """Focused Fast mode trims low-ranked tail passages while keeping top anchors and their same-page neighbors."""
+    from app.rag_agent import PsychologyAgent
+
+    path = tmp_path / "fast_budget.db"
+    long_filler = "Binary search algorithm steps. " * 14  # ~434 chars each; all 7 fit Careful byte budget, trimmed by Fast 5-chunk/3800-char cap
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE chunks(id INTEGER PRIMARY KEY, doc_id INTEGER, book_title TEXT, filename TEXT, page_num INTEGER, chunk_index INTEGER, text TEXT)"
+        )
+        rows = [
+            (1, 10, "Algorithms", "algo.pdf", 2, 0, "Định lý Bayes: P(A|B)=P(B|A)P(A)/P(B). " + long_filler),
+            (2, 10, "Algorithms", "algo.pdf", 2, 1, "Điều kiện bắt buộc là P(B)>0."),
+            (3, 10, "Algorithms", "algo.pdf", 5, 0, "Biến cố độc lập: " + long_filler),
+            (4, 10, "Algorithms", "algo.pdf", 9, 0, "TAIL_CHUNK_ALPHA: " + long_filler),
+            (5, 10, "Algorithms", "algo.pdf", 12, 0, "TAIL_CHUNK_BETA: " + long_filler),
+            (6, 10, "Algorithms", "algo.pdf", 15, 0, "TAIL_CHUNK_GAMMA: " + long_filler),
+            (7, 10, "Algorithms", "algo.pdf", 18, 0, "TAIL_CHUNK_DELTA: " + long_filler),
+        ]
+        db.executemany("INSERT INTO chunks VALUES(?,?,?,?,?,?,?)", rows)
+
+    s = HybridSearcher(path)
+    expand_calls = []
+    orig_expand = s.expand_page_context
+
+    def wrap_expand(chunks, **kwargs):
+        expand_calls.append(kwargs)
+        return orig_expand(chunks, **kwargs)
+
+    hits = []
+    for cid in (1, 3, 4, 5, 6, 7):
+        row = s.source_page_chunks(10, {1: 2, 3: 5, 4: 9, 5: 12, 6: 15, 7: 18}[cid])[0]
+        row["hybrid_score"] = 0.05
+        hits.append(row)
+
+    s.search_hybrid = lambda **kwargs: [dict(h) for h in hits]
+    s.expand_page_context = wrap_expand
+    translator = type("Translator", (), {"translate": lambda self, chunks: {}})()
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            yield "Định lý Bayes P(A|B)=P(B|A)P(A)/P(B) [S1]. Điều kiện bắt buộc P(B)>0 [S4]."
+
+    # Fast mode: tight expansion kwargs + keeps anchor 1, anchor 2, and anchor 1's page-2 neighbor while dropping tails
+    fast_model = Model()
+    res_fast = PsychologyAgent(s, fast_model, translator).process_query_sync(
+        "Định lý Bayes là gì?", model="test-ollama", embed_model=None, processing_level="standard"
+    )
+    assert expand_calls[-1] == {"max_chunks": 5, "max_chars": 4800}
+    fast_prompt = "\n".join(m["content"] for m in fast_model.calls[0]["messages"])
+    assert "Định lý Bayes: P(A|B)=P(B|A)P(A)/P(B)." in fast_prompt
+    assert "Điều kiện bắt buộc là P(B)&amp;gt;0." in fast_prompt
+    assert "TAIL_CHUNK_GAMMA" not in fast_prompt and "TAIL_CHUNK_DELTA" not in fast_prompt
+    assert res_fast["response_kind"] == "answer"
+
+    # Careful mode: no Fast cap on expansion or context chunks
+    careful_model = Model()
+    PsychologyAgent(s, careful_model, translator).process_query_sync(
+        "Định lý Bayes là gì?", model="test-ollama", embed_model=None, processing_level="careful"
+    )
+    assert expand_calls[-1] == {}
+    careful_prompt = "\n".join(m["content"] for m in careful_model.calls[0]["messages"])
+    assert "TAIL_CHUNK_DELTA" in careful_prompt

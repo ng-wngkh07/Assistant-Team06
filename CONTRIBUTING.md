@@ -49,7 +49,7 @@ The repository owner merges after review and required checks. Approval and merge
 - Preserve per-account isolation, early ASGI body/rate-limit/security-header admission guards (`app/request_admission.py`), bounded FIFO GPU queue fairness (`app/dialogue.py`), upload storage quotas, and infrastructure readiness checks (`/api/health`, `/api/status`, `scripts/backend_service.py`) when modifying backend routes or environment configuration.
 - Preserve original source files. Keep uncertain extraction or OCR explicitly unresolved.
 - Use one writer for each canonical index or model operation, and coordinate inference through the existing resource locks.
-- Do not change the serving model, activate an adapter or start training as a side effect of a software fix.
+- Do not change the serving model, activate an adapter or start training as a side effect of a software fix; verify offline readiness gates read-only with `python scripts/audit_adapter_readiness.py --root . --strict`.
 
 Report suspected credential exposure privately to the repository owner and revoke the affected credential promptly. See [Security](SECURITY.md).
 

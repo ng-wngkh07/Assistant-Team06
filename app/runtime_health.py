@@ -139,6 +139,10 @@ def inspect_infrastructure_health() -> dict:
     acc_dir = accounts.root_dir()
     accounts_dir_writable = bool(acc_dir.is_dir() and os.access(acc_dir, os.W_OK | os.X_OK))
 
+    from app.retrieval_tree import inspect_retrieval_tree_health
+
+    retrieval_tree_health = inspect_retrieval_tree_health(kb_path)
+
     return {
         "healthy": bool(disk_healthy),
         "disk_free_bytes": disk_free_bytes,
@@ -148,6 +152,7 @@ def inspect_infrastructure_health() -> dict:
         "disk_warning": disk_warning,
         "knowledge_base_readable": kb_readable,
         "accounts_dir_writable": accounts_dir_writable,
+        "retrieval_tree": retrieval_tree_health,
         "security_posture": {
             "accounts_required": accounts.required(),
             "allow_registration": os.getenv("STUDY_ALLOW_REGISTRATION", "").strip() == "1",

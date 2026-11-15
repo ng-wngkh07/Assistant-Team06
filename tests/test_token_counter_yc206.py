@@ -66,3 +66,66 @@ def test_tokenizer_stdin_backpressure_obeys_same_deadline(tmp_path):
     assert bounded, 'Tokenizer input pipe backpressure blocked the question lane'
     assert isinstance(outcomes[0],TimeoutError)
     assert client._proc is None
+
+
+def test_build_context_uses_count_batch_and_lru_cache_without_duplicate_calls():
+    client = TokenizerWorkerClient(Path("/tmp/unused"), Path("/tmp/unused-py"))
+    ipc_batches = []
+    ipc_singles = []
+
+    def fake_communicate(payload: str) -> str:
+        import json
+        req = json.loads(payload)
+        if "batch" in req:
+            ipc_batches.append(len(req["batch"]))
+            return json.dumps({
+                "counts": [
+                    sum(len(m["content"]) for m in msgs)
+                    for msgs in req["batch"]
+                ]
+            })
+        ipc_singles.append(payload)
+        return json.dumps({"count": sum(len(m["content"]) for m in req["messages"])})
+
+    client._communicate = fake_communicate  # type: ignore[method-assign]
+
+    passages = [f'<document id="S{i}">Đoạn {i} ngắn.</document>' for i in range(1, 5)]
+    history = [
+        {"role": "user", "content": "H1?"},
+        {"role": "assistant", "content": "A1."},
+        {"role": "user", "content": "H2?"},
+        {"role": "assistant", "content": "A2."},
+    ]
+
+    def batched_counter(msgs):
+        return client.count(msgs)
+    batched_counter.count_batch = client.count_batch
+
+    msgs_batched, info_batched = build_context(
+        "Chỉ dùng nguồn.", "Câu mới?", passages, history,
+        capacity=4096, output_reserve=500, token_counter=batched_counter,
+    )
+
+    def plain_counter(msgs):
+        return sum(len(m["content"]) for m in msgs)
+
+    msgs_plain, info_plain = build_context(
+        "Chỉ dùng nguồn.", "Câu mới?", passages, history,
+        capacity=4096, output_reserve=500, token_counter=plain_counter,
+    )
+
+    assert msgs_batched == msgs_plain
+    assert info_batched == info_plain
+    # 1 batch for passages [base + P1..P4], 1 batch for history suffixes [1..2]
+    assert len(ipc_batches) == 2
+    assert len(ipc_singles) == 0
+
+    # Repeating identical inputs hits LRU cache with zero additional IPC
+    prev_batches = list(ipc_batches)
+    msgs_repeat, info_repeat = build_context(
+        "Chỉ dùng nguồn.", "Câu mới?", passages, history,
+        capacity=4096, output_reserve=500, token_counter=batched_counter,
+    )
+    assert msgs_repeat == msgs_batched
+    assert info_repeat == info_batched
+    assert ipc_batches == prev_batches

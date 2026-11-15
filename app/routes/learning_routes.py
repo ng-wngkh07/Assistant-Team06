@@ -1,5 +1,6 @@
 """Practice & Topic-Based Learning API Routes (Single Responsibility Module)."""
 
+import inspect
 import logging
 import re
 from typing import Any, Literal, Optional
@@ -20,6 +21,21 @@ from app.runtime_health import runtime_failure_message
 logger = logging.getLogger("psychology_agent")
 
 router = APIRouter()
+
+
+def _bank_refresh_kwargs(target_fn: Any, refresh: bool) -> dict[str, Any]:
+    """Forward reuse_verified_bank=False only when explicitly refreshing a compatible callee."""
+    if not refresh:
+        return {}
+    try:
+        params = inspect.signature(target_fn).parameters
+    except (TypeError, ValueError):
+        return {}
+    if "reuse_verified_bank" in params or any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    ):
+        return {"reuse_verified_bank": False}
+    return {}
 
 
 def _raise_learning_http_error(exc: Exception, *, context_label: str, fallback_detail: str | None = None) -> None:
@@ -49,6 +65,7 @@ class PracticeGenerateRequest(BaseModel):
     source_chunk_id: Optional[int] = Field(default=None, ge=1)
     count: int = Field(default=3, ge=1, le=3)
     processing_level: Optional[str] = "careful"
+    refresh: bool = False
 
 
 class PracticeAnswerRequest(BaseModel):
@@ -65,6 +82,7 @@ class LearningGenerateRequest(BaseModel):
     weak_topics: Optional[list[str]] = None
     model: Optional[str] = None
     processing_level: Optional[str] = "careful"
+    refresh: bool = False
 
     @field_validator("topic")
     @classmethod
@@ -116,6 +134,7 @@ async def generate_practice(req: PracticeGenerateRequest):
                 count=req.count,
                 model=_srv.DEFAULT_CHAT_MODEL,
                 source_chunk_id=req.source_chunk_id,
+                **_bank_refresh_kwargs(_srv.practice_service.generate, req.refresh),
             )
 
     try:
@@ -206,6 +225,7 @@ async def generate_learning(req: LearningGenerateRequest):
                 purpose=req.purpose,
                 weak_topics=req.weak_topics,
                 model=_srv.DEFAULT_CHAT_MODEL,
+                **_bank_refresh_kwargs(_srv.learning_service.generate, req.refresh),
             )
 
     try:
@@ -270,7 +290,7 @@ async def export_practice_session_pdf(
     try:
         questions = _srv.practice_service.get_session_questions_with_answers(practice_id)
     except PracticeSessionNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=sanitize_error_detail(str(exc), fallback="Phiên luyện tập không tồn tại."))
     try:
         pdf_bytes = await run_in_threadpool(
             generate_exercise_worksheet_pdf,
@@ -280,7 +300,7 @@ async def export_practice_session_pdf(
             questions=questions,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(exc)))
     filename = _safe_pdf_filename(topic)
     return Response(
         content=pdf_bytes,

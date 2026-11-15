@@ -1,5 +1,7 @@
 """Run one local MLX inference from JSON stdin (in the Python 3.13 training venv)."""
 
+from collections import OrderedDict
+import gc
 import json
 import os
 import sys
@@ -24,9 +26,102 @@ from mlx_lm import stream_generate, load
 from mlx_lm.sample_utils import make_logits_processors, make_sampler
 
 
-def main():
-    started = time.perf_counter()
-    request = json.load(sys.stdin)
+def _clone_cache_value(val):
+    if isinstance(val, mx.array):
+        return mx.array(val)
+    if isinstance(val, list):
+        return [_clone_cache_value(item) for item in val]
+    if isinstance(val, tuple):
+        return tuple(_clone_cache_value(item) for item in val)
+    return val
+
+
+def _clone_prompt_cache(model, src_cache):
+    from mlx_lm.models.cache import make_prompt_cache
+
+    dst_cache = make_prompt_cache(model)
+    for src_layer, dst_layer in zip(src_cache, dst_cache):
+        dst_layer.state = _clone_cache_value(src_layer.state)
+    return dst_cache
+
+
+def _system_prefix_tokens(tokenizer, messages, full_prompt: str, full_tokens: list[int]) -> list[int]:
+    if not messages or messages[0].get("role") != "system":
+        return []
+    marker = "<|im_start|>user\n"
+    if marker not in full_prompt:
+        return []
+    sys_prefix = full_prompt.split(marker, 1)[0] + marker
+    try:
+        pref_tokens = tokenizer.encode(sys_prefix)
+    except Exception:
+        return []
+    limit = min(len(pref_tokens), len(full_tokens) - 1)
+    matched = 0
+    for left, right in zip(pref_tokens[:limit], full_tokens[:limit]):
+        if left != right:
+            break
+        matched += 1
+    if matched < 64:
+        return []
+    return list(full_tokens[:matched])
+
+
+def _prepare_stream_prefix_cache(
+    model,
+    tokenizer,
+    prompt: str,
+    tokens: list[int],
+    request: dict,
+    prefix_cache_store: OrderedDict,
+    *,
+    clone: bool = True,
+):
+    pref_tokens = _system_prefix_tokens(tokenizer, request.get("messages"), prompt, tokens)
+    if not pref_tokens:
+        return prompt, {}, {"reused_tokens": 0}
+    try:
+        from mlx_lm.models.cache import make_prompt_cache
+    except Exception:
+        return prompt, {}, {"reused_tokens": 0}
+
+    key = (
+        str(request.get("model_path", "")),
+        str(request.get("adapter_path") or ""),
+        tuple(pref_tokens),
+    )
+    cached = prefix_cache_store.get(key)
+    reused = cached is not None
+    if cached is not None:
+        prefix_cache_store.move_to_end(key)
+        snap = cached
+    else:
+        snap = make_prompt_cache(model)
+        n_pref = len(pref_tokens)
+        for off in range(0, n_pref, 128):
+            model(mx.array(pref_tokens[off:min(off + 128, n_pref)])[None], cache=snap)
+            mx.eval([layer.state for layer in snap])
+        prefix_cache_store[key] = snap
+        prefix_cache_store.move_to_end(key)
+        while len(prefix_cache_store) > 2:
+            prefix_cache_store.popitem(last=False)
+        if hasattr(mx, "clear_cache"):
+            mx.clear_cache()
+
+    diagnostics = {
+        "reused_tokens": len(pref_tokens) if reused else 0,
+        "prefix_tokens": len(pref_tokens),
+        "scope": "worker_system_prefix_kv",
+        "warmed": not reused,
+    }
+    if not clone:
+        return tokens[len(pref_tokens):], {}, diagnostics
+
+    cloned = _clone_prompt_cache(model, snap)
+    return tokens[len(pref_tokens):], {"prompt_cache": cloned}, diagnostics
+
+
+def _validate_model_and_capacity(request: dict, state: dict | None) -> tuple[Path, Path | None, dict, int]:
     model_path = Path(request["model_path"])
     adapter_path = Path(request["adapter_path"]) if request.get("adapter_path") else None
     if not model_path.exists() or (adapter_path and not (adapter_path / "adapters.safetensors").exists()):
@@ -37,9 +132,14 @@ def main():
     if not config_path.exists():
         raise ValueError(f"Không tìm thấy cấu hình mô hình tại {config_path}")
     try:
-        cfg = json.loads(config_path.read_text(encoding="utf-8"))
-        from app.model_resolver import validate_native_model_config
-        validate_native_model_config(model_path)
+        model_key_cfg = str(model_path)
+        cfg = state["cfg"].get(model_key_cfg) if state is not None else None
+        if cfg is None:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            from app.model_resolver import validate_native_model_config
+            validate_native_model_config(model_path)
+            if state is not None:
+                state["cfg"][model_key_cfg] = cfg
         text_cfg = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else {}
         raw_cap = (
             text_cfg.get("max_position_embeddings")
@@ -55,6 +155,10 @@ def main():
     except (OSError, ValueError, TypeError) as exc:
         raise ValueError("Cấu hình mô hình không hợp lệ hoặc thiếu giới hạn ngữ cảnh") from exc
 
+    return model_path, adapter_path, cfg, model_capacity
+
+
+def _validate_adapter_acceptance(model_path: Path, adapter_path: Path | None, request: dict) -> tuple[dict | None, float]:
     adapter_acceptance = None
     validation_started = time.perf_counter()
     if adapter_path is not None:
@@ -71,7 +175,148 @@ def main():
                 not matches_scope(request)):
             raise ValueError("Adapter chưa được nghiệm thu cho loại yêu cầu này.")
         request["seed"] = 42
-    adapter_validation_seconds = time.perf_counter() - validation_started
+    return adapter_acceptance, time.perf_counter() - validation_started
+
+
+def _resolve_num_ctx(request: dict, model_capacity: int) -> int:
+    num_ctx_req = request.get("num_ctx")
+    try:
+        num_ctx = int(num_ctx_req) if num_ctx_req is not None else 8192
+    except (TypeError, ValueError):
+        raise ValueError("num_ctx không hợp lệ")
+    if num_ctx <= 0:
+        raise ValueError(f"num_ctx phải là số nguyên dương, nhận: {num_ctx}")
+    return min(num_ctx, model_capacity)
+
+
+def _get_offline_tokenizer(model_path: Path, state: dict | None):
+    try:
+        from transformers import AutoTokenizer
+        tok_key = str(model_path)
+        tokenizer = state["tok"].get(tok_key) if state is not None else None
+        if tokenizer is None:
+            tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True, trust_remote_code=False)
+            if state is not None:
+                state["tok"][tok_key] = tokenizer
+        return tokenizer
+    except Exception as exc:
+        raise ValueError("Không thể tải hoặc xác minh tokenizer của mô hình") from exc
+
+
+def _ensure_loaded_model(model_path: Path, adapter_path: Path | None, state: dict | None):
+    load_started = time.perf_counter()
+    model_load_key = (str(model_path), str(adapter_path) if adapter_path else "")
+    if state is not None and state.get("model_key") == model_load_key and state.get("model") is not None:
+        return state["model"], state["loaded_tok"], 0.0
+    if state is not None and state.get("model") is not None:
+        state["model"] = None
+        state["loaded_tok"] = None
+        state["model_key"] = None
+        state["prefix_caches"].clear()
+        gc.collect()
+        if hasattr(mx, "clear_cache"):
+            mx.clear_cache()
+    model, loaded_tokenizer = load(str(model_path), adapter_path=str(adapter_path) if adapter_path else None)
+    load_seconds = time.perf_counter() - load_started
+    if state is not None:
+        state["model_key"] = model_load_key
+        state["model"] = model
+        state["loaded_tok"] = loaded_tokenizer
+    return model, loaded_tokenizer, load_seconds
+
+
+def _run_warmup(request: dict, state: dict | None = None) -> dict:
+    started = time.perf_counter()
+    model_path, adapter_path, cfg, model_capacity = _validate_model_and_capacity(request, state)
+    adapter_acceptance, _ = _validate_adapter_acceptance(model_path, adapter_path, request)
+    context_limit = _resolve_num_ctx(request, model_capacity)
+    tokenizer = _get_offline_tokenizer(model_path, state)
+
+    raw_prompts = request.get("system_prompts")
+    if raw_prompts is None:
+        raw_prompts = []
+    if not isinstance(raw_prompts, list):
+        raise ValueError("system_prompts phải là danh sách chuỗi.")
+
+    seen = set()
+    prepared_prompts = []
+    for item in raw_prompts:
+        if not isinstance(item, str):
+            raise ValueError("Mỗi phần tử trong system_prompts phải là chuỗi.")
+        if not item.strip() or item in seen:
+            continue
+        seen.add(item)
+        sample_messages = [
+            {"role": "system", "content": item},
+            {"role": "user", "content": "x"},
+        ]
+        try:
+            formatted = tokenizer.apply_chat_template(
+                sample_messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            encoded = list(tokenizer.encode(formatted))
+        except Exception as exc:
+            raise ValueError("Không thể mã hóa system_prompt bằng tokenizer của mô hình") from exc
+        if len(encoded) >= context_limit:
+            raise ValueError(
+                f"System prompt warmup ({len(encoded)} tokens) vượt quá giới hạn ngữ cảnh {context_limit}."
+            )
+        prepared_prompts.append((sample_messages, formatted, encoded))
+
+    model, loaded_tokenizer, load_seconds = _ensure_loaded_model(model_path, adapter_path, state)
+    active_tok = loaded_tokenizer or tokenizer
+    prefix_cache_store = state["prefix_caches"] if state is not None else OrderedDict()
+
+    cache_started = time.perf_counter()
+    warmed_prefixes = []
+    for sample_messages, formatted, encoded in prepared_prompts:
+        active_tokens = encoded if active_tok is tokenizer else list(active_tok.encode(formatted))
+        _, _, diag = _prepare_stream_prefix_cache(
+            model,
+            active_tok,
+            formatted,
+            active_tokens,
+            {
+                "model_path": str(model_path),
+                "adapter_path": str(adapter_path) if adapter_path else "",
+                "messages": sample_messages,
+            },
+            prefix_cache_store,
+            clone=False,
+        )
+        warmed_prefixes.append(diag)
+    cache_seconds = time.perf_counter() - cache_started
+    base_identity = cfg.get("_name_or_path") or model_path.name
+
+    return {
+        "op": "warmup",
+        "ok": True,
+        "warmed": True,
+        "base_model": str(base_identity),
+        "adapter_path": str(adapter_path) if adapter_path else None,
+        "adapter_sha256": adapter_acceptance["sha256"] if adapter_acceptance else None,
+        "context_limit": context_limit,
+        "warmed_prefixes": warmed_prefixes,
+        "timings": {
+            "load_seconds": load_seconds,
+            "cache_seconds": cache_seconds,
+            "worker_seconds": time.perf_counter() - started,
+        },
+    }
+
+
+def _run_request(
+    request: dict,
+    *,
+    stream_tokens: bool = False,
+    state: dict | None = None,
+) -> dict:
+    started = time.perf_counter()
+    model_path, adapter_path, cfg, model_capacity = _validate_model_and_capacity(request, state)
+    adapter_acceptance, adapter_validation_seconds = _validate_adapter_acceptance(model_path, adapter_path, request)
 
     try:
         max_tokens = int(request.get("max_tokens", 700))
@@ -80,23 +325,8 @@ def main():
     if max_tokens <= 0:
         raise ValueError(f"max_tokens phải là số nguyên dương, nhận: {max_tokens}")
 
-    num_ctx_req = request.get("num_ctx")
-    try:
-        num_ctx = int(num_ctx_req) if num_ctx_req is not None else 8192
-    except (TypeError, ValueError):
-        raise ValueError("num_ctx không hợp lệ")
-    if num_ctx <= 0:
-        raise ValueError(f"num_ctx phải là số nguyên dương, nhận: {num_ctx}")
-
-    context_limit = min(num_ctx, model_capacity)
-
-    # Required exact input+output validation before loading weights.
-    # Fail closed if AutoTokenizer is unavailable or malformed.
-    try:
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True, trust_remote_code=False)
-    except Exception as exc:
-        raise ValueError("Không thể tải hoặc xác minh tokenizer của mô hình") from exc
+    context_limit = _resolve_num_ctx(request, model_capacity)
+    tokenizer = _get_offline_tokenizer(model_path, state)
 
     try:
         prompt = tokenizer.apply_chat_template(
@@ -116,9 +346,7 @@ def main():
             f"vượt quá giới hạn ngữ cảnh {context_limit}."
         )
 
-    load_started = time.perf_counter()
-    model, loaded_tokenizer = load(str(model_path), adapter_path=str(adapter_path) if adapter_path else None)
-    load_seconds = time.perf_counter() - load_started
+    model, loaded_tokenizer, load_seconds = _ensure_loaded_model(model_path, adapter_path, state)
     active_tok = loaded_tokenizer or tokenizer
 
     seed = request.get("seed")
@@ -158,6 +386,24 @@ def main():
     from app.mlx_review_cache import prepare_review_cache
     generation_prompt, cache_kwargs, cache_diagnostics = prepare_review_cache(
         model, active_tok, prompt, request, adapter_acceptance)
+    if (
+        not cache_kwargs
+        and state is not None
+        and not request.get("review_cache_dir")
+    ):
+        active_prompt_tokens = (
+            list(prompt_tokens)
+            if active_tok is tokenizer
+            else list(active_tok.encode(prompt))
+        )
+        generation_prompt, cache_kwargs, cache_diagnostics = _prepare_stream_prefix_cache(
+            model,
+            active_tok,
+            prompt,
+            active_prompt_tokens,
+            request,
+            state["prefix_caches"],
+        )
     gen_kwargs.update(cache_kwargs)
     cache_seconds = time.perf_counter() - cache_started
 
@@ -168,8 +414,11 @@ def main():
     for chunk in stream_generate(model, active_tok, prompt=generation_prompt, **gen_kwargs):
         if first_token_seconds is None:
             first_token_seconds = time.perf_counter() - generation_started
-        parts.append(chunk.text)
+        text_piece = chunk.text
+        parts.append(text_piece)
         last_chunk = chunk
+        if stream_tokens and text_piece:
+            print(json.dumps({"token": text_piece}, ensure_ascii=False), flush=True)
     answer = "".join(parts)
     done_reason = getattr(last_chunk, "finish_reason", None)
     if done_reason not in {"stop", "length"}:
@@ -183,7 +432,7 @@ def main():
     base_identity = cfg.get("_name_or_path") or model_path.name
     has_adapter = bool(adapter_path and (adapter_path / "adapters.safetensors").exists())
 
-    print(json.dumps({
+    return {
         "answer": answer,
         "is_truncated": is_truncated,
         "done_reason": done_reason,
@@ -209,7 +458,50 @@ def main():
             "generation_tokens_per_second": getattr(last_chunk, "generation_tps", None),
             "peak_memory_gb": getattr(last_chunk, "peak_memory", None),
         },
-    }, ensure_ascii=False))
+    }
+
+
+def serve_stream():
+    state = {
+        "cfg": {},
+        "tok": {},
+        "model_key": None,
+        "model": None,
+        "loaded_tok": None,
+        "prefix_caches": OrderedDict(),
+    }
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            request = json.loads(line)
+            if not isinstance(request, dict):
+                raise ValueError("Payload phải là JSON object.")
+            if request.get("op") == "warmup":
+                payload = _run_warmup(request, state=state)
+            else:
+                payload = _run_request(request, stream_tokens=True, state=state)
+            payload["done"] = True
+            print(json.dumps(payload, ensure_ascii=False), flush=True)
+        except Exception as exc:
+            print(json.dumps({"error": str(exc)}, ensure_ascii=False), flush=True)
+        finally:
+            gc.collect()
+            if hasattr(mx, "clear_cache"):
+                mx.clear_cache()
+
+
+def main():
+    if "--stream" in sys.argv[1:]:
+        serve_stream()
+        return
+    request = json.load(sys.stdin)
+    if isinstance(request, dict) and request.get("op") == "warmup":
+        payload = _run_warmup(request, state=None)
+    else:
+        payload = _run_request(request, stream_tokens=False, state=None)
+    print(json.dumps(payload, ensure_ascii=False))
 
 
 if __name__ == "__main__":

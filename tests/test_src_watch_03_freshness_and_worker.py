@@ -17,10 +17,19 @@ import pytest
 
 from app import file_lock as fcntl
 from app import native_embedding, source_freshness
-from app.gpu_lock import GPULockManager, IndexingCancelledError
+from app.gpu_lock import GPULockManager, IndexingCancelledError, is_pid_alive
 from app.indexer import KnowledgeIndexer
 from app.native_embedding import BGE_NATIVE_IDENTITY, NativeEmbeddingClient
 from app.searcher import HybridSearcher
+
+
+def _wait_pid_dead(pid: int, attempts: int = 30, delay: float = 0.02) -> bool:
+    """Poll OS process liveness safely on both POSIX and Windows."""
+    for _ in range(attempts):
+        if not is_pid_alive(pid):
+            return True
+        time.sleep(delay)
+    return not is_pid_alive(pid)
 
 
 def _indexed_doc_fixture(tmp_path: Path, text: str = "The old approved original holds seventeen units.") -> dict:
@@ -433,15 +442,7 @@ def test_native_embedding_disposable_subprocess_cancellation_inherits_locks_and_
 
         # Child and grandchild must both be terminated and reaped (no zombies or orphans)
         for pid in (child_pid, grandchild_pid):
-            alive = True
-            for _ in range(30):
-                try:
-                    os.kill(pid, 0)
-                    time.sleep(0.02)
-                except (ProcessLookupError, OSError):
-                    alive = False
-                    break
-            assert alive is False, f"Owned PID {pid} survived cancellation"
+            assert _wait_pid_dead(pid), f"Owned PID {pid} survived cancellation"
 
         with native_embedding._ACTIVE_WORKERS_LOCK:
             assert len(native_embedding._ACTIVE_WORKERS) == 0
@@ -494,18 +495,182 @@ def test_native_embedding_disposable_subprocess_timeout_escalates_sigkill_and_re
 
     assert pid_file.exists()
     pid = int(pid_file.read_text().strip())
-    alive = True
-    for _ in range(30):
-        try:
-            os.kill(pid, 0)
-            time.sleep(0.02)
-        except (ProcessLookupError, OSError):
-            alive = False
-            break
-    assert alive is False
+    assert _wait_pid_dead(pid)
 
     with native_embedding._ACTIVE_WORKERS_LOCK:
         assert len(native_embedding._ACTIVE_WORKERS) == 0
 
     with gpu_lock.acquire_for_inference(timeout=0.5):
         pass
+
+
+def test_native_embedding_persistent_stream_worker_reuse_recovery_and_eviction(tmp_path, monkeypatch):
+    """Persistent --stream worker reuses loaded process across max_lengths, recovers on crash, and evicts cleanly."""
+    import os
+    from contextlib import nullcontext
+
+    gpu_dir = tmp_path / "runtime"
+    gpu_dir.mkdir()
+    gpu_lock = GPULockManager(gpu_dir / "gpu.lock", gpu_dir / "gpu_state.json")
+
+    spawn_log = tmp_path / "spawns.jsonl"
+    crash_marker = tmp_path / "crashed.once"
+    stream_worker = tmp_path / "stream_worker.py"
+    stream_worker.write_text(
+        "import json, os, pathlib, sys\n"
+        f"log_path = pathlib.Path({json.dumps(str(spawn_log))})\n"
+        f"crash_marker = pathlib.Path({json.dumps(str(crash_marker))})\n"
+        "handshake = json.loads(sys.stdin.readline())\n"
+        "with log_path.open('a', encoding='utf-8') as f:\n"
+        "    f.write(json.dumps({'pid': os.getpid(), 'max_length': handshake.get('max_length')}) + '\\n')\n"
+        "print(json.dumps({'ready': True, 'model_identity': 'bge-m3-mlx-fp16@a37eddded9a6a1273a87fb8b0da0d1cdbd98aeec'}), flush=True)\n"
+        "for line in sys.stdin:\n"
+        "    line = line.strip()\n"
+        "    if not line:\n"
+        "        continue\n"
+        "    req = json.loads(line)\n"
+        "    texts = req.get('texts', [])\n"
+        "    if texts == ['__crash__'] and not crash_marker.exists():\n"
+        "        crash_marker.write_text('1', encoding='utf-8')\n"
+        "        os._exit(2)\n"
+        "    vecs = [[1.0] + [0.0] * 1023 for _ in texts]\n"
+        "    print(json.dumps({'vectors': vecs, 'count': len(vecs), 'dimensions': 1024, "
+        "'model_identity': 'bge-m3-mlx-fp16@a37eddded9a6a1273a87fb8b0da0d1cdbd98aeec', "
+        "'seen_max_length': req.get('max_length')}), flush=True)\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(native_embedding, "gpu_coordinator", gpu_lock)
+    monkeypatch.setattr(NativeEmbeddingClient, "available", classmethod(lambda cls, *a, **kw: True))
+    monkeypatch.setattr(NativeEmbeddingClient, "verify_identity", classmethod(lambda cls, *a, **kw: BGE_NATIVE_IDENTITY))
+    monkeypatch.setattr(
+        NativeEmbeddingClient,
+        "_stream_worker_command",
+        classmethod(lambda cls: [sys.executable, str(stream_worker)]),
+    )
+
+    NativeEmbeddingClient.evict_stream_worker()
+    with NativeEmbeddingClient._query_cache_lock:
+        NativeEmbeddingClient._query_cache.clear()
+
+    client = NativeEmbeddingClient(tmp_path)
+    try:
+        # 1. Multiple calls with distinct max_length reuse the single persistent worker process
+        res1 = client.get_batch_embeddings(["first query"], max_length=512)
+        res2 = client.get_batch_embeddings(["second chunk text"], max_length=2048)
+        assert len(res1) == 1 and len(res2) == 1
+        assert getattr(res2, "verified_identity", None) == BGE_NATIVE_IDENTITY
+
+        spawns = [json.loads(line) for line in spawn_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len(spawns) == 1
+        pid1 = spawns[0]["pid"]
+
+        # 2. Unexpected worker crash triggers transparent single-retry respawn
+        res3 = client.get_batch_embeddings(["__crash__"], max_length=512)
+        assert len(res3) == 1
+        spawns_after_crash = [
+            json.loads(line) for line in spawn_log.read_text(encoding="utf-8").splitlines() if line.strip()
+        ]
+        assert len(spawns_after_crash) == 2
+        pid2 = spawns_after_crash[1]["pid"]
+        assert pid2 != pid1
+
+        # 3. Idle timeout reaps resident worker automatically
+        monkeypatch.setattr(NativeEmbeddingClient, "_STREAM_IDLE_TIMEOUT", 0.08)
+        with NativeEmbeddingClient._stream_lock:
+            if NativeEmbeddingClient._stream_worker is not None:
+                NativeEmbeddingClient._schedule_idle_eviction_locked(NativeEmbeddingClient._stream_worker)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            with NativeEmbeddingClient._stream_lock:
+                if NativeEmbeddingClient._stream_worker is None:
+                    break
+            time.sleep(0.02)
+        with NativeEmbeddingClient._stream_lock:
+            assert NativeEmbeddingClient._stream_worker is None
+
+        # Verify pid2 was terminated and gpu_coordinator can acquire exclusive/training state cleanly
+        assert _wait_pid_dead(pid2)
+
+        # 4. Eviction callback registered cleanly releases resident worker
+        monkeypatch.setattr(NativeEmbeddingClient, "_STREAM_IDLE_TIMEOUT", 180.0)
+        res4 = client.get_batch_embeddings(["warm again"], max_length=512)
+        assert len(res4) == 1
+        with NativeEmbeddingClient._stream_lock:
+            pid3 = NativeEmbeddingClient._stream_worker["proc"].pid
+        NativeEmbeddingClient.evict_stream_worker()
+        with NativeEmbeddingClient._stream_lock:
+            assert NativeEmbeddingClient._stream_worker is None
+        assert _wait_pid_dead(pid3)
+    finally:
+        NativeEmbeddingClient.evict_stream_worker()
+        with native_embedding._ACTIVE_WORKERS_LOCK:
+            assert len(native_embedding._ACTIVE_WORKERS) == 0
+
+
+def test_native_embedding_evict_waits_for_inflight_idle_eviction(monkeypatch):
+    """Concurrent evict_stream_worker() must block until in-flight idle eviction finishes reaping and discarding proc."""
+    started = threading.Event()
+    release_term = threading.Event()
+    terminated = []
+
+    class FakeStdin:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeProc:
+        def __init__(self) -> None:
+            self.stdin = FakeStdin()
+
+        def poll(self):
+            return None
+
+    fake_proc = FakeProc()
+    state = {"proc": fake_proc}
+
+    def slow_terminate(proc, grace_seconds=0.5):
+        started.set()
+        assert release_term.wait(timeout=2.0)
+        terminated.append(proc)
+
+    monkeypatch.setattr(native_embedding, "_terminate_owned_worker", slow_terminate)
+    NativeEmbeddingClient.evict_stream_worker()
+    with native_embedding._ACTIVE_WORKERS_LOCK:
+        native_embedding._ACTIVE_WORKERS.add(fake_proc)  # type: ignore[arg-type]
+    with NativeEmbeddingClient._stream_lock:
+        NativeEmbeddingClient._stream_worker = state
+        NativeEmbeddingClient._stream_idle_timer = None
+        monkeypatch.setattr(NativeEmbeddingClient, "_STREAM_IDLE_TIMEOUT", 0.01)
+        NativeEmbeddingClient._schedule_idle_eviction_locked(state)
+
+    try:
+        assert started.wait(timeout=2.0)
+        concurrent_done = threading.Event()
+        observed_after_evict = []
+
+        def concurrent_evict():
+            NativeEmbeddingClient.evict_stream_worker()
+            with native_embedding._ACTIVE_WORKERS_LOCK:
+                observed_after_evict.append(len(native_embedding._ACTIVE_WORKERS))
+            concurrent_done.set()
+
+        t = threading.Thread(target=concurrent_evict, daemon=True)
+        t.start()
+        assert not concurrent_done.wait(timeout=0.05)
+
+        release_term.set()
+        assert concurrent_done.wait(timeout=2.0)
+        t.join(timeout=1.0)
+        assert fake_proc.stdin.closed is True
+        assert terminated == [fake_proc]
+        assert observed_after_evict == [0]
+    finally:
+        release_term.set()
+        with NativeEmbeddingClient._stream_lock:
+            NativeEmbeddingClient._stream_worker = None
+            NativeEmbeddingClient._stream_idle_timer = None
+        with native_embedding._ACTIVE_WORKERS_LOCK:
+            native_embedding._ACTIVE_WORKERS.discard(fake_proc)  # type: ignore[arg-type]
