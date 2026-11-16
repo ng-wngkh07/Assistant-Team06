@@ -1211,7 +1211,8 @@ def start_service(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 cur_back, expected_cwd=cfg["code_dir"], required_cmd_tokens=_backend_tokens(cfg)
             )
             if cur_back_ok:
-                health = fetch_health_snapshot(cfg, timeout=1.5)
+                poll_timeout = min(5.0, max(1.0, deadline - time.monotonic()))
+                health = fetch_health_snapshot(cfg, timeout=poll_timeout)
                 if health["reachable"]:
                     status = get_status(cfg)
                     status["action"] = "started"

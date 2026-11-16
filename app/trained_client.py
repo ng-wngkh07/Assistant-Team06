@@ -140,6 +140,7 @@ class TrainedModelClient:
         env["TRANSFORMERS_OFFLINE"] = "1"
         env["HF_DATASETS_OFFLINE"] = "1"
         env["TOKENIZERS_PARALLELISM"] = "false"
+        env.setdefault("MLX_PREFILL_STEP_SIZE", "256")
         return env
 
     @classmethod
@@ -165,15 +166,41 @@ class TrainedModelClient:
         timeout_sec: float = 120.0,
         gpu_wait_timeout: float = 0.25,
         cancel_event: Optional[threading.Event] = None,
+        warmup_schemas: Optional[list[dict]] = None,
     ) -> dict:
-        """Pre-load the resident MLX worker and warm immutable system-prefix KV caches."""
+        """Pre-load the resident MLX worker and warm immutable prefix/schema caches."""
         if cancel_event is not None and cancel_event.is_set():
             return {"warmed": False, "skipped": "cancelled"}
         target_model = model_name or (MLX_9B_NAME if sys.platform == "darwin" else TRAINED_MODEL_NAME)
         if not cls.available(target_model):
             return {"warmed": False, "skipped": "unavailable"}
         model_dir = resolve_mlx_model_dir(target_model)
-        prompts = list(cls._default_warmup_prompts() if system_prompts is None else system_prompts)
+        if system_prompts is None:
+            prompts = list(cls._default_warmup_prompts())
+            from app.reasoning_policy import AUDITOR_SYSTEM_PROMPT_COMPACT
+
+            if AUDITOR_SYSTEM_PROMPT_COMPACT not in prompts:
+                prompts.append(AUDITOR_SYSTEM_PROMPT_COMPACT)
+            if warmup_schemas is None:
+                from app.rag_agent import _build_qa_response_schema
+                from app.reasoning_policy import build_auditor_response_schema
+
+                warmup_schemas = [
+                    _build_qa_response_schema(
+                        ["S1", "S2", "S3"],
+                        use_source_lines=True,
+                        max_line=20,
+                        min_claims=0,
+                        max_claims=8,
+                    ),
+                    build_auditor_response_schema(
+                        {"S1", "S2"},
+                        {"S1": {"E1": "x"}, "S2": {"E1": "y"}},
+                        claim_count=2,
+                    ),
+                ]
+        else:
+            prompts = list(system_prompts)
         prompts = [p for p in prompts if isinstance(p, str) and p.strip()]
         if not prompts:
             return {"warmed": False, "skipped": "no_prompts"}
@@ -189,13 +216,17 @@ class TrainedModelClient:
         except (TypeError, ValueError):
             acq_kwargs = {}
 
+        prefill_step = max(64, min(1024, int(os.getenv("MLX_PREFILL_STEP_SIZE") or 256)))
         request = {
             "op": "warmup",
             "model_path": str(model_dir),
             "adapter_path": None,
             "system_prompts": prompts,
             "num_ctx": get_model_context_capacity(target_model),
+            "prefill_step_size": prefill_step,
         }
+        if warmup_schemas:
+            request["warmup_schemas"] = warmup_schemas
 
         try:
             with acquire_fn(**acq_kwargs):
@@ -313,12 +344,19 @@ class TrainedModelClient:
             if not full_messages or full_messages[0].get("role") != "system":
                 full_messages = [{"role": "system", "content": system_prompt}] + full_messages
 
+        prefill_step = max(
+            64,
+            min(1024, int(kwargs.get("prefill_step_size") or os.getenv("MLX_PREFILL_STEP_SIZE") or 256)),
+        )
         request = {
             "model_path": str(model_dir),
             "adapter_path": adapter_path,
             "messages": full_messages,
             "max_tokens": tokens_limit,
+            "prefill_step_size": prefill_step,
         }
+        if isinstance(kwargs.get("context_prefix_marker"), str) and kwargs["context_prefix_marker"]:
+            request["context_prefix_marker"] = kwargs["context_prefix_marker"]
         if kwargs.get("response_schema") is not None:
             request["response_schema"] = kwargs["response_schema"]
         num_ctx = kwargs.get("num_ctx")

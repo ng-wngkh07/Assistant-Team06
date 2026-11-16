@@ -37,6 +37,11 @@
   async function loadWeeklyLessons() {
     const tbody = document.getElementById('weekly-lessons-table-body');
     if (!tbody) return;
+    const studyAccount = typeof window !== 'undefined' ? window.StudyAccount : null;
+    if (studyAccount?.canAccessProtectedApis && !studyAccount.canAccessProtectedApis()) {
+      renderWeeklyLessons([]);
+      return;
+    }
     try {
       const res = await fetch('/api/timetable/planner/weekly-lessons');
       const data = await res.json().catch(() => ({}));
@@ -310,8 +315,21 @@
     document.getElementById('form-weekly-lesson')?.addEventListener('submit', handleAddWeeklyLesson);
     document.getElementById('btn-auto-schedule-90m')?.addEventListener('click', handleAutoSchedule90m);
     document.getElementById('btn-export-calendar-bundle')?.addEventListener('click', handleExportCalendarBundleZip);
-    window.addEventListener('study:account-changed', loadWeeklyLessons);
-    loadWeeklyLessons();
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('study:account-changed', () => {
+        loadWeeklyLessons();
+      });
+    }
+    const studyAccount = typeof window !== 'undefined' ? window.StudyAccount : null;
+    if (studyAccount?.runWhenAuthorized) {
+      studyAccount.runWhenAuthorized(loadWeeklyLessons);
+    } else if (studyAccount?.whenReady) {
+      studyAccount.whenReady().then((authState) => {
+        if (!authState?.required || authState.account) loadWeeklyLessons();
+      });
+    } else {
+      loadWeeklyLessons();
+    }
   }
 
   window.ARYMPlannerAssistant = {

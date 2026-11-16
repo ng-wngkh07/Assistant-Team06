@@ -219,9 +219,22 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     // Load initial confirmed schedule, restore any active draft, and load planner state
-    loadConfirmedSchedule();
     restoreDraftLocally();
-    loadFullPlannerState();
+    if (typeof window !== "undefined" && window.StudyAccount?.runWhenAuthorized) {
+        window.StudyAccount.runWhenAuthorized(() => {
+            loadConfirmedSchedule();
+            loadFullPlannerState();
+        });
+    } else if (typeof window !== "undefined" && window.StudyAccount?.whenReady) {
+        window.StudyAccount.whenReady().then((authState) => {
+            if (authState?.required && !authState.account) return;
+            loadConfirmedSchedule();
+            loadFullPlannerState();
+        });
+    } else {
+        loadConfirmedSchedule();
+        loadFullPlannerState();
+    }
 
     // -------------------------------------------------------------
     // Drag & Drop / File Selection
@@ -2332,7 +2345,9 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-        window.addEventListener("study:account-changed", () => {
+        window.addEventListener("study:account-changed", (ev) => {
+            const authCfg = window.StudyAccount?.getConfig?.();
+            if (authCfg?.required && !ev?.detail?.account) return;
             loadConfirmedSchedule().catch(() => {});
             loadFullPlannerState().catch(() => {});
         });

@@ -45,15 +45,9 @@ def _clone_prompt_cache(model, src_cache):
     return dst_cache
 
 
-def _system_prefix_tokens(tokenizer, messages, full_prompt: str, full_tokens: list[int]) -> list[int]:
-    if not messages or messages[0].get("role") != "system":
-        return []
-    marker = "<|im_start|>user\n"
-    if marker not in full_prompt:
-        return []
-    sys_prefix = full_prompt.split(marker, 1)[0] + marker
+def _prefix_tokens_for_split(tokenizer, prefix_text: str, full_tokens: list[int]) -> list[int]:
     try:
-        pref_tokens = tokenizer.encode(sys_prefix)
+        pref_tokens = tokenizer.encode(prefix_text)
     except Exception:
         return []
     limit = min(len(pref_tokens), len(full_tokens) - 1)
@@ -65,6 +59,35 @@ def _system_prefix_tokens(tokenizer, messages, full_prompt: str, full_tokens: li
     if matched < 64:
         return []
     return list(full_tokens[:matched])
+
+
+def _system_prefix_tokens(tokenizer, messages, full_prompt: str, full_tokens: list[int]) -> list[int]:
+    if not messages or messages[0].get("role") != "system":
+        return []
+    marker = "<|im_start|>user\n"
+    if marker not in full_prompt:
+        return []
+    sys_prefix = full_prompt.split(marker, 1)[0] + marker
+    return _prefix_tokens_for_split(tokenizer, sys_prefix, full_tokens)
+
+
+def _context_prefix_tokens(
+    tokenizer,
+    request: dict | None,
+    full_prompt: str,
+    full_tokens: list[int],
+    *,
+    min_len: int = 64,
+) -> list[int]:
+    marker = request.get("context_prefix_marker") if isinstance(request, dict) else None
+    if not isinstance(marker, str) or not marker:
+        return []
+    idx = full_prompt.find(marker)
+    if idx <= 0:
+        return []
+    split_at = idx + 1 if marker.startswith("\n") else idx
+    pref = _prefix_tokens_for_split(tokenizer, full_prompt[:split_at], full_tokens)
+    return pref if len(pref) >= max(64, int(min_len)) else []
 
 
 def _resolve_prefill_step_size(request: dict | None = None) -> int:
@@ -80,6 +103,42 @@ def _resolve_prefill_step_size(request: dict | None = None) -> int:
     return max(64, min(1024, step))
 
 
+def _fill_prefix_snapshot(
+    model,
+    pref_tokens: list[int],
+    *,
+    prefill_step_size: int,
+    base_snap=None,
+    base_len: int = 0,
+):
+    from mlx_lm.models.cache import make_prompt_cache
+
+    if base_snap is not None and 0 < base_len < len(pref_tokens):
+        snap = _clone_prompt_cache(model, base_snap)
+        start = base_len
+    else:
+        snap = make_prompt_cache(model)
+        start = 0
+    n_pref = len(pref_tokens)
+    step = max(64, int(prefill_step_size))
+    for off in range(start, n_pref, step):
+        model(mx.array(pref_tokens[off:min(off + step, n_pref)])[None], cache=snap)
+        mx.eval([layer.state for layer in snap])
+    return snap
+
+
+def _store_lru_snapshot(cache_store: OrderedDict, key, snap, *, max_entries: int) -> None:
+    cache_store[key] = snap
+    cache_store.move_to_end(key)
+    evicted = False
+    while len(cache_store) > max_entries:
+        cache_store.popitem(last=False)
+        evicted = True
+    if evicted or max_entries <= 1:
+        if hasattr(mx, "clear_cache"):
+            mx.clear_cache()
+
+
 def _prepare_stream_prefix_cache(
     model,
     tokenizer,
@@ -90,50 +149,104 @@ def _prepare_stream_prefix_cache(
     *,
     clone: bool = True,
     prefill_step_size: int = 128,
+    context_prefix_store: OrderedDict | None = None,
 ):
-    pref_tokens = _system_prefix_tokens(tokenizer, request.get("messages"), prompt, tokens)
-    if not pref_tokens:
+    sys_tokens = _system_prefix_tokens(tokenizer, request.get("messages"), prompt, tokens)
+    ctx_tokens = (
+        _context_prefix_tokens(
+            tokenizer,
+            request,
+            prompt,
+            tokens,
+            min_len=len(sys_tokens) + 32,
+        )
+        if context_prefix_store is not None
+        else []
+    )
+    if not sys_tokens and not ctx_tokens:
         return prompt, {}, {"reused_tokens": 0}
     try:
-        from mlx_lm.models.cache import make_prompt_cache
+        from mlx_lm.models.cache import make_prompt_cache  # noqa: F401
     except Exception:
         return prompt, {}, {"reused_tokens": 0}
 
-    key = (
+    model_id_key = (
         str(request.get("model_path", "")),
         str(request.get("adapter_path") or ""),
-        tuple(pref_tokens),
     )
+
+    if ctx_tokens and context_prefix_store is not None:
+        ctx_key = (*model_id_key, tuple(ctx_tokens))
+        cached_ctx = context_prefix_store.get(ctx_key)
+        if cached_ctx is not None:
+            context_prefix_store.move_to_end(ctx_key)
+            snap = cached_ctx
+            diagnostics = {
+                "reused_tokens": len(ctx_tokens),
+                "prefix_tokens": len(ctx_tokens),
+                "scope": "worker_context_prefix_kv",
+                "warmed": False,
+            }
+        else:
+            sys_snap = None
+            sys_reused = False
+            if sys_tokens:
+                sys_key = (*model_id_key, tuple(sys_tokens))
+                sys_snap = prefix_cache_store.get(sys_key)
+                if sys_snap is not None:
+                    prefix_cache_store.move_to_end(sys_key)
+                    sys_reused = True
+                else:
+                    sys_snap = _fill_prefix_snapshot(
+                        model,
+                        sys_tokens,
+                        prefill_step_size=prefill_step_size,
+                    )
+                    _store_lru_snapshot(prefix_cache_store, sys_key, sys_snap, max_entries=4)
+            snap = _fill_prefix_snapshot(
+                model,
+                ctx_tokens,
+                prefill_step_size=prefill_step_size,
+                base_snap=sys_snap,
+                base_len=len(sys_tokens) if sys_snap is not None else 0,
+            )
+            _store_lru_snapshot(context_prefix_store, ctx_key, snap, max_entries=1)
+            diagnostics = {
+                "reused_tokens": len(sys_tokens) if sys_reused else 0,
+                "prefix_tokens": len(ctx_tokens),
+                "scope": "worker_context_prefix_kv",
+                "warmed": True,
+            }
+        if not clone:
+            return tokens[len(ctx_tokens):], {}, diagnostics
+        cloned = _clone_prompt_cache(model, snap)
+        return tokens[len(ctx_tokens):], {"prompt_cache": cloned}, diagnostics
+
+    key = (*model_id_key, tuple(sys_tokens))
     cached = prefix_cache_store.get(key)
     reused = cached is not None
     if cached is not None:
         prefix_cache_store.move_to_end(key)
         snap = cached
     else:
-        snap = make_prompt_cache(model)
-        n_pref = len(pref_tokens)
-        step = max(64, int(prefill_step_size))
-        for off in range(0, n_pref, step):
-            model(mx.array(pref_tokens[off:min(off + step, n_pref)])[None], cache=snap)
-            mx.eval([layer.state for layer in snap])
-        prefix_cache_store[key] = snap
-        prefix_cache_store.move_to_end(key)
-        while len(prefix_cache_store) > 2:
-            prefix_cache_store.popitem(last=False)
-        if hasattr(mx, "clear_cache"):
-            mx.clear_cache()
+        snap = _fill_prefix_snapshot(
+            model,
+            sys_tokens,
+            prefill_step_size=prefill_step_size,
+        )
+        _store_lru_snapshot(prefix_cache_store, key, snap, max_entries=4)
 
     diagnostics = {
-        "reused_tokens": len(pref_tokens) if reused else 0,
-        "prefix_tokens": len(pref_tokens),
+        "reused_tokens": len(sys_tokens) if reused else 0,
+        "prefix_tokens": len(sys_tokens),
         "scope": "worker_system_prefix_kv",
         "warmed": not reused,
     }
     if not clone:
-        return tokens[len(pref_tokens):], {}, diagnostics
+        return tokens[len(sys_tokens):], {}, diagnostics
 
     cloned = _clone_prompt_cache(model, snap)
-    return tokens[len(pref_tokens):], {"prompt_cache": cloned}, diagnostics
+    return tokens[len(sys_tokens):], {"prompt_cache": cloned}, diagnostics
 
 
 def _validate_model_and_capacity(request: dict, state: dict | None) -> tuple[Path, Path | None, dict, int]:
@@ -228,6 +341,8 @@ def _ensure_loaded_model(model_path: Path, adapter_path: Path | None, state: dic
         state["loaded_tok"] = None
         state["model_key"] = None
         state["prefix_caches"].clear()
+        if "context_prefix_cache" in state:
+            state["context_prefix_cache"].clear()
         if "schema_processors" in state:
             state["schema_processors"].clear()
         gc.collect()
@@ -240,6 +355,36 @@ def _ensure_loaded_model(model_path: Path, adapter_path: Path | None, state: dic
         state["model"] = model
         state["loaded_tok"] = loaded_tokenizer
     return model, loaded_tokenizer, load_seconds
+
+
+def _get_or_compile_schema_processor(
+    tokenizer,
+    response_schema: dict,
+    state: dict | None,
+    *,
+    max_entries: int = 16,
+):
+    from mlx_vlm.structured import build_json_schema_logits_processor
+
+    schema_cache = state.get("schema_processors") if state is not None else None
+    schema_key = None
+    if schema_cache is not None:
+        schema_key = (
+            id(tokenizer),
+            json.dumps(response_schema, sort_keys=True, ensure_ascii=False),
+        )
+        cached_proc = schema_cache.get(schema_key)
+        if cached_proc is not None:
+            schema_cache.move_to_end(schema_key)
+            return cached_proc.clone()
+    compiled = build_json_schema_logits_processor(tokenizer, response_schema)
+    if schema_cache is not None and callable(getattr(compiled, "clone", None)):
+        schema_cache[schema_key] = compiled
+        schema_cache.move_to_end(schema_key)
+        while len(schema_cache) > max_entries:
+            schema_cache.popitem(last=False)
+        return compiled.clone()
+    return compiled
 
 
 def _run_warmup(request: dict, state: dict | None = None) -> dict:
@@ -307,6 +452,18 @@ def _run_warmup(request: dict, state: dict | None = None) -> dict:
             prefill_step_size=prefill_step_size,
         )
         warmed_prefixes.append(diag)
+
+    warmed_schemas = 0
+    raw_schemas = request.get("warmup_schemas")
+    if raw_schemas is not None:
+        if not isinstance(raw_schemas, list):
+            raise ValueError("warmup_schemas phải là danh sách JSON schema object.")
+        for schema in raw_schemas:
+            if not isinstance(schema, dict):
+                raise ValueError("Mỗi phần tử trong warmup_schemas phải là JSON object.")
+            _get_or_compile_schema_processor(tokenizer, schema, state)
+            warmed_schemas += 1
+
     cache_seconds = time.perf_counter() - cache_started
     base_identity = cfg.get("_name_or_path") or model_path.name
 
@@ -319,6 +476,7 @@ def _run_warmup(request: dict, state: dict | None = None) -> dict:
         "adapter_sha256": adapter_acceptance["sha256"] if adapter_acceptance else None,
         "context_limit": context_limit,
         "warmed_prefixes": warmed_prefixes,
+        "warmed_schemas": warmed_schemas,
         "timings": {
             "load_seconds": load_seconds,
             "cache_seconds": cache_seconds,
@@ -398,30 +556,11 @@ def _run_request(
     )
     schema_compile_started = time.perf_counter()
     if response_schema is not None:
-        from mlx_vlm.structured import build_json_schema_logits_processor
-        schema_proc = None
-        schema_cache = state.get("schema_processors") if state is not None else None
-        schema_key = None
-        if schema_cache is not None:
-            schema_key = (
-                id(tokenizer),
-                json.dumps(response_schema, sort_keys=True, ensure_ascii=False),
-            )
-            cached_proc = schema_cache.get(schema_key)
-            if cached_proc is not None:
-                schema_cache.move_to_end(schema_key)
-                schema_proc = cached_proc.clone()
-        if schema_proc is None:
-            compiled = build_json_schema_logits_processor(tokenizer, response_schema)
-            if schema_cache is not None and callable(getattr(compiled, "clone", None)):
-                schema_cache[schema_key] = compiled
-                schema_cache.move_to_end(schema_key)
-                while len(schema_cache) > 8:
-                    schema_cache.popitem(last=False)
-                schema_proc = compiled.clone()
-            else:
-                schema_proc = compiled
-        gen_kwargs["logits_processors"].append(schema_proc)
+        if not isinstance(response_schema, dict):
+            raise ValueError("response_schema phải là JSON object.")
+        gen_kwargs["logits_processors"].append(
+            _get_or_compile_schema_processor(tokenizer, response_schema, state)
+        )
     schema_compile_seconds = time.perf_counter() - schema_compile_started
 
     cache_started = time.perf_counter()
@@ -446,6 +585,7 @@ def _run_request(
             request,
             state["prefix_caches"],
             prefill_step_size=prefill_step_size,
+            context_prefix_store=state.get("context_prefix_cache"),
         )
     gen_kwargs.update(cache_kwargs)
     cache_seconds = time.perf_counter() - cache_started
@@ -513,6 +653,7 @@ def serve_stream():
         "model": None,
         "loaded_tok": None,
         "prefix_caches": OrderedDict(),
+        "context_prefix_cache": OrderedDict(),
         "schema_processors": OrderedDict(),
     }
     for line in sys.stdin:

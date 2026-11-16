@@ -3,7 +3,9 @@ from contextlib import asynccontextmanager
 import json
 import logging
 import re
+import sqlite3
 import sys
+import threading
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Literal
@@ -503,46 +505,150 @@ def _inference_model_available(mlx_available, models):
                for model in models)
 
 
-def _configured_index_coverage():
-    """Check actual embedding bytes off the event loop, independently of QA."""
-    import sqlite3
-    from app.config import DB_PATH, DEFAULT_EMBED_MODEL
-    from app.vector_integrity import index_coverage
-    with sqlite3.connect(DB_PATH.resolve().as_uri() + '?mode=ro', uri=True) as db:
-        actual_identity = None
-        try:
-            installed_digest = None
-            try:
-                row = db.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
-                if row:
-                    installed_digest = row[0]
-            except sqlite3.Error:
-                pass
+_INDEX_COVERAGE_LOCK = threading.Lock()
+_INDEX_COVERAGE_CACHE: Dict[Any, Dict[str, Any]] = {}
+_INDEX_COVERAGE_INFLIGHT: Dict[Any, threading.Event] = {}
+_INSTALLED_DIGEST_CACHE: Dict[Any, Optional[str]] = {}
 
-            if installed_digest and installed_digest.startswith("ollama-sha256:"):
-                actual_identity = ollama.embedding_identity(DEFAULT_EMBED_MODEL)
-                expected_identity = actual_identity
-            elif installed_digest and installed_digest.startswith("bge-m3-mlx-fp16@"):
-                if sys.platform != 'darwin':
-                    actual_identity = None
-                    expected_identity = None
-                else:
-                    from app.native_embedding import BGE_NATIVE_IDENTITY, NativeEmbeddingClient
-                    actual_identity = NativeEmbeddingClient().get_status_identity()
-                    expected_identity = actual_identity if actual_identity == BGE_NATIVE_IDENTITY else None
-            elif os.getenv("EMBED_BACKEND") == "ollama" or sys.platform != 'darwin':
-                actual_identity = ollama.embedding_identity(DEFAULT_EMBED_MODEL)
-                expected_identity = actual_identity
+
+def _stat_signature(path: Path):
+    try:
+        st = path.stat()
+        return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+
+
+def _read_edge_bytes(path: Path) -> tuple[bytes, bytes]:
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(100)
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            tail = b""
+            if size > 0:
+                fh.seek(max(0, size - 64))
+                tail = fh.read(64)
+            return head, tail
+    except OSError:
+        return b"", b""
+
+
+def _db_file_signature(db_path: Path):
+    resolved = db_path.resolve()
+    main_stat = _stat_signature(resolved)
+    if main_stat is None:
+        return None
+    main_head, _ = _read_edge_bytes(resolved)
+    wal_path = Path(f"{resolved}-wal")
+    wal_stat = _stat_signature(wal_path)
+    wal_head, wal_tail = _read_edge_bytes(wal_path) if wal_stat is not None else (b"", b"")
+    journal_stat = _stat_signature(Path(f"{resolved}-journal"))
+    return (str(resolved), main_stat, main_head, wal_stat, wal_head[:32], wal_tail, journal_stat)
+
+
+def _cached_installed_digest(db_path: Path, db_sig) -> Optional[str]:
+    if db_sig is not None:
+        with _INDEX_COVERAGE_LOCK:
+            if db_sig in _INSTALLED_DIGEST_CACHE:
+                return _INSTALLED_DIGEST_CACHE[db_sig]
+    installed_digest = None
+    with sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True) as db:
+        try:
+            row = db.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
+            if row:
+                installed_digest = row[0]
+        except sqlite3.Error:
+            pass
+    if db_sig is not None:
+        with _INDEX_COVERAGE_LOCK:
+            if len(_INSTALLED_DIGEST_CACHE) >= 8:
+                _INSTALLED_DIGEST_CACHE.clear()
+            _INSTALLED_DIGEST_CACHE[db_sig] = installed_digest
+    return installed_digest
+
+
+def _resolve_configured_embed_identities(installed_digest: Optional[str], default_embed_model: str):
+    actual_identity = None
+    try:
+        if installed_digest and installed_digest.startswith("ollama-sha256:"):
+            actual_identity = ollama.embedding_identity(default_embed_model)
+            expected_identity = actual_identity
+        elif installed_digest and installed_digest.startswith("bge-m3-mlx-fp16@"):
+            if sys.platform != 'darwin':
+                actual_identity = None
+                expected_identity = None
             else:
                 from app.native_embedding import BGE_NATIVE_IDENTITY, NativeEmbeddingClient
                 actual_identity = NativeEmbeddingClient().get_status_identity()
                 expected_identity = actual_identity if actual_identity == BGE_NATIVE_IDENTITY else None
-        except Exception as exc:
-            logger.debug('Embedding identity unavailable during coverage check: %s', type(exc).__name__)
-            expected_identity = None
-        result = index_coverage(db, expected_identity)
-        result['configured_model_identity'] = actual_identity
-        return result
+        elif os.getenv("EMBED_BACKEND") == "ollama" or sys.platform != 'darwin':
+            actual_identity = ollama.embedding_identity(default_embed_model)
+            expected_identity = actual_identity
+        else:
+            from app.native_embedding import BGE_NATIVE_IDENTITY, NativeEmbeddingClient
+            actual_identity = NativeEmbeddingClient().get_status_identity()
+            expected_identity = actual_identity if actual_identity == BGE_NATIVE_IDENTITY else None
+    except Exception as exc:
+        logger.debug('Embedding identity unavailable during coverage check: %s', type(exc).__name__)
+        expected_identity = None
+    return actual_identity, expected_identity
+
+
+def _configured_index_coverage():
+    """Check actual embedding bytes off the event loop, independently of QA."""
+    from app import vector_integrity
+    from app.config import DB_PATH, DEFAULT_EMBED_MODEL
+
+    db_path = Path(DB_PATH)
+    db_sig = _db_file_signature(db_path)
+    installed_digest = _cached_installed_digest(db_path, db_sig)
+    actual_identity, expected_identity = _resolve_configured_embed_identities(
+        installed_digest, DEFAULT_EMBED_MODEL
+    )
+    if db_sig is None:
+        with sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True) as db:
+            result = vector_integrity.index_coverage(db, expected_identity)
+            result['configured_model_identity'] = actual_identity
+            return result
+
+    cache_key = (db_sig, installed_digest, expected_identity, actual_identity)
+    with _INDEX_COVERAGE_LOCK:
+        cached = _INDEX_COVERAGE_CACHE.get(cache_key)
+        if cached is not None:
+            return dict(cached)
+        event = _INDEX_COVERAGE_INFLIGHT.get(cache_key)
+        if event is None:
+            event = threading.Event()
+            _INDEX_COVERAGE_INFLIGHT[cache_key] = event
+            leader = True
+        else:
+            leader = False
+
+    if not leader:
+        event.wait()
+        with _INDEX_COVERAGE_LOCK:
+            cached = _INDEX_COVERAGE_CACHE.get(cache_key)
+            if cached is not None:
+                return dict(cached)
+        with sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True) as db:
+            result = vector_integrity.index_coverage(db, expected_identity)
+            result['configured_model_identity'] = actual_identity
+            return result
+
+    try:
+        with sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True) as db:
+            result = vector_integrity.index_coverage(db, expected_identity)
+            result['configured_model_identity'] = actual_identity
+        with _INDEX_COVERAGE_LOCK:
+            if len(_INDEX_COVERAGE_CACHE) >= 8:
+                _INDEX_COVERAGE_CACHE.clear()
+            _INDEX_COVERAGE_CACHE[cache_key] = dict(result)
+        return dict(result)
+    finally:
+        with _INDEX_COVERAGE_LOCK:
+            _INDEX_COVERAGE_INFLIGHT.pop(cache_key, None)
+            event.set()
 
 
 @app.get("/api/health")
@@ -551,12 +657,11 @@ async def health_check():
     installed_digest = None
     try:
         from app.config import DB_PATH
-        if DB_PATH.exists():
-            import sqlite3
-            with sqlite3.connect(DB_PATH.resolve().as_uri() + '?mode=ro', uri=True) as db:
-                row = db.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
-                if row:
-                    installed_digest = row[0]
+        db_path = Path(DB_PATH)
+        if db_path.exists():
+            installed_digest = await run_in_threadpool(
+                _cached_installed_digest, db_path, _db_file_signature(db_path)
+            )
     except Exception:
         pass
 

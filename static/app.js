@@ -263,24 +263,54 @@ document.addEventListener("DOMContentLoaded", () => {
     let latestRestorableTurn = null;
     let viewRevision = 0;
     let isLoadingSession = true;
+    let statusPollAuthBlocked = false;
     btnSend.disabled = true;
 
-    // Initialize
-    fetchKnowledgeBaseStatus();
-    fetchOllamaModels();
-    loadSessions().then(() => {
-        const savedSessionId = sessionStorage.getItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
-        if (savedSessionId && sessionsApiSupported) {
-            return openSession(savedSessionId, { autoRestore: true }).catch(() => {
-                sessionStorage.removeItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
-                currentSessionId = null;
-            });
+    async function refreshKnowledgeBaseStatus() {
+        if (statusPollAuthBlocked) return "auth_required";
+        const statusResult = await fetchKnowledgeBaseStatus();
+        if (statusResult === "auth_required") {
+            statusPollAuthBlocked = true;
         }
-    }).finally(() => {
-        isLoadingSession = false;
-        btnSend.disabled = isGenerating;
-    });
-    setInterval(fetchKnowledgeBaseStatus, 5000);
+        return statusResult;
+    }
+
+    function startAuthenticatedBootstrap() {
+        refreshKnowledgeBaseStatus();
+        fetchOllamaModels();
+        loadSessions().then(() => {
+            const savedSessionId = sessionStorage.getItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
+            if (savedSessionId && sessionsApiSupported) {
+                return openSession(savedSessionId, { autoRestore: true }).catch(() => {
+                    sessionStorage.removeItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
+                    currentSessionId = null;
+                });
+            }
+        }).finally(() => {
+            isLoadingSession = false;
+            btnSend.disabled = isGenerating;
+        });
+    }
+
+    // Initialize
+    if (typeof window !== "undefined" && window.StudyAccount && typeof window.StudyAccount.whenReady === "function") {
+        window.StudyAccount.whenReady().then((authState) => {
+            if (authState && authState.required && !authState.account) {
+                statusPollAuthBlocked = true;
+                if (ollamaStatus) {
+                    ollamaStatus.textContent = "🔒 Đăng nhập để xem trạng thái mô hình và thư viện";
+                    ollamaStatus.className = "status-indicator";
+                }
+                isLoadingSession = false;
+                btnSend.disabled = isGenerating;
+                return;
+            }
+            startAuthenticatedBootstrap();
+        });
+    } else {
+        startAuthenticatedBootstrap();
+    }
+    setInterval(refreshKnowledgeBaseStatus, 5000);
 
     // Event Listeners
     userInput.addEventListener("input", () => {
@@ -972,6 +1002,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (sessionsApiSupported === null) {
             try {
                 const testRes = await fetch("/api/sessions?limit=1");
+                if (testRes.status === 401) {
+                    if (historyList) {
+                        historyList.textContent = "Đăng nhập để xem lịch sử trò chuyện.";
+                    }
+                    return;
+                }
                 sessionsApiSupported = testRes.ok;
             } catch (_) {
                 sessionsApiSupported = false;
@@ -1615,11 +1651,18 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const res = await fetch("/api/status");
             if (!res.ok) {
+                if (res.status === 401) {
+                    if (ollamaStatus) {
+                        ollamaStatus.textContent = "🔒 Đăng nhập để xem trạng thái mô hình và thư viện";
+                        ollamaStatus.className = "status-indicator";
+                    }
+                    return "auth_required";
+                }
                 if (ollamaStatus) {
                     ollamaStatus.textContent = `🔴 Máy chủ web phản hồi lỗi HTTP ${res.status}`;
                     ollamaStatus.className = "status-indicator disconnected";
                 }
-                return;
+                return "error";
             }
             const data = await res.json();
             const kb = data.knowledge_base || {};
@@ -1742,6 +1785,13 @@ document.addEventListener("DOMContentLoaded", () => {
     async function fetchOllamaModels() {
         try {
             const res = await fetch("/api/models");
+            if (res.status === 401) {
+                if (ollamaStatus && !ollamaStatus.textContent.includes("Đăng nhập")) {
+                    ollamaStatus.textContent = "🔒 Đăng nhập để xem trạng thái mô hình";
+                    ollamaStatus.className = "status-indicator";
+                }
+                return;
+            }
             if (!res.ok) throw new Error("Không đọc được trạng thái mô hình");
             const data = await res.json();
             const name = data.default_model;
@@ -4171,7 +4221,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-        window.addEventListener("study:account-changed", () => {
+        window.addEventListener("study:account-changed", (ev) => {
+            const authCfg = window.StudyAccount?.getConfig?.();
+            const hasAccount = Boolean(ev?.detail?.account);
+            if (authCfg?.required && !hasAccount) {
+                statusPollAuthBlocked = true;
+                return;
+            }
+            statusPollAuthBlocked = false;
+            refreshKnowledgeBaseStatus();
+            fetchOllamaModels();
             loadSessions().catch(() => {});
         });
     }

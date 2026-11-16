@@ -29,7 +29,7 @@ See `.env.example` and `app/config.py` for current defaults.
 | `KNOWLEDGE_PACK_PATH`, `KNOWLEDGE_PACK_SHA256` | Prepared library archive and trusted publisher digest; set both together for explicit `--install-pack --profile local` |
 | `MLX_MODEL_DIR`, `MLX_BGE_MODEL_DIR` | Optional paths to the installed native QA and embedding artifacts |
 | `MLX_CONTEXT_TOKENS` | Operational context budget for the MLX backend |
-| `MLX_PREFILL_STEP_SIZE` | Optional bounded MLX prefill chunk size (`128` default; clamped to `64..1024`) |
+| `MLX_PREFILL_STEP_SIZE` | Optional bounded MLX prefill chunk size (`256` default in `TrainedModelClient` worker env, `128` fallback in direct `mlx_infer.py`; clamped to `64..1024`) |
 | `HOST`, `PORT` | Listening address and port |
 
 The sample leaves QA selection to the platform default. Existing process variables take precedence, so review stale model overrides during migration. The Mac requires a separate native MLX runtime and locally installed weights; see [macOS setup](../README_MAC.md). An unavailable selected artifact must fail visibly rather than choose a different model.

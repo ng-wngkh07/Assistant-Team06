@@ -1060,8 +1060,21 @@ document.addEventListener("DOMContentLoaded", () => {
     updateSelectedScope();
     updateReviewCount();
     renderReviewList();
-    loadExampleDocuments();
-    loadLearningTopics();
+    if (typeof window !== "undefined" && window.StudyAccount?.runWhenAuthorized) {
+        window.StudyAccount.runWhenAuthorized(() => {
+            loadExampleDocuments();
+            loadLearningTopics();
+        });
+    } else if (typeof window !== "undefined" && window.StudyAccount?.whenReady) {
+        window.StudyAccount.whenReady().then((authState) => {
+            if (authState?.required && !authState.account) return;
+            loadExampleDocuments();
+            loadLearningTopics();
+        });
+    } else {
+        loadExampleDocuments();
+        loadLearningTopics();
+    }
 
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
         window.addEventListener("study:account-changed", (e) => {
@@ -1070,6 +1083,9 @@ document.addEventListener("DOMContentLoaded", () => {
             progressKey = storageScope === "local" ? "study-agent-review-v1" : `study-agent-review-v1-${storageScope}`;
             updateReviewCount();
             renderReviewList();
+            const authCfg = window.StudyAccount?.getConfig?.();
+            if (authCfg?.required && !e?.detail?.account) return;
+            loadExampleDocuments().catch(() => {});
             loadLearningTopics().catch(() => {});
         });
     }

@@ -31,6 +31,10 @@
   let isAuthSubmitting = false;
   let isAuthImeComposing = false;
   let authKeyboardBound = false;
+  let readyResolve = null;
+  const readyPromise = new Promise((resolve) => {
+    readyResolve = resolve;
+  });
 
   function isOverlayElementOpen(el) {
     if (!el) return false;
@@ -391,6 +395,20 @@
     }
   }
 
+  function canAccessProtectedApis() {
+    return !authConfig.required || Boolean(currentAccount);
+  }
+
+  function runWhenAuthorized(fn) {
+    if (typeof fn !== 'function') {
+      return readyPromise.then(() => canAccessProtectedApis());
+    }
+    return readyPromise.then(() => {
+      if (!canAccessProtectedApis()) return false;
+      return Promise.resolve(fn()).then(() => true);
+    });
+  }
+
   function reloadAccountScopedState(account) {
     const scope = account?.id ? account.id : 'local';
     const metaEl = document.querySelector('meta[name="study-account-scope"]');
@@ -399,7 +417,12 @@
     }
     window.dispatchEvent(
       new CustomEvent('study:account-changed', {
-        detail: { account: account || null, scope },
+        detail: {
+          account: account || null,
+          scope,
+          required: Boolean(authConfig.required),
+          authorized: !authConfig.required || Boolean(account),
+        },
       })
     );
   }
@@ -694,6 +717,14 @@
     }
     syncRegistrationButtonState();
     renderAccountHeaderTrigger();
+    if (typeof readyResolve === 'function') {
+      readyResolve({
+        account: currentAccount,
+        required: authConfig.required,
+        registration_allowed: authConfig.registration_allowed,
+      });
+      readyResolve = null;
+    }
     if (currentAccount) {
       await notifyFeatureEnter(activeFeature, true);
     }
@@ -702,6 +733,9 @@
   window.StudyAccount = {
     getAccount: () => currentAccount,
     getConfig: () => Object.assign({}, authConfig),
+    canAccessProtectedApis,
+    runWhenAuthorized,
+    whenReady: () => readyPromise,
     openAuthModal,
     closeAuthModal,
     reloadState: () => reloadAccountScopedState(currentAccount),

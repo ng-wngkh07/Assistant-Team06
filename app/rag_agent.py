@@ -1378,6 +1378,8 @@ class PsychologyAgent:
             "num_predict": max_gen_tokens,
             "num_ctx": capacity,
         }
+        if is_mlx_model(model) and isinstance(generator, TrainedModelClient):
+            primary_kwargs["context_prefix_marker"] = "\n<user_query>"
         if use_source_lines and supports_schema and admitted_primary_keys:
             primary_kwargs["response_schema"] = _build_qa_response_schema(
                 admitted_primary_keys,
@@ -2504,8 +2506,14 @@ class PsychologyAgent:
             ]
             admitted_context_block = "<context>\n" + "\n\n".join(admitted_context_parts) + "\n</context>"
             catalog = build_evidence_catalog(sources_text_map)
+            auditor_draft_claims = extract_draft_claims(raw_answer)
+            use_compact_auditor = bool(auditor_draft_claims)
             auditor_messages = build_auditor_messages(
-                query, raw_answer, admitted_context_block, sources_map=sources_text_map
+                query,
+                raw_answer,
+                admitted_context_block,
+                sources_map=sources_text_map,
+                compact=use_compact_auditor,
             )
             try:
                 auditor_tokens = None
@@ -2516,8 +2524,15 @@ class PsychologyAgent:
                         pass
                 if auditor_tokens is None:
                     auditor_tokens = sum(len(m["content"].encode("utf-8")) for m in auditor_messages) + 256
-                auditor_claim_count = max(1, len(extract_draft_claims(raw_answer)))
-                target_auditor_predict = min(1800, max(1000, auditor_claim_count * 160 + 400))
+                auditor_claim_count = max(1, len(auditor_draft_claims))
+                target_auditor_predict = min(
+                    1800,
+                    max(
+                        1000,
+                        auditor_claim_count * (80 if use_compact_auditor else 160)
+                        + (200 if use_compact_auditor else 400),
+                    ),
+                )
                 available_auditor_headroom = capacity - auditor_tokens
                 if available_auditor_headroom >= 600:
                     auditor_num_predict = min(target_auditor_predict, available_auditor_headroom)
@@ -2535,6 +2550,7 @@ class PsychologyAgent:
                         auditor_kwargs["response_schema"] = build_auditor_response_schema(
                             set(sources_text_map.keys()),
                             evidence_catalog=catalog,
+                            claim_count=len(auditor_draft_claims) if use_compact_auditor else None,
                         )
                     gen_calls += 1
                     auditor_raw = "".join(generator.chat_stream(**auditor_kwargs))
