@@ -27,7 +27,14 @@ from app.trained_client import TrainedModelClient
 from app.answer_format import clean_answer, extract_citation_claims, normalize_math_notation
 from app.evaluation_metrics import has_repetition, has_language_drift
 from app.query_normalizer import normalize_query, normalize_query_with_model, is_unclear_query
-from app.dialogue import dialogue_intent, build_context, context_capacity, ContextLimitError
+from app.dialogue import (
+    DialogueBusyError,
+    dialogue_intent,
+    build_context,
+    context_capacity,
+    ContextLimitError,
+)
+from app.gpu_lock import GPUBusyError, IndexingCancelledError
 from app.answer_modes import validate_mode_format, get_mode_retry_prompt, validate_compare_mode
 from app.token_counter import get_exact_token_counter
 from app.source_consistency import differing_value_reference_signatures, inconsistent_prime_extraction_example
@@ -1392,6 +1399,8 @@ class PsychologyAgent:
         gen_calls = 1
         try:
             raw_answer = "".join(generator.chat_stream(**primary_kwargs))
+        except (GPUBusyError, DialogueBusyError, IndexingCancelledError):
+            raise
         except Exception as e:
             logger.error("Inference exception during primary generation: %s", e)
             yield {
@@ -2275,6 +2284,8 @@ class PsychologyAgent:
                 gen_calls = 2
                 try:
                     repair_raw = "".join(generator.chat_stream(**repair_kwargs))
+                except (GPUBusyError, DialogueBusyError, IndexingCancelledError):
+                    raise
                 except Exception as e:
                     logger.error("Inference exception during repair generation: %s", e)
                     yield {
@@ -2584,6 +2595,8 @@ class PsychologyAgent:
                         check_status = status
                 else:
                     check_status = "unverified"
+            except (GPUBusyError, DialogueBusyError, IndexingCancelledError):
+                raise
             except Exception as e:
                 logger.warning("Auditor call failed: %s", e)
                 check_status = "unverified"

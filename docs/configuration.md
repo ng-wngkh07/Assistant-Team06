@@ -75,7 +75,7 @@ Use an ignored private operator environment file for deployment paths and source
 
 ## Automatic source ingestion
 
-`STUDY_SRC_AUTO_WATCH=1` (alias `AGENT_SRC_AUTO_WATCH`) enables the backend-managed watcher; default is off. `STUDY_SRC_WATCH_POLL_SECONDS` defaults to `2.0`, and `STUDY_SRC_WATCH_DEBOUNCE_SECONDS` to `1.5`. Export them in the launching environment before startup. The local profile does not otherwise rebuild an existing library automatically.
+`STUDY_SRC_AUTO_WATCH=1` (alias `AGENT_SRC_AUTO_WATCH`) enables the backend-managed watcher; default is off. `STUDY_SRC_WATCH_POLL_SECONDS` defaults to `2.0`, `STUDY_SRC_WATCH_DEBOUNCE_SECONDS` to `1.5`, and `STUDY_BACKGROUND_GPU_COOLDOWN_SECONDS` defaults to `120` so background OCR/vectorization yields to interactive requests. Export them in the launching environment before startup. The local profile does not otherwise rebuild an existing library automatically.
 
 Settled new supported files under `AGENT_SRC_DIR` are indexed incrementally under the corpus writer lock and model coordinator. Status is visible through the library UI and `/api/storage` or `/api/status`; private state lives at `AGENT_DATA_DIR/runtime/src_watcher_state.json`. Extraction/indexing is retrieval preparation, not model training or source approval.
 
