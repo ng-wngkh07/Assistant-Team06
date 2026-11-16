@@ -266,8 +266,19 @@ document.addEventListener("DOMContentLoaded", () => {
     let statusPollAuthBlocked = false;
     btnSend.disabled = true;
 
+    function canUseProtectedApis() {
+        return !(
+            typeof window !== "undefined" &&
+            window.StudyAccount &&
+            typeof window.StudyAccount.canAccessProtectedApis === "function" &&
+            !window.StudyAccount.canAccessProtectedApis()
+        );
+    }
+
     async function refreshKnowledgeBaseStatus() {
-        if (statusPollAuthBlocked) return "auth_required";
+        if (statusPollAuthBlocked || !canUseProtectedApis()) {
+            return "auth_required";
+        }
         const statusResult = await fetchKnowledgeBaseStatus();
         if (statusResult === "auth_required") {
             statusPollAuthBlocked = true;
@@ -998,6 +1009,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let currentSessionOffset = 0;
     async function loadSessions(searchQuery = "", offset = 0, append = false) {
+        if (!canUseProtectedApis()) {
+            return;
+        }
         // Capability detection on first load
         if (sessionsApiSupported === null) {
             try {
@@ -1019,11 +1033,21 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         try {
+            if (!canUseProtectedApis()) {
+                return;
+            }
             const limit = 50;
             const url = searchQuery
                 ? `/api/sessions/search?q=${encodeURIComponent(searchQuery)}&limit=${limit}&offset=${offset}`
                 : `/api/sessions?limit=${limit}&offset=${offset}`;
             const res = await fetch(url);
+            if (res.status === 401) {
+                statusPollAuthBlocked = true;
+                if (historyList) {
+                    historyList.textContent = "Đăng nhập để xem lịch sử trò chuyện.";
+                }
+                return;
+            }
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             const items = data.items || [];
@@ -1115,6 +1139,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 historyList.appendChild(moreBtn);
             }
         } catch (err) {
+            if (!canUseProtectedApis()) {
+                return;
+            }
             console.error("Lỗi tải danh sách phiên:", err);
             fetchLegacyHistory();
         }
@@ -1347,8 +1374,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function fetchLegacyHistory() {
+        if (!canUseProtectedApis()) {
+            return;
+        }
         try {
             const response = await fetch("/api/history");
+            if (response.status === 401) {
+                statusPollAuthBlocked = true;
+                if (historyList) {
+                    historyList.textContent = "Đăng nhập để xem lịch sử trò chuyện.";
+                }
+                return;
+            }
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const { items } = await response.json();
             historyList.replaceChildren();

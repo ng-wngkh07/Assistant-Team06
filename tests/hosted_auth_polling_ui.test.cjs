@@ -309,3 +309,96 @@ test("document-lookup, practice, timetable, and planner-assistant suppress unaut
   await new Promise((r) => setTimeout(r, 15));
   assert.deepEqual(calledUrls, ["/api/account/status"]);
 });
+
+test("app.js does not fall back to /api/history when /api/sessions returns 401 and accounts.js blocks protected polling during logout", async () => {
+  const { elements, docEvents, document, makeEl } = makeFakeDom();
+  makeEl("btn-account-logout");
+  makeEl("btn-account-switch");
+  makeEl("btn-account-cancel");
+  makeEl("btn-account-login");
+  makeEl("btn-account-register");
+  const origGetById = document.getElementById;
+  document.getElementById = (id) => (id === "account-ui-styles" ? null : origGetById(id));
+  const store = { getItem() { return null; }, setItem() {}, removeItem() {} };
+  let sessionReqCount = 0;
+  let logoutStarted = false;
+  const calledUrls = [];
+
+  const winListeners = {};
+  const context = {
+    document,
+    console: { log() {}, warn() {}, error() {} },
+    alert() {},
+    confirm: () => true,
+    Event: class { constructor(t) { this.type = t; } preventDefault() {} },
+    CustomEvent: class { constructor(t, init) { this.type = t; this.detail = init?.detail; } },
+    URLSearchParams,
+    TextDecoder,
+    TextEncoder,
+    localStorage: store,
+    sessionStorage: store,
+    setInterval() { return 1; },
+    clearInterval() {},
+    setTimeout() {},
+    clearTimeout() {},
+    window: {
+      location: { reload() {} },
+      addEventListener(type, fn) {
+        winListeners[type] = winListeners[type] || [];
+        winListeners[type].push(fn);
+      },
+      dispatchEvent(evt) {
+        for (const fn of winListeners[evt.type] || []) fn(evt);
+      },
+      matchMedia: () => ({ matches: false, addEventListener() {} }),
+    },
+    fetch: async (url) => {
+      const u = String(url);
+      calledUrls.push(u);
+      if (u === "/api/account/status") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            account: { id: "u1", username: "student" },
+            required: true,
+            registration_allowed: false,
+          }),
+        };
+      }
+      if (u === "/api/account/logout") {
+        logoutStarted = true;
+        await new Promise((r) => setTimeout(r, 15));
+        return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
+      }
+      if (u === "/api/sessions?limit=1") {
+        return { ok: true, status: 200, json: async () => ({ items: [] }) };
+      }
+      if (u.startsWith("/api/sessions?limit=50")) {
+        sessionReqCount += 1;
+        return { ok: false, status: 401, json: async () => ({ detail: "Unauthorized" }) };
+      }
+      if (u === "/api/history") {
+        return { ok: false, status: 401, json: async () => ({ detail: "Unauthorized" }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ documents: [], models: [], entries: [], lessons: [], known_courses: [], routines: [], tasks: [] }) };
+    },
+  };
+  context.window.document = document;
+
+  vm.runInNewContext(fs.readFileSync(ACCOUNTS_JS_PATH, "utf8"), context);
+  vm.runInNewContext(fs.readFileSync(APP_JS_PATH, "utf8"), context);
+
+  for (const fn of docEvents.DOMContentLoaded || []) await fn();
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setTimeout(r, 25));
+
+  assert.equal(sessionReqCount, 1, "Initial loadSessions ran once");
+  assert.ok(!calledUrls.includes("/api/history"), `Unexpected fallback to /api/history after 401: ${calledUrls.join(", ")}`);
+
+  const logoutBtn = elements.get("btn-account-logout");
+  for (const fn of logoutBtn?.listeners?.click || []) fn({ preventDefault() {} });
+  assert.equal(logoutStarted, true);
+  assert.equal(context.window.StudyAccount.canAccessProtectedApis(), false, "canAccessProtectedApis must return false immediately once logout begins");
+  await new Promise((r) => setTimeout(r, 25));
+});

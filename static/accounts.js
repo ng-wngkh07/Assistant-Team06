@@ -31,6 +31,7 @@
   let isAuthSubmitting = false;
   let isAuthImeComposing = false;
   let authKeyboardBound = false;
+  let isLoggingOut = false;
   let readyResolve = null;
   const readyPromise = new Promise((resolve) => {
     readyResolve = resolve;
@@ -396,7 +397,7 @@
   }
 
   function canAccessProtectedApis() {
-    return !authConfig.required || Boolean(currentAccount);
+    return !isLoggingOut && (!authConfig.required || Boolean(currentAccount));
   }
 
   function runWhenAuthorized(fn) {
@@ -497,6 +498,8 @@
   }
 
   async function logout() {
+    if (isLoggingOut) return;
+    isLoggingOut = true;
     const errorEl = document.getElementById('account-popover-error') || document.getElementById('account-auth-error');
     if (errorEl) {
       errorEl.textContent = '';
@@ -505,6 +508,7 @@
     try {
       await apiJson('/api/account/logout', { method: 'POST' });
     } catch (err) {
+      isLoggingOut = false;
       // Failed logout: NEVER clear identity or reload! Show readable error and retain state.
       if (errorEl) {
         errorEl.textContent = err.message || 'Đăng xuất không thành công.';

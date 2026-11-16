@@ -528,6 +528,57 @@ def test_native_ocr_passes_transcript_schema_and_retries_length_up_to_4096(tmp_p
     assert rec['raw_text'] == 'Quote "GDP" and \\frac{Y}{P}'
 
 
+def test_native_vision_ocr_retries_4096_when_native_client_raises_truncation_value_error(
+    tmp_path, monkeypatch, current_native_config
+):
+    """Real NativeVisionClient raises ValueError on length=2048; VisionOCRManager must still retry at 4096."""
+    import hashlib
+    import io
+    from contextlib import nullcontext
+    from PIL import Image
+    from app import native_vision, vision_ocr
+
+    img_buf = io.BytesIO()
+    Image.new('RGB', (400, 300), 'white').save(img_buf, 'PNG')
+    raw = img_buf.getvalue()
+    # Add non-white pixel so blank-page check runs inference
+    img = Image.open(io.BytesIO(raw))
+    img.putpixel((10, 10), (0, 0, 0))
+    out_buf = io.BytesIO()
+    img.save(out_buf, 'PNG')
+    raw = out_buf.getvalue()
+
+    model_dir = tmp_path / 'vision-model'
+    model_dir.mkdir()
+    (model_dir / 'config.json').write_text(json.dumps(current_native_config), encoding='utf-8')
+    (model_dir / 'processor_config.json').write_text('{}', encoding='utf-8')
+    (model_dir / 'preprocessor_config.json').write_text('{}', encoding='utf-8')
+
+    monkeypatch.setattr(vision_ocr, 'sys', types.SimpleNamespace(platform='darwin'))
+    monkeypatch.setattr(vision_ocr, 'CACHE_DIR', tmp_path / 'ocr_cache')
+    monkeypatch.setattr(vision_ocr.gpu_coordinator, 'acquire_for_inference', lambda **kw: nullcontext())
+    monkeypatch.setattr(native_vision, 'MLX_9B_DIR', model_dir)
+    monkeypatch.setattr(native_vision.NativeVisionClient, 'available', classmethod(lambda cls, *a, **kw: True))
+    monkeypatch.setattr(native_vision.NativeVisionClient, 'get_identity', lambda self: 'native-ocr-digest')
+    monkeypatch.setattr(native_vision.gpu_coordinator, 'acquire_for_inference', lambda **kw: nullcontext())
+
+    calls = []
+
+    def fake_request_json(payload, **kwargs):
+        calls.append(payload.get('max_tokens'))
+        if payload.get('max_tokens', 2048) <= 2048:
+            return {'text': '{"text":"truncated', 'finish_reason': 'length', 'is_truncated': True}
+        return {'text': json.dumps({'text': 'Recovered full dense page'}), 'finish_reason': 'stop', 'is_truncated': False}
+
+    monkeypatch.setattr(native_vision._VISION_STREAM_WORKER, 'request_json', fake_request_json)
+    mgr = vision_ocr.VisionOCRManager(cache_dir=tmp_path / 'ocr_cache')
+    rec = mgr.ocr_image_bytes(raw, hashlib.sha256(raw).hexdigest(), 'dense_real.pdf', 1)
+
+    assert calls == [2048, 4096]
+    assert rec['raw_text'] == 'Recovered full dense page'
+    assert rec['status'] == 'CAPTURED_PENDING_REVIEW'
+
+
 def test_native_vision_status_identity_caches_stat_signature_and_detects_mutation(
     tmp_path, monkeypatch, current_native_config
 ):
