@@ -1,10 +1,11 @@
 """Timetable & Vision Schedule API Routes (Single Responsibility Module)."""
 
 import logging
+import os
 import re
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.concurrency import run_in_threadpool
 
@@ -262,12 +263,22 @@ async def clear_timetable():
     return {"status": "ok"}
 
 
+def _resolve_public_base_url(request: Optional[Request] = None) -> str:
+    env_url = os.getenv("STUDY_PUBLIC_URL", "").strip()
+    if env_url.startswith(("http://", "https://")):
+        return env_url.rstrip("/")
+    if request is not None:
+        return str(request.base_url).rstrip("/")
+    return ""
+
+
 @router.get("/api/timetable/export.ics")
 async def export_timetable_ics(
     start_date: str = Query(..., description="Start date of semester in YYYY-MM-DD"),
     end_date: str = Query(..., description="End date of semester in YYYY-MM-DD"),
     include_planner: bool = Query(False, description="Include personal routines, confirmed study sessions and dated deadlines"),
     reminder_minutes: int = Query(60, ge=0, le=10080),
+    request: Request = None,
 ):
     from app import server as _srv
     try:
@@ -282,9 +293,10 @@ async def export_timetable_ics(
             from app.accounts import account_id
             tasks = await run_in_threadpool(study_planner.get_tasks)
             week_start = study_planner._infer_week_monday(preferences, tasks)
+            if week_start is None:
+                sd = date.fromisoformat(start_date)
+                week_start = sd - timedelta(days=sd.weekday())
             routines = await run_in_threadpool(study_planner.get_routines)
-            if week_start is None and (any(not r.get("is_recurring", True) for r in routines) or await run_in_threadpool(study_planner.get_study_sessions)):
-                raise ValueError("Hãy chọn tuần lập kế hoạch trước khi xuất buổi học hoặc hoạt động một lần.")
             for r in routines:
                 if r["flexibility"] != "study_window":
                     entries.append({
@@ -318,7 +330,16 @@ async def export_timetable_ics(
                 detail="Thời khóa biểu hiện chưa có môn học nào để xuất lịch. Vui lòng thêm môn học trước.",
             )
         from app.accounts import account_id
-        ics_content = _srv.timetable_ics.generate_ics(entries, start_date, end_date, deadlines=deadlines, reminder_minutes=reminder_minutes, namespace=account_id.get() or "local")
+        base_url = _resolve_public_base_url(request)
+        ics_content = _srv.timetable_ics.generate_ics(
+            entries,
+            start_date,
+            end_date,
+            deadlines=deadlines,
+            reminder_minutes=reminder_minutes,
+            namespace=account_id.get() or "local",
+            base_url=base_url or None,
+        )
         return Response(
             content=ics_content,
             media_type="text/calendar; charset=utf-8",
@@ -398,6 +419,7 @@ class StudyPlanGeneratePayload(BaseModel):
     reschedule_only: bool = False
     ai_notes: Optional[str] = None
     require_estimates: bool = False
+    include_courses: Optional[bool] = None
 
 
 class StudyPlanConfirmPayload(BaseModel):
@@ -551,6 +573,7 @@ async def generate_planner_schedule(payload: Optional[StudyPlanGeneratePayload] 
             study_planner.generate_study_plan,
             reschedule_only=req.reschedule_only,
             ai_notes_override=req.ai_notes,
+            include_courses=req.include_courses,
         )
         return {"status": "ok", "draft": draft}
     except ValueError as e:
@@ -926,13 +949,24 @@ async def generate_weekly_lesson_exercise_endpoint(lesson_id: int):
                             "UPDATE weekly_lessons SET practice_id = ?, exercise_status = 'available', question_count = ? WHERE id = ?",
                             (practice_id, actual_count, lesson_id),
                         )
-                    # Also link matching planned sessions in study_sessions
+                    # Also link matching planned sessions in study_sessions (by lesson ID or enrolled course)
                     s_cols = {r[1] for r in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
-                    if "weekly_lesson_id" in s_cols:
-                        conn.execute(
-                            "UPDATE study_sessions SET practice_id = ?, exercise_status = 'available' WHERE weekly_lesson_id = ?",
-                            (practice_id, lesson_id),
-                        )
+                    if "practice_id" in s_cols:
+                        course_name = (target_lesson.get("course") or "").strip()
+                        if "weekly_lesson_id" in s_cols:
+                            conn.execute(
+                                "UPDATE study_sessions SET practice_id = ?, exercise_status = 'available' WHERE weekly_lesson_id = ?",
+                                (practice_id, lesson_id),
+                            )
+                        if course_name:
+                            conn.execute(
+                                """
+                                UPDATE study_sessions
+                                SET practice_id = ?, exercise_status = 'available'
+                                WHERE COALESCE(practice_id, '') = '' AND lower(trim(course)) = lower(trim(?))
+                                """,
+                                (practice_id, course_name),
+                            )
                     conn.commit()
             await run_in_threadpool(_update_lesson_and_sessions)
         return {
@@ -983,6 +1017,7 @@ async def export_timetable_bundle_zip(
     start_date: str = Query(..., description="Start date of semester in YYYY-MM-DD"),
     end_date: str = Query(..., description="End date of semester in YYYY-MM-DD"),
     reminder_minutes: int = Query(60, ge=0, le=10080),
+    request: Request = None,
 ):
     from datetime import date, timedelta
     from app import server as _srv
@@ -997,7 +1032,10 @@ async def export_timetable_bundle_zip(
 
         preferences = await run_in_threadpool(study_planner.get_preferences)
         tasks = await run_in_threadpool(study_planner.get_tasks)
-        week_start = study_planner._infer_week_monday(preferences, tasks) or date.fromisoformat(start_date)
+        week_start = study_planner._infer_week_monday(preferences, tasks)
+        if week_start is None:
+            sd = date.fromisoformat(start_date)
+            week_start = sd - timedelta(days=sd.weekday())
         routines = await run_in_threadpool(study_planner.get_routines)
         for r in routines:
             if r["flexibility"] != "study_window":
@@ -1034,6 +1072,7 @@ async def export_timetable_bundle_zip(
                 detail="Chưa có lịch học hoặc buổi tự học nào để xuất gói .zip.",
             )
 
+        base_url = _resolve_public_base_url(request)
         ics_text = _srv.timetable_ics.generate_ics(
             entries,
             start_date,
@@ -1041,11 +1080,13 @@ async def export_timetable_bundle_zip(
             deadlines=deadlines,
             reminder_minutes=reminder_minutes,
             namespace=account_id.get() or "local",
+            base_url=base_url or None,
         )
         zip_bytes = await run_in_threadpool(
             build_calendar_bundle_zip,
             None,
             ics_bytes=ics_text.encode("utf-8"),
+            base_url=base_url or "http://127.0.0.1:8000",
         )
         return Response(
             content=zip_bytes,

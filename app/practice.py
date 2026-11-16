@@ -1384,7 +1384,9 @@ class PracticeService:
                 continue
 
             had_candidates = True
-            verify_timeout = min(180.0, max(1.0, total_deadline - (time.monotonic() - start_time)))
+            # Dedicated floor (120s) prevents slow primary generation (e.g. 90-135s on 9B)
+            # from starving the follow-up verification phase into immediate HTTP 422 timeouts.
+            verify_timeout = min(180.0, max(120.0, total_deadline - (time.monotonic() - start_time)))
             try:
                 verified = self._verify_questions(
                     candidates, passage_by_id, model,

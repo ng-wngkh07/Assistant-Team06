@@ -8,6 +8,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -16,10 +17,34 @@ import tempfile
 import unicodedata
 from pathlib import Path
 from PIL import Image, ImageOps, ImageDraw
-from app.config import BASE_DIR, OLLAMA_BASE_URL, OLLAMA_AUX_CHAT_MODEL, VISION_TIMEOUT_SECONDS
+from app.config import BASE_DIR, DATA_DIR, OLLAMA_BASE_URL, OLLAMA_AUX_CHAT_MODEL, VISION_TIMEOUT_SECONDS
 from app.gpu_lock import gpu_coordinator, GPUBusyError
 
 VERSION = 'registered-table-literal-v4-registration-hold'
+
+
+def _find_apple_vision_ocr() -> Path | None:
+    """Locate the native macOS Apple Vision OCR binary across checkout, DATA_DIR, and runtime roots."""
+    candidates: list[Path] = []
+    env_bin = os.getenv("STUDY_APPLE_VISION_OCR_BIN", "").strip()
+    if env_bin:
+        candidates.append(Path(env_bin))
+    candidates.extend([
+        Path(BASE_DIR) / "data/runtime/apple_vision_ocr",
+        Path(DATA_DIR) / "runtime/apple_vision_ocr",
+        Path(DATA_DIR).parent / "runtime/apple_vision_ocr",
+    ])
+    try:
+        candidates.append(Path(sys.executable).resolve().parents[2] / "data/runtime/apple_vision_ocr")
+    except IndexError:
+        pass
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                return cand
+        except OSError:
+            continue
+    return None
 
 
 def _find_tesseract_executable() -> str | None:
@@ -39,7 +64,7 @@ def _find_tesseract_executable() -> str | None:
 def cache_is_current(record):
     """Reuse exact-image results only while the OCR engine and auxiliary model match."""
     if not isinstance(record,dict) or record.get('version')!=VERSION: return False
-    path = (Path(BASE_DIR)/'data/runtime/apple_vision_ocr') if record.get('engine')=='apple-vision' else Path(shutil.which('tesseract') or '/nonexistent')
+    path = (_find_apple_vision_ocr() or Path('/nonexistent')) if record.get('engine')=='apple-vision' else Path(_find_tesseract_executable() or '/nonexistent')
     if not path.is_file(): return False
     digest=hashlib.sha256(path.read_bytes()).hexdigest()
     room_vision=record.get('room_vision')
@@ -156,8 +181,8 @@ def grid_weekday_evidence(lines):
 
 
 def local_ocr_identity():
-    paths = [Path(BASE_DIR)/'data/runtime/apple_vision_ocr', Path(shutil.which('tesseract') or '/nonexistent')]
-    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in paths if p.is_file()}
+    paths = [p for p in (_find_apple_vision_ocr(), Path(_find_tesseract_executable() or '/nonexistent')) if p and p.is_file()]
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 
 
 def read_grid_weekdays(image_bytes):
@@ -268,8 +293,8 @@ def parse_registered_table(lines, room_reader=None):
 
 
 def read_local_lines(path):
-    binary=Path(BASE_DIR)/'data/runtime/apple_vision_ocr'
-    if binary.is_file():
+    binary = _find_apple_vision_ocr()
+    if binary and binary.is_file():
         try:
             r=subprocess.run([str(binary),str(path)],capture_output=True,text=True,timeout=25)
             data=json.loads(r.stdout)

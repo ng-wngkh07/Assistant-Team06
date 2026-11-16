@@ -43,6 +43,7 @@ class MaterialUploadRequest(BaseModel):
 
 class MaterialLibraryGenerateRequest(BaseModel):
     document_id: Optional[int] = Field(default=None, ge=1)
+    material_id: Optional[str] = Field(default=None, max_length=64)
     filename: Optional[str] = None
     page_from: int = Field(default=1, ge=1)
     page_to: Optional[int] = Field(default=None, ge=1)
@@ -225,6 +226,7 @@ async def generate_materials_from_library(req: MaterialLibraryGenerateRequest):
     from app import server as _srv
 
     def run_lib_generation():
+        extra_kwargs = {"material_id": req.material_id} if req.material_id else {}
         return _srv.study_material_manager.generate_from_library_document(
             doc_id=req.document_id,
             filename=req.filename,
@@ -234,6 +236,7 @@ async def generate_materials_from_library(req: MaterialLibraryGenerateRequest):
             flashcard_count=req.flashcard_count,
             difficulty=req.difficulty,
             model=_srv.DEFAULT_CHAT_MODEL,
+            **extra_kwargs,
         )
 
     try:

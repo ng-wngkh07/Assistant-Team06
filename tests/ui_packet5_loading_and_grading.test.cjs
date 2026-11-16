@@ -662,3 +662,60 @@ test('05-E: Verified quiz grading renders authoritative score and accuracy copy'
   const scoreText = h.elements.get('quiz-score-text').textContent;
   assert.match(scoreText, /Điểm: 1 \/ 1 \(Tổng 1 câu\)/i);
 });
+
+test('Batch 3 UI: modal PDF export, topic flashcards control, private upload persist_to_src, and flashcard flex scroll', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '../static/index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '../static/style.css'), 'utf8');
+  assert.match(html, /id="btn-study-export-pdf"/);
+  assert.match(html, /id="btn-learning-flashcards"/);
+  assert.match(css, /\.card-face-body\s*\{[^}]*justify-content:\s*flex-start;/s);
+  assert.match(css, /\.card-face-body::before,\s*\.card-face-body::after\s*\{[^}]*margin:\s*auto\s+0;/s);
+
+  const calls = [];
+  let blobUrlCreated = null;
+  let blobUrlRevoked = null;
+  const h = createHarness({
+    fetch: (url, opts = {}) => {
+      calls.push({ url, opts });
+      if (url === '/api/learning/export-pdf') {
+        return Promise.resolve({
+          ok: true,
+          blob: async () => new Blob(['%PDF-1.4\n'], { type: 'application/pdf' }),
+        });
+      }
+      if (url === '/api/materials/documents') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ documents: [{ filename: 'test-doc.pdf', clean_title: 'Test Doc', total_pages: 2, chunk_count: 2 }] }),
+        });
+      }
+      if (url === '/api/materials/generate-from-library') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            material: {
+              id: 'm1',
+              filename: 'test-doc.pdf',
+              difficulty: 'medium',
+              answers_verified: true,
+              quiz: [{ id: 'q1', question: 'Q1?', choices: [{ label: 'A', text: '1' }], correct_answer: 'A' }],
+              flashcards: [{ id: 1, front: 'F?', back: 'B', page_num: 1 }],
+            },
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ sessions: [], items: [], models: [], knowledge_base: {} }) });
+    },
+  });
+
+  // Override URL helpers inside test sandbox? Verify click directly via window.openStudyMaterialModal + export click
+  const appCode = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+  assert.match(appCode, /window\.openStudyMaterialModal\s*=\s*openStudyMaterial/);
+  assert.match(appCode, /persist_to_src:\s*!isInstantStudyToolUpload\s*&&\s*!isPrivateAccountUpload/);
+  assert.match(appCode, /material_id:\s*currentStudyMaterial\.material_id/);
+
+  const timetableJs = fs.readFileSync(path.join(__dirname, '../static/timetable.js'), 'utf8');
+  assert.equal(timetableJs.includes('"Tự chọn"'), false);
+  assert.match(timetableJs, /practice_id:\s*tr\.dataset\.practiceId/);
+  assert.match(timetableJs, /weekly_lesson_id:\s*tr\.dataset\.weeklyLessonId/);
+});

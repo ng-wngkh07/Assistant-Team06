@@ -630,6 +630,11 @@ document.addEventListener("DOMContentLoaded", () => {
         e.preventDefault();
         if (isComposing) return;
         const query = userInput.value.trim();
+        if (typeof canUseProtectedApis === "function" && !canUseProtectedApis()) {
+            chatStatus.textContent = "Vui lòng đăng nhập để gửi câu hỏi.";
+            window.StudyAccount?.openAuthModal?.();
+            return;
+        }
         if (isGenerating) {
             chatStatus.textContent = "Đang xử lý câu hỏi trước. Câu mới được giữ trong ô nhập; bạn gửi lại sau khi câu trước hoàn tất.";
             return;
@@ -1670,6 +1675,11 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("btn-model-check")?.addEventListener("click", async () => {
         const button = document.getElementById("btn-model-check");
         const status = document.getElementById("model-check-result");
+        if (typeof canUseProtectedApis === "function" && !canUseProtectedApis()) {
+            if (status) status.textContent = "Vui lòng đăng nhập để kiểm tra mô hình.";
+            window.StudyAccount?.openAuthModal?.();
+            return;
+        }
         button.disabled = true;
         status.textContent = "Đang khởi tạo và chạy thử mô hình cục bộ…";
         try {
@@ -2273,6 +2283,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnQuizPrev = document.getElementById("btn-quiz-prev");
     const btnQuizNext = document.getElementById("btn-quiz-next");
     const btnQuizRestart = document.getElementById("btn-quiz-restart");
+    const btnStudyExportPdf = document.getElementById("btn-study-export-pdf");
     const quizBubbles = document.getElementById("quiz-bubbles");
 
     // Flashcard UI
@@ -3225,6 +3236,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function handleMaterialFileUpload(file, inputEl) {
         if (!file) return;
+        if (typeof canUseProtectedApis === "function" && !canUseProtectedApis()) {
+            if (inputEl) inputEl.value = "";
+            window.StudyAccount?.openAuthModal?.();
+            return;
+        }
 
         if (file.size === 0) {
             if (inputEl) inputEl.value = "";
@@ -3268,6 +3284,12 @@ document.addEventListener("DOMContentLoaded", () => {
                     : `⏳ Đang đọc và nạp tệp "${file.name}" vào thư viện cá nhân...`;
             }
 
+            const authCfg = typeof window !== "undefined" ? window.StudyAccount?.getConfig?.() : null;
+            const activeAccount = typeof window !== "undefined" ? window.StudyAccount?.getAccount?.() : null;
+            const isPrivateAccountUpload = Boolean(
+                (authCfg && (authCfg.required || authCfg.accounts_required)) || activeAccount
+            );
+
             const res = await fetch("/api/materials/upload", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -3275,7 +3297,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     filename: file.name,
                     file_base64: base64Data,
                     generate_study_set: false,
-                    persist_to_src: !isInstantStudyToolUpload
+                    persist_to_src: !isInstantStudyToolUpload && !isPrivateAccountUpload
                 })
             });
 
@@ -3645,6 +3667,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     filename,
+                    material_id: (existingUploadEntry && !existingUploadEntry.doc_id)
+                        ? (existingUploadEntry.material_id || existingUploadEntry.id || null)
+                        : null,
                     quiz_count: quizCount,
                     flashcard_count: flashcardCount,
                     difficulty: difficulty,
@@ -3772,7 +3797,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return false;
     }
 
-    function openStudyMaterial(material) {
+    function openStudyMaterial(material, options = {}) {
         if (!material) return;
         currentStudyMaterial = material;
         currentQuizIndex = 0;
@@ -3842,14 +3867,27 @@ document.addEventListener("DOMContentLoaded", () => {
             sourceTextPreview.textContent = previewText || "Không có trích đoạn văn bản thô.";
         }
 
-        switchStudyTab("quiz");
+        const initialTab = (options && options.initialTab) || (
+            !(material.quiz && material.quiz.length) && (material.flashcards && material.flashcards.length)
+                ? "flashcards"
+                : "quiz"
+        );
+        switchStudyTab(initialTab);
         renderQuiz();
         renderFlashcards();
+        const exportPdfBtn = (typeof btnStudyExportPdf !== "undefined" && btnStudyExportPdf) || (typeof document !== "undefined" && typeof document.getElementById === "function" ? document.getElementById("btn-study-export-pdf") : null);
+        if (exportPdfBtn) {
+            exportPdfBtn.disabled = !(material.quiz && material.quiz.length);
+        }
 
         if (studyMaterialModal) {
             studyMaterialModal.style.display = "flex";
             studyMaterialModal.classList.add("active");
         }
+    }
+
+    if (typeof window !== "undefined") {
+        window.openStudyMaterialModal = openStudyMaterial;
     }
 
     btnCloseStudyMaterial?.addEventListener("click", () => {
@@ -4079,6 +4117,49 @@ document.addEventListener("DOMContentLoaded", () => {
         renderQuizQuestion(0);
         renderQuizBubbles();
         updateQuizScore();
+    });
+
+    btnStudyExportPdf?.addEventListener("click", async () => {
+        const quiz = (currentStudyMaterial && currentStudyMaterial.quiz) || [];
+        if (!quiz.length) {
+            alert("Bộ ôn luyện này chưa có câu hỏi trắc nghiệm để xuất PDF.");
+            return;
+        }
+        const topicName = (currentStudyMaterial.topic || currentStudyMaterial.clean_title || currentStudyMaterial.filename || "On-tap-tai-lieu").trim();
+        btnStudyExportPdf.disabled = true;
+        try {
+            const res = await fetch("/api/learning/export-pdf", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    topic: topicName,
+                    difficulty: currentStudyMaterial.difficulty || "medium",
+                    material_id: currentStudyMaterial.material_id || currentStudyMaterial.id || null,
+                }),
+            });
+            if (!res.ok) {
+                let errMsg = "Không thể xuất file PDF.";
+                try {
+                    const errJson = await res.json();
+                    errMsg = errJson.detail || errMsg;
+                } catch (_) {}
+                throw new Error(errMsg);
+            }
+            const blob = await res.blob();
+            const safeSlug = topicName.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "arym-bai-tap";
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `arym-${safeSlug.slice(0, 40)}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            alert(err.message || "Không thể xuất file PDF.");
+        } finally {
+            btnStudyExportPdf.disabled = !(currentStudyMaterial && currentStudyMaterial.quiz && currentStudyMaterial.quiz.length);
+        }
     });
 
     // --- Flashcards Logic ---

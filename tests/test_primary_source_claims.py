@@ -1219,3 +1219,90 @@ def test_repair_prompt_ends_with_numeric_ban_and_same_page_chunk_warning():
     tail = repair_prompt[draft_pos:]
     assert "S3" in tail and "5" in tail and "S2" in tail
     assert "48" in tail and "L1" in tail
+
+
+def test_partial_valid_primary_claims_salvaged_when_repair_fails_unrelated_neighbor():
+    s1 = "Hệ thống 1 hoạt động tự động và nhanh chóng.\nHệ thống 2 chú ý tới hoạt động đòi hỏi nỗ lực."
+    s2 = "Đoạn mở rộng kế cận không chứa dữ kiện liên quan."
+
+    class PartialThenBadRepairModel:
+        def __init__(self):
+            self.calls = []
+            self.last_done_reason = "stop"
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            self.last_done_reason = "stop"
+            if len(self.calls) == 1:
+                yield json.dumps(
+                    {
+                        "claims": [
+                            {"text": "Hệ thống 1 hoạt động tự động và nhanh chóng.", "source_ids": ["S1"], "evidence_lines": [1, 1]},
+                            {"text": "Hệ thống 2 và Hệ thống 1 phân biệt theo mức nỗ lực.", "source_ids": ["S2"], "evidence_lines": [1, 1]},
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            else:
+                # Repair still makes an unsupported numeric claim on S2
+                yield json.dumps(
+                    {"claims": [{"text": "Hệ thống 1 và 2 đối lập hoàn toàn.", "source_ids": ["S2"], "evidence_lines": [1, 1]}]},
+                    ensure_ascii=False,
+                )
+
+    model = PartialThenBadRepairModel()
+    res = PsychologyAgent(
+        searcher=RecordingSearcher([
+            make_chunk(s1, semantic_score=0.95, doc_id=4, page_num=116),
+            make_chunk(s2, semantic_score=0.80, doc_id=4, page_num=212),
+        ]),
+        ollama=model,
+        translator=NoTranslation(),
+    ).process_query_sync(
+        "Hệ thống 1 và Hệ thống 2 khác nhau thế nào?",
+        model="qwen3.5-9b-4bit",
+        embed_model=None,
+        isolate_context=True,
+        processing_level="standard",
+    )
+    assert res["response_kind"] == "answer"
+    assert len(res["citations"]) == 1
+    assert res["citations"][0]["id"] == "S1"
+    assert "Hệ thống 1 hoạt động tự động" in res["answer"]
+
+
+def test_repetitive_primary_draft_gets_single_repair_chance():
+    s1 = "Ánh xạ tuyến tính T bảo toàn phép cộng và phép nhân vô hướng."
+
+    class RepetitiveThenCleanModel:
+        def __init__(self):
+            self.calls = []
+            self.last_done_reason = "stop"
+
+        def chat_stream(self, **kwargs):
+            self.calls.append(kwargs)
+            self.last_done_reason = "stop"
+            if len(self.calls) == 1:
+                dup = {"text": "Ánh xạ tuyến tính T bảo toàn phép cộng và phép nhân vô hướng.", "source_ids": ["S1"], "evidence_lines": [1, 1]}
+                yield json.dumps({"claims": [dup, dup, dup]}, ensure_ascii=False)
+            else:
+                yield json.dumps(
+                    {"claims": [{"text": "Ánh xạ tuyến tính T bảo toàn phép cộng và phép nhân vô hướng.", "source_ids": ["S1"], "evidence_lines": [1, 1]}]},
+                    ensure_ascii=False,
+                )
+
+    model = RepetitiveThenCleanModel()
+    res = PsychologyAgent(
+        searcher=RecordingSearcher([make_chunk(s1, semantic_score=0.95, doc_id=47, page_num=1)]),
+        ollama=model,
+        translator=NoTranslation(),
+    ).process_query_sync(
+        "Ánh xạ tuyến tính là gì?",
+        model="qwen3.5-9b-4bit",
+        embed_model=None,
+        isolate_context=True,
+        processing_level="standard",
+    )
+    assert len(model.calls) == 2
+    assert res["response_kind"] == "answer"
+    assert res["citations"] and res["citations"][0]["doc_id"] == 47

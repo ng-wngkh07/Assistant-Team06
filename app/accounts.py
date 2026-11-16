@@ -147,16 +147,32 @@ def issue_session(response, identity, request):
     with connection() as db:
         db.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
         db.execute('INSERT INTO sessions VALUES(?,?,?)', (digest(raw), identity, time.time() + 30*86400))
-    response.set_cookie(COOKIE, raw, max_age=30*86400, httponly=True, samesite='strict', secure=request.url.scheme == 'https' or os.environ.get('STUDY_SECURE_COOKIES') == '1', path='/')
+    response.set_cookie(COOKIE, raw, max_age=30*86400, httponly=True, samesite='lax', secure=request.url.scheme == 'https' or os.environ.get('STUDY_SECURE_COOKIES') == '1', path='/')
 
 
-def throttle(request, username):
-    key = digest(f'{request.client.host if request.client else "unknown"}|{username.lower()}')
+def _attempt_key(request, username):
+    return digest(f'{request.client.host if request.client else "unknown"}|{username.lower()}')
+
+
+def _check_throttle(request, username):
+    key = _attempt_key(request, username)
     with connection() as db:
         db.execute('DELETE FROM auth_attempts WHERE attempted<?', (time.time()-900,))
         if db.execute('SELECT COUNT(*) FROM auth_attempts WHERE identity=?', (key,)).fetchone()[0] >= 5:
             raise HTTPException(429, 'Thử quá nhiều lần. Vui lòng chờ 15 phút.')
+    return key
+
+
+def throttle(request, username):
+    key = _check_throttle(request, username)
+    with connection() as db:
         db.execute('INSERT INTO auth_attempts VALUES(?,?)', (key,time.time()))
+
+
+def _clear_throttle(request, username):
+    key = _attempt_key(request, username)
+    with connection() as db:
+        db.execute('DELETE FROM auth_attempts WHERE identity=?', (key,))
 
 
 @router.get('/status')
@@ -183,13 +199,16 @@ def register(credentials: Credentials, request: Request, response: Response):
 
 @router.post('/login')
 def login(credentials: Credentials, request: Request, response: Response):
-    throttle(request, credentials.username)
+    _check_throttle(request, credentials.username)
     with connection() as db:
         row = db.execute('SELECT * FROM accounts WHERE username=?',(credentials.username.lower(),)).fetchone()
     salt = row['salt'] if row else '0'*32
     encoded = password_hash(credentials.password,salt)
     if not row or not hmac.compare_digest(encoded,row['password_hash']):
+        with connection() as db:
+            db.execute('INSERT INTO auth_attempts VALUES(?,?)', (_attempt_key(request, credentials.username), time.time()))
         raise HTTPException(401,'Tên tài khoản hoặc mật khẩu chưa đúng.')
+    _clear_throttle(request, credentials.username)
     issue_session(response,row['id'],request)
     return {'account': {'id':row['id'],'username':row['username']}}
 
@@ -200,7 +219,7 @@ def logout(request: Request, response: Response):
     if raw:
         with connection() as db:
             db.execute('DELETE FROM sessions WHERE token_hash=?',(digest(raw),))
-    response.delete_cookie(COOKIE, path='/', samesite='strict')
+    response.delete_cookie(COOKIE, path='/', samesite='lax')
     return {'status':'ok'}
 
 

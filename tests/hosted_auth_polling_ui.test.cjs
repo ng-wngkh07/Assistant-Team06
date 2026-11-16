@@ -402,3 +402,58 @@ test("app.js does not fall back to /api/history when /api/sessions returns 401 a
   assert.equal(context.window.StudyAccount.canAccessProtectedApis(), false, "canAccessProtectedApis must return false immediately once logout begins");
   await new Promise((r) => setTimeout(r, 25));
 });
+
+test("app.js guards /api/model/check and /api/chat/stream when unauthenticated without clearing draft", async () => {
+  const { elements, docEvents, document } = makeFakeDom();
+  const store = { getItem() { return null; }, setItem() {}, removeItem() {} };
+  const calledUrls = [];
+  let modalOpened = 0;
+
+  const context = {
+    document,
+    console: { log() {}, warn() {}, error() {} },
+    alert() {},
+    confirm: () => true,
+    Event: class { constructor(t) { this.type = t; } preventDefault() {} },
+    CustomEvent: class { constructor(t, init) { this.type = t; this.detail = init?.detail; } },
+    URLSearchParams,
+    TextDecoder,
+    TextEncoder,
+    localStorage: store,
+    sessionStorage: store,
+    setInterval() { return 1; },
+    clearInterval() {},
+    setTimeout() {},
+    clearTimeout() {},
+    window: {
+      location: { reload() {} },
+      addEventListener() {},
+      dispatchEvent() {},
+      matchMedia: () => ({ matches: false, addEventListener() {} }),
+      StudyAccount: {
+        canAccessProtectedApis: () => false,
+        whenReady: async () => ({ account: null, required: true, registration_allowed: false }),
+        openAuthModal: () => { modalOpened += 1; },
+      },
+    },
+    fetch: async (url) => {
+      calledUrls.push(String(url));
+      return { ok: true, status: 200, json: async () => ({ models: [] }) };
+    },
+  };
+  context.window.document = document;
+  vm.runInNewContext(fs.readFileSync(APP_JS_PATH, "utf8"), context);
+
+  for (const fn of docEvents.DOMContentLoaded || []) await fn();
+  await new Promise((r) => setImmediate(r));
+
+  for (const fn of elements.get("btn-model-check").listeners.click || []) await fn({ preventDefault() {} });
+  assert.ok(!calledUrls.includes("/api/model/check"), `Unauthenticated #btn-model-check must not POST: ${calledUrls}`);
+  assert.ok(modalOpened >= 1);
+
+  elements.get("user-input").value = "Câu hỏi chưa đăng nhập";
+  for (const fn of elements.get("chat-form").listeners.submit || []) await fn({ preventDefault() {} });
+  assert.ok(!calledUrls.includes("/api/chat/stream"), `Unauthenticated submit must not POST: ${calledUrls}`);
+  assert.equal(elements.get("user-input").value, "Câu hỏi chưa đăng nhập");
+  assert.ok(modalOpened >= 2);
+});

@@ -1363,3 +1363,282 @@ def test_api_generate_from_library_carries_controls(client, monkeypatch):
     assert seen[0]['quiz_count'] == 5
     assert seen[0]['flashcard_count'] == 7
     assert seen[0]['difficulty'] == 'medium'
+
+
+def test_large_103_page_deck_caps_prompt_prefill_and_prioritizes_substantive_pages():
+    from app.study_materials import StudyMaterialManager, PDFExtractionResult
+
+    seen_prompts = []
+
+    class CaptureClient:
+        def check_health(self):
+            return True
+
+        def chat_complete(self, **kwargs):
+            self.last_done_reason = "stop"
+            seen_prompts.append(kwargs["messages"][0]["content"])
+            return '{"questions": [], "flashcards": []}'
+
+    res = PDFExtractionResult(filename="Chuong_1_103.pdf", filepath=Path("Chuong_1_103.pdf"))
+    res.clean_title = "Chuong 1 Ma tran"
+    res.total_pages = 103
+    res.extracted_pages = [
+        {"page_num": 1, "text": "ĐẠI HỌC KHOA HỌC TỰ NHIÊN"},
+        {"page_num": 2, "text": "Nội dung: 1.1 Ma trận; 1.2 Định thức."},
+    ] + [
+        {
+            "page_num": p,
+            "text": f"Định nghĩa trang {p}: Ma trận vuông cấp n có định thức xác định và quy tắc nhân ma trận hợp lệ.",
+        }
+        for p in range(3, 104)
+    ]
+    res.total_chars = sum(len(p["text"]) for p in res.extracted_pages)
+
+    mgr = StudyMaterialManager(CaptureClient())
+    mgr.generate_materials_from_pages(res, model="test-ollama", quiz_count=3, flashcard_count=5, difficulty="easy")
+    assert seen_prompts
+    # Must not pack all 103 pages into a huge prompt prefill for a 3-question / 5-card set
+    doc_blocks_count = seen_prompts[0].count("Trang ")
+    assert doc_blocks_count <= 24
+
+
+def test_topic_flashcards_and_modal_quiz_pdf_export_endpoints(client, tmp_path, monkeypatch):
+    import sqlite3
+    import fitz
+    import app.config as cfg
+    from app import server as _srv
+    from app.indexer import KnowledgeIndexer
+    from app.study_materials import StudyMaterialManager
+
+    src = tmp_path / "topic_flash_src"
+    src.mkdir(exist_ok=True)
+    db = tmp_path / "topic_flash_kb.db"
+    KnowledgeIndexer(db, src)
+    (src / "DaiSo.pdf").write_bytes(b"%PDF-1.4\n")
+    theory = (
+        "Ánh xạ tuyến tính f từ không gian vectơ V vào W bảo toàn phép cộng vectơ "
+        "và phép nhân vô hướng với mọi vectơ u, v trong V."
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO documents(id,filename,clean_title,filepath,file_size,file_hash,total_pages,extracted_pages_count,status) VALUES(?,?,?,?,?,?,?,?,?)",
+            (1, "DaiSo.pdf", "Đại số tuyến tính", str(src / "DaiSo.pdf"), 100, "h1", 1, 1, "indexed"),
+        )
+        conn.execute(
+            "INSERT INTO chunks(doc_id,filename,book_title,page_num,chunk_index,text) VALUES(?,?,?,?,?,?)",
+            (1, "DaiSo.pdf", "Đại số tuyến tính", 5, 0, theory),
+        )
+    monkeypatch.setattr(cfg, "SRC_DIR", src)
+    monkeypatch.setattr(cfg, "DB_PATH", db)
+    from app.document_lookup import DocumentLookup
+    monkeypatch.setattr(_srv.learning_service, "document_lookup", DocumentLookup(db, src))
+
+    class MockFlashClient:
+        last_done_reason = "stop"
+
+        def check_health(self):
+            return True
+
+        def chat_complete(self, **kwargs):
+            self.last_done_reason = "stop"
+            return json.dumps(
+                {
+                    "flashcards": [
+                        {
+                            "front": "Ánh xạ tuyến tính bảo toàn phép toán nào?",
+                            "back": "bảo toàn phép cộng vectơ",
+                            "evidence_quote": theory,
+                            "page_num": 5,
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+
+    monkeypatch.setattr(_srv, "study_material_manager", StudyMaterialManager(MockFlashClient()))
+    res_fc = client.post("/api/learning/flashcards", json={"topic": "Ánh xạ tuyến tính", "count": 5})
+    assert res_fc.status_code == 200, res_fc.text
+    fc_data = res_fc.json()
+    assert fc_data["topic"] == "Ánh xạ tuyến tính"
+    assert len(fc_data["flashcards"]) >= 1
+    assert fc_data["flashcards"][0]["back"]
+
+    # Export server-stored modal quiz questions directly via material_id
+    saved_mgr = _srv.study_material_manager
+    saved_mat = {
+        "id": "modal-mat-1",
+        "filename": "BaiGiang.pdf",
+        "clean_title": "Tài liệu tải lên: BaiGiang.pdf",
+        "quiz": [
+            {
+                "id": "q1",
+                "question": "Ánh xạ tuyến tính bảo toàn phép toán nào?",
+                "choices": [
+                    {"label": "A", "text": "Phép cộng và phép nhân vô hướng"},
+                    {"label": "B", "text": "Phép chia vô hướng"},
+                ],
+                "correct_answer": "A",
+                "explanation": "Theo định nghĩa trang 5.",
+                "page_num": 5,
+                "evidence_quote": theory,
+            }
+        ],
+    }
+    saved_mgr._materials["modal-mat-1"] = saved_mat
+    res_pdf = client.post(
+        "/api/learning/export-pdf",
+        json={
+            "topic": "Tài liệu tải lên: BaiGiang.pdf",
+            "difficulty": "medium",
+            "material_id": "modal-mat-1",
+        },
+    )
+    assert res_pdf.status_code == 200, res_pdf.text
+    assert res_pdf.headers["content-type"].startswith("application/pdf")
+    doc = fitz.open(stream=res_pdf.content, filetype="pdf")
+    try:
+        full_text = "\n".join(p.get_text("text") for p in doc)
+        assert "Ánh xạ tuyến tính bảo toàn phép toán nào?" in full_text
+        assert "Phép cộng và phép nhân vô hướng" in full_text
+    finally:
+        doc.close()
+
+
+def test_upload_study_set_generate_and_pdf_export_e2e(client, monkeypatch):
+    import json
+    from app import server as _srv
+    from app.study_materials import study_material_manager
+
+    raw_text = (
+        "Ma trận vuông A được gọi là khả nghịch nếu tồn tại ma trận vuông B sao cho AB = BA = I.\n"
+        "Định thức của ma trận khả nghịch luôn khác 0 theo định lý cơ bản."
+    )
+    b64 = base64.b64encode(raw_text.encode("utf-8")).decode("ascii")
+
+    # 1. Instant upload in Study Tool (persist_to_src=False)
+    up_res = client.post(
+        "/api/materials/upload",
+        json={
+            "filename": "upload_ephemeral_note.txt",
+            "file_base64": b64,
+            "generate_study_set": False,
+            "persist_to_src": False,
+        },
+    )
+    assert up_res.status_code == 200, up_res.text
+    mat_id = up_res.json()["material"]["id"]
+
+    class MockStudyClient:
+        last_done_reason = "stop"
+
+        def check_health(self):
+            return True
+
+        def chat_complete(self, **kwargs):
+            self.last_done_reason = "stop"
+            prompt = kwargs["messages"][0]["content"]
+            if "Kiểm định độc lập từng câu" in prompt:
+                return json.dumps(
+                    {
+                        "checks": [
+                            {
+                                "index": 1,
+                                "source_basis": "Ma trận vuông A được gọi là khả nghịch nếu tồn tại ma trận vuông B sao cho AB = BA = I.",
+                                "matching_choices": "A",
+                                "input_audit": "Đầy đủ dữ kiện theo định nghĩa trang 1.",
+                                "independent_solution": "Tra cứu định nghĩa khả nghịch: tồn tại B sao cho AB = BA = I.",
+                                "choice_comparison": "Khớp với đáp án A.",
+                                "explanation_audit": "Giải thích đúng theo định nghĩa trang 1.",
+                                "supported": True,
+                                "explanation_supported": True,
+                                "unique_answer": True,
+                                "qualifiers_preserved": True,
+                                "difficulty_matches": True,
+                                "verified_answer": "A",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            if "flashcards" in prompt.lower():
+                return json.dumps(
+                    {
+                        "flashcards": [
+                            {
+                                "front": "Khi nào ma trận vuông A khả nghịch?",
+                                "back": "khả nghịch",
+                                "evidence_quote": "Ma trận vuông A được gọi là khả nghịch nếu tồn tại ma trận vuông B sao cho AB = BA = I.",
+                                "page_num": 1,
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            return json.dumps(
+                {
+                    "questions": [
+                        {
+                            "question": "Khi nào ma trận vuông A khả nghịch?",
+                            "choices": {
+                                "A": "Khi tồn tại B sao cho AB = BA = I",
+                                "B": "Khi det(A) = 0",
+                                "C": "Khi A là ma trận không",
+                                "D": "Khi A có các hàng giống nhau",
+                            },
+                            "answer": "A",
+                            "explanation": "Theo định nghĩa trang 1.",
+                            "evidence_quote": "Ma trận vuông A được gọi là khả nghịch nếu tồn tại ma trận vuông B sao cho AB = BA = I.",
+                            "page_num": 1,
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+
+    monkeypatch.setattr(_srv, "DEFAULT_CHAT_MODEL", "test-ollama")
+    monkeypatch.setattr(_srv.study_material_manager, "ollama", MockStudyClient())
+    monkeypatch.setattr(study_material_manager, "ollama", MockStudyClient())
+    gen_res = client.post(
+        "/api/materials/generate-from-library",
+        json={
+            "material_id": mat_id,
+            "filename": "upload_ephemeral_note.txt",
+            "quiz_count": 1,
+            "flashcard_count": 1,
+            "difficulty": "easy",
+        },
+    )
+    assert gen_res.status_code == 200, gen_res.text
+    mat = gen_res.json()["material"]
+    assert len(mat["quiz"]) >= 1
+    assert len(mat["flashcards"]) >= 1
+    pdf_res = client.post(
+        "/api/learning/export-pdf",
+        json={
+            "topic": mat["filename"],
+            "difficulty": mat["difficulty"],
+            "material_id": mat["id"],
+        },
+    )
+    assert pdf_res.status_code == 200
+    assert pdf_res.content.startswith(b"%PDF-")
+
+    # 2. Scanned (<40 char text) PDF upload for study set must return clear 422 instead of fake quiz
+    import fitz as _fitz
+    scan_doc = _fitz.open()
+    p = scan_doc.new_page()
+    p.insert_text((72, 72), "Hi")
+    scan_bytes = scan_doc.tobytes()
+    scan_doc.close()
+    scan_b64 = base64.b64encode(scan_bytes).decode("ascii")
+    scan_res = client.post(
+        "/api/materials/upload",
+        json={
+            "filename": "scanned_only.pdf",
+            "file_base64": scan_b64,
+            "generate_study_set": True,
+            "persist_to_src": False,
+        },
+    )
+    assert scan_res.status_code == 422
+    assert any(kw in scan_res.json()["detail"].lower() for kw in ("hình ảnh", "văn bản", "scan", "ocr", "đọc"))

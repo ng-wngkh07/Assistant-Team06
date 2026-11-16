@@ -56,6 +56,8 @@ The `scripts/dev.py` `.env` loader accepts its explicit `ENV_KEYS` allowlist (`S
 | `STUDY_ACCOUNT_MAX_STORAGE_MB` | Maximum non-deduplicated upload storage in MiB per account (default `250`) |
 | `STUDY_MIN_FREE_DISK_MB` | Minimum free disk headroom threshold for `/api/health` infrastructure warning (`512` default) and `backend_service.py` preflight |
 | `STUDY_DISABLE_STARTUP_WARMUP` | Disable background startup warmup of the resident MLX prefix KV cache on macOS (`1` disables; default `0`) |
+| `STUDY_PUBLIC_URL` | Optional public `http(s)` origin used to qualify relative document `URL:`/`ATTACH:` links in exported `.ics` calendars (falls back to `request.base_url`) |
+| `STUDY_APPLE_VISION_OCR_BIN` | Optional explicit path to the macOS native `apple_vision_ocr` helper binary for registered-table timetable extraction |
 
 For example, a loopback local session with account login and watched shared sources:
 

@@ -319,25 +319,25 @@ class StudyMaterialManager:
         budget = max(0, capacity - output_reserve - chat_overhead)
 
         def estimate_cost(cand_passages: List[Dict[str, Any]]) -> int:
-            prompt_q = build_quiz_prompt(cand_passages, count=min(3,quiz_count), difficulty=difficulty)
-            prompt_f = build_flashcards_prompt(cand_passages, count=min(5,flashcard_count))
+            prompt_q = build_quiz_prompt(cand_passages, count=min(3, quiz_count), difficulty=difficulty) if quiz_count > 0 else ""
+            prompt_f = build_flashcards_prompt(cand_passages, count=min(5, flashcard_count)) if flashcard_count > 0 else ""
             messages_q = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt_q},
-            ]
+            ] if prompt_q else []
             messages_f = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt_f},
-            ]
+            ] if prompt_f else []
             if token_counter_func is not None:
                 try:
-                    cost_q = token_counter_func(messages_q)
-                    cost_f = token_counter_func(messages_f)
+                    cost_q = token_counter_func(messages_q) if messages_q else 0
+                    cost_f = token_counter_func(messages_f) if messages_f else 0
                     return max(cost_q, cost_f)
                 except Exception:
                     pass
-            cost_q = len(system_prompt.encode("utf-8")) + len(prompt_q.encode("utf-8")) + chat_overhead
-            cost_f = len(system_prompt.encode("utf-8")) + len(prompt_f.encode("utf-8")) + chat_overhead
+            cost_q = (len(system_prompt.encode("utf-8")) + len(prompt_q.encode("utf-8")) + chat_overhead) if prompt_q else 0
+            cost_f = (len(system_prompt.encode("utf-8")) + len(prompt_f.encode("utf-8")) + chat_overhead) if prompt_f else 0
             return max(cost_q, cost_f)
 
         def prompt_fits(prompt, reserve=1500):
@@ -350,8 +350,23 @@ class StudyMaterialManager:
                 size = sum(len(m['content'].encode()) for m in messages)
             return size + reserve + chat_overhead <= capacity
 
+        candidate_passages = passages
+        if len(passages) > 16:
+            max_study_pages = min(20, max(12, (max(0, quiz_count) + max(0, flashcard_count)) * 2))
+            substantive = [
+                p for p in passages
+                if len((p.get("text") or "").strip()) >= 120
+                and not str(p.get("text") or "").strip().startswith("[Tài liệu hình ảnh:")
+            ]
+            pool = substantive if substantive else passages
+            if len(pool) > max_study_pages:
+                step = len(pool) / max_study_pages
+                candidate_passages = [pool[int(i * step)] for i in range(max_study_pages)]
+            else:
+                candidate_passages = pool
+
         admitted_passages = []
-        for p in passages:
+        for p in candidate_passages:
             cand = admitted_passages + [p]
             if estimate_cost(cand) <= budget:
                 admitted_passages.append(p)
@@ -445,7 +460,7 @@ class StudyMaterialManager:
                     return "duplicate_options"
             return None
 
-        if active_client is not None:
+        if quiz_count > 0 and active_client is not None:
             try:
                 quiz_prompt = build_quiz_prompt(admitted_passages, count=min(3,quiz_count), difficulty=difficulty)
                 for attempt in range(2):
@@ -527,7 +542,7 @@ class StudyMaterialManager:
 
         # 2. Generate Flashcards
         flashcard_raw_items = []
-        if active_client is not None:
+        if flashcard_count > 0 and active_client is not None:
             try:
                 for _ in range((flashcard_count + 4) // 5):
                     remaining = flashcard_count - len(flashcard_raw_items)
@@ -732,7 +747,10 @@ class StudyMaterialManager:
                     reviewed.append({**{k:v for k,v in item.items() if k != 'source'},'difficulty':difficulty})
             valid_quiz = reviewed
 
-        if difficulty == "hard":
+        if quiz_count <= 0:
+            norm_quiz = []
+            quiz_mode = "skipped"
+        elif difficulty == "hard":
             matching_quiz = [q for q in valid_quiz if q.get("difficulty") == "hard"]
             if not matching_quiz:
                 raise StudyMaterialError(
@@ -1540,6 +1558,35 @@ class StudyMaterialManager:
 
         return results
 
+    def generate_flashcards_from_passages(
+        self,
+        passages: List[Dict[str, Any]],
+        *,
+        filename: str,
+        clean_title: Optional[str] = None,
+        count: int = 5,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Generate strict quote-verified flashcards from pre-selected source passages."""
+        extracted = PDFExtractionResult(filename=filename, filepath=Path(filename))
+        extracted.clean_title = clean_title or filename
+        extracted.extracted_pages = [
+            {
+                "page_num": int(p.get("page_num", idx + 1)),
+                "text": str(p.get("text") or ""),
+            }
+            for idx, p in enumerate(passages)
+            if str(p.get("text") or "").strip()
+        ]
+        extracted.total_pages = len(extracted.extracted_pages)
+        extracted.total_chars = sum(len(p["text"]) for p in extracted.extracted_pages)
+        return self.generate_materials_from_pages(
+            extracted,
+            quiz_count=0,
+            flashcard_count=count,
+            model=model,
+        )
+
     def generate_from_library_document(
         self,
         doc_id: Optional[int] = None,
@@ -1549,12 +1596,19 @@ class StudyMaterialManager:
         quiz_count: int = 3,
         flashcard_count: int = 5,
         difficulty: str = "medium",
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        material_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Generate quiz and flashcards from an existing indexed library document or local study document."""
-        if doc_id is None and not filename:
-            raise StudyMaterialError("Cần cung cấp doc_id hoặc filename tài liệu.")
-        material = self.inspect_library_document(doc_id=doc_id, filename=filename)
+        """Generate quiz and flashcards from an existing indexed library document or uploaded study document."""
+        if doc_id is None and not filename and not material_id:
+            raise StudyMaterialError("Cần cung cấp doc_id, material_id hoặc filename tài liệu.")
+        material = None
+        if material_id and doc_id is None:
+            cand = self.get_material(material_id)
+            if cand and cand.get("pages"):
+                material = cand
+        if material is None:
+            material = self.inspect_library_document(doc_id=doc_id, filename=filename)
         pages = material.get("pages") or []
         p_to = page_to or max((int(p.get("page_num", 1)) for p in pages), default=page_from)
         scoped_pages = [p for p in pages if page_from <= int(p.get("page_num", 1)) <= p_to]

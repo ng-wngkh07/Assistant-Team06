@@ -1103,12 +1103,25 @@ class PsychologyAgent:
             attach_quality = getattr(self.searcher, "_attach_page_quality_metadata", None)
             if callable(attach_quality):
                 attach_quality(retrieved_chunks)
-            if any(
-                (c.get("page_quality") or {}).get("needs_review")
-                and "unrepresented_formula_or_diagram_suspected"
-                in ((c.get("page_quality") or {}).get("warnings") or [])
-                for c in retrieved_chunks
-            ):
+
+            def _has_unverified_visual(chunk: dict) -> bool:
+                pq = chunk.get("page_quality") or {}
+                return bool(
+                    pq.get("needs_review")
+                    and "unrepresented_formula_or_diagram_suspected" in (pq.get("warnings") or [])
+                )
+
+            if source_page is not None:
+                blocked_visual = any(_has_unverified_visual(c) for c in retrieved_chunks)
+            else:
+                safe_visual_chunks = [c for c in retrieved_chunks if not _has_unverified_visual(c)]
+                if safe_visual_chunks:
+                    retrieved_chunks = safe_visual_chunks
+                    blocked_visual = False
+                else:
+                    blocked_visual = any(_has_unverified_visual(c) for c in retrieved_chunks)
+
+            if blocked_visual:
                 reason = "source_visual_content_unverified"
                 message = insufficient_evidence_message(reason, search_scope)
                 yield {"type": "token", "content": message}
@@ -1848,7 +1861,6 @@ class PsychologyAgent:
                 if (
                     collect_accepted is not None
                     and valid_items
-                    and not compare_concepts
                     and not formula_transcription_failed
                 ):
                     collect_accepted.clear()
@@ -1994,9 +2006,16 @@ class PsychologyAgent:
                 yield {"type": "done", "citations": [], "response_kind": "generation_failed", "failure_reason": "language_drift", "search_scope": search_scope, "generation_calls": 1}
                 return
             if repetitive_answer(raw_answer, len(retrieved_chunks)):
-                yield {"type": "token", "content": "Mô hình chưa tạo được câu trả lời đáng tin cậy cho câu hỏi này. Hãy thử diễn đạt câu hỏi cụ thể hơn."}
-                yield {"type": "done", "citations": [], "response_kind": "generation_failed", "failure_reason": "repetitive_output", "search_scope": search_scope, "generation_calls": 1}
-                return
+                if not citations_by_id:
+                    yield {"type": "token", "content": "Mô hình chưa tạo được câu trả lời đáng tin cậy cho câu hỏi này. Hãy thử diễn đạt câu hỏi cụ thể hơn."}
+                    yield {"type": "done", "citations": [], "response_kind": "generation_failed", "failure_reason": "repetitive_output", "search_scope": search_scope, "generation_calls": 1}
+                    return
+                accepted_from_primary.clear()
+                _append_source_feedback("Không lặp lại cùng một câu hoặc cùng một nhận định nhiều lần; tóm gọn thành 1–3 claims khác nhau.")
+                valid_ids = []
+                invalid_ids = ["invalid"]
+                initial_failure_reason = "repetitive_output"
+                failure_reason = "repetitive_output"
 
         if valid_ids and not invalid_ids:
             pos_conflict = check_positional_sequence_contradiction(
@@ -2453,6 +2472,36 @@ class PsychologyAgent:
                 valid_ids = []
                 invalid_ids = ["invalid"]
                 failure_reason = "positional_contradiction"
+
+        if (invalid_ids or not valid_ids) and accepted_from_primary and not formula_transcription_failed and failure_reason != "positional_contradiction":
+            salvaged_claims = [entry["claim"] for entry in accepted_from_primary]
+            salvaged_sids = {sid for c in salvaged_claims for sid in c.get("source_ids", [])}
+            if not matched_answer_ids or matched_answer_ids.intersection(salvaged_sids):
+                salv_answer, salv_val, salv_claims_map, salv_quotes_map = _render_claims(salvaged_claims)
+                salv_clean = clean_answer(salv_answer)
+                if (
+                    salv_val
+                    and salv_clean
+                    and re.search(r"\w", salv_clean, re.UNICODE)
+                    and not has_language_drift(salv_clean)
+                    and not repetitive_answer(salv_answer, len(retrieved_chunks))
+                    and not check_positional_sequence_contradiction(
+                        resolved_query,
+                        salv_answer,
+                        {sid: safe_texts_budgeted[sid] for sid in salv_val if sid in safe_texts_budgeted},
+                    )
+                ):
+                    logger.info(
+                        "Salvaged %d validated Call 1 claim(s) after repair failed (%s).",
+                        len(salvaged_claims),
+                        failure_reason,
+                    )
+                    raw_answer = salv_answer
+                    valid_ids = salv_val
+                    invalid_ids = []
+                    structured_claims_map = salv_claims_map
+                    evidence_quotes_map = salv_quotes_map
+                    failure_reason = None
 
         if invalid_ids or not valid_ids:
             logger.warning("Model answer lacks complete source attribution; unknown ids: %s", invalid_ids)

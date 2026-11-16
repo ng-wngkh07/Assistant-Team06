@@ -1209,3 +1209,197 @@ def test_http_future_week_unscheduled_diagnostic_and_suggestion_apply(isolated_c
     assert "DTSTART;TZID=Asia/Ho_Chi_Minh:20261116T070000" in ics_res.text
 
 
+def test_timetable_table_resolves_apple_vision_binary_from_env_and_data_dir(tmp_path, monkeypatch):
+    """apple_vision_ocr must resolve from DATA_DIR/runtime or STUDY_APPLE_VISION_OCR_BIN when absent under BASE_DIR."""
+    import sys
+    from PIL import Image
+    from app import timetable_table
+
+    empty_base = tmp_path / "empty_base"
+    empty_base.mkdir()
+    data_dir = tmp_path / "custom_data"
+    runtime_dir = data_dir / "runtime"
+    runtime_dir.mkdir(parents=True)
+    fake_bin = runtime_dir / "apple_vision_ocr"
+    fake_bin.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "print(json.dumps({'success': True, 'lines': [{'text': 'H6-201', 'bounds': [0.5, 0.5, 0.1, 0.03]}]}))\n",
+        encoding="utf-8",
+    )
+    fake_bin.chmod(0o755)
+
+    monkeypatch.setattr(timetable_table, "BASE_DIR", empty_base)
+    monkeypatch.setattr(timetable_table, "DATA_DIR", data_dir)
+    monkeypatch.delenv("STUDY_APPLE_VISION_OCR_BIN", raising=False)
+
+    assert timetable_table._find_apple_vision_ocr() == fake_bin
+    assert "apple_vision_ocr" in timetable_table.local_ocr_identity()
+
+    img_path = tmp_path / "sample.png"
+    Image.new("RGB", (60, 40), "white").save(img_path)
+    lines, engine, digest = timetable_table.read_local_lines(img_path)
+    assert engine == "apple-vision"
+    assert digest is not None
+    assert lines and lines[0]["text"] == "H6-201"
+
+
+def test_planner_generate_proposes_only_enrolled_semester_courses_and_links_real_exercises(isolated_client, tmp_path, monkeypatch):
+    """Free-time planner proposes enrolled semester courses (no virtual courses), preserves timeline,
+    links existing/generated practice exercises across confirm, and exports valid .ics/.zip."""
+    import io
+    import json as _json
+    import sqlite3
+    import zipfile
+    from zoneinfo import ZoneInfo
+    from app import planner_topic_bridge, practice, server as _srv
+
+    vn_tz = ZoneInfo("Asia/Ho_Chi_Minh")
+    _freeze_planner_now(monkeypatch, datetime(2026, 11, 16, 8, 0, 0, tzinfo=vn_tz))
+
+    # Isolated practice DB with one pre-existing real practice session for Đại số tuyến tính
+    pr_db = tmp_path / "linked_practice.db"
+    monkeypatch.setattr(practice, "get_practice_db_path", lambda: pr_db)
+    with sqlite3.connect(str(pr_db)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE practice_sessions (
+                practice_id TEXT PRIMARY KEY,
+                created_at REAL,
+                count INTEGER,
+                requested_count INTEGER,
+                difficulty TEXT,
+                purpose TEXT,
+                topic TEXT,
+                warning TEXT,
+                processing_level TEXT,
+                questions_json TEXT,
+                answers_json TEXT,
+                metadata_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO practice_sessions VALUES (?, 1000.0, 1, 1, 'medium', 'practice', 'Không gian vector', NULL, 'careful', ?, '{}', '{}')
+            """,
+            (
+                "prac_real_1",
+                _json.dumps(
+                    [
+                        {
+                            "id": "q1",
+                            "question": "Điều kiện không gian con là gì?",
+                            "choices": [
+                                {"label": "A", "text": "Đóng với phép cộng và nhân vô hướng"},
+                                {"label": "B", "text": "Chỉ chứa vectơ 0"},
+                            ],
+                            "answer": "A",
+                            "explanation": "Theo định nghĩa trang 5.",
+                            "source": {"title": "Đại số tuyến tính", "page_num": 5, "snippet": "Đóng với hai phép toán."},
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+        conn.commit()
+
+    # 1. Confirm 2 semester courses in timetable_confirmed (and keep intact throughout)
+    for cls in (
+        {"course": "Đại số tuyến tính", "weekday": 1, "start_time": "07:00", "end_time": "09:30", "room": "H6-201"},
+        {"course": "Cơ sở lập trình", "weekday": 3, "start_time": "13:00", "end_time": "15:30", "room": "B4-305"},
+    ):
+        r = isolated_client.post("/api/timetable/manual", json=cls)
+        assert r.status_code == 200
+
+    # 2. Add evening study windows
+    for w in (1, 2, 3):
+        r = isolated_client.post(
+            "/api/timetable/planner/routines",
+            json={"weekday": w, "start_time": "19:00", "end_time": "22:00", "title": "Tự học tối", "activity_type": "study_window", "flexibility": "study_window"},
+        )
+        assert r.status_code == 200
+
+    # 3. Seed one enrolled weekly lesson with real practice_id AND one unenrolled course lesson
+    with planner_topic_bridge._connect(None) as conn:
+        conn.execute(
+            """
+            INSERT INTO weekly_lessons (course, lesson_title, status, classified_topic, domain_label, question_count, practice_id, exercise_status, created_at)
+            VALUES ('Đại số tuyến tính', 'Không gian vector', 'upcoming', 'Đại số tuyến tính', 'Toán', 1, 'prac_real_1', 'available', '2026-11-16T00:00:00Z')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO weekly_lessons (course, lesson_title, status, classified_topic, domain_label, question_count, created_at)
+            VALUES ('Môn học ảo không đăng ký', 'Chủ đề ảo', 'upcoming', 'Ảo', 'Khác', 2, '2026-11-16T00:00:00Z')
+            """
+        )
+        conn.commit()
+
+    # 4. Call planner/generate with NO manual tasks and NO explicit week_start_date
+    gen_res = isolated_client.post("/api/timetable/planner/generate", json={})
+    assert gen_res.status_code == 200, gen_res.text
+    draft = gen_res.json()["draft"]
+    proposed = draft["sessions"]
+    assert len(proposed) >= 2
+    proposed_courses = {s["course"] for s in proposed}
+    assert {"Đại số tuyến tính", "Cơ sở lập trình"} <= proposed_courses
+    assert "Môn học ảo không đăng ký" not in proposed_courses
+    assert "Tự chọn" not in proposed_courses
+
+    ds_session = next(s for s in proposed if s["course"] == "Đại số tuyến tính")
+    assert ds_session["practice_id"] == "prac_real_1"
+    assert ds_session["exercise_status"] == "available"
+    assert ds_session["weekly_lesson_id"] is not None
+    assert not ds_session.get("worksheet_id")
+
+    # 5. Confirm using minimal payload (simulating clients omitting extra fields) — confirm must preserve practice_id & weekly_lesson_id
+    minimal_sessions = [
+        {
+            "task_id": s.get("task_id"),
+            "weekday": s["weekday"],
+            "start_time": s["start_time"],
+            "end_time": s["end_time"],
+            "title": s["title"],
+            "course": s["course"],
+            "priority": s["priority"],
+            "locked": s["locked"],
+            "source": "ai_assistant",
+            "session_index": s.get("session_index", 1),
+            "total_sessions": s.get("total_sessions", 1),
+            "notes": s.get("notes", ""),
+        }
+        for s in proposed
+    ]
+    conf_res = isolated_client.post("/api/timetable/planner/confirm", json={"plan_id": draft["plan_id"], "sessions": minimal_sessions})
+    assert conf_res.status_code == 200, conf_res.text
+    saved = conf_res.json()["sessions"]
+    saved_ds = next(s for s in saved if s["course"] == "Đại số tuyến tính")
+    assert saved_ds["practice_id"] == "prac_real_1"
+    assert saved_ds["weekly_lesson_id"] is not None
+    assert saved_ds["pdf_url"] == "/api/learning/export-pdf/prac_real_1"
+
+    # Confirmed semester classes remained completely intact (never overwritten)
+    classes = isolated_client.get("/api/timetable").json()["entries"]
+    assert {(c["course"], c["room"], c["start_time"]) for c in classes} == {
+        ("Đại số tuyến tính", "H6-201", "07:00"),
+        ("Cơ sở lập trình", "B4-305", "13:00"),
+    }
+
+    # 6. Export .ics even without tasks/week_start_date must succeed & fold properly
+    ics_res = isolated_client.get("/api/timetable/export.ics?start_date=2026-11-16&end_date=2026-12-20&include_planner=true")
+    assert ics_res.status_code == 200, ics_res.text
+    unfolded_ics = ics_res.text.replace("\r\n ", "")
+    assert "LOCATION:H6-201" in unfolded_ics
+    assert "LOCATION:\r\n" not in unfolded_ics
+    assert "URL:http://testserver/api/learning/export-pdf/prac_real_1" in unfolded_ics
+    assert "URL:/api/" not in unfolded_ics
+
+    # 7. Export ZIP bundle includes real practice PDF inside bai-tap-pdf/
+    zip_res = isolated_client.get("/api/timetable/export-bundle.zip?start_date=2026-11-16&end_date=2026-12-20")
+    assert zip_res.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(zip_res.content)) as zf:
+        pdfs = [n for n in zf.namelist() if n.startswith("bai-tap-pdf/") and n.endswith(".pdf")]
+        assert len(pdfs) >= 1
+        assert zf.read(pdfs[0]).startswith(b"%PDF-")
