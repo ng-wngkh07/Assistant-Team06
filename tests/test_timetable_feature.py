@@ -1212,6 +1212,7 @@ def test_http_future_week_unscheduled_diagnostic_and_suggestion_apply(isolated_c
 def test_timetable_table_resolves_apple_vision_binary_from_env_and_data_dir(tmp_path, monkeypatch):
     """apple_vision_ocr must resolve from DATA_DIR/runtime or STUDY_APPLE_VISION_OCR_BIN when absent under BASE_DIR."""
     import sys
+    from pathlib import Path
     from PIL import Image
     from app import timetable_table
 
