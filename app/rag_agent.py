@@ -1830,9 +1830,9 @@ class PsychologyAgent:
                     return "error", ("citation_invalid", ["invalid"])
                 item["text"] = normalized_text
 
-                if compare_concepts:
-                    # This repair is an extractive side-by-side definition,
-                    # so each chosen source must contain the actual quote.
+                if compare_concepts and not (require_quote or quote is not None):
+                    # Legacy unquoted compare repair uses item["text"] itself as the verbatim quote.
+                    # Structured quoted claims already passed verbatim quote/line validation above.
                     for sid in source_ids:
                         source_text = raw_sources_map.get(sid, "")
                         if item["text"].strip() not in source_text:

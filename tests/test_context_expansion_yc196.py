@@ -66,3 +66,31 @@ def test_conversational_compare_query_and_vector_orthography_variants():
     ).process_query_sync(query, embed_model=None, model="test", processing_level="standard")
     assert result["response_kind"] != "insufficient_evidence"
     assert len(result["citations"]) >= 2
+
+    # Structured 9B JSON claims with verbatim evidence_quote must not fail just because text summarizes
+    json_model = RecordingModel(
+        answer=__import__("json").dumps(
+            {
+                "claims": [
+                    {
+                        "text": "Không gian vectơ V cần thỏa mãn 8 tiên đề về phép cộng và nhân vô hướng.",
+                        "source_ids": ["S1"],
+                        "evidence_quote": "Cho V là một không gian vectơ trên R thỏa 8 tiên đề.",
+                    },
+                    {
+                        "text": "Không gian con W là tập con khác rỗng của không gian vectơ V.",
+                        "source_ids": ["S2"],
+                        "evidence_quote": "Cho W là một tập con khác rỗng của V gọi là không gian con của V.",
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+    )
+    json_res = PsychologyAgent(
+        searcher=RecordingSearcher([c1_chunk, c2_chunk]),
+        ollama=json_model,
+        translator=NoTranslation(),
+    ).process_query_sync(query, embed_model=None, model="test", processing_level="standard")
+    assert json_res["response_kind"] == "answer"
+    assert len(json_res["citations"]) == 2
