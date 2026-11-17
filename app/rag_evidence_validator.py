@@ -10,8 +10,14 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List
 
 from app.evaluation_metrics import has_repetition
-from app.rag_query_analyzer import DIRECTIVE_STOPWORDS, QUERY_STOPWORDS
+from app.rag_query_analyzer import COMPARE_SCOPE_SPLIT_RE, DIRECTIVE_STOPWORDS, QUERY_STOPWORDS
 from app.searcher import extract_document_scope_tokens
+
+
+def _normalize_loanword_terms_cf(text: str) -> str:
+    """Normalize common academic loanword orthography variants (e.g. vectơ/vecto <-> vector)."""
+    folded = text.casefold()
+    return re.sub(r"\bvec[\s-]*t[oơ]\b", "vector", folded)
 
 
 def weak_keyword_evidence(query: str, chunks: list[dict]) -> bool:
@@ -289,7 +295,7 @@ def concept_has_evidence(concept: str, chunks: List[Dict[str, Any]]) -> bool:
     if not chunks:
         return False
     norm_concept = re.sub(r"\s+", " ", concept).strip()
-    norm_concept_cf = norm_concept.casefold()
+    norm_concept_cf = _normalize_loanword_terms_cf(norm_concept)
 
     terms_cf = [
         w
@@ -312,7 +318,7 @@ def concept_has_evidence(concept: str, chunks: List[Dict[str, Any]]) -> bool:
     for chunk in chunks:
         raw_text = str(chunk.get("text", ""))
         c_text = re.sub(r"\s+", " ", raw_text)
-        c_text_cf = c_text.casefold()
+        c_text_cf = _normalize_loanword_terms_cf(c_text)
 
         left_b = r"\b" if re.match(r"^\w", norm_concept) else r""
         right_b = r"\b" if re.search(r"\w$", norm_concept) else r""
@@ -348,25 +354,31 @@ def detect_partial_evidence(query: str, chunks: List[Dict[str, Any]]) -> bool:
         return False
     if not re.search(r"so sánh|khác nhau|khác gì|điểm khác biệt|phân biệt|\bvs\b|versus", query, re.I):
         return False
-    bounded_query = re.split(
-        r"\b(?:trong cuốn|trong sách|theo tài liệu|theo sách)\b", query, maxsplit=1, flags=re.I
-    )[0]
+    bounded_query = re.split(COMPARE_SCOPE_SPLIT_RE, query, maxsplit=1, flags=re.I)[0]
     parts = re.split(r"\s+(?:và|với|vs|versus)\s+", bounded_query, maxsplit=1, flags=re.I)
     if len(parts) != 2:
         return False
-    left_text = re.sub(r"^\s*so sánh\s+", "", parts[0], flags=re.I)
+    left_text = re.sub(
+        r"^\s*(?:hãy\s+)?(?:so\s+sánh|đối\s+chiếu|phân\s+biệt)"
+        r"(?:\s+(?:ngắn\s+gọn|nhanh|chi\s+tiết|cụ\s+thể|tóm\s+tắt))?"
+        r"(?:\s+(?:(?:sự|những|các)\s+)?(?:điểm\s+)?(?:giống(?:\s+nhau)?(?:\s+và\s+khác(?:\s+nhau)?)?|khác\s+nhau|khác\s+biệt))?"
+        r"(?:\s+giữa)?\s+",
+        "",
+        parts[0],
+        flags=re.I,
+    )
     right_text = re.split(
         r"\s+(?:khác nhau|khác gì|có gì|hoạt động|thế nào|ra sao)\b", parts[1], maxsplit=1, flags=re.I
     )[0]
     stopwords = QUERY_STOPWORDS | DIRECTIVE_STOPWORDS | {"hệ", "thống", "concept", "khái", "niệm"}
     left = {
         w
-        for w in re.findall(r"\w+", left_text.casefold())
+        for w in re.findall(r"\w+", _normalize_loanword_terms_cf(left_text))
         if (len(w) >= 2 or w.isdigit()) and w not in stopwords
     }
     right = {
         w
-        for w in re.findall(r"\w+", right_text.casefold())
+        for w in re.findall(r"\w+", _normalize_loanword_terms_cf(right_text))
         if (len(w) >= 2 or w.isdigit()) and w not in stopwords
     }
     if not left or not right or left == right:
@@ -377,7 +389,7 @@ def detect_partial_evidence(query: str, chunks: List[Dict[str, Any]]) -> bool:
     source_words = {
         word
         for chunk in chunks
-        for word in re.findall(r"\w+", str(chunk.get("text", "")).casefold())
+        for word in re.findall(r"\w+", _normalize_loanword_terms_cf(str(chunk.get("text", ""))))
     }
     left_found = bool(left_distinct & source_words)
     right_found = bool(right_distinct & source_words)

@@ -35,3 +35,34 @@ def test_numbered_comparison_keeps_distinct_concept_identifiers():
     assert result['insufficient_reason']=='partial_evidence'
     assert result['search_scope']=={'kind':'library'}
     assert not model.calls
+
+
+def test_conversational_compare_query_and_vector_orthography_variants():
+    from app.rag_agent import extract_compare_concepts, PsychologyAgent
+    from app.rag_evidence_validator import concept_has_evidence, detect_partial_evidence
+    from test_study_agent_c_f_g import RecordingSearcher, RecordingModel, NoTranslation, make_chunk
+
+    query = "So sánh ngắn gọn sự khác nhau giữa không gian vector và không gian con trong tài liệu."
+    concepts = extract_compare_concepts(query)
+    assert concepts == ("không gian vector", "không gian con")
+
+    c1_chunk = make_chunk("Định nghĩa. Cho V là một không gian vectơ trên R thỏa 8 tiên đề.", doc_id=63, page_num=3)
+    c2_chunk = make_chunk("Định nghĩa. Cho W là một tập con khác rỗng của V gọi là không gian con của V.", doc_id=63, page_num=46)
+    assert concept_has_evidence(concepts[0], [c1_chunk]) is True
+    assert concept_has_evidence(concepts[1], [c2_chunk]) is True
+    assert detect_partial_evidence(query, [c1_chunk, c2_chunk]) is False
+
+    model = RecordingModel(
+        answer=(
+            "| Tiêu chí | Không gian vectơ | Không gian con |\n"
+            "|---|---|---|\n"
+            "| Định nghĩa | Cho V là một không gian vectơ trên R thỏa 8 tiên đề [S1]. | Cho W là một tập con khác rỗng của V gọi là không gian con của V [S2]. |"
+        )
+    )
+    result = PsychologyAgent(
+        searcher=RecordingSearcher([c1_chunk, c2_chunk]),
+        ollama=model,
+        translator=NoTranslation(),
+    ).process_query_sync(query, embed_model=None, model="test", processing_level="standard")
+    assert result["response_kind"] != "insufficient_evidence"
+    assert len(result["citations"]) >= 2

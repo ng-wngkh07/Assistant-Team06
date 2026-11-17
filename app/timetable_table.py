@@ -162,7 +162,7 @@ def grid_weekday_evidence(lines):
         return {}
     codes = {}
     for line in lines:
-        match = re.fullmatch(r'\(([A-Z]{2,8}\d{4,10})\)', line.get('text', '').strip())
+        match = re.fullmatch(r'\(([A-Z]{2,8}\d{4,10}[A-Z]{0,3})\)', line.get('text', '').strip())
         if match and len(line.get('bounds', [])) == 4:
             codes.setdefault(match.group(1), []).append(line)
     result = {}
@@ -177,6 +177,46 @@ def grid_weekday_evidence(lines):
             day, header = aligned[0]
             result[code] = {'weekday': day, 'header': header['text'],
                             'header_bounds': header['bounds'], 'course_code_bounds': anchor['bounds']}
+    return result
+
+
+def grid_room_evidence(lines):
+    """Extract literal room codes stacked immediately above unique grid course-code anchors."""
+    codes = {}
+    for line in lines:
+        match = re.fullmatch(r'\(([A-Z]{2,8}\d{4,10}[A-Z]{0,3})\)', str(line.get('text', '')).strip())
+        if match and len(line.get('bounds', [])) == 4:
+            codes.setdefault(match.group(1), []).append(line)
+
+    room_pat = re.compile(
+        r'^(?:(?:P\.?\s*|Phòng\s+)?[A-Z]\d?(?:[-.]\d{2,4}[A-Z]?|\d{2,4}[A-Z]?))$',
+        re.IGNORECASE,
+    )
+    skip_prefix = re.compile(r'^(?:LHP|GV|Email|Số\s*tiết|Tiết|Giờ)\b', re.IGNORECASE)
+    result = {}
+    for code, occurrences in codes.items():
+        if len(occurrences) != 1:
+            continue
+        anchor = occurrences[0]
+        ax, ay, aw, _ah = anchor['bounds']
+        acx = ax + aw / 2
+        above = []
+        for line in lines:
+            text = str(line.get('text', '')).strip()
+            bounds = line.get('bounds', [])
+            if not text or len(text) > 24 or len(bounds) != 4:
+                continue
+            if skip_prefix.match(text) or code in text:
+                continue
+            lx, ly, lw, _lh = bounds
+            lcx = lx + lw / 2
+            dy = ly - ay
+            if 0.0 < dy <= 0.16 and abs(lcx - acx) <= 0.09 and room_pat.fullmatch(text):
+                above.append((dy, text, bounds))
+        if above:
+            above.sort(key=lambda item: item[0])
+            _, room_text, room_bounds = above[0]
+            result[code] = {'room': room_text, 'room_bounds': room_bounds, 'course_code_bounds': anchor['bounds']}
     return result
 
 
@@ -195,6 +235,22 @@ def read_grid_weekdays(image_bytes):
         for record in evidence.values():
             record.update(engine=engine, engine_digest=digest)
         return evidence
+
+
+def read_grid_cell_evidence(image_bytes):
+    """Return both column weekday and cell room corroboration from a single OCR pass."""
+    with tempfile.TemporaryDirectory(prefix='timetable-columns-') as td:
+        path = Path(td) / 'input.png'
+        with Image.open(io.BytesIO(image_bytes)) as original:
+            ImageOps.exif_transpose(original).convert('RGB').save(path, 'PNG')
+        lines, engine, digest = read_local_lines(path)
+        weekdays = grid_weekday_evidence(lines)
+        rooms = grid_room_evidence(lines)
+        for record in weekdays.values():
+            record.update(engine=engine, engine_digest=digest)
+        for record in rooms.values():
+            record.update(engine=engine, engine_digest=digest)
+        return weekdays, rooms
 
 
 def parse_registered_table(lines, room_reader=None):

@@ -59,3 +59,70 @@ def test_grid_weekday_does_not_infer_missing_columns_or_use_vertical_list_dates(
     assert not timetable_table.grid_weekday_evidence(observations)
     observations[1]['bounds'][1]=.4
     assert not timetable_table.grid_weekday_evidence(observations)
+
+
+def test_grid_room_corroboration_replaces_lhp_code_with_literal_cell_room(monkeypatch, tmp_path):
+    import io
+    import json as _json
+    from PIL import Image
+    from app import timetable_store, timetable_vision
+
+    monkeypatch.setenv('TIMETABLE_DB_PATH', str(tmp_path / 'tt.db'))
+    with timetable_store.get_connection():
+        pass
+    monkeypatch.setattr(timetable_table, 'extract_registered_table', lambda _b: None)
+
+    observations = [
+        {'text': 'Thứ 2', 'bounds': [0.14, 0.59, 0.05, 0.02]},
+        {'text': 'Thứ 4', 'bounds': [0.39, 0.59, 0.05, 0.02]},
+        {'text': 'F1-509', 'bounds': [0.13, 0.355, 0.06, 0.02]},
+        {'text': '(MATH132901E)', 'bounds': [0.12, 0.301, 0.09, 0.02]},
+        {'text': 'LHP: 261MATH132901E_58FIE', 'bounds': [0.09, 0.276, 0.14, 0.02]},
+    ]
+    assert timetable_table.grid_weekday_evidence(observations)['MATH132901E']['weekday'] == 1
+    assert timetable_table.grid_room_evidence(observations)['MATH132901E']['room'] == 'F1-509'
+
+    monkeypatch.setattr(
+        timetable_table,
+        'read_grid_cell_evidence',
+        lambda _b: (
+            timetable_table.grid_weekday_evidence(observations),
+            timetable_table.grid_room_evidence(observations),
+        ),
+    )
+
+    class _FakeNativeVision:
+        @classmethod
+        def available(cls):
+            return True
+
+        def get_identity(self):
+            return 'fake-vlm-digest'
+
+        def generate_from_image(self, _img, **_kwargs):
+            return {
+                'text': _json.dumps({
+                    'entries': [{
+                        'course': 'Mathematical Statistics for Engineers (MATH132901E)',
+                        'weekday_label': 'Thứ 2',
+                        'start_time': '07:30',
+                        'end_time': None,
+                        'period': '1-5',
+                        'room': '261MATH132901E_58FIE',
+                    }],
+                    'uncertainties': [],
+                })
+            }
+
+    from app import native_vision
+    monkeypatch.setattr(native_vision, 'NativeVisionClient', _FakeNativeVision)
+    monkeypatch.setattr(timetable_vision.gpu_coordinator, 'check_inference_allowed', lambda: (True, ''))
+    monkeypatch.setattr(timetable_vision.sys, 'platform', 'darwin')
+
+    buf = io.BytesIO()
+    sample = Image.new('RGB', (120, 80), 'white')
+    sample.putpixel((10, 10), (20, 20, 20))
+    sample.save(buf, format='PNG')
+    draft = timetable_vision.call_vlm_extract(buf.getvalue(), 'img_hash_lhp', 'week.jpg')
+    assert draft['entries'][0]['room'] == 'F1-509'
+    assert draft['entries'][0]['weekday'] == 1

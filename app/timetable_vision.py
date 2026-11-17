@@ -24,7 +24,7 @@ from app import timetable_store
 logger = logging.getLogger(__name__)
 
 VLM_MODEL_NAME = OLLAMA_AUX_CHAT_MODEL
-PROMPT_VERSION = "v5-timetable-literal-weekdays"
+PROMPT_VERSION = "v6-timetable-literal-cells"
 MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 15 MB
 MAX_PIXELS = 40_000_000  # Decompression safety (e.g. 8000x5000)
 MAX_INFERENCE_EDGE = 1600
@@ -80,8 +80,8 @@ QUY TẮC TRÍCH XUẤT:
 2. Với trường weekday_label: BẮT BUỘC chép nguyên văn chữ hoặc nhãn thứ xuất hiện trên cột/hàng của ảnh (ví dụ: "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật", "Monday", "Wednesday"...). Tuyệt đối không tự suy diễn số. Nếu không có nhãn thứ rõ ràng, để null.
 3. Với start_time và end_time: Chỉ điền chuỗi 24h "HH:MM" (ví dụ "07:30", "09:00") khi trong ảnh CÓ GIỜ ĐỒNG HỒ CỤ THỂ. Nếu trong ảnh CHỈ CÓ TIẾT (ví dụ Tiết 1-3, Tiết 7-9) mà KHÔNG có giờ đồng hồ cụ thể, BẮT BUỘC để giá trị là null (không điền chuỗi "null").
 4. Với period: Điền chuỗi tiết học nếu có (ví dụ "1-3", "Tiết 1-3"), không có để null.
-5. Với room: Điền tên hoặc mã phòng học (ví dụ "A101", "B203"), không có để null.
-6. Mọi trường không rõ ràng đều để null. Tuyệt đối không tự quy đổi tiết học sang giờ đồng hồ."""
+5. Với room: Điền tên hoặc mã phòng học thực tế trên ảnh (ví dụ "A101", "B203", "F1-509"), không có để null. TUYỆT ĐỐI KHÔNG lấy mã lớp học phần (LHP), mã nhóm, hoặc mã môn học làm phòng học.
+6. Đọc cẩn thận từng chữ tên môn học đúng chính tả tiếng Việt/Anh trên ảnh. Mọi trường không rõ ràng đều để null. Tuyệt đối không tự quy đổi tiết học sang giờ đồng hồ."""
 
 
 class VLMUnavailableError(Exception):
@@ -585,22 +585,34 @@ def call_vlm_extract(
             "Vui lòng nhập giờ hoặc áp dụng bảng quy đổi tiết học."
         )
 
-    # Corroborate a grid column only from a unique, literal course-code location.
+    # Corroborate grid column weekday and cell room only from a unique, literal course-code anchor.
     # Never fill a missing column by guessing or treating OCR as training approval.
-    from app.timetable_table import read_grid_weekdays
+    from app.timetable_table import read_grid_cell_evidence
+    has_grid_codes = any(re.search(r'[A-Z]{2,8}\d{4,10}[A-Z]{0,3}', e.get('course') or '') for e in normalized_entries)
     try:
-        day_evidence = read_grid_weekdays(image_bytes) if any(re.search(r'[A-Z]{2,8}\d{4,10}', e.get('course') or '') for e in normalized_entries) else {}
+        day_evidence, room_evidence = read_grid_cell_evidence(image_bytes) if has_grid_codes else ({}, {})
     except (OSError, ValueError, RuntimeError) as exc:
-        logger.warning('Local weekday corroboration unavailable: %s', exc)
-        day_evidence = {}
+        logger.warning('Local grid corroboration unavailable: %s', exc)
+        day_evidence, room_evidence = {}, {}
     for entry in normalized_entries:
-        codes = re.findall(r'\b[A-Z]{2,8}\d{4,10}\b', entry.get('course') or '')
-        if len(codes) == 1 and codes[0] in day_evidence:
-            evidence = day_evidence[codes[0]]
-            if entry['weekday'] != evidence['weekday']:
-                uncertainties.append(f"{entry['course']}: đối chiếu cột {evidence['header']} trên ảnh gốc để sửa thứ mô hình đọc; cần kiểm tra bản nháp trước khi xác nhận.")
-            entry['weekday'] = evidence['weekday']
-            entry['weekday_evidence'] = evidence
+        codes = re.findall(r'\b[A-Z]{2,8}\d{4,10}[A-Z]{0,3}\b', entry.get('course') or '')
+        if entry.get('room'):
+            r_up = entry['room'].strip().upper()
+            if r_up.startswith("LHP") or any(c in r_up for c in codes) or re.fullmatch(r'\d{2,4}[A-Z]{2,8}\d{4,10}[A-Z0-9_]*', r_up):
+                entry['room'] = None
+        if len(codes) == 1:
+            code = codes[0]
+            if code in day_evidence:
+                evidence = day_evidence[code]
+                if entry['weekday'] != evidence['weekday']:
+                    uncertainties.append(f"{entry['course']}: đối chiếu cột {evidence['header']} trên ảnh gốc để sửa thứ mô hình đọc; cần kiểm tra bản nháp trước khi xác nhận.")
+                entry['weekday'] = evidence['weekday']
+                entry['weekday_evidence'] = evidence
+            if code in room_evidence:
+                r_ev = room_evidence[code]
+                if entry.get('room') != r_ev['room']:
+                    entry['room'] = r_ev['room']
+                entry['room_evidence'] = r_ev
 
     # Check time slot conflicts
     conflicts = detect_conflicts(normalized_entries)
