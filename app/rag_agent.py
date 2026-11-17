@@ -1708,6 +1708,7 @@ class PsychologyAgent:
                     if (not use_source_lines or len(source_ids) != 1 or not isinstance(span, list)
                             or len(span) != 2 or any(type(n) is not int for n in span)):
                         source_selection_failed = True
+                        logger.info("Claim rejected: invalid evidence_lines span=%r sids=%s", span, source_ids)
                         _append_source_feedback(
                             "evidence_lines phải có đúng hai số nguyên [dòng đầu, dòng cuối], "
                             "không liệt kê từng dòng. Chọn hai đầu của một đoạn liên tục "
@@ -1718,6 +1719,7 @@ class PsychologyAgent:
                     first, last = span
                     if 1 <= last < first <= len(lines):
                         source_selection_failed = True
+                        logger.info("Claim rejected: reversed evidence_lines=%r sids=%s", span, source_ids)
                         _append_source_feedback(
                             f"{source_ids[0]}: phạm vi dòng [{first}, {last}] bị ngược (số đầu > số cuối); "
                             f"viết tăng dần [{last}, {first}] trong L1 đến L{len(lines)}."
@@ -1725,6 +1727,7 @@ class PsychologyAgent:
                         return "error", ("citation_invalid", source_ids)
                     if not 1 <= first <= last <= len(lines):
                         source_selection_failed = True
+                        logger.info("Claim rejected: out-of-range evidence_lines=%r len=%d sids=%s", span, len(lines), source_ids)
                         _append_source_feedback(
                             f"{source_ids[0]} chỉ có L1 đến L{len(lines)}. "
                             "Chọn lại hai đầu phạm vi trong các dòng hiện có; không tạo thêm dòng."
@@ -1734,6 +1737,7 @@ class PsychologyAgent:
                         binding = re.compile(rf'\b{re.escape(name)}\s*\(\s*{re.escape(arg)}\s*\)\s*=')
                         premise = max((n for n, line in enumerate(lines[:last], 1) if binding.search(line)), default=0)
                         if premise and first > premise:
+                            logger.info("Claim rejected: missing premise L%d for %s(%s) span=%r sids=%s", premise, name, arg, span, source_ids)
                             _append_source_feedback(
                                 f"{source_ids[0]}: phạm vi bằng chứng phải bao gồm L{premise}, dòng định nghĩa {name}({arg}), cùng kết luận."
                             )
@@ -1741,6 +1745,7 @@ class PsychologyAgent:
                     selected = '\n'.join(lines[first-1:last])
                     if not selected.strip():
                         source_selection_failed = True
+                        logger.info("Claim rejected: empty selected lines span=%r sids=%s", span, source_ids)
                         non_empty = [f"L{idx}" for idx, line in enumerate(lines, 1) if line.strip()]
                         non_empty_hint = (
                             f" (dòng có nội dung: {', '.join(non_empty[:10])})"
@@ -1752,6 +1757,7 @@ class PsychologyAgent:
                         )
                         return "error", ("citation_invalid", source_ids)
                     if quote is not None and (not isinstance(quote, str) or ' '.join(quote.split()) != ' '.join(selected.split())):
+                        logger.info("Claim rejected: quote mismatch vs evidence_lines sids=%s", source_ids)
                         return "error", ("citation_invalid", source_ids)
                     quote = selected
                 cited_texts = [raw_sources_map.get(sid, "") for sid in source_ids]
@@ -1759,6 +1765,7 @@ class PsychologyAgent:
                     item_text, cited_texts, query, effective_chat_history
                 )
                 if ungrounded_terms:
+                    logger.info("Claim rejected: ungrounded_terms=%s sids=%s", ungrounded_terms[:3], source_ids)
                     _append_source_feedback(
                         f"{', '.join(source_ids)}: không dùng thuật ngữ từ lượt trước hoặc ngoài tài liệu "
                         f"({', '.join(ungrounded_terms[:3])}) khi không có trong đoạn nguồn đã trích."
@@ -1766,6 +1773,7 @@ class PsychologyAgent:
                     return "error", ("citation_invalid", source_ids)
                 if require_quote or quote is not None:
                     if len(source_ids) != 1 or not isinstance(quote, str) or not quote.strip():
+                        logger.info("Claim rejected: missing/multi quote sids=%s", source_ids)
                         return "error", ("citation_invalid", ["invalid"])
                     # Decode the context transport only until a literal source
                     # slice matches. Never decode or rewrite the source itself.
@@ -1779,6 +1787,7 @@ class PsychologyAgent:
                             break
                         normalized_quote = decoded
                     if not normalized_quote or normalized_quote not in normalized_source:
+                        logger.info("Claim rejected: quote not in source sids=%s", source_ids)
                         return "error", ("citation_invalid", source_ids)
                     # A question may contain the inputs, but cannot substantiate
                     # a numeric result that is absent from the chosen evidence.
@@ -1787,6 +1796,7 @@ class PsychologyAgent:
 
                     if not claim_numbers.issubset(quote_numbers) or not claim_unparsed.issubset(quote_unparsed):
                         source_selection_failed = True
+                        logger.info("Claim rejected: numeric mismatch claim=%s quote=%s sids=%s", claim_numbers - quote_numbers, claim_unparsed - quote_unparsed, source_ids)
                         _append_source_feedback(
                             format_numeric_mismatch_feedback(
                                 source_ids[0],
@@ -2100,8 +2110,6 @@ class PsychologyAgent:
                 repair_system_prompt = source_system_prompt
                 if not formula_transcription_failed and MLX_SOURCE_LINE_CONTRACT not in repair_system_prompt:
                     repair_system_prompt += "\n" + MLX_SOURCE_LINE_CONTRACT
-                if compare_concepts:
-                    repair_system_prompt += " Xuất hai claims đối chiếu; text mỗi claim trích nguyên văn định nghĩa đầy đủ của một khái niệm từ nguồn."
 
             if matched_answer_ids:
                 repair_system_prompt += (
@@ -2127,7 +2135,7 @@ class PsychologyAgent:
 
             def _build_repair_content(*, include_draft: bool = True, include_accepted: bool = True) -> str:
                 escaped_query = _escape_data_content(resolved_query)
-                if compare_concepts:
+                if compare_concepts and not use_source_lines:
                     c1, c2 = compare_concepts
                     return (
                         f"{repair_context}\n\n"
@@ -2184,8 +2192,9 @@ class PsychologyAgent:
                             "Start directly with facts inside that claim's selected lines; never echo opening clauses, question scenarios, or numbers from <user_query> unless literally written inside those selected lines."
                         )
                     if compare_concepts:
+                        c1, c2 = compare_concepts
                         line_parts.append(
-                            "Xuất hai claims đối chiếu; text mỗi claim trích nguyên văn định nghĩa đầy đủ của một khái niệm từ nguồn."
+                            f"Xuất ít nhất hai claims đối chiếu «{_escape_data_content(c1)}» (claim đầu) và «{_escape_data_content(c2)}» (claim sau); mỗi claim dùng một source_id và giữ đúng số, công thức và điều kiện trong các dòng đã chọn."
                         )
                     if matched_answer_ids:
                         line_parts.append(
