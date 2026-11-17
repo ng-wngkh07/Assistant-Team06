@@ -1226,6 +1226,7 @@ def test_mlx_practice_verification_keeps_full_240s_budget(monkeypatch):
         clock.now += seconds
         return json.dumps(responses.pop(0), ensure_ascii=False)
 
+    monkeypatch.setattr("app.model_resolver.is_mlx_model", lambda _model=None: True)
     monkeypatch.setattr("app.practice.time.monotonic", lambda: clock.now)
     monkeypatch.setattr(service, "_chat_complete", timed_chat)
     result = service.generate_from_passages([passage()], count=3, model="qwen3.5-9b-4bit")

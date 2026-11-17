@@ -775,7 +775,7 @@ def _sync_practice_notes(notes: str, practice_id: Optional[str]) -> str:
     if not p_id:
         return raw
     cleaned = re.sub(r"\s*\(Chưa có bài tập PDF đính kèm\)", "", raw).strip()
-    cleaned = re.sub(r"(?:\s*\|\s*)+$", "", cleaned).strip()
+    cleaned = cleaned.rstrip(" \t\r\n|").strip()
     pdf_path = f"/api/learning/export-pdf/{p_id}"
     if "/api/learning/export-pdf/" in cleaned:
         return re.sub(r"/api/learning/export-pdf/[^\s|]+", pdf_path, cleaned)

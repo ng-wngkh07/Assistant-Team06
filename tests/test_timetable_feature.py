@@ -1238,6 +1238,15 @@ def test_timetable_table_resolves_apple_vision_binary_from_env_and_data_dir(tmp_
 
     img_path = tmp_path / "sample.png"
     Image.new("RGB", (60, 40), "white").save(img_path)
+    if sys.platform == "win32":
+        orig_run = timetable_table.subprocess.run
+
+        def _win_shim(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and cmd and Path(cmd[0]) == fake_bin:
+                cmd = [sys.executable, str(fake_bin), *cmd[1:]]
+            return orig_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(timetable_table.subprocess, "run", _win_shim)
     lines, engine, digest = timetable_table.read_local_lines(img_path)
     assert engine == "apple-vision"
     assert digest is not None
