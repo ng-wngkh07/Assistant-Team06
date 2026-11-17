@@ -153,6 +153,8 @@ def pack_vector(vec: List[float]) -> bytes:
 def unpack_vector(blob: bytes) -> np.ndarray:
     """Unpack binary bytes into numpy float32 array."""
     count = len(blob) // 4
+    if isinstance(blob, (bytes, bytearray, memoryview)) and len(blob) == count * 4:
+        return np.frombuffer(blob, dtype=np.float32).copy()
     return np.array(struct.unpack(f"{count}f", blob), dtype=np.float32)
 
 

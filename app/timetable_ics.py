@@ -8,7 +8,7 @@ import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _get_vn_timezone():
@@ -69,6 +69,7 @@ def generate_ics(
     deadlines=None,
     reminder_minutes=60,
     namespace="local",
+    base_url: Optional[str] = None,
 ) -> str:
     """Generate RFC 5545 .ics text for a list of timetable entries.
 
@@ -208,17 +209,24 @@ def generate_ics(
             description += f"\nPhòng: {room}"
         if classified_topic:
             description += f"\nChủ đề phân loại: {classified_topic}"
+        abs_pdf_url = ""
         if pdf_url:
-            description += f"\nBài tập PDF đính kèm (có đáp án cuối trang): {pdf_url}"
+            if pdf_url.startswith("/") and base_url and base_url.startswith(("http://", "https://")):
+                abs_pdf_url = f"{base_url.rstrip('/')}{pdf_url}"
+            elif pdf_url.startswith(("http://", "https://")):
+                abs_pdf_url = pdf_url
+
+        if abs_pdf_url or pdf_url:
+            description += f"\nBài tập PDF đính kèm (có đáp án cuối trang): {abs_pdf_url or pdf_url}"
         if notes:
             description += f"\nGhi chú: {notes}"
 
         extra_pdf_lines = []
-        if pdf_url:
-            extra_pdf_lines.append(f"URL:{pdf_url}")
-            extra_pdf_lines.append(f"ATTACH;FMTTYPE=application/pdf:{pdf_url}")
+        if abs_pdf_url:
+            extra_pdf_lines.append(f"URL:{abs_pdf_url}")
+            extra_pdf_lines.append(f"ATTACH;FMTTYPE=application/pdf:{abs_pdf_url}")
 
-        lines.extend([
+        event_lines = [
             "BEGIN:VEVENT",
             f"UID:{event_uid}",
             f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
@@ -226,12 +234,16 @@ def generate_ics(
             f"DTEND;TZID=Asia/Ho_Chi_Minh:{dtend}",
             *([] if entry.get("event_date") else [f"RRULE:FREQ=WEEKLY;BYDAY={byday_map[raw_weekday]};UNTIL={until_str}"]),
             f"SUMMARY:{_escape_text(course)}",
-            f"LOCATION:{_escape_text(room)}",
+        ]
+        if room.strip():
+            event_lines.append(f"LOCATION:{_escape_text(room)}")
+        event_lines.extend([
             f"DESCRIPTION:{_escape_text(description)}",
             *extra_pdf_lines,
             "STATUS:CONFIRMED",
             "END:VEVENT",
         ])
+        lines.extend(event_lines)
         events_count += 1
 
     for task in deadlines:
@@ -251,11 +263,14 @@ def generate_ics(
         identity = f"deadline:{task.get('id', title)}"
         uid = uuid.uuid5(uuid.NAMESPACE_URL, namespace + ':' + identity)
         description = f"Hạn nộp: {title}\nMôn: {task.get('course') or ''}"
+        due_dt = datetime.strptime(f"{due_date.strftime('%Y%m%d')}{due_time.replace(':', '')}00", "%Y%m%d%H%M%S")
+        due_end_dt = due_dt + timedelta(minutes=15)
         lines.extend([
             "BEGIN:VEVENT",
             f"UID:{uid}@study-agent",
             f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
-            f"DTSTART;TZID=Asia/Ho_Chi_Minh:{due_date.strftime('%Y%m%d')}T{due_time.replace(':','')}00",
+            f"DTSTART;TZID=Asia/Ho_Chi_Minh:{due_dt.strftime('%Y%m%dT%H%M%S')}",
+            f"DTEND;TZID=Asia/Ho_Chi_Minh:{due_end_dt.strftime('%Y%m%dT%H%M%S')}",
             f"SUMMARY:{_escape_text('[Deadline] ' + title)}",
             f"DESCRIPTION:{_escape_text(description)}",
             "STATUS:CONFIRMED",

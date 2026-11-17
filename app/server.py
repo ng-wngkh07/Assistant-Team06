@@ -1,9 +1,13 @@
+import asyncio
 import base64
+import contextvars
 from contextlib import asynccontextmanager
 import json
 import logging
 import re
+import sqlite3
 import sys
+import threading
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Literal
@@ -486,6 +490,14 @@ async def serve_index():
         return HTMLResponse(content=content, headers={"Cache-Control": "no-store", "Vary": "Cookie"})
     return HTMLResponse(content="<h1>Study QA Agent Backend Running</h1><p>index.html not found in static/</p>")
 
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def serve_favicon():
+    icon = STATIC_DIR / "logo.jpg"
+    if icon.is_file():
+        return FileResponse(path=str(icon), media_type="image/jpeg")
+    return Response(status_code=204)
+
 def _requires_mlx_model():
     from app.model_resolver import is_mlx_model
     return is_mlx_model(DEFAULT_CHAT_MODEL)
@@ -503,46 +515,150 @@ def _inference_model_available(mlx_available, models):
                for model in models)
 
 
-def _configured_index_coverage():
-    """Check actual embedding bytes off the event loop, independently of QA."""
-    import sqlite3
-    from app.config import DB_PATH, DEFAULT_EMBED_MODEL
-    from app.vector_integrity import index_coverage
-    with sqlite3.connect(DB_PATH.resolve().as_uri() + '?mode=ro', uri=True) as db:
-        actual_identity = None
-        try:
-            installed_digest = None
-            try:
-                row = db.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
-                if row:
-                    installed_digest = row[0]
-            except sqlite3.Error:
-                pass
+_INDEX_COVERAGE_LOCK = threading.Lock()
+_INDEX_COVERAGE_CACHE: Dict[Any, Dict[str, Any]] = {}
+_INDEX_COVERAGE_INFLIGHT: Dict[Any, threading.Event] = {}
+_INSTALLED_DIGEST_CACHE: Dict[Any, Optional[str]] = {}
 
-            if installed_digest and installed_digest.startswith("ollama-sha256:"):
-                actual_identity = ollama.embedding_identity(DEFAULT_EMBED_MODEL)
-                expected_identity = actual_identity
-            elif installed_digest and installed_digest.startswith("bge-m3-mlx-fp16@"):
-                if sys.platform != 'darwin':
-                    actual_identity = None
-                    expected_identity = None
-                else:
-                    from app.native_embedding import BGE_NATIVE_IDENTITY, NativeEmbeddingClient
-                    actual_identity = NativeEmbeddingClient().get_status_identity()
-                    expected_identity = actual_identity if actual_identity == BGE_NATIVE_IDENTITY else None
-            elif os.getenv("EMBED_BACKEND") == "ollama" or sys.platform != 'darwin':
-                actual_identity = ollama.embedding_identity(DEFAULT_EMBED_MODEL)
-                expected_identity = actual_identity
+
+def _stat_signature(path: Path):
+    try:
+        st = path.stat()
+        return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+
+
+def _read_edge_bytes(path: Path) -> tuple[bytes, bytes]:
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(100)
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            tail = b""
+            if size > 0:
+                fh.seek(max(0, size - 64))
+                tail = fh.read(64)
+            return head, tail
+    except OSError:
+        return b"", b""
+
+
+def _db_file_signature(db_path: Path):
+    resolved = db_path.resolve()
+    main_stat = _stat_signature(resolved)
+    if main_stat is None:
+        return None
+    main_head, _ = _read_edge_bytes(resolved)
+    wal_path = Path(f"{resolved}-wal")
+    wal_stat = _stat_signature(wal_path)
+    wal_head, wal_tail = _read_edge_bytes(wal_path) if wal_stat is not None else (b"", b"")
+    journal_stat = _stat_signature(Path(f"{resolved}-journal"))
+    return (str(resolved), main_stat, main_head, wal_stat, wal_head[:32], wal_tail, journal_stat)
+
+
+def _cached_installed_digest(db_path: Path, db_sig) -> Optional[str]:
+    if db_sig is not None:
+        with _INDEX_COVERAGE_LOCK:
+            if db_sig in _INSTALLED_DIGEST_CACHE:
+                return _INSTALLED_DIGEST_CACHE[db_sig]
+    installed_digest = None
+    with sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True) as db:
+        try:
+            row = db.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
+            if row:
+                installed_digest = row[0]
+        except sqlite3.Error:
+            pass
+    if db_sig is not None:
+        with _INDEX_COVERAGE_LOCK:
+            if len(_INSTALLED_DIGEST_CACHE) >= 8:
+                _INSTALLED_DIGEST_CACHE.clear()
+            _INSTALLED_DIGEST_CACHE[db_sig] = installed_digest
+    return installed_digest
+
+
+def _resolve_configured_embed_identities(installed_digest: Optional[str], default_embed_model: str):
+    actual_identity = None
+    try:
+        if installed_digest and installed_digest.startswith("ollama-sha256:"):
+            actual_identity = ollama.embedding_identity(default_embed_model)
+            expected_identity = actual_identity
+        elif installed_digest and installed_digest.startswith("bge-m3-mlx-fp16@"):
+            if sys.platform != 'darwin':
+                actual_identity = None
+                expected_identity = None
             else:
                 from app.native_embedding import BGE_NATIVE_IDENTITY, NativeEmbeddingClient
                 actual_identity = NativeEmbeddingClient().get_status_identity()
                 expected_identity = actual_identity if actual_identity == BGE_NATIVE_IDENTITY else None
-        except Exception as exc:
-            logger.debug('Embedding identity unavailable during coverage check: %s', type(exc).__name__)
-            expected_identity = None
-        result = index_coverage(db, expected_identity)
-        result['configured_model_identity'] = actual_identity
-        return result
+        elif os.getenv("EMBED_BACKEND") == "ollama" or sys.platform != 'darwin':
+            actual_identity = ollama.embedding_identity(default_embed_model)
+            expected_identity = actual_identity
+        else:
+            from app.native_embedding import BGE_NATIVE_IDENTITY, NativeEmbeddingClient
+            actual_identity = NativeEmbeddingClient().get_status_identity()
+            expected_identity = actual_identity if actual_identity == BGE_NATIVE_IDENTITY else None
+    except Exception as exc:
+        logger.debug('Embedding identity unavailable during coverage check: %s', type(exc).__name__)
+        expected_identity = None
+    return actual_identity, expected_identity
+
+
+def _configured_index_coverage():
+    """Check actual embedding bytes off the event loop, independently of QA."""
+    from app import vector_integrity
+    from app.config import DB_PATH, DEFAULT_EMBED_MODEL
+
+    db_path = Path(DB_PATH)
+    db_sig = _db_file_signature(db_path)
+    installed_digest = _cached_installed_digest(db_path, db_sig)
+    actual_identity, expected_identity = _resolve_configured_embed_identities(
+        installed_digest, DEFAULT_EMBED_MODEL
+    )
+    if db_sig is None:
+        with sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True) as db:
+            result = vector_integrity.index_coverage(db, expected_identity)
+            result['configured_model_identity'] = actual_identity
+            return result
+
+    cache_key = (db_sig, installed_digest, expected_identity, actual_identity)
+    with _INDEX_COVERAGE_LOCK:
+        cached = _INDEX_COVERAGE_CACHE.get(cache_key)
+        if cached is not None:
+            return dict(cached)
+        event = _INDEX_COVERAGE_INFLIGHT.get(cache_key)
+        if event is None:
+            event = threading.Event()
+            _INDEX_COVERAGE_INFLIGHT[cache_key] = event
+            leader = True
+        else:
+            leader = False
+
+    if not leader:
+        event.wait()
+        with _INDEX_COVERAGE_LOCK:
+            cached = _INDEX_COVERAGE_CACHE.get(cache_key)
+            if cached is not None:
+                return dict(cached)
+        with sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True) as db:
+            result = vector_integrity.index_coverage(db, expected_identity)
+            result['configured_model_identity'] = actual_identity
+            return result
+
+    try:
+        with sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True) as db:
+            result = vector_integrity.index_coverage(db, expected_identity)
+            result['configured_model_identity'] = actual_identity
+        with _INDEX_COVERAGE_LOCK:
+            if len(_INDEX_COVERAGE_CACHE) >= 8:
+                _INDEX_COVERAGE_CACHE.clear()
+            _INDEX_COVERAGE_CACHE[cache_key] = dict(result)
+        return dict(result)
+    finally:
+        with _INDEX_COVERAGE_LOCK:
+            _INDEX_COVERAGE_INFLIGHT.pop(cache_key, None)
+            event.set()
 
 
 @app.get("/api/health")
@@ -551,12 +667,11 @@ async def health_check():
     installed_digest = None
     try:
         from app.config import DB_PATH
-        if DB_PATH.exists():
-            import sqlite3
-            with sqlite3.connect(DB_PATH.resolve().as_uri() + '?mode=ro', uri=True) as db:
-                row = db.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
-                if row:
-                    installed_digest = row[0]
+        db_path = Path(DB_PATH)
+        if db_path.exists():
+            installed_digest = await run_in_threadpool(
+                _cached_installed_digest, db_path, _db_file_signature(db_path)
+            )
     except Exception:
         pass
 
@@ -658,9 +773,19 @@ async def health_check():
         "admission": dialogue_gate.get_status(),
     }
 
+def _note_foreground_gpu_activity() -> None:
+    fn = getattr(gpu_coordinator, "note_foreground_activity", None)
+    if callable(fn):
+        fn()
+
+
+STREAM_KEEPALIVE_SECONDS = 15.0
+
+
 @app.post("/api/model/check")
 async def check_local_model():
     """User-operated warm-up of the configured local model; never switches it."""
+    _note_foreground_gpu_activity()
     def run_check():
         with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
             from app.model_resolver import is_mlx_model
@@ -881,6 +1006,7 @@ async def trigger_indexing(req: IndexRequest):
 
 @app.post("/api/chat")
 async def chat_sync(req: ChatRequest):
+    _note_foreground_gpu_activity()
     try:
         return await run_in_threadpool(_chat_sync_locked, req)
     except DialogueBusyError as exc:
@@ -1020,6 +1146,7 @@ def _chat_sync(req):
 
 @app.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest):
+    _note_foreground_gpu_activity()
     source_page, source_document_id = await run_in_threadpool(requested_source_scope, req)
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Câu hỏi không được để trống")
@@ -1097,125 +1224,158 @@ async def chat_stream(req: ChatRequest):
             }
         )
 
-    def event_generator():
-        nonlocal target_session_id
-        answer_parts = []
-        citations = []
-        search_scope = {}
-        failed = False
-        turn_committed = False
-        try:
-            with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
-                # Reload context only after exclusive admission; prior turn is committed.
-                if req.isolate_context:
-                    effective_history = []
-                elif target_session_id:
-                    session_now = history_store.get_session(target_session_id)
-                    if not session_now:
-                        yield f"data: {json.dumps({'type': 'error', 'content': 'Phiên đã bị xóa; câu hỏi chưa được xử lý.'}, ensure_ascii=False)}\n\n"
-                        return
-                    effective_history = history_store.get_session_context(
-                        target_session_id,
-                        max_turns=8,
+    async def event_generator():
+        loop = asyncio.get_running_loop()
+        event_queue: asyncio.Queue = asyncio.Queue()
+        sentinel = object()
+        cancel_event = threading.Event()
+        ctx = contextvars.copy_context()
+
+        def _push(item: Any) -> None:
+            try:
+                loop.call_soon_threadsafe(event_queue.put_nowait, item)
+            except RuntimeError:
+                pass
+
+        def _stream_worker() -> None:
+            nonlocal target_session_id
+            answer_parts = []
+            citations = []
+            search_scope = {}
+            failed = False
+            turn_committed = False
+            try:
+                with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
+                    # Reload context only after exclusive admission; prior turn is committed.
+                    if req.isolate_context:
+                        effective_history = []
+                    elif target_session_id:
+                        session_now = history_store.get_session(target_session_id)
+                        if not session_now:
+                            _push(f"data: {json.dumps({'type': 'error', 'content': 'Phiên đã bị xóa; câu hỏi chưa được xử lý.'}, ensure_ascii=False)}\n\n")
+                            return
+                        effective_history = history_store.get_session_context(
+                            target_session_id,
+                            max_turns=8,
+                            query=req.query,
+                            document_id=source_document_id,
+                            material_id=req.material_id,
+                        )
+                        omitted = max(0, len(session_now.get("turns", [])) - 8)
+                        if omitted:
+                            _push(f"data: {json.dumps({'type': 'context', 'history_turns_omitted': omitted, 'scope': 'stored_history_window'}, ensure_ascii=False)}\n\n")
+                    else:
+                        effective_history = req.chat_history or []
+                    if req.request_id:
+                        prior = history_store.get_turn_by_request_id(req.request_id)
+                        if prior:
+                            if prior["question"] != req.query.strip() or (target_session_id and prior["session_id"] != target_session_id):
+                                _push(f"data: {json.dumps({'type': 'error', 'content': 'request_id đã thuộc câu hỏi hoặc phiên khác', 'code': 'request_conflict'})}\n\n")
+                                return
+                            prior_scope = prior.get("search_scope") or {}
+                            if req.material_id and prior_scope.get("material_id") != req.material_id:
+                                _push(f"data: {json.dumps({'type': 'error', 'content': 'request_id đã thuộc tài liệu khác', 'code': 'request_conflict'})}\n\n")
+                                return
+                            if source_document_id and prior_scope.get("document_id") != source_document_id:
+                                _push(f"data: {json.dumps({'type': 'error', 'content': 'request_id đã thuộc tài liệu khác', 'code': 'request_conflict'})}\n\n")
+                                return
+                            _push(f"data: {json.dumps(project_chat_payload({'type': 'done', 'answer': prior['answer'], 'citations': prior['citations'], 'answer_mode': prior['answer_mode'], 'search_scope': prior['search_scope'], 'session_id': prior['session_id'], 'turn_id': prior['id'], 'cached_replay': True}), ensure_ascii=False)}\n\n")
+                            return
+                    for event in agent.process_query_stream(
                         query=req.query,
-                        document_id=source_document_id,
+                        chat_history=effective_history,
+                        model=DEFAULT_CHAT_MODEL,
+                        embed_model=DEFAULT_EMBED_MODEL,
+                        top_k=DEFAULT_TOP_K,
+                        temperature=req.temperature if req.temperature is not None else 0.2,
+                        answer_mode=req.answer_mode,
+                        source_document_id=source_document_id,
+                        attachment_filename=req.attachment_filename,
+                        isolate_context=bool(req.isolate_context),
+                        processing_level=req.processing_level,
                         material_id=req.material_id,
-                    )
-                    omitted = max(0, len(session_now.get("turns", [])) - 8)
-                    if omitted:
-                        yield f"data: {json.dumps({'type': 'context', 'history_turns_omitted': omitted, 'scope': 'stored_history_window'}, ensure_ascii=False)}\n\n"
-                else:
-                    effective_history = req.chat_history or []
-                if req.request_id:
-                    prior = history_store.get_turn_by_request_id(req.request_id)
-                    if prior:
-                        if prior["question"] != req.query.strip() or (target_session_id and prior["session_id"] != target_session_id):
-                            yield f"data: {json.dumps({'type': 'error', 'content': 'request_id đã thuộc câu hỏi hoặc phiên khác', 'code': 'request_conflict'})}\n\n"
-                            return
-                        prior_scope = prior.get("search_scope") or {}
-                        if req.material_id and prior_scope.get("material_id") != req.material_id:
-                            yield f"data: {json.dumps({'type': 'error', 'content': 'request_id đã thuộc tài liệu khác', 'code': 'request_conflict'})}\n\n"
-                            return
-                        if source_document_id and prior_scope.get("document_id") != source_document_id:
-                            yield f"data: {json.dumps({'type': 'error', 'content': 'request_id đã thuộc tài liệu khác', 'code': 'request_conflict'})}\n\n"
-                            return
-                        yield f"data: {json.dumps(project_chat_payload({'type': 'done', 'answer': prior['answer'], 'citations': prior['citations'], 'answer_mode': prior['answer_mode'], 'search_scope': prior['search_scope'], 'session_id': prior['session_id'], 'turn_id': prior['id'], 'cached_replay': True}), ensure_ascii=False)}\n\n"
-                        return
-                for event in agent.process_query_stream(
-                    query=req.query,
-                    chat_history=effective_history,
-                    model=DEFAULT_CHAT_MODEL,
-                    embed_model=DEFAULT_EMBED_MODEL,
-                    top_k=DEFAULT_TOP_K,
-                    temperature=req.temperature if req.temperature is not None else 0.2,
-                    answer_mode=req.answer_mode,
-                    source_document_id=source_document_id,
-                    attachment_filename=req.attachment_filename,
-                    isolate_context=bool(req.isolate_context),
-                    processing_level=req.processing_level,
-                    material_id=req.material_id,
-                    **({'source_page':source_page} if source_page else {})
-                ):
-                    if event.get("type") in ("token", "crisis"):
-                        answer_parts.append(event.get("content", ""))
-                    elif event.get("type") == "citations":
-                        citations = project_public_response(event.get("citations", []))
-                    elif event.get("type") == "error":
-                        failed = True
-                    elif event.get("type") == "done":
-                        search_scope = project_public_response(event.get("search_scope", search_scope))
-                        event.setdefault("answer_mode", req.answer_mode)
-                        event.setdefault("processing_level", req.processing_level)
-                        # Fallback citations if not sent earlier
-                        if not citations and event.get("citations"):
+                        **({'source_page':source_page} if source_page else {})
+                    ):
+                        if cancel_event.is_set():
+                            break
+                        if event.get("type") in ("token", "crisis"):
+                            answer_parts.append(event.get("content", ""))
+                        elif event.get("type") == "citations":
                             citations = project_public_response(event.get("citations", []))
+                        elif event.get("type") == "error":
+                            failed = True
+                        elif event.get("type") == "done":
+                            search_scope = project_public_response(event.get("search_scope", search_scope))
+                            event.setdefault("answer_mode", req.answer_mode)
+                            event.setdefault("processing_level", req.processing_level)
+                            # Fallback citations if not sent earlier
+                            if not citations and event.get("citations"):
+                                citations = project_public_response(event.get("citations", []))
 
-                        is_truncated = event.get("is_truncated", False)
-                        # Single completion commit guard: skip truncated, error, failed
-                        if (
-                            req.save_history
-                            and answer_parts
-                            and not failed
-                            and not is_truncated
-                            and not turn_committed
-                            and event.get("response_kind") not in {"generation_failed", "technical_error"}
-                        ):
-                            turn_committed = True
-                            if create_on_completion and not target_session_id:
-                                new_sess = history_store.create_session()
-                                target_session_id = new_sess["id"]
+                            is_truncated = event.get("is_truncated", False)
+                            # Single completion commit guard: skip truncated, error, failed
+                            if (
+                                req.save_history
+                                and answer_parts
+                                and not failed
+                                and not is_truncated
+                                and not turn_committed
+                                and event.get("response_kind") not in {"generation_failed", "technical_error"}
+                            ):
+                                turn_committed = True
+                                if create_on_completion and not target_session_id:
+                                    new_sess = history_store.create_session()
+                                    target_session_id = new_sess["id"]
 
-                            turn_info = history_store.add_turn(
-                                session_id=target_session_id,
-                                question=req.query,
-                                answer="".join(answer_parts),
-                                citations=project_public_response(citations),
-                                model=DEFAULT_CHAT_MODEL,
-                                request_id=req.request_id,
-                                answer_mode=req.answer_mode,
-                                search_scope=project_public_response(search_scope),
-                            )
-                            event["history_id"] = turn_info.get("legacy_id", turn_info["id"])
-                            event["turn_id"] = turn_info["id"]
-                            event["session_id"] = target_session_id
-                            event["turn_index"] = turn_info["turn_index"]
-                            event["session_title"] = turn_info.get("session_title")
+                                turn_info = history_store.add_turn(
+                                    session_id=target_session_id,
+                                    question=req.query,
+                                    answer="".join(answer_parts),
+                                    citations=project_public_response(citations),
+                                    model=DEFAULT_CHAT_MODEL,
+                                    request_id=req.request_id,
+                                    answer_mode=req.answer_mode,
+                                    search_scope=project_public_response(search_scope),
+                                )
+                                event["history_id"] = turn_info.get("legacy_id", turn_info["id"])
+                                event["turn_id"] = turn_info["id"]
+                                event["session_id"] = target_session_id
+                                event["turn_index"] = turn_info["turn_index"]
+                                event["session_title"] = turn_info.get("session_title")
 
-                        if target_session_id:
-                            cur_s = history_store.get_session(target_session_id)
-                            if cur_s and cur_s.get("turns"):
-                                event["recent_question"] = cur_s["turns"][-1]["question"]
-                                event["recent_source"] = cur_s["turns"][-1]["citations"][0] if cur_s["turns"][-1].get("citations") else None
-                    yield f"data: {json.dumps(project_chat_payload(event), ensure_ascii=False)}\n\n"
-        except DialogueBusyError as e:
-            yield f"data: {json.dumps({'type': 'error', 'content': sanitize_error_detail(str(e)), 'code': 'dialogue_busy', 'retryable': True}, ensure_ascii=False)}\n\n"
-        except GPUBusyError as e:
-            err_event = {"type": "error", "content": sanitize_error_detail(str(e)), "gpu_busy": True}
-            yield f"data: {json.dumps(err_event, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            logger.exception("Stream error")
-            err_event = {"type": "error", "content": sanitize_error_detail(runtime_failure_message(e))}
-            yield f"data: {json.dumps(err_event, ensure_ascii=False)}\n\n"
+                            if target_session_id:
+                                cur_s = history_store.get_session(target_session_id)
+                                if cur_s and cur_s.get("turns"):
+                                    event["recent_question"] = cur_s["turns"][-1]["question"]
+                                    event["recent_source"] = cur_s["turns"][-1]["citations"][0] if cur_s["turns"][-1].get("citations") else None
+                        _push(f"data: {json.dumps(project_chat_payload(event), ensure_ascii=False)}\n\n")
+            except DialogueBusyError as e:
+                _push(f"data: {json.dumps({'type': 'error', 'content': sanitize_error_detail(str(e)), 'code': 'dialogue_busy', 'retryable': True}, ensure_ascii=False)}\n\n")
+            except GPUBusyError as e:
+                err_event = {"type": "error", "content": sanitize_error_detail(str(e)), "gpu_busy": True}
+                _push(f"data: {json.dumps(err_event, ensure_ascii=False)}\n\n")
+            except Exception as e:
+                logger.exception("Stream error")
+                err_event = {"type": "error", "content": sanitize_error_detail(runtime_failure_message(e))}
+                _push(f"data: {json.dumps(err_event, ensure_ascii=False)}\n\n")
+            finally:
+                _push(sentinel)
+
+        worker = threading.Thread(target=ctx.run, args=(_stream_worker,), name="chat-stream-worker", daemon=True)
+        worker.start()
+        keepalive_interval = max(0.01, float(STREAM_KEEPALIVE_SECONDS))
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(event_queue.get(), timeout=keepalive_interval)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if chunk is sentinel:
+                    break
+                yield chunk
+        finally:
+            cancel_event.set()
 
     return StreamingResponse(
         event_generator(),

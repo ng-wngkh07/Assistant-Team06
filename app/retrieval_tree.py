@@ -16,6 +16,7 @@ import logging
 import os
 import sqlite3
 import threading
+import unicodedata
 import uuid
 from contextlib import closing
 from datetime import datetime, timezone
@@ -111,9 +112,11 @@ def compute_taxonomy_hash_from_db(conn: sqlite3.Connection) -> str:
 
 
 def _normalize_fp(fp: Any) -> Any:
-    """Normalize nested tuple/list structures for consistent JSON comparison."""
+    """Normalize nested tuple/list structures and Unicode paths for consistent JSON comparison."""
     if isinstance(fp, (tuple, list)):
         return [_normalize_fp(x) for x in fp]
+    if isinstance(fp, str):
+        return unicodedata.normalize("NFC", fp)
     return fp
 
 
@@ -660,7 +663,7 @@ class TreeSearcher:
                 stored_fp = meta_rows.get("source_db_fingerprint")
                 if not stored_src or not stored_fp:
                     return False
-                if Path(stored_src).resolve() != self.source_db_path:
+                if unicodedata.normalize("NFC", str(Path(stored_src).resolve())) != unicodedata.normalize("NFC", str(self.source_db_path)):
                     return False
 
                 current_fp = get_source_binding_fingerprint(self.source_db_path)
@@ -1007,7 +1010,7 @@ def _validate_sidecar_connection(
     stored_fp = meta.get("source_db_fingerprint")
     if not stored_src or not stored_fp:
         return "source_binding_missing", meta
-    if Path(stored_src).resolve() != src_p:
+    if unicodedata.normalize("NFC", str(Path(stored_src).resolve())) != unicodedata.normalize("NFC", str(src_p)):
         return "source_path_mismatch", meta
 
     current_fp = get_source_binding_fingerprint(src_p)

@@ -1126,3 +1126,111 @@ def test_learning_routes_refresh_flag_forwarding_respects_spies():
     assert _bank_refresh_kwargs(bank_aware_generate, False) == {}
     assert _bank_refresh_kwargs(bank_aware_generate, True) == {"reuse_verified_bank": False}
     assert _bank_refresh_kwargs(LegacySpy().generate, True) == {}
+
+
+def test_practice_verification_phase_gets_dedicated_timeout_after_slow_generation(monkeypatch):
+    """Slow primary generation (e.g. 135s on 9B) must not starve verification to 45s and fail HTTP 422."""
+    import subprocess
+    from types import SimpleNamespace
+
+    clock = SimpleNamespace(now=1000.0)
+    batch = [
+        {
+            **QUESTION,
+            "question": f"Câu hỏi độc lập {i} về điều kiện A trong nguồn?",
+            "choices": {**QUESTION["choices"], "B": f"Điều kiện A được nêu rõ trong nguồn ({i})."},
+        }
+        for i in range(1, 4)
+    ]
+    responses = [
+        {"questions": batch},
+        {
+            "checks": [
+                {
+                    "index": idx,
+                    **AUDIT_FIELDS,
+                    "supported": True,
+                    "explanation_supported": True,
+                    "unique_answer": True,
+                    "qualifiers_preserved": True,
+                    "verified_answer": "B",
+                }
+                for idx in range(1, 4)
+            ]
+        },
+    ]
+    service, _, _ = make_service([])
+    timeouts = []
+
+    def timed_chat(prompt, model, max_tokens, timeout=None, **kwargs):
+        seconds = 135.0 if max_tokens == 1800 else 75.0
+        timeouts.append(timeout)
+        if timeout is not None and timeout < seconds:
+            raise subprocess.TimeoutExpired("fixture-native-inference", timeout)
+        clock.now += seconds
+        return json.dumps(responses.pop(0), ensure_ascii=False)
+
+    monkeypatch.setattr("app.practice.time.monotonic", lambda: clock.now)
+    monkeypatch.setattr(service, "_chat_complete", timed_chat)
+    result = service.generate_from_passages([passage()], count=3, model="test-model")
+    assert result["count"] == 3
+    assert result["complete"] is True
+    assert len(timeouts) == 2
+    assert timeouts[1] >= 120.0
+
+
+def test_mlx_practice_verification_keeps_full_240s_budget(monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+
+    clock = SimpleNamespace(now=200.0)
+    batch = [
+        {
+            **QUESTION,
+            "question": f"Câu {idx} về điều kiện A trong nguồn?",
+            "choices": {**QUESTION["choices"], "B": f"Điều kiện A được nêu rõ trong nguồn ({idx})."},
+        }
+        for idx in range(1, 5)
+    ]
+    responses = [
+        {"questions": batch},
+        {
+            "checks": [
+                {
+                    "index": idx,
+                    "source_basis": QUESTION["evidence_quote"],
+                    "input_audit": "Source supplies direct fact.",
+                    "independent_solution": "B matches the quoted statement.",
+                    "choice_comparison": "Only B matches; A,C,D diverge.",
+                    "explanation_audit": "Explanation matches source.",
+                    "matching_choices": "B",
+                    "supported": True,
+                    "explanation_supported": True,
+                    "unique_answer": True,
+                    "qualifiers_preserved": True,
+                    "verified_answer": "B",
+                    "difficulty_matches": True,
+                }
+                for idx in range(1, 4)
+            ]
+        },
+    ]
+    service, _, _ = make_service([])
+    timeouts = []
+
+    def timed_chat(prompt, model, max_tokens, timeout=None, **kwargs):
+        seconds = 155.0 if max_tokens == 1800 else (45.0 if max_tokens <= 1000 else 135.0)
+        timeouts.append(timeout)
+        if timeout is not None and timeout < seconds:
+            raise subprocess.TimeoutExpired("fixture-mlx-inference", timeout)
+        clock.now += seconds
+        return json.dumps(responses.pop(0), ensure_ascii=False)
+
+    monkeypatch.setattr("app.model_resolver.is_mlx_model", lambda _model=None: True)
+    monkeypatch.setattr("app.practice.time.monotonic", lambda: clock.now)
+    monkeypatch.setattr(service, "_chat_complete", timed_chat)
+    result = service.generate_from_passages([passage()], count=3, model="qwen3.5-9b-4bit")
+    assert result["count"] == 3
+    assert result["complete"] is True
+    assert len(timeouts) == 2
+    assert timeouts[1] >= 240.0

@@ -263,24 +263,65 @@ document.addEventListener("DOMContentLoaded", () => {
     let latestRestorableTurn = null;
     let viewRevision = 0;
     let isLoadingSession = true;
+    let statusPollAuthBlocked = false;
     btnSend.disabled = true;
 
-    // Initialize
-    fetchKnowledgeBaseStatus();
-    fetchOllamaModels();
-    loadSessions().then(() => {
-        const savedSessionId = sessionStorage.getItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
-        if (savedSessionId && sessionsApiSupported) {
-            return openSession(savedSessionId, { autoRestore: true }).catch(() => {
-                sessionStorage.removeItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
-                currentSessionId = null;
-            });
+    function canUseProtectedApis() {
+        return !(
+            typeof window !== "undefined" &&
+            window.StudyAccount &&
+            typeof window.StudyAccount.canAccessProtectedApis === "function" &&
+            !window.StudyAccount.canAccessProtectedApis()
+        );
+    }
+
+    async function refreshKnowledgeBaseStatus() {
+        if (statusPollAuthBlocked || !canUseProtectedApis()) {
+            return "auth_required";
         }
-    }).finally(() => {
-        isLoadingSession = false;
-        btnSend.disabled = isGenerating;
-    });
-    setInterval(fetchKnowledgeBaseStatus, 5000);
+        const statusResult = await fetchKnowledgeBaseStatus();
+        if (statusResult === "auth_required") {
+            statusPollAuthBlocked = true;
+        }
+        return statusResult;
+    }
+
+    function startAuthenticatedBootstrap() {
+        refreshKnowledgeBaseStatus();
+        fetchOllamaModels();
+        loadSessions().then(() => {
+            const savedSessionId = sessionStorage.getItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
+            if (savedSessionId && sessionsApiSupported) {
+                return openSession(savedSessionId, { autoRestore: true }).catch(() => {
+                    sessionStorage.removeItem((storageScope === "local" ? "active_session_id" : `active_session_id-${storageScope}`));
+                    currentSessionId = null;
+                });
+            }
+        }).finally(() => {
+            isLoadingSession = false;
+            btnSend.disabled = isGenerating;
+        });
+    }
+
+    // Initialize
+    if (typeof window !== "undefined" && window.StudyAccount && typeof window.StudyAccount.whenReady === "function") {
+        window.StudyAccount.whenReady().then((authState) => {
+            if (authState && authState.required && !authState.account) {
+                statusPollAuthBlocked = true;
+                if (ollamaStatus) {
+                    ollamaStatus.textContent = "🔒 Đăng nhập để xem trạng thái mô hình và thư viện";
+                    ollamaStatus.className = "status-indicator";
+                }
+                isLoadingSession = false;
+                btnSend.disabled = isGenerating;
+                return;
+            }
+            startAuthenticatedBootstrap();
+        });
+    } else {
+        startAuthenticatedBootstrap();
+    }
+    setInterval(refreshKnowledgeBaseStatus, 5000);
 
     // Event Listeners
     userInput.addEventListener("input", () => {
@@ -589,6 +630,11 @@ document.addEventListener("DOMContentLoaded", () => {
         e.preventDefault();
         if (isComposing) return;
         const query = userInput.value.trim();
+        if (typeof canUseProtectedApis === "function" && !canUseProtectedApis()) {
+            chatStatus.textContent = "Vui lòng đăng nhập để gửi câu hỏi.";
+            window.StudyAccount?.openAuthModal?.();
+            return;
+        }
         if (isGenerating) {
             chatStatus.textContent = "Đang xử lý câu hỏi trước. Câu mới được giữ trong ô nhập; bạn gửi lại sau khi câu trước hoàn tất.";
             return;
@@ -968,10 +1014,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let currentSessionOffset = 0;
     async function loadSessions(searchQuery = "", offset = 0, append = false) {
+        if (!canUseProtectedApis()) {
+            return;
+        }
         // Capability detection on first load
         if (sessionsApiSupported === null) {
             try {
                 const testRes = await fetch("/api/sessions?limit=1");
+                if (testRes.status === 401) {
+                    if (historyList) {
+                        historyList.textContent = "Đăng nhập để xem lịch sử trò chuyện.";
+                    }
+                    return;
+                }
                 sessionsApiSupported = testRes.ok;
             } catch (_) {
                 sessionsApiSupported = false;
@@ -983,11 +1038,21 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         try {
+            if (!canUseProtectedApis()) {
+                return;
+            }
             const limit = 50;
             const url = searchQuery
                 ? `/api/sessions/search?q=${encodeURIComponent(searchQuery)}&limit=${limit}&offset=${offset}`
                 : `/api/sessions?limit=${limit}&offset=${offset}`;
             const res = await fetch(url);
+            if (res.status === 401) {
+                statusPollAuthBlocked = true;
+                if (historyList) {
+                    historyList.textContent = "Đăng nhập để xem lịch sử trò chuyện.";
+                }
+                return;
+            }
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             const items = data.items || [];
@@ -1079,6 +1144,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 historyList.appendChild(moreBtn);
             }
         } catch (err) {
+            if (!canUseProtectedApis()) {
+                return;
+            }
             console.error("Lỗi tải danh sách phiên:", err);
             fetchLegacyHistory();
         }
@@ -1311,8 +1379,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function fetchLegacyHistory() {
+        if (!canUseProtectedApis()) {
+            return;
+        }
         try {
             const response = await fetch("/api/history");
+            if (response.status === 401) {
+                statusPollAuthBlocked = true;
+                if (historyList) {
+                    historyList.textContent = "Đăng nhập để xem lịch sử trò chuyện.";
+                }
+                return;
+            }
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const { items } = await response.json();
             historyList.replaceChildren();
@@ -1597,6 +1675,11 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("btn-model-check")?.addEventListener("click", async () => {
         const button = document.getElementById("btn-model-check");
         const status = document.getElementById("model-check-result");
+        if (typeof canUseProtectedApis === "function" && !canUseProtectedApis()) {
+            if (status) status.textContent = "Vui lòng đăng nhập để kiểm tra mô hình.";
+            window.StudyAccount?.openAuthModal?.();
+            return;
+        }
         button.disabled = true;
         status.textContent = "Đang khởi tạo và chạy thử mô hình cục bộ…";
         try {
@@ -1615,11 +1698,18 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const res = await fetch("/api/status");
             if (!res.ok) {
+                if (res.status === 401) {
+                    if (ollamaStatus) {
+                        ollamaStatus.textContent = "🔒 Đăng nhập để xem trạng thái mô hình và thư viện";
+                        ollamaStatus.className = "status-indicator";
+                    }
+                    return "auth_required";
+                }
                 if (ollamaStatus) {
                     ollamaStatus.textContent = `🔴 Máy chủ web phản hồi lỗi HTTP ${res.status}`;
                     ollamaStatus.className = "status-indicator disconnected";
                 }
-                return;
+                return "error";
             }
             const data = await res.json();
             const kb = data.knowledge_base || {};
@@ -1742,6 +1832,13 @@ document.addEventListener("DOMContentLoaded", () => {
     async function fetchOllamaModels() {
         try {
             const res = await fetch("/api/models");
+            if (res.status === 401) {
+                if (ollamaStatus && !ollamaStatus.textContent.includes("Đăng nhập")) {
+                    ollamaStatus.textContent = "🔒 Đăng nhập để xem trạng thái mô hình";
+                    ollamaStatus.className = "status-indicator";
+                }
+                return;
+            }
             if (!res.ok) throw new Error("Không đọc được trạng thái mô hình");
             const data = await res.json();
             const name = data.default_model;
@@ -2186,6 +2283,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnQuizPrev = document.getElementById("btn-quiz-prev");
     const btnQuizNext = document.getElementById("btn-quiz-next");
     const btnQuizRestart = document.getElementById("btn-quiz-restart");
+    const btnStudyExportPdf = document.getElementById("btn-study-export-pdf");
     const quizBubbles = document.getElementById("quiz-bubbles");
 
     // Flashcard UI
@@ -3138,6 +3236,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function handleMaterialFileUpload(file, inputEl) {
         if (!file) return;
+        if (typeof canUseProtectedApis === "function" && !canUseProtectedApis()) {
+            if (inputEl) inputEl.value = "";
+            window.StudyAccount?.openAuthModal?.();
+            return;
+        }
 
         if (file.size === 0) {
             if (inputEl) inputEl.value = "";
@@ -3181,6 +3284,12 @@ document.addEventListener("DOMContentLoaded", () => {
                     : `⏳ Đang đọc và nạp tệp "${file.name}" vào thư viện cá nhân...`;
             }
 
+            const authCfg = typeof window !== "undefined" ? window.StudyAccount?.getConfig?.() : null;
+            const activeAccount = typeof window !== "undefined" ? window.StudyAccount?.getAccount?.() : null;
+            const isPrivateAccountUpload = Boolean(
+                (authCfg && (authCfg.required || authCfg.accounts_required)) || activeAccount
+            );
+
             const res = await fetch("/api/materials/upload", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -3188,7 +3297,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     filename: file.name,
                     file_base64: base64Data,
                     generate_study_set: false,
-                    persist_to_src: !isInstantStudyToolUpload
+                    persist_to_src: !isInstantStudyToolUpload && !isPrivateAccountUpload
                 })
             });
 
@@ -3558,6 +3667,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     filename,
+                    material_id: (existingUploadEntry && !existingUploadEntry.doc_id)
+                        ? (existingUploadEntry.material_id || existingUploadEntry.id || null)
+                        : null,
                     quiz_count: quizCount,
                     flashcard_count: flashcardCount,
                     difficulty: difficulty,
@@ -3685,7 +3797,7 @@ document.addEventListener("DOMContentLoaded", () => {
         return false;
     }
 
-    function openStudyMaterial(material) {
+    function openStudyMaterial(material, options = {}) {
         if (!material) return;
         currentStudyMaterial = material;
         currentQuizIndex = 0;
@@ -3755,14 +3867,27 @@ document.addEventListener("DOMContentLoaded", () => {
             sourceTextPreview.textContent = previewText || "Không có trích đoạn văn bản thô.";
         }
 
-        switchStudyTab("quiz");
+        const initialTab = (options && options.initialTab) || (
+            !(material.quiz && material.quiz.length) && (material.flashcards && material.flashcards.length)
+                ? "flashcards"
+                : "quiz"
+        );
+        switchStudyTab(initialTab);
         renderQuiz();
         renderFlashcards();
+        const exportPdfBtn = (typeof btnStudyExportPdf !== "undefined" && btnStudyExportPdf) || (typeof document !== "undefined" && typeof document.getElementById === "function" ? document.getElementById("btn-study-export-pdf") : null);
+        if (exportPdfBtn) {
+            exportPdfBtn.disabled = !(material.quiz && material.quiz.length);
+        }
 
         if (studyMaterialModal) {
             studyMaterialModal.style.display = "flex";
             studyMaterialModal.classList.add("active");
         }
+    }
+
+    if (typeof window !== "undefined") {
+        window.openStudyMaterialModal = openStudyMaterial;
     }
 
     btnCloseStudyMaterial?.addEventListener("click", () => {
@@ -3994,6 +4119,49 @@ document.addEventListener("DOMContentLoaded", () => {
         updateQuizScore();
     });
 
+    btnStudyExportPdf?.addEventListener("click", async () => {
+        const quiz = (currentStudyMaterial && currentStudyMaterial.quiz) || [];
+        if (!quiz.length) {
+            alert("Bộ ôn luyện này chưa có câu hỏi trắc nghiệm để xuất PDF.");
+            return;
+        }
+        const topicName = (currentStudyMaterial.topic || currentStudyMaterial.clean_title || currentStudyMaterial.filename || "On-tap-tai-lieu").trim();
+        btnStudyExportPdf.disabled = true;
+        try {
+            const res = await fetch("/api/learning/export-pdf", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    topic: topicName,
+                    difficulty: currentStudyMaterial.difficulty || "medium",
+                    material_id: currentStudyMaterial.material_id || currentStudyMaterial.id || null,
+                }),
+            });
+            if (!res.ok) {
+                let errMsg = "Không thể xuất file PDF.";
+                try {
+                    const errJson = await res.json();
+                    errMsg = errJson.detail || errMsg;
+                } catch (_) {}
+                throw new Error(errMsg);
+            }
+            const blob = await res.blob();
+            const safeSlug = topicName.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "arym-bai-tap";
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `arym-${safeSlug.slice(0, 40)}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            alert(err.message || "Không thể xuất file PDF.");
+        } finally {
+            btnStudyExportPdf.disabled = !(currentStudyMaterial && currentStudyMaterial.quiz && currentStudyMaterial.quiz.length);
+        }
+    });
+
     // --- Flashcards Logic ---
     function renderFlashcards() {
         const cards = (currentStudyMaterial && currentStudyMaterial.flashcards) || [];
@@ -4171,7 +4339,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-        window.addEventListener("study:account-changed", () => {
+        window.addEventListener("study:account-changed", (ev) => {
+            const authCfg = window.StudyAccount?.getConfig?.();
+            const hasAccount = Boolean(ev?.detail?.account);
+            if (authCfg?.required && !hasAccount) {
+                statusPollAuthBlocked = true;
+                return;
+            }
+            statusPollAuthBlocked = false;
+            refreshKnowledgeBaseStatus();
+            fetchOllamaModels();
             loadSessions().catch(() => {});
         });
     }

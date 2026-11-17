@@ -23,7 +23,7 @@ from app.config import (
 )
 from app.db import secure_dir_permissions, secure_file_permissions
 import inspect
-from app.gpu_lock import GPUBusyError, IndexingCancelledError
+from app.gpu_lock import GPUBusyError, IndexingCancelledError, gpu_coordinator
 from app.indexer import (
     CorpusBusyError,
     FileModifiedDuringIndexingError,
@@ -34,6 +34,36 @@ from app.runtime_health import runtime_failure_message
 from app.vision_ocr import BACKEND_OLLAMA_VISION, VisionOCRManager, classify_ocr_failure
 
 logger = logging.getLogger(__name__)
+
+
+class _CombinedCancelEvent:
+    """Thread-safe event wrapper that fires when either watcher stop or foreground yield triggers."""
+
+    def __init__(self, *events: Optional[threading.Event]) -> None:
+        self._events = [ev for ev in events if ev is not None]
+
+    def is_set(self) -> bool:
+        return any(ev.is_set() for ev in self._events)
+
+    def set(self) -> None:
+        if self._events:
+            self._events[-1].set()
+
+    def wait(self, timeout: Optional[float] = None) -> bool:
+        if self.is_set():
+            return True
+        if timeout is None:
+            while not self.is_set():
+                time.sleep(0.02)
+            return True
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while True:
+            if self.is_set():
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(0.02, remaining))
 
 
 def _is_auto_ocr_enabled() -> bool:
@@ -566,12 +596,20 @@ class SrcWatcher:
             needing = [1]
         return total_pages, sorted(set(needing))
 
+    def _gpu_retry_at(self, now_wall: float) -> float:
+        base_delay = min(1.0, self.poll_interval)
+        rem = gpu_coordinator.background_yield_remaining()
+        if rem > 0.0:
+            return now_wall + max(base_delay, min(15.0, rem))
+        return now_wall + base_delay
+
     def _sync_vectors_for_doc(
         self,
         indexer: KnowledgeIndexer,
         item: Dict[str, Any],
         db_row: Dict[str, Any],
         now_wall: float,
+        cancel_event: Optional[Any] = None,
     ) -> Tuple[bool, bool, bool]:
         doc_id = db_row.get("id")
         if doc_id is None:
@@ -602,11 +640,19 @@ class SrcWatcher:
             item["embedding_status"] = "partial" if compat_c > 0 else "vector_pending"
             return False, False, False
 
+        if gpu_coordinator.should_yield_background():
+            item["vectors_ready"] = False
+            item["embedding_status"] = "partial" if compat_c > 0 else "vector_pending"
+            item["vector_error"] = "Đang nhường GPU cho tác vụ người dùng trực tiếp."
+            item["vector_next_retry_at"] = self._gpu_retry_at(now_wall)
+            return False, True, False
+
+        active_cancel = cancel_event or self._stop_event
         try:
             indexer.backfill_missing_embeddings(
                 embed_model=self.embed_model,
                 doc_id=doc_id,
-                cancel_event=self._stop_event,
+                cancel_event=active_cancel,
                 gpu_timeout=0.5,
             )
             with indexer.get_connection() as conn:
@@ -623,13 +669,19 @@ class SrcWatcher:
                 item.pop("vector_next_retry_at", None)
             return ready, False, bool(ready and compat_c < total_c)
         except IndexingCancelledError:
-            raise
+            if self._stop_event.is_set():
+                raise
+            item["vectors_ready"] = False
+            item["embedding_status"] = "partial" if compat_c > 0 else "vector_pending"
+            item["vector_error"] = "Đang nhường GPU cho tác vụ người dùng trực tiếp."
+            item["vector_next_retry_at"] = self._gpu_retry_at(now_wall)
+            return False, True, False
         except GPUBusyError as exc:
             _, msg = _sanitize_error(exc, paths_to_redact=self._redact_paths())
             item["vectors_ready"] = False
             item["embedding_status"] = "vector_pending"
             item["vector_error"] = msg
-            item["vector_next_retry_at"] = now_wall + min(1.0, self.poll_interval)
+            item["vector_next_retry_at"] = self._gpu_retry_at(now_wall)
             return False, True, False
         except Exception as exc:
             _, msg = _sanitize_error(exc, reason_code="embedding_error", paths_to_redact=self._redact_paths())
@@ -653,6 +705,7 @@ class SrcWatcher:
         ocr_available: bool,
         ocr_budget_remaining: int,
         now_wall: float,
+        cancel_event: Optional[Any] = None,
     ) -> Tuple[int, bool, bool]:
         """Run bounded per-page OCR & compute durable page progress.
 
@@ -733,6 +786,9 @@ class SrcWatcher:
                 }
                 continue
 
+            if gpu_coordinator.should_yield_background():
+                waiting_gpu = True
+
             if ocr_budget_remaining <= 0 or waiting_gpu:
                 if p_key not in page_states or page_states[p_key].get("status") in ("ocr_running", "needs_ocr"):
                     page_states[p_key] = {
@@ -780,7 +836,7 @@ class SrcWatcher:
                     sig_p = inspect.signature(mgr.ocr_image_bytes).parameters
                     has_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig_p.values())
                     if has_kw or "cancel_event" in sig_p:
-                        ocr_kwargs["cancel_event"] = self._stop_event
+                        ocr_kwargs["cancel_event"] = cancel_event or self._stop_event
                     if has_kw or "gpu_timeout" in sig_p:
                         ocr_kwargs["gpu_timeout"] = 0.5
                     if batch_model_digest and (has_kw or "preverified_model_digest" in sig_p):
@@ -803,12 +859,21 @@ class SrcWatcher:
                     "updated_at": _utc_now_iso(),
                 }
             except IndexingCancelledError:
+                if self._stop_event.is_set():
+                    page_states[p_key] = {
+                        "status": "ocr_queued",
+                        "reason_code": "cancelled_on_stop",
+                        "updated_at": _utc_now_iso(),
+                    }
+                    raise
                 page_states[p_key] = {
-                    "status": "ocr_queued",
-                    "reason_code": "cancelled_on_stop",
+                    "status": "waiting_gpu",
+                    "reason_code": "gpu_busy",
+                    "message": "Đang nhường GPU cho tác vụ người dùng trực tiếp.",
                     "updated_at": _utc_now_iso(),
                 }
-                raise
+                waiting_gpu = True
+                break
             except GPUBusyError as exc:
                 _, msg = _sanitize_error(exc, paths_to_redact=self._redact_paths())
                 page_states[p_key] = {
@@ -962,7 +1027,7 @@ class SrcWatcher:
             item["status"] = "waiting_gpu"
             item["reason_code"] = "gpu_busy"
             item["message"] = "GPU hoặc tiến trình mô hình OCR đang bận; sẽ tự động thử lại khi sẵn sàng."
-            item["next_retry_at"] = now_wall + min(1.0, self.poll_interval)
+            item["next_retry_at"] = self._gpu_retry_at(now_wall)
             summary["waiting_gpu"] += 1
         elif pages_error > 0 and pages_uncaptured == 0 and pages_captured == 0 and first_err is not None:
             item["status"] = "error"
@@ -1092,6 +1157,9 @@ class SrcWatcher:
                     ocr_available = self._can_run_local_ocr()
                     ocr_available_checked = True
                 return ocr_available
+
+            bg_yield_event = threading.Event()
+            bg_cancel = _CombinedCancelEvent(self._stop_event, bg_yield_event)
 
             # 2. Reconcile discovered disk files in deterministic order.
             for rel_path in sorted(disk_files.keys()):
@@ -1302,41 +1370,53 @@ class SrcWatcher:
                             if "cancel_event" in idx_params or any(
                                 p.kind == inspect.Parameter.VAR_KEYWORD for p in idx_params.values()
                             ):
-                                index_kwargs["cancel_event"] = self._stop_event
+                                index_kwargs["cancel_event"] = bg_cancel
                         except (TypeError, ValueError):
                             pass
-                        try:
-                            res = indexer.index_file(fpath, **index_kwargs)
-                        except GPUBusyError as exc:
-                            if not has_new_review or not self.embed_model:
-                                raise
-                            # Preserve newly accepted human review chunks immediately in fts_only/vector_pending.
-                            _, vec_msg = _sanitize_error(exc, paths_to_redact=self._redact_paths())
-                            fallback_kwargs = dict(index_kwargs, embed_model=None)
-                            res = indexer.index_file(fpath, **fallback_kwargs)
-                            item["vector_error"] = vec_msg
-                            item["vector_next_retry_at"] = now_wall + min(1.0, self.poll_interval)
+                        with gpu_coordinator.background_scope(bg_yield_event):
+                            try:
+                                res = indexer.index_file(fpath, **index_kwargs)
+                            except GPUBusyError as exc:
+                                if not has_new_review or not self.embed_model:
+                                    raise
+                                # Preserve newly accepted human review chunks immediately in fts_only/vector_pending.
+                                _, vec_msg = _sanitize_error(exc, paths_to_redact=self._redact_paths())
+                                fallback_kwargs = dict(index_kwargs, embed_model=None)
+                                res = indexer.index_file(fpath, **fallback_kwargs)
+                                item["vector_error"] = vec_msg
+                                item["vector_next_retry_at"] = self._gpu_retry_at(now_wall)
                         ran_index = True
                     except IndexingCancelledError:
+                        if self._stop_event.is_set():
+                            item.update({
+                                "status": "needs_update" if (db_usable and prev.get("stale")) else "pending",
+                                "reason_code": "cancelled_on_stop",
+                                "message": "Đã dừng tác vụ lập chỉ mục theo yêu cầu tắt máy chủ.",
+                                "attempts": 0,
+                                "exhausted": False,
+                                "stale": bool(db_usable and prev.get("stale")),
+                                "updated_at": _utc_now_iso(),
+                            })
+                            items[rel_path] = item
+                            summary["needs_update" if item["stale"] else "pending"] += 1
+                            break
                         item.update({
-                            "status": "needs_update" if (db_usable and prev.get("stale")) else "pending",
-                            "reason_code": "cancelled_on_stop",
-                            "message": "Đã dừng tác vụ lập chỉ mục theo yêu cầu tắt máy chủ.",
-                            "attempts": 0,
-                            "exhausted": False,
-                            "stale": bool(db_usable and prev.get("stale")),
+                            "status": "waiting_gpu",
+                            "reason_code": "gpu_busy",
+                            "message": "Đang nhường GPU cho tác vụ người dùng trực tiếp.",
+                            "next_retry_at": self._gpu_retry_at(now_wall),
                             "updated_at": _utc_now_iso(),
                         })
                         items[rel_path] = item
-                        summary["needs_update" if item["stale"] else "pending"] += 1
-                        break
+                        summary["waiting_gpu"] += 1
+                        continue
                     except GPUBusyError as exc:
                         code, msg = _sanitize_error(exc, paths_to_redact=self._redact_paths())
                         item.update({
                             "status": "waiting_gpu",
                             "reason_code": code,
                             "message": msg,
-                            "next_retry_at": now_wall + min(1.0, self.poll_interval),
+                            "next_retry_at": self._gpu_retry_at(now_wall),
                             "updated_at": _utc_now_iso(),
                         })
                         items[rel_path] = item
@@ -1449,20 +1529,23 @@ class SrcWatcher:
                 item["extracted_pages_count"] = int(db_row.get("extracted_pages_count") or 0) if db_row else 0
 
                 if db_row and db_row.get("status") in ("indexed", "ocr_partial_reviewed"):
-                    try:
-                        v_ready, vec_busy, v_synced = self._sync_vectors_for_doc(indexer, item, db_row, now_wall)
-                        if not ran_index and v_synced:
-                            summary["vectors_synced"] += 1
-                    except IndexingCancelledError:
-                        item.update({
-                            "status": "pending",
-                            "reason_code": "cancelled_on_stop",
-                            "message": "Đã dừng đồng bộ vector theo yêu cầu tắt máy chủ.",
-                            "updated_at": _utc_now_iso(),
-                        })
-                        items[rel_path] = item
-                        summary["pending"] += 1
-                        break
+                    with gpu_coordinator.background_scope(bg_yield_event):
+                        try:
+                            v_ready, vec_busy, v_synced = self._sync_vectors_for_doc(
+                                indexer, item, db_row, now_wall, cancel_event=bg_cancel
+                            )
+                            if not ran_index and v_synced:
+                                summary["vectors_synced"] += 1
+                        except IndexingCancelledError:
+                            item.update({
+                                "status": "pending",
+                                "reason_code": "cancelled_on_stop",
+                                "message": "Đã dừng đồng bộ vector theo yêu cầu tắt máy chủ.",
+                                "updated_at": _utc_now_iso(),
+                            })
+                            items[rel_path] = item
+                            summary["pending"] += 1
+                            break
                     if db_row.get("id") is None and not ran_index:
                         pass
                 else:
@@ -1479,30 +1562,32 @@ class SrcWatcher:
                 waiting_ocr_gpu = False
                 if needs_ocr_surface:
                     can_ocr_now = _ensure_ocr_available()
-                    try:
-                        ocr_budget_remaining, waiting_ocr_gpu, _ = self._reconcile_ocr_pages(
-                            item=item,
-                            items=items,
-                            rel_path=rel_path,
-                            fpath=fpath,
-                            current_hash=current_hash,
-                            db_row=db_row,
-                            indexer=indexer,
-                            doc_snapshot=doc_snapshot,
-                            ocr_available=can_ocr_now,
-                            ocr_budget_remaining=ocr_budget_remaining,
-                            now_wall=now_wall,
-                        )
-                    except IndexingCancelledError:
-                        item.update({
-                            "status": "needs_ocr",
-                            "reason_code": "cancelled_on_stop",
-                            "message": "Đã dừng tác vụ OCR theo yêu cầu tắt máy chủ.",
-                            "updated_at": _utc_now_iso(),
-                        })
-                        items[rel_path] = item
-                        summary["needs_ocr"] += 1
-                        break
+                    with gpu_coordinator.background_scope(bg_yield_event):
+                        try:
+                            ocr_budget_remaining, waiting_ocr_gpu, _ = self._reconcile_ocr_pages(
+                                item=item,
+                                items=items,
+                                rel_path=rel_path,
+                                fpath=fpath,
+                                current_hash=current_hash,
+                                db_row=db_row,
+                                indexer=indexer,
+                                doc_snapshot=doc_snapshot,
+                                ocr_available=can_ocr_now,
+                                ocr_budget_remaining=ocr_budget_remaining,
+                                now_wall=now_wall,
+                                cancel_event=bg_cancel,
+                            )
+                        except IndexingCancelledError:
+                            item.update({
+                                "status": "needs_ocr",
+                                "reason_code": "cancelled_on_stop",
+                                "message": "Đã dừng tác vụ OCR theo yêu cầu tắt máy chủ.",
+                                "updated_at": _utc_now_iso(),
+                            })
+                            items[rel_path] = item
+                            summary["needs_ocr"] += 1
+                            break
                 else:
                     item.pop("ocr_progress", None)
 

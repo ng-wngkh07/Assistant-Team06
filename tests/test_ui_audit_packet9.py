@@ -407,6 +407,114 @@ def test_09c_missing_documents_truthfully_reports_unavailable(tmp_path, monkeypa
     assert updated_sess["practice_id"] is None
 
 
+def test_09c_session_exercise_strips_tu_hoc_course_prefix_and_generic_review_subtitle(tmp_path, monkeypatch):
+    """Auto-generated session titles like 'Tự học Đại số tuyến tính: Ôn tập Đại số tuyến tính'
+    must resolve to the enrolled course/topic rather than searching documents for the literal 'Tự học ...' prefix.
+    """
+    test_db = tmp_path / "session_topic_unwrap.db"
+    monkeypatch.setenv("TIMETABLE_DB_PATH", str(test_db))
+
+    with _connect(test_db) as conn:
+        c1 = conn.execute(
+            """
+            INSERT INTO study_sessions (
+                plan_id, task_id, title, course, weekday, start_time, end_time,
+                duration_minutes, priority, source, completed, locked,
+                session_index, total_sessions, notes, created_at,
+                classified_topic, worksheet_id, practice_id, exercise_status
+            ) VALUES (
+                'p2', NULL, 'Tự học Đại số tuyến tính: Ôn tập Đại số tuyến tính', 'Đại số tuyến tính',
+                1, '19:00', '20:30', 90, 'medium', 'ai_auto_90m', 0, 0, 1, 1,
+                '', '2026-11-16T00:00:00Z', 'Đại số tuyến tính', '', '', 'not_generated'
+            )
+            """
+        )
+        sid_generic = c1.lastrowid
+        c2 = conn.execute(
+            """
+            INSERT INTO study_sessions (
+                plan_id, task_id, title, course, weekday, start_time, end_time,
+                duration_minutes, priority, source, completed, locked,
+                session_index, total_sessions, notes, created_at,
+                classified_topic, worksheet_id, practice_id, exercise_status
+            ) VALUES (
+                'p2', NULL, 'Tự học Đại số tuyến tính: Không gian vector', 'Đại số tuyến tính',
+                2, '19:00', '20:30', 90, 'medium', 'ai_auto_90m', 0, 0, 1, 1,
+                '', '2026-11-16T00:00:00Z', 'Đại số tuyến tính', '', '', 'not_generated'
+            )
+            """
+        )
+        sid_specific = c2.lastrowid
+        conn.commit()
+
+    from app import server as _srv
+
+    seen_topics = []
+
+    class _CaptureLearningService:
+        def generate(self, topic: str, count: int = 3, **kwargs):
+            seen_topics.append(topic)
+            return {
+                "practice_id": f"prac_{len(seen_topics)}",
+                "topic": topic,
+                "count": 1,
+                "questions": [
+                    {"id": "q1", "question": f"Hỏi về {topic}?", "choices": {"A": "1", "B": "2", "C": "3", "D": "4"}, "answer": "A"}
+                ],
+            }
+
+    monkeypatch.setattr(_srv, "learning_service", _CaptureLearningService(), raising=False)
+    client = TestClient(app)
+
+    res1 = client.post(f"/api/timetable/planner/sessions/{sid_generic}/exercise/generate")
+    assert res1.status_code == 200
+    res2 = client.post(f"/api/timetable/planner/sessions/{sid_specific}/exercise/generate")
+    assert res2.status_code == 200
+    assert seen_topics == ["Đại số tuyến tính", "Không gian vector"]
+
+    combined = client.get("/api/timetable/planner/schedule")
+    assert combined.status_code == 200
+    study_items = {it["item_id"]: it for it in combined.json().get("items", []) if it.get("category") == "study_session"}
+    assert study_items[sid_generic]["practice_id"] == "prac_1"
+    assert study_items[sid_generic]["exercise_status"] == "available"
+    assert "(Chưa có bài tập PDF đính kèm)" not in (study_items[sid_generic].get("notes") or "")
+    assert "/api/learning/export-pdf/prac_1" in (study_items[sid_generic].get("notes") or "")
+
+
+def test_09c_update_session_practice_clears_stale_unattached_note(tmp_path):
+    """Attaching a generated practice set strips the stale unattached PDF warning in notes and combined schedule."""
+    test_db = tmp_path / "sync_notes.db"
+    with _connect(test_db) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO study_sessions (
+                plan_id, task_id, title, course, weekday, start_time, end_time,
+                duration_minutes, priority, source, completed, locked,
+                session_index, total_sessions, notes, created_at,
+                classified_topic, worksheet_id, practice_id, exercise_status
+            ) VALUES (
+                'p3', NULL, 'Tự học Đại số tuyến tính: Ôn tập Đại số tuyến tính', 'Đại số tuyến tính',
+                2, '19:00', '20:30', 90, 'medium', 'ai_auto_90m', 0, 0, 1, 1,
+                'Đề xuất tự học Đại số tuyến tính | Chủ đề: Đại số tuyến tính (Chưa có bài tập PDF đính kèm)',
+                '2026-11-16T00:00:00Z', 'Đại số tuyến tính', '', '', 'not_generated'
+            )
+            """
+        )
+        sid = cur.lastrowid
+        conn.commit()
+
+    from app.study_planner import get_combined_weekly_schedule
+
+    assert update_session_practice(sid, "prac_xyz", exercise_status="available", db_path=test_db) is True
+    combined = get_combined_weekly_schedule(db_path=test_db)
+    item = next(it for it in combined["items"] if it["item_id"] == sid)
+    assert item["practice_id"] == "prac_xyz"
+    assert item["exercise_status"] == "available"
+    assert item["pdf_url"] == "/api/learning/export-pdf/prac_xyz"
+    assert "(Chưa có bài tập PDF đính kèm)" not in item["notes"]
+    assert "/api/learning/export-pdf/prac_xyz" in item["notes"]
+
+
 # ==============================================================================
 # 09-D: BACKWARD API COMPATIBILITY & ROUTE DELEGATION
 # ==============================================================================

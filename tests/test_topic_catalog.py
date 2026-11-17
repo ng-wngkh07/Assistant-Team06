@@ -326,3 +326,57 @@ def test_markdown_heading_context_filters_exercise_and_admits_theory(tmp_path):
     assert 'Khi đổi diện tích' in selected[0]['text']
     assert not any('999' in p['text'] or 'Bỏ qua tài liệu' in p['text'] for p in selected)
     assert not any('Đổi 2.5 m²' in p['text'] for p in selected)
+
+
+def test_matching_documents_and_exercises_support_vecto_vector_orthography(tmp_path):
+    """'Không gian vector' must match Vietnamese 'vectơ'/'vecto' chapters & workbook exercises."""
+    src = tmp_path / 'src'
+    src.mkdir()
+    db = tmp_path / 'kb.db'
+    KnowledgeIndexer(db, src)
+
+    with sqlite3.connect(db) as conn:
+        p1 = src / 'Dai so tuyen tinh'
+        p1.mkdir(parents=True, exist_ok=True)
+        for fname in ('Chuong 3_Khong gian vecto.pdf', 'TH_Chuong 3_Khong gian vecto.pdf', 'Chuong 1_Ma tran.pdf'):
+            (p1 / fname).write_bytes(b'%PDF-1.4\n')
+
+        conn.execute(
+            'INSERT INTO documents(id,filename,clean_title,filepath,file_size,file_hash,total_pages,extracted_pages_count,status) VALUES(?,?,?,?,?,?,?,?,?)',
+            (63, 'Dai so tuyen tinh/Chuong 3_Khong gian vecto.pdf', 'Chuong 3 Khong gian vecto', str(p1 / 'Chuong 3_Khong gian vecto.pdf'), 100, 'h63', 3, 3, 'indexed'),
+        )
+        conn.execute(
+            'INSERT INTO documents(id,filename,clean_title,filepath,file_size,file_hash,total_pages,extracted_pages_count,status) VALUES(?,?,?,?,?,?,?,?,?)',
+            (68, 'Dai so tuyen tinh/TH_Chuong 3_Khong gian vecto.pdf', 'TH Chuong 3 Khong gian vecto', str(p1 / 'TH_Chuong 3_Khong gian vecto.pdf'), 100, 'h68', 3, 3, 'indexed'),
+        )
+        conn.execute(
+            'INSERT INTO documents(id,filename,clean_title,filepath,file_size,file_hash,total_pages,extracted_pages_count,status) VALUES(?,?,?,?,?,?,?,?,?)',
+            (61, 'Dai so tuyen tinh/Chuong 1_Ma tran.pdf', 'Chuong 1 Ma tran', str(p1 / 'Chuong 1_Ma tran.pdf'), 100, 'h61', 1, 1, 'indexed'),
+        )
+        chunks_data = [
+            (63, 'Dai so tuyen tinh/Chuong 3_Khong gian vecto.pdf', 'Chuong 3 Khong gian vecto', 3, 0,
+             '3.1. Không gian vectơ\nĐịnh nghĩa. Cho V là một tập hợp với phép toán cộng vectơ và nhân vô hướng thỏa 8 tiên đề.'),
+            (68, 'Dai so tuyen tinh/TH_Chuong 3_Khong gian vecto.pdf', 'TH Chuong 3 Khong gian vecto', 1, 0,
+             'Chương 3. KHÔNG GIAN VECTƠ\nPhần I. Hướng dẫn sử dụng Maple.'),
+            (68, 'Dai so tuyen tinh/TH_Chuong 3_Khong gian vecto.pdf', 'TH Chuong 3 Khong gian vecto', 8, 0,
+             'Phần II. Bài tập\n3.1 Chứng minh rằng hệ các vectơ u_1=(1,1,0), u_2=(1,0,1) độc lập tuyến tính trong R^3.'),
+            (68, 'Dai so tuyen tinh/TH_Chuong 3_Khong gian vecto.pdf', 'TH Chuong 3 Khong gian vecto', 9, 0,
+             '3.13 Chứng minh rằng tập hợp các đa thức f_1=1+2t, f_2=3+t là một tập sinh của không gian P_1[t].'),
+            (61, 'Dai so tuyen tinh/Chuong 1_Ma tran.pdf', 'Chuong 1 Ma tran', 1, 0,
+             'Chương 1. Ma trận và định thức của ma trận vuông cấp n.'),
+        ]
+        for doc_id, fn, bt, pnum, cidx, txt in chunks_data:
+            conn.execute(
+                'INSERT INTO chunks(doc_id,filename,book_title,page_num,chunk_index,text) VALUES(?,?,?,?,?,?)',
+                (doc_id, fn, bt, pnum, cidx, txt),
+            )
+
+    service = LearningService(DocumentLookup(db, src), None)
+    matched_ids = {d['id'] for d in service._matching_documents('Không gian vector')}
+    assert 63 in matched_ids
+    assert 68 in matched_ids
+
+    ex_items = service.exercises('Không gian vector', limit=10)['items']
+    assert len(ex_items) >= 2
+    assert any('độc lập tuyến tính' in it['question'] for it in ex_items)
+    assert any('tập sinh' in it['question'] for it in ex_items)

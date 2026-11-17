@@ -66,7 +66,11 @@ def nonvector_fingerprint(db):
 def valid_blob(blob, vector_hash, dimensions=1024):
     if not blob or len(blob) != dimensions * 4 or hashlib.sha256(blob).hexdigest() != vector_hash:
         return False
-    vector = unpack_vector(blob)
+    vector = (
+        np.frombuffer(blob, dtype=np.float32)
+        if isinstance(blob, (bytes, bytearray, memoryview))
+        else unpack_vector(blob)
+    )
     return bool(np.all(np.isfinite(vector)) and abs(float(np.linalg.norm(vector)) - 1.0) <= 1e-3)
 
 

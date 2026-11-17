@@ -14,11 +14,11 @@
             try { localStorage.setItem("theme", "dark"); } catch (e) {}
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=liquid-glass-20261111-06">
+    <link rel="stylesheet" href="/static/style.css?v=liquid-glass-20261117-02">
     <link rel="stylesheet" href="/static/theme.css?v=3-contrast-fix">
     <link rel="stylesheet" href="/static/liquid-glass.css?v=liquid-glass-20261110-03">
     <link rel="stylesheet" href="/static/onboarding-tour.css?v=liquid-glass-20261110-03">
-    <link rel="stylesheet" href="/static/spatial-layout.css?v=liquid-glass-20261111-06">
+    <link rel="stylesheet" href="/static/spatial-layout.css?v=liquid-glass-20261117-02">
     <link rel="stylesheet" href="/static/planner-wizard.css?v=liquid-glass-20261110-03">
 </head>
 <body>
@@ -197,6 +197,7 @@
                                 </div>
                                 <div class="form-group form-actions">
                                     <button type="button" id="btn-learning-generate" class="btn btn-primary">Tạo câu hỏi</button>
+                                    <button type="button" id="btn-learning-flashcards" class="btn btn-secondary" title="Tạo bộ thẻ ghi nhớ Flashcard từ tài liệu thuộc chủ đề này">🗂️ Tạo Flashcard</button>
                                     <button type="button" id="btn-export-practice-pdf" class="btn btn-outline" title="Xuất bộ câu hỏi theo chủ đề ra file PDF kèm bảng đáp án đối chiếu riêng ở cuối trang">📄 Xuất PDF kèm đáp án cuối trang</button>
                                 </div>
                             </div>
@@ -1500,6 +1501,7 @@
                             <div id="quiz-bubbles" class="quiz-bubbles-nav"></div>
                             <button type="button" id="btn-quiz-next" class="btn btn-primary btn-sm">Câu tiếp theo ➡</button>
                             <button type="button" id="btn-quiz-restart" class="btn btn-outline btn-sm" style="display: none;">🔄 Làm lại trắc nghiệm</button>
+                            <button type="button" id="btn-study-export-pdf" class="btn btn-outline btn-sm" title="Xuất bộ câu hỏi trắc nghiệm ra file PDF kèm đáp án cuối trang">📄 Xuất PDF</button>
                         </div>
                     </div>
                 </div>
@@ -1685,14 +1687,14 @@
 
     <script src="/static/spatial-layout.js?v=liquid-glass-20261111-06"></script>
     <script src="/static/onboarding-tour.js?v=liquid-glass-20261110-03"></script>
-    <script src="/static/accounts.js?v=liquid-glass-20261114-01"></script>
-    <script src="/static/app.js?v=liquid-glass-20261114-01"></script>
-    <script src="/static/document-lookup.js?v=liquid-glass-20261110-03"></script>
-    <script src="/static/timetable.js?v=liquid-glass-20261110-03"></script>
+    <script src="/static/accounts.js?v=liquid-glass-20261116-02"></script>
+    <script src="/static/app.js?v=liquid-glass-20261116-02"></script>
+    <script src="/static/document-lookup.js?v=liquid-glass-20261116-01"></script>
+    <script src="/static/timetable.js?v=liquid-glass-20261116-01"></script>
     <script src="/static/planner-wizard.js?v=liquid-glass-20261110-03"></script>
-    <script src="/static/planner-assistant.js?v=liquid-glass-20261110-03"></script>
+    <script src="/static/planner-assistant.js?v=liquid-glass-20261116-01"></script>
     <script src="/static/layout.js?v=liquid-glass-20261110-03"></script>
-    <script src="/static/practice.js?v=liquid-glass-20261110-03"></script>
+    <script src="/static/practice.js?v=liquid-glass-20261116-01"></script>
     <script src="/static/practice-pdf.js?v=liquid-glass-20261110-03"></script>
 </body>
 </html>

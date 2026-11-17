@@ -112,6 +112,17 @@ class LearningExercisesRequest(BaseModel):
         return validate_topic_input(v)
 
 
+class LearningFlashcardsRequest(BaseModel):
+    topic: str
+    count: int = Field(default=5, ge=1, le=15, strict=True)
+    model: Optional[str] = None
+
+    @field_validator("topic")
+    @classmethod
+    def validate_topic(cls, v: str) -> str:
+        return validate_topic_input(v)
+
+
 @router.post("/api/practice/generate")
 async def generate_practice(req: PracticeGenerateRequest):
     from app import server as _srv
@@ -264,11 +275,33 @@ async def list_learning_exercises(req: LearningExercisesRequest):
         )
 
 
+@router.post("/api/learning/flashcards")
+async def generate_topic_flashcards(req: LearningFlashcardsRequest):
+    from app import server as _srv
+
+    try:
+        record = await run_in_threadpool(
+            _srv.learning_service.flashcards,
+            topic=req.topic,
+            count=req.count,
+            model=req.model or _srv.DEFAULT_CHAT_MODEL,
+            material_manager=_srv.study_material_manager,
+        )
+        return project_public_response(record)
+    except Exception as exc:
+        _raise_learning_http_error(
+            exc,
+            context_label="Không tạo được flashcard theo chủ đề",
+            fallback_detail="Không tạo được flashcard cho chủ đề này.",
+        )
+
+
 class LearningExportPdfRequest(BaseModel):
     topic: str = Field(default="Chủ đề luyện tập", max_length=160)
     course: str = Field(default="", max_length=160)
     difficulty: Literal["easy", "medium", "hard"] = "medium"
     practice_id: Optional[str] = Field(default=None, max_length=64)
+    material_id: Optional[str] = Field(default=None, max_length=64)
     questions: Optional[list[dict[str, Any]]] = None
 
 
@@ -318,6 +351,34 @@ async def export_topic_exercises_pdf(req: LearningExportPdfRequest):
             questions = _srv.practice_service.get_session_questions_with_answers(req.practice_id)
         except PracticeSessionNotFound:
             raise HTTPException(status_code=404, detail="Phiên luyện tập không tồn tại.")
+    elif req.material_id:
+        mat = _srv.study_material_manager.get_material(req.material_id)
+        if not mat:
+            raise HTTPException(status_code=404, detail="Bộ học liệu không tồn tại.")
+        mat_title = mat.get("clean_title") or mat.get("filename") or req.topic or "Tài liệu học tập"
+        for item in mat.get("quiz") or []:
+            if not isinstance(item, dict):
+                continue
+            q_text = str(item.get("question") or item.get("text") or "").strip()
+            if not q_text:
+                continue
+            ans = item.get("answer") or item.get("correct_answer") or ""
+            questions.append(
+                {
+                    "question": q_text,
+                    "source_context": item.get("source_context") or "",
+                    "choices": item.get("choices") or [],
+                    "answer": ans,
+                    "answer_status": item.get("answer_status") or ("source_document" if item.get("evidence_quote") else None),
+                    "answer_source": item.get("answer_source"),
+                    "explanation": item.get("explanation") or item.get("solution") or "",
+                    "source": {
+                        "title": mat_title,
+                        "page_num": item.get("page_num") or 1,
+                        "snippet": item.get("evidence_quote") or item.get("snippet") or "",
+                    },
+                }
+            )
     else:
         clean_topic = validate_topic_input(req.topic)
         ex_res = await run_in_threadpool(

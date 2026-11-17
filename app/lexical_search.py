@@ -12,22 +12,34 @@ STOPWORDS = {
     "là", "gì", "thế", "nào", "sao", "ra", "như", "được", "có", "của", "trong", "ở", "về",
     "cho", "với", "theo", "và", "hoặc", "hay", "những", "các", "một", "này", "đó", "kia",
     "bởi", "tại", "khi", "để", "thì", "mà", "nếu", "bị", "do", "từ", "hãy", "nêu", "biết",
+    "bài", "giảng", "tài", "liệu", "sách", "giáo", "trình", "dùng", "làm", "nói", "giải",
+    "thích", "trình", "bày", "so", "sánh", "phân", "tích", "bao", "nhiêu", "đây", "vậy",
+    "ấy", "câu", "hỏi", "trên", "dưới", "học",
 }
 
 
 def clean_fts_query(query: str) -> str:
     """Sanitize query string for FTS5 syntax, avoiding syntax errors with special chars."""
-    cleaned = re.sub(r'["\'\*\^\:\(\)\[\]\{\}\+\-\~]', " ", query)
-    words = [w.strip() for w in cleaned.split() if w.strip()]
+    cleaned = re.sub(r"[^\w\s]", " ", query, flags=re.UNICODE)
+    words = [
+        w.strip()
+        for w in cleaned.split()
+        if w.strip() and not (len(w.strip()) == 1 and w.strip().isalpha())
+    ]
+    if not words:
+        words = [w.strip() for w in cleaned.split() if w.strip()]
     if not words:
         return ""
     meaningful = [w for w in words if w.lower() not in STOPWORDS]
     target_words = meaningful if meaningful else words
-    terms = [f'"{w}"*' for w in target_words]
-    w_lower = [w.lower() for w in words]
+    terms = [
+        (f'"{w}"' if (w.isupper() and len(w) <= 5) else f'"{w}"*')
+        for w in target_words
+    ]
+    w_lower = [w.lower() for w in re.findall(r"\w+", query)]
     if "xạ" in w_lower and "tuyến" in w_lower:
         terms.extend(['"xạtuyến"*', '"sốtuyến"*'])
-    return " OR ".join(terms)
+    return " OR ".join(dict.fromkeys(terms))
 
 
 def extract_document_scope_tokens(query: str) -> List[str]:
@@ -198,8 +210,15 @@ def is_heading_or_toc_chunk(text: str) -> bool:
         if prose_lines < 2:
             return True
 
-    has_toc_header = any(top_tl.startswith(prefix) for prefix in ("mục lục", "table of contents")) or (
-        top_tl.startswith("nội dung") and any(w in tl for w in ("chương trình", "mục lục", "chi tiết", "bài giảng", "khóa học"))
+    first_tl = top_tl
+    if len(content_lines) >= 2 and re.match(r"^(?:trang|slide|page)\s*\d+\b", top_tl):
+        first_tl = content_lines[1].strip().lower()
+    has_toc_header = any(first_tl.startswith(prefix) for prefix in ("mục lục", "table of contents")) or (
+        first_tl.startswith("nội dung")
+        and (
+            any(w in tl for w in ("chương trình", "mục lục", "chi tiết", "bài giảng", "khóa học"))
+            or not any(len(l) > 60 for l in content_lines)
+        )
     )
     if has_toc_header:
         substantive = [
@@ -222,6 +241,16 @@ def is_heading_or_toc_chunk(text: str) -> bool:
     if len(lines) <= 6 and len(t) < 250:
         section_lines = sum(1 for line in lines if re.match(r"^(\d+(\.\d+)*\.?|[A-ZĐ\d\.\s\-]{3,30}$)", line))
         if section_lines > 0 and section_lines >= len(lines) - 1:
+            return True
+
+    if len(lines) <= 2 and len(t) <= 48:
+        # Filter bare slide/section dividers (e.g. "L-System", "Tổng quan Fractal",
+        # "This page intentionally left blank") that carry no propositional content.
+        if not re.search(r"[.=≠≤≥≈:;?!()]", t) and not re.search(
+            r"\b(?:là|gồm|gọi|được|dùng|means|is|are)\b",
+            t,
+            re.IGNORECASE,
+        ):
             return True
 
     return False

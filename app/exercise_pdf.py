@@ -295,6 +295,8 @@ def _build_questions_html(
                 margin-bottom: 11pt;
                 padding-bottom: 8pt;
                 border-bottom: 0.5pt solid #d4d4d8;
+                break-inside: avoid;
+                page-break-inside: avoid;
             }}
             .q-header {{
                 margin-bottom: 3pt;
@@ -469,6 +471,8 @@ def _build_answer_key_html(
                 margin-bottom: 10pt;
                 padding-bottom: 7pt;
                 border-bottom: 0.5pt solid #d4d4d8;
+                break-inside: avoid;
+                page-break-inside: avoid;
             }}
             .ans-line {{
                 margin-bottom: 3pt;
@@ -504,13 +508,31 @@ def _build_answer_key_html(
     """
 
 
-def _render_html_story_to_doc(doc: fitz.Document, html_content: str) -> None:
-    """Render an HTML document onto an A4 page using page.insert_htmlbox."""
+def _render_html_story_to_doc(doc: fitz.Document, html_content: str) -> int:
+    """Paginate an HTML story across one or more A4 pages using PyMuPDF Story."""
     mediabox = fitz.paper_rect("a4")
     margin = 36  # 0.5 inch margin
     where = fitz.Rect(margin, margin, mediabox.width - margin, mediabox.height - margin - 24)
-    page = doc.new_page(width=mediabox.width, height=mediabox.height)
-    page.insert_htmlbox(where, html_content, scale_low=0.55)
+    buf = io.BytesIO()
+    writer = fitz.DocumentWriter(buf)
+    story = fitz.Story(html=html_content)
+    pages_added = 0
+    while True:
+        dev = writer.begin_page(mediabox)
+        more, _ = story.place(where)
+        story.draw(dev)
+        writer.end_page()
+        pages_added += 1
+        if not more:
+            break
+    writer.close()
+
+    section_doc = fitz.open("pdf", buf.getvalue())
+    try:
+        doc.insert_pdf(section_doc)
+    finally:
+        section_doc.close()
+    return pages_added
 
 
 def generate_exercise_worksheet_pdf(
@@ -552,7 +574,7 @@ def generate_exercise_worksheet_pdf(
     doc = fitz.open()
     try:
         # Part I: Questions pages
-        _render_html_story_to_doc(doc, questions_html)
+        question_page_count = _render_html_story_to_doc(doc, questions_html)
         # Part II: Separate Answer Key & Explanations page(s) at the end of the PDF
         _render_html_story_to_doc(doc, answer_key_html)
 
@@ -560,7 +582,7 @@ def generate_exercise_worksheet_pdf(
         total_pages = len(doc)
         for page_index, page in enumerate(doc, start=1):
             footer_rect = fitz.Rect(36, page.rect.height - 26, page.rect.width - 36, page.rect.height - 10)
-            section_tag = "Đáp án đối chiếu cuối trang" if page_index == total_pages else "Đề bài luyện tập"
+            section_tag = "Đáp án đối chiếu cuối trang" if page_index > question_page_count else "Đề bài luyện tập"
             page.insert_htmlbox(
                 footer_rect,
                 f'<div style="font-family: sans-serif; font-size: 8pt; color: #52525b;">'
@@ -569,7 +591,7 @@ def generate_exercise_worksheet_pdf(
             )
 
         buf = io.BytesIO()
-        doc.save(buf)
+        doc.save(buf, garbage=4, deflate=True)
         return buf.getvalue()
     finally:
         doc.close()

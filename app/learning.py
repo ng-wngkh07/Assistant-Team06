@@ -41,6 +41,16 @@ def _clean_question_prefix(text: str) -> str:
     return _BULLET_PREFIX_PATTERN.sub("", text).strip()
 
 
+def _topic_orthography_variants(norm_text: str) -> set[str]:
+    """Return canonical spelling variants for loanwords such as vectơ/vecto vs vector."""
+    if not norm_text:
+        return set()
+    variants = {norm_text}
+    variants.add(re.sub(r"\bvectors?\b", "vecto", norm_text))
+    variants.add(re.sub(r"\bvecto\b", "vector", norm_text))
+    return {v for v in variants if v}
+
+
 def _strip_trailing_ornaments_and_footer(
     text: str,
     clean_title: str = "",
@@ -103,9 +113,12 @@ def _find_declared_identifiers(text: str) -> list[str]:
 def _find_referenced_dependencies(text: str) -> list[tuple[str, str]]:
     """Detect dependent references such as array[0][0], *ptr, or explicit 'ở câu X'."""
     refs: list[tuple[str, str]] = []
-    # Variable indexing e.g. array[0][0]
-    for m in re.finditer(r"\b([a-zA-Z_]\w*)\s*\[", text):
-        refs.append(("ident", m.group(1)))
+    # Variable indexing e.g. array[0][0], ignoring mathematical polynomial spaces such as R_2[t], P_1[t]
+    for m in re.finditer(r"\b([a-zA-Z_]\w*)\s*\[\s*([^\]]+)\s*\]", text):
+        ident, inner = m.group(1), m.group(2).strip()
+        if re.match(r"^[PRZCKQ](?:_[0-9a-zA-Z]+)?$", ident) and re.match(r"^[txyz]$", inner):
+            continue
+        refs.append(("ident", ident))
     # Explicit question reference e.g. 'ở câu 7', 'của câu 10'
     for m in re.finditer(r"\b(?:ở|của|trong|theo)\s+(?:bài|câu)\s+(\d+)", text, re.IGNORECASE):
         refs.append(("qid", m.group(1)))
@@ -190,6 +203,22 @@ def _is_theory_chunk(raw_text: Any, heading_context: Optional[Any] = None) -> bo
 
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
+        return False
+
+    # Back-matter Glossary / Index / Bibliography blocks hold dictionary pointers rather than chapter theory.
+    head_folded = [_normalize_text(re.sub(r"^#{1,6}\s*", "", ln)) for ln in lines[:4]]
+    if any(
+        ln in {
+            "glossary", "index", "subject index", "author index",
+            "references", "bibliography", "bang thuat ngu", "chi muc",
+            "tai lieu tham khao",
+        }
+        for ln in head_folded
+    ):
+        return False
+    glossary_ref_endings = len(re.findall(r"\.\s*\(\d{1,2}(?:,\s*\d{1,2})*\)\s*$", text, re.MULTILINE))
+    see_also_pointers = len(re.findall(r"\bSee\s+(?:also\s+)?[A-Z]", text))
+    if glossary_ref_endings >= 2 or (see_also_pointers >= 2 and glossary_ref_endings >= 1):
         return False
 
     # Standalone Markdown headings do not supply substantive question evidence.
@@ -429,6 +458,7 @@ class LearningService:
 
     def _matching_documents(self, topic: str) -> list[dict]:
         target = _normalize_text(topic)
+        target_variants = _topic_orthography_variants(target)
         available = self.document_lookup.documents()
         if not available or not target:
             return []
@@ -447,15 +477,16 @@ class LearningService:
             doc_topic = _normalize_text(self._extract_document_topic(doc))
             clean_title = _normalize_text(doc.get("clean_title") or "")
             filename = _normalize_text(doc.get("filename") or "")
-            if (
-                (doc_topic and (doc_topic == target or target in doc_topic or doc_topic in target))
-                or (clean_title and (clean_title == target or target in clean_title or clean_title in target))
-                or (filename and target in filename)
+            if any(
+                (doc_topic and (doc_topic == tv or tv in doc_topic or doc_topic in tv))
+                or (clean_title and (clean_title == tv or tv in clean_title or clean_title in tv))
+                or (filename and tv in filename)
+                for tv in target_variants
             ):
                 matched_ids.add(doc["id"])
                 matched_docs.append(doc)
 
-        # 2. Add remaining documents whose chunks body contains target (no early return)
+        # 2. Add remaining documents whose chunks body contains target or orthographic equivalent
         remaining_docs = [d for d in available if d["id"] not in matched_ids]
         if remaining_docs:
             remaining_ids = [d["id"] for d in remaining_docs]
@@ -469,7 +500,7 @@ class LearningService:
                     found_ids = set()
                     for r in cursor:
                         c_text = _normalize_text(r["text"])
-                        if target in c_text:
+                        if any(tv in c_text for tv in target_variants):
                             found_ids.add(r["doc_id"])
                             if len(found_ids) == len(remaining_ids):
                                 break
@@ -499,16 +530,14 @@ class LearningService:
 
         return []
 
-    def generate(
+    def _select_topic_passages(
         self,
         topic: str,
-        count: int = 3,
+        *,
         difficulty: str = "medium",
-        purpose: str = "practice",
         weak_topics: Optional[list[str]] = None,
-        model: Optional[str] = None,
-        reuse_verified_bank: Optional[bool] = None,
-    ) -> dict[str, Any]:
+        limit: int = 6,
+    ) -> list[dict]:
         matching_docs = self._matching_documents(topic)
         inspect_fn = getattr(self.document_lookup, "inspect_document_status", None)
         if callable(inspect_fn):
@@ -521,6 +550,7 @@ class LearningService:
 
         authored = resolve_topic(topic)
         topic_norm = _normalize_text(topic)
+        topic_variants = _topic_orthography_variants(topic_norm)
         topic_terms = [
             w for w in re.findall(r"\w+", topic_norm)
             if len(w) >= 2 and w not in QUERY_STOPWORDS and w not in DIRECTIVE_STOPWORDS
@@ -532,7 +562,6 @@ class LearningService:
 
         doc_ids = [d["id"] for d in matching_docs]
         scope = ",".join("?" for _ in doc_ids)
-
         doc_map = {d["id"]: d for d in matching_docs}
 
         def relevance_score(raw_text: str, doc_info: dict) -> int:
@@ -542,32 +571,28 @@ class LearningService:
             score = 0
             if authored and matches(c_norm, authored[1]):
                 score += 100
-            if topic_norm and topic_norm in c_norm:
+            if topic_variants and any(tv in c_norm for tv in topic_variants):
                 score += 100
             score += sum(10 for t in topic_terms if t in c_norm)
             score += sum(5 for w in weak_terms if w in c_norm)
 
-            # Document dedication boost (+60)
             doc_title = _normalize_text(doc_info.get("clean_title") or "")
             doc_fname = _normalize_text(doc_info.get("filename") or "")
-            if (authored and (matches(doc_title, authored[1]) or matches(doc_fname, authored[1]))) or (topic_norm in doc_title or topic_norm in doc_fname):
+            if (authored and (matches(doc_title, authored[1]) or matches(doc_fname, authored[1]))) or any(
+                tv in doc_title or tv in doc_fname for tv in topic_variants
+            ):
                 score += 60
 
-            # Substantive concept explanations / definitions (+40)
             if re.search(r"(?i)\b(?:khái\s+niệm|định\s+nghĩa|bản\s+chất|nguyên\s+lý|cốt\s+lõi|đặc\s+điểm|tính\s+chất|vấn\s+đề\s+giải\s+quyết|cơ\s+chế)\b", raw_text):
                 score += 40
 
-            # Structured comparison / tables / property matrix (+60)
             if ("|" in raw_text and re.search(r"\|[-:]+\|", raw_text)) or re.search(r"(?i)(?:tính\s+chất[\s\S]+vấn\s+đề\s+giải\s+quyết[\s\S]+cơ\s+chế|đóng\s+gói[\s\S]+trừu\s+tượng[\s\S]+kế\s+thừa[\s\S]+đa\s+hình)", raw_text):
                 score += 60
 
-            # Code syntax / class implementation (+30)
             if re.search(r"\b(?:class\s+\w+|struct\s+\w+|public:|private:|protected:|virtual\s+|override)\b", raw_text):
                 score += 30
 
             if difficulty == "hard":
-                # Prefer applicable conditions over definition-heavy tables.
-                # This ranks sources, never certifies a generated difficulty.
                 rule_clauses = re.split(r"[.!?;\n]+", c_norm)
                 rule_count = sum(bool(re.search(
                     r"\b(?:neu|chi\s+(?:khi|duoc|co)|khong\s+(?:duoc|the)|"
@@ -575,11 +600,10 @@ class LearningService:
                     clause)) for clause in rule_clauses)
                 score += 60 * min(rule_count, 3)
 
-            # Passing mention penalty (-100): chapter/heading is another topic
             ch_m = re.search(r"(?im)^[#\s]*(?:chương|phần|bài)\s+\d+[:\s]+([^\n]+)", raw_text)
             if ch_m:
                 ch_title = _normalize_text(ch_m.group(1))
-                if authored and not matches(ch_title, authored[1]) and topic_norm not in ch_title:
+                if authored and not matches(ch_title, authored[1]) and not any(tv in ch_title for tv in topic_variants):
                     score -= 100
 
             return score
@@ -603,7 +627,6 @@ class LearningService:
                     _update_heading_stack(heading_stack, raw_text)
                     if not _is_theory_chunk(raw_text, heading_context=heading_stack):
                         continue
-                    # Repeated course headers do not make the body a duplicate.
                     exact_text = re.sub(r"\s+", " ", unicodedata.normalize("NFC", raw_text)).strip().casefold()
                     text_key = hashlib.sha256(exact_text.encode("utf-8")).digest()
                     if text_key in seen_texts:
@@ -624,13 +647,24 @@ class LearningService:
         max_score = scored_candidates[0][0]
         if max_score >= 100:
             threshold = max(50, max_score * 0.5)
-            matching_scored = [c for score, c in scored_candidates if score >= threshold]
         else:
             threshold = max_score * 0.5
-            matching_scored = [c for score, c in scored_candidates if score >= threshold]
+        matching_scored = [c for score, c in scored_candidates if score >= threshold]
+        return matching_scored[:limit]
 
-        selected_passages = matching_scored[:6]
-
+    def generate(
+        self,
+        topic: str,
+        count: int = 3,
+        difficulty: str = "medium",
+        purpose: str = "practice",
+        weak_topics: Optional[list[str]] = None,
+        model: Optional[str] = None,
+        reuse_verified_bank: Optional[bool] = None,
+    ) -> dict[str, Any]:
+        selected_passages = self._select_topic_passages(
+            topic, difficulty=difficulty, weak_topics=weak_topics, limit=6,
+        )
         extra_kwargs = (
             {"reuse_verified_bank": reuse_verified_bank}
             if reuse_verified_bank is not None
@@ -648,6 +682,72 @@ class LearningService:
             topic=topic,
             **extra_kwargs,
         )
+
+    def flashcards(
+        self,
+        topic: str,
+        count: int = 5,
+        model: Optional[str] = None,
+        material_manager: Any = None,
+    ) -> dict[str, Any]:
+        """Generate quote-verified flashcards from matching course materials for any topic."""
+        selected_passages = self._select_topic_passages(topic, limit=6)
+        if material_manager is None:
+            from app.study_materials import study_material_manager
+            material_manager = study_material_manager
+        record = material_manager.generate_flashcards_from_passages(
+            selected_passages,
+            filename=f"Chủ đề: {topic}",
+            clean_title=topic,
+            count=count,
+            model=model or DEFAULT_CHAT_MODEL,
+        )
+        page_to_docs: dict[int, list[dict[str, Any]]] = {}
+        pages_preview = []
+        for p in selected_passages:
+            p_num = int(p.get("page_num", 1))
+            src_title = p.get("book_title") or p.get("filename") or topic
+            doc_meta = {
+                "doc_id": p.get("doc_id"),
+                "title": src_title,
+                "filename": p.get("filename"),
+                "text": str(p.get("text") or ""),
+            }
+            page_to_docs.setdefault(p_num, []).append(doc_meta)
+            pages_preview.append({
+                "page_num": p_num,
+                "doc_id": p.get("doc_id"),
+                "source_title": src_title,
+                "text": doc_meta["text"],
+            })
+
+        def _resolve_card_source(card: dict[str, Any]) -> dict[str, Any]:
+            c_page = int(card.get("page_num", 1))
+            candidates = page_to_docs.get(c_page) or []
+            if len(candidates) <= 1:
+                return candidates[0] if candidates else {}
+            ev = re.sub(r"\s+", " ", str(card.get("evidence_quote") or "")).strip()
+            if ev:
+                for cand in candidates:
+                    if ev in re.sub(r"\s+", " ", cand["text"]).strip():
+                        return cand
+            return candidates[0]
+
+        cards = []
+        for c in (record.get("flashcards") or []):
+            matched_src = _resolve_card_source(c)
+            cards.append({
+                **c,
+                "source_title": matched_src.get("title") or topic,
+                "doc_id": matched_src.get("doc_id"),
+            })
+        return {
+            **record,
+            "topic": topic,
+            "clean_title": topic,
+            "flashcards": cards,
+            "pages": pages_preview,
+        }
 
     def _extract_exercises_and_answers(
         self,
@@ -710,6 +810,7 @@ class LearningService:
         # Markdown headings may occupy their own indexed section. Keep their
         # number separately, then bind content to its actual body chunk/page.
         pending_markdown = None
+        in_exercise_section = False
         def markdown_blocks():
             for chunk in chunks:
                 for block in re.split(r"(?m)(?=^#{1,6}\s)", chunk.get("text", "")):
@@ -743,6 +844,7 @@ class LearningService:
                 r"\s+(?:(?:bài|câu|exercise|problem)\s+)?(\d+(?:[.:]\d+)*)[.:]?[^\n]*(?:\n|$)", text,
             )
             if numbered_heading:
+                in_exercise_section = False
                 pending_markdown = {
                     "kind": numbered_heading.group(1).casefold(),
                     "id": numbered_heading.group(2),
@@ -777,129 +879,147 @@ class LearningService:
                 continue
 
             parts = re.split(
-                r"(?im)(?:^|\n)\s*(?:#+\s*)?(bài\s+tập|exercises|practice\s+problems?|đáp\s+án|lời\s+giải|answers|solutions|answer\s+key|checkpoints?|lý\s+thuyết|theory)\b",
+                r"(?im)(?:^|\n)[ \t]*(?:#+\s*)?(?:(?:phần|section|part)\s+[ivx\d]+\s*[.:]\s*)?(bài\s+tập|exercises|practice\s+problems?|đáp\s+án|lời\s+giải|answers|solutions|answer\s+key|checkpoints?|lý\s+thuyết|theory)\b",
                 text,
             )
             chunk_exercises: list[dict[str, Any]] = []
+
+            def _collect_section_exercises(section_text: str, *, is_checkpoint: bool = False, allow_dotted: bool = False) -> None:
+                if is_checkpoint:
+                    ex_pattern = re.compile(
+                        r"(?im)(?:^|\n)[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(\d+\.\d+|\d+)[\.:]?[ \t]*"
+                    )
+                elif allow_dotted:
+                    ex_pattern = re.compile(
+                        r"(?im)(?:^|\n)[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?"
+                        r"(?:(?:bài|câu|exercise|problem)\s+(\d+(?:[.:]\d+)*)[\.:]?[ \t]*"
+                        r"|(\d+\.\d+)(?=\s+[^\n]{15,}))"
+                    )
+                else:
+                    ex_pattern = re.compile(
+                        r"(?im)(?:^|\n)[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(?:bài|câu|exercise|problem)\s+(\d+(?:[.:]\d+)*)[\.:]?[ \t]*"
+                    )
+                matches_found = list(ex_pattern.finditer(section_text))
+                lead_in = section_text[:matches_found[0].start()].strip() if matches_found else ""
+                lead_in_clean = _strip_trailing_ornaments_and_footer(lead_in, clean_title, recurring_footers)
+                has_lead_premise = bool(
+                    _find_declared_identifiers(lead_in_clean)
+                    or re.search(r"(?i)\b(?:giả\s+sử|cho|xét|đoạn\s+(?:mã|lệnh|code)|chương\s+trình|hàm)\b", lead_in_clean)
+                )
+
+                for j, m in enumerate(matches_found):
+                    start = m.start()
+                    end = matches_found[j + 1].start() if j + 1 < len(matches_found) else len(section_text)
+                    explicit_id = m.group(1)
+                    dotted_id = m.group(2) if m.lastindex and m.lastindex >= 2 else None
+                    ex_id = explicit_id or dotted_id
+                    if not ex_id:
+                        continue
+                    full_text = section_text[start:end].strip()
+                    clean_text = _strip_trailing_ornaments_and_footer(
+                        _clean_question_prefix(full_text),
+                        clean_title=clean_title,
+                        recurring_footers=recurring_footers,
+                    )
+                    if dotted_id and not explicit_id and len(clean_text) < 30:
+                        continue
+                    if is_checkpoint:
+                        body_txt = re.sub(r"^\s*\d+(?:\.\d+)*[\.:]?\s*", "", clean_text).strip()
+                        first_word = (re.findall(r"\w+", body_txt) or [""])[0].lower()
+                        is_question = ("?" in body_txt) or (first_word in {
+                            "what", "why", "how", "which", "where", "when", "who", "whom", "whose",
+                            "name", "list", "identify", "explain", "describe", "define", "calculate",
+                            "find", "give", "state", "show", "is", "are", "can", "do", "does", "did",
+                            "true", "false", "suppose", "assume", "write", "differentiate", "compare",
+                            "nêu", "hãy", "tính", "giải", "cho", "viết", "trình", "liệt", "tìm", "phân",
+                            "so", "tại", "vì", "đâu", "ai", "gì", "khi", "như", "làm",
+                        })
+                        if not is_question:
+                            break
+
+                    declared = _find_declared_identifiers(clean_text)
+                    refs = _find_referenced_dependencies(clean_text)
+                    source_context = lead_in_clean if has_lead_premise else None
+                    is_dependent_unresolved = False
+
+                    unresolved_refs = [
+                        ref for ref in refs
+                        if (ref[0] == "ident" and ref[1] not in declared)
+                        or (ref[0] == "qid")
+                    ]
+                    if unresolved_refs:
+                        remaining_refs = list(unresolved_refs)
+                        satisfying_contexts: list[str] = []
+
+                        if source_context:
+                            lead_decl = _find_declared_identifiers(source_context)
+                            remaining_refs = [
+                                ref for ref in remaining_refs
+                                if not (ref[0] == "ident" and ref[1] in lead_decl)
+                            ]
+
+                        for prev_ex in reversed(chunk_exercises):
+                            if not remaining_refs:
+                                break
+                            prev_txt = prev_ex["question"]
+                            prev_decl = _find_declared_identifiers(prev_txt)
+                            matched_any = False
+                            new_remaining = []
+                            for ref in remaining_refs:
+                                if ref[0] == "ident" and ref[1] in prev_decl:
+                                    matched_any = True
+                                elif ref[0] == "qid" and prev_ex["id"] == ref[1]:
+                                    matched_any = True
+                                else:
+                                    new_remaining.append(ref)
+                            if matched_any:
+                                satisfying_contexts.append(prev_txt)
+                                remaining_refs = new_remaining
+
+                        if satisfying_contexts:
+                            ctx_combined = "\n".join(reversed(satisfying_contexts))
+                            source_context = f"{source_context}\n{ctx_combined}".strip() if source_context else ctx_combined
+
+                        if remaining_refs:
+                            is_dependent_unresolved = True
+
+                    ex_dict = {
+                        "id": ex_id,
+                        "question": clean_text,
+                        "source_context": source_context,
+                        "is_dependent_unresolved": is_dependent_unresolved,
+                        "source": {
+                            "doc_id": doc_id,
+                            "page_num": page_num,
+                            "filename": filename,
+                            "title": title,
+                            "chunk_id": chunk_id,
+                            "pdf_url": pdf_url,
+                            "snippet": clean_text,
+                            "source_context": source_context,
+                        },
+                    }
+                    chunk_exercises.append(ex_dict)
+                    exercises.append(ex_dict)
 
             if len(parts) > 1:
                 for i in range(1, len(parts), 2):
                     header = parts[i].casefold()
                     content = parts[i + 1] if i + 1 < len(parts) else ""
                     if any(k in header for k in ("bài tập", "exercise", "problem", "checkpoint")):
-                        if "checkpoint" in header:
-                            ex_pattern = re.compile(
-                                r"(?im)(?:^|\n)[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(\d+\.\d+|\d+)[\.:]?[ \t]*"
-                            )
-                        else:
-                            ex_pattern = re.compile(
-                                r"(?im)(?:^|\n)[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(?:bài|câu|exercise|problem)\s+(\d+(?:[.:]\d+)*)[\.:]?[ \t]*"
-                            )
-                        matches = list(ex_pattern.finditer(content))
-                        lead_in = content[:matches[0].start()].strip() if matches else ""
-                        lead_in_clean = _strip_trailing_ornaments_and_footer(lead_in, clean_title, recurring_footers)
-                        has_lead_premise = bool(
-                            _find_declared_identifiers(lead_in_clean)
-                            or re.search(r"(?i)\b(?:giả\s+sử|cho|xét|đoạn\s+(?:mã|lệnh|code)|chương\s+trình|hàm)\b", lead_in_clean)
-                        )
-
-                        for j, m in enumerate(matches):
-                            start = m.start()
-                            end = matches[j + 1].start() if j + 1 < len(matches) else len(content)
-                            ex_id = m.group(1)
-                            full_text = content[start:end].strip()
-                            clean_text = _strip_trailing_ornaments_and_footer(
-                                _clean_question_prefix(full_text),
-                                clean_title=clean_title,
-                                recurring_footers=recurring_footers,
-                            )
-                            if "checkpoint" in header:
-                                body = re.sub(r"^\s*\d+(?:\.\d+)*[\.:]?\s*", "", clean_text).strip()
-                                first_word = (re.findall(r"\w+", body) or [""])[0].lower()
-                                is_question = ("?" in body) or (first_word in {
-                                    "what", "why", "how", "which", "where", "when", "who", "whom", "whose",
-                                    "name", "list", "identify", "explain", "describe", "define", "calculate",
-                                    "find", "give", "state", "show", "is", "are", "can", "do", "does", "did",
-                                    "true", "false", "suppose", "assume", "write", "differentiate", "compare",
-                                    "nêu", "hãy", "tính", "giải", "cho", "viết", "trình", "liệt", "tìm", "phân",
-                                    "so", "tại", "vì", "đâu", "ai", "gì", "khi", "như", "làm",
-                                })
-                                if not is_question:
-                                    break
-
-                            declared = _find_declared_identifiers(clean_text)
-                            refs = _find_referenced_dependencies(clean_text)
-                            source_context = lead_in_clean if has_lead_premise else None
-                            is_dependent_unresolved = False
-
-                            unresolved_refs = [
-                                ref for ref in refs
-                                if (ref[0] == "ident" and ref[1] not in declared)
-                                or (ref[0] == "qid")
-                            ]
-                            if unresolved_refs:
-                                remaining_refs = list(unresolved_refs)
-                                satisfying_contexts: list[str] = []
-
-                                if source_context:
-                                    lead_decl = _find_declared_identifiers(source_context)
-                                    remaining_refs = [
-                                        ref for ref in remaining_refs
-                                        if not (ref[0] == "ident" and ref[1] in lead_decl)
-                                    ]
-
-                                for prev_ex in reversed(chunk_exercises):
-                                    if not remaining_refs:
-                                        break
-                                    prev_txt = prev_ex["question"]
-                                    prev_decl = _find_declared_identifiers(prev_txt)
-                                    matched_any = False
-                                    new_remaining = []
-                                    for ref in remaining_refs:
-                                        if ref[0] == "ident" and ref[1] in prev_decl:
-                                            matched_any = True
-                                        elif ref[0] == "qid" and prev_ex["id"] == ref[1]:
-                                            matched_any = True
-                                        else:
-                                            new_remaining.append(ref)
-                                    if matched_any:
-                                        satisfying_contexts.append(prev_txt)
-                                        remaining_refs = new_remaining
-
-                                if satisfying_contexts:
-                                    ctx_combined = "\n".join(reversed(satisfying_contexts))
-                                    source_context = f"{source_context}\n{ctx_combined}".strip() if source_context else ctx_combined
-
-                                if remaining_refs:
-                                    is_dependent_unresolved = True
-
-                            ex_dict = {
-                                "id": ex_id,
-                                "question": clean_text,
-                                "source_context": source_context,
-                                "is_dependent_unresolved": is_dependent_unresolved,
-                                "source": {
-                                    "doc_id": doc_id,
-                                    "page_num": page_num,
-                                    "filename": filename,
-                                    "title": title,
-                                    "chunk_id": chunk_id,
-                                    "pdf_url": pdf_url,
-                                    "snippet": clean_text,
-                                    "source_context": source_context,
-                                },
-                            }
-                            chunk_exercises.append(ex_dict)
-                            exercises.append(ex_dict)
-
+                        is_cp = "checkpoint" in header
+                        if not is_cp:
+                            in_exercise_section = True
+                        _collect_section_exercises(content, is_checkpoint=is_cp, allow_dotted=not is_cp)
                     elif any(k in header for k in ("đáp án", "lời giải", "answer", "solution", "key")):
+                        in_exercise_section = False
                         ans_pattern = re.compile(
                             r"(?im)(?:^|\n)[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(?:(?:đáp\s+án\s+(?:cho\s+)?(?:bài|câu)?\s*|lời\s+giải\s+(?:cho\s+)?(?:bài|câu)?\s*|answers?\s*(?:to\s*)?(?:problem|exercise)?\s*|solutions?\s*(?:to\s*)?(?:problem|exercise)?\s*|bài\s+|câu\s+|exercise\s+|problem\s+)?(\d+(?:[.:]\d+)*)[\.:]?[ \t]*)"
                         )
-                        matches = list(ans_pattern.finditer(content))
-                        for j, m in enumerate(matches):
+                        matches_found = list(ans_pattern.finditer(content))
+                        for j, m in enumerate(matches_found):
                             start = m.start()
-                            end = matches[j + 1].start() if j + 1 < len(matches) else len(content)
+                            end = matches_found[j + 1].start() if j + 1 < len(matches_found) else len(content)
                             ans_id = m.group(1)
                             full_text = content[start:end].strip()
                             clean_ans = _strip_trailing_ornaments_and_footer(
@@ -921,15 +1041,20 @@ class LearningService:
                                         "snippet": clean_ans,
                                     },
                                 }
+                    else:
+                        in_exercise_section = False
             else:
+                if re.search(r"(?im)^[ \t]*(?:#+\s*)?(?:chương\s+\d+|phần\s+[ivx\d]+\s*[.:]\s*(?:hướng\s+dẫn|lý\s+thuyết|tóm\s+tắt)|hướng\s+dẫn|lý\s+thuyết|tóm\s+tắt)\b", text):
+                    in_exercise_section = False
                 if re.search(r"(?im)^[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(?:đáp\s+án|lời\s+giải|answer|solution)\b", text):
+                    in_exercise_section = False
                     ans_pattern = re.compile(
                         r"(?im)(?:^|\n)[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(?:(?:đáp\s+án\s+(?:cho\s+)?(?:bài|câu)?\s*|lời\s+giải\s+(?:cho\s+)?(?:bài|câu)?\s*|answers?\s*(?:to\s*)?(?:problem|exercise)?\s*|solutions?\s*(?:to\s*)?(?:problem|exercise)?\s*|bài\s+|câu\s+|exercise\s+|problem\s+)?(\d+(?:[.:]\d+)*)[\.:]?[ \t]*)"
                     )
-                    matches = list(ans_pattern.finditer(text))
-                    for j, m in enumerate(matches):
+                    matches_found = list(ans_pattern.finditer(text))
+                    for j, m in enumerate(matches_found):
                         start = m.start()
-                        end = matches[j + 1].start() if j + 1 < len(matches) else len(text)
+                        end = matches_found[j + 1].start() if j + 1 < len(matches_found) else len(text)
                         ans_id = m.group(1)
                         full_text = text[start:end].strip()
                         clean_ans = _strip_trailing_ornaments_and_footer(
@@ -951,92 +1076,8 @@ class LearningService:
                                     "snippet": clean_ans,
                                 },
                             }
-                elif re.search(r"(?im)^[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(?:bài|câu|exercise|problem)\s+\d+[\.:]", text):
-                    ex_pattern = re.compile(
-                        r"(?im)(?:^|\n)[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(?:bài|câu|exercise|problem)\s+(\d+(?:[.:]\d+)*)[\.:]?[ \t]*"
-                    )
-                    matches = list(ex_pattern.finditer(text))
-                    lead_in = text[:matches[0].start()].strip() if matches else ""
-                    lead_in_clean = _strip_trailing_ornaments_and_footer(lead_in, clean_title, recurring_footers)
-                    has_lead_premise = bool(
-                        _find_declared_identifiers(lead_in_clean)
-                        or re.search(r"(?i)\b(?:giả\s+sử|cho|xét|đoạn\s+(?:mã|lệnh|code)|chương\s+trình|hàm)\b", lead_in_clean)
-                    )
-
-                    for j, m in enumerate(matches):
-                        start = m.start()
-                        end = matches[j + 1].start() if j + 1 < len(matches) else len(text)
-                        ex_id = m.group(1)
-                        full_text = text[start:end].strip()
-                        clean_text = _strip_trailing_ornaments_and_footer(
-                            _clean_question_prefix(full_text),
-                            clean_title=clean_title,
-                            recurring_footers=recurring_footers,
-                        )
-                        declared = _find_declared_identifiers(clean_text)
-                        refs = _find_referenced_dependencies(clean_text)
-                        source_context = lead_in_clean if has_lead_premise else None
-                        is_dependent_unresolved = False
-
-                        unresolved_refs = [
-                            ref for ref in refs
-                            if (ref[0] == "ident" and ref[1] not in declared)
-                            or (ref[0] == "qid")
-                        ]
-                        if unresolved_refs:
-                            remaining_refs = list(unresolved_refs)
-                            satisfying_contexts: list[str] = []
-
-                            if source_context:
-                                lead_decl = _find_declared_identifiers(source_context)
-                                remaining_refs = [
-                                    ref for ref in remaining_refs
-                                    if not (ref[0] == "ident" and ref[1] in lead_decl)
-                                ]
-
-                            for prev_ex in reversed(chunk_exercises):
-                                if not remaining_refs:
-                                    break
-                                prev_txt = prev_ex["question"]
-                                prev_decl = _find_declared_identifiers(prev_txt)
-                                matched_any = False
-                                new_remaining = []
-                                for ref in remaining_refs:
-                                    if ref[0] == "ident" and ref[1] in prev_decl:
-                                        matched_any = True
-                                    elif ref[0] == "qid" and prev_ex["id"] == ref[1]:
-                                        matched_any = True
-                                    else:
-                                        new_remaining.append(ref)
-                                if matched_any:
-                                    satisfying_contexts.append(prev_txt)
-                                    remaining_refs = new_remaining
-
-                            if satisfying_contexts:
-                                ctx_combined = "\n".join(reversed(satisfying_contexts))
-                                source_context = f"{source_context}\n{ctx_combined}".strip() if source_context else ctx_combined
-
-                            if remaining_refs:
-                                is_dependent_unresolved = True
-
-                        ex_dict = {
-                            "id": ex_id,
-                            "question": clean_text,
-                            "source_context": source_context,
-                            "is_dependent_unresolved": is_dependent_unresolved,
-                            "source": {
-                                "doc_id": doc_id,
-                                "page_num": page_num,
-                                "filename": filename,
-                                "title": title,
-                                "chunk_id": chunk_id,
-                                "pdf_url": pdf_url,
-                                "snippet": clean_text,
-                                "source_context": source_context,
-                            },
-                        }
-                        chunk_exercises.append(ex_dict)
-                        exercises.append(ex_dict)
+                elif in_exercise_section or re.search(r"(?im)^[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(?:bài|câu|exercise|problem)\s+\d+[\.:]", text):
+                    _collect_section_exercises(text, is_checkpoint=False, allow_dotted=in_exercise_section)
 
         return exercises, answers, ans_counts
 

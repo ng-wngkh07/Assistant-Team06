@@ -68,21 +68,48 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     async function loadBooks() {
+        if (!book) return;
+        const studyAccount = typeof window !== "undefined" ? window.StudyAccount : null;
+        if (studyAccount?.canAccessProtectedApis && !studyAccount.canAccessProtectedApis()) {
+            return;
+        }
         try {
             const response = await fetch("/api/documents");
+            if (response.status === 401) return;
             if (!response.ok) throw new Error("Không tải được danh sách tài liệu.");
             const data = await response.json();
+            if (typeof book.querySelectorAll === "function") {
+                for (const opt of book.querySelectorAll("option[data-doc-option='1']")) {
+                    opt.remove?.();
+                }
+            }
             for (const doc of data.documents || []) {
                 const option = document.createElement("option");
                 option.value = doc.id;
                 option.textContent = doc.clean_title || doc.filename;
+                option.setAttribute?.("data-doc-option", "1");
                 book.appendChild(option);
             }
         } catch (error) {
             if (revision === 0) status.textContent = `${error.message} Bạn vẫn có thể thử tìm trong toàn bộ thư viện.`;
         }
     }
-    loadBooks();
+    if (typeof window !== "undefined" && window.StudyAccount?.runWhenAuthorized) {
+        window.StudyAccount.runWhenAuthorized(loadBooks);
+    } else if (typeof window !== "undefined" && window.StudyAccount?.whenReady) {
+        window.StudyAccount.whenReady().then((authState) => {
+            if (!authState?.required || authState.account) loadBooks();
+        });
+    } else {
+        loadBooks();
+    }
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+        window.addEventListener("study:account-changed", (ev) => {
+            const authCfg = window.StudyAccount?.getConfig?.();
+            if (authCfg?.required && !ev?.detail?.account) return;
+            loadBooks().catch(() => {});
+        });
+    }
 
     function invalidateSearch() {
         revision += 1;

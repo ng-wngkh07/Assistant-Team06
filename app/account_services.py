@@ -492,18 +492,15 @@ def make_material_manager():
                     for alias in aliases:
                         self._raw_files._remember(alias, file_bytes)
 
-        def store_extracted_document(
+        def persist_material_record(
             self,
-            extracted_result,
-            ingestion_info: Optional[Dict[str, Any]] = None,
-            **kwargs,
+            record: Dict[str, Any],
+            raw_bytes: Optional[bytes] = None,
         ) -> Dict[str, Any]:
-            """Store extracted document and persist only this record to database."""
-            record = self.build_extracted_document_record(extracted_result, ingestion_info)
+            """Persist an already-built material record (and optional CAS original) to uploads.db."""
             mid = record["id"]
-            raw_b = getattr(extracted_result, "_raw_bytes", None)
-            if raw_b is not None:
-                self.cache_raw_file(extracted_result.filename, raw_b, material_id=mid, _record=record)
+            if raw_bytes is not None:
+                self.cache_raw_file(record.get("filename"), raw_bytes, material_id=mid, _record=record)
             else:
                 self.check_upload_quota(None, material_id=mid)
                 with self._lock, self.connect() as db:
@@ -516,6 +513,17 @@ def make_material_manager():
             with self._lock:
                 self._materials[mid] = record
             return record
+
+        def store_extracted_document(
+            self,
+            extracted_result,
+            ingestion_info: Optional[Dict[str, Any]] = None,
+            **kwargs,
+        ) -> Dict[str, Any]:
+            """Store extracted document and persist only this record to database."""
+            record = self.build_extracted_document_record(extracted_result, ingestion_info)
+            raw_b = getattr(extracted_result, "_raw_bytes", None)
+            return self.persist_material_record(record, raw_bytes=raw_b)
 
         def verify_cas_integrity(self, material_id: str) -> None:
             """Ensure original CAS file exists on disk and matches checksum."""

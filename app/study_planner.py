@@ -768,6 +768,22 @@ def delete_task(task_id: int, db_path: Optional[Path | str] = None) -> bool:
 # ==============================================================================
 
 
+def _sync_practice_notes(notes: str, practice_id: Optional[str]) -> str:
+    """Keep session notes aligned once a persistent practice set is attached."""
+    raw = str(notes or "")
+    p_id = str(practice_id or "").strip()
+    if not p_id:
+        return raw
+    cleaned = re.sub(r"\s*\(Chưa có bài tập PDF đính kèm\)", "", raw).strip()
+    cleaned = cleaned.rstrip(" \t\r\n|").strip()
+    pdf_path = f"/api/learning/export-pdf/{p_id}"
+    if "/api/learning/export-pdf/" in cleaned:
+        return re.sub(r"/api/learning/export-pdf/[^\s|]+", pdf_path, cleaned)
+    if "/api/timetable/worksheets/" in cleaned:
+        return cleaned
+    return f"{cleaned} | Bài tập đính kèm: {pdf_path}" if cleaned else f"Bài tập đính kèm: {pdf_path}"
+
+
 def _enrich_session(row_dict: Dict[str, Any]) -> Dict[str, Any]:
     d = dict(row_dict)
     w = int(d.get("weekday") or 1)
@@ -799,6 +815,8 @@ def _enrich_session(row_dict: Dict[str, Any]) -> Dict[str, Any]:
 
     if p_id:
         d["pdf_url"] = f"/api/learning/export-pdf/{p_id}"
+        if d.get("notes"):
+            d["notes"] = _sync_practice_notes(d["notes"], p_id)
     elif ws_id:
         d["pdf_url"] = f"/api/timetable/worksheets/{ws_id}.pdf"
     else:
@@ -868,12 +886,18 @@ def update_session_practice(
         cols = {r[1] for r in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
         updates = []
         params = []
+        p_id_clean = str(practice_id or "").strip()
         if "practice_id" in cols:
             updates.append("practice_id = ?")
-            params.append(str(practice_id or "").strip())
+            params.append(p_id_clean)
         if "exercise_status" in cols:
             updates.append("exercise_status = ?")
             params.append(str(exercise_status or "").strip())
+        if "notes" in cols and p_id_clean:
+            row = conn.execute("SELECT notes FROM study_sessions WHERE id = ?", (int(session_id),)).fetchone()
+            if row is not None:
+                updates.append("notes = ?")
+                params.append(_sync_practice_notes(row[0], p_id_clean))
         if not updates:
             return False
         params.append(int(session_id))
@@ -1176,7 +1200,7 @@ def _slot_preference_bonus(start_min: int, end_min: int, preferred_periods: List
 def generate_study_plan(
     reschedule_only: bool = False,
     ai_notes_override: Optional[str] = None,
-    include_courses: bool = False,
+    include_courses: Optional[bool] = None,
     course_items: Optional[List[Dict[str, Any]]] = None,
     session_duration: Optional[int] = None,
     db_path: Optional[Path | str] = None,
@@ -1320,8 +1344,34 @@ def generate_study_plan(
     unplaced_courses: List[str] = []
     days_without_free_slot: List[str] = []
 
+    lesson_rows: List[Dict[str, Any]] = []
+    try:
+        with timetable_store.get_connection(db_path=db_path) as conn:
+            tbl_ok = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='weekly_lessons'"
+            ).fetchone()
+            if tbl_ok:
+                lesson_rows = [
+                    dict(r)
+                    for r in conn.execute("SELECT * FROM weekly_lessons ORDER BY id ASC").fetchall()
+                ]
+    except Exception:
+        lesson_rows = []
+
+    lessons_by_course_all_cf: Dict[str, List[Dict[str, Any]]] = {}
+    for lr in lesson_rows:
+        ck = (lr.get("course") or "").strip().casefold()
+        if ck:
+            lessons_by_course_all_cf.setdefault(ck, []).append(lr)
+
+    effective_include_courses = (
+        bool(include_courses)
+        if include_courses is not None
+        else bool(not schedulable_tasks and not reschedule_only and (confirmed_classes or lesson_rows))
+    )
+
     # Optional course/weekly-lesson scheduling (unified core)
-    if include_courses or course_items is not None:
+    if effective_include_courses or course_items is not None:
         ordered_courses: List[str] = []
         lessons_by_course: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -1331,26 +1381,35 @@ def generate_study_plan(
                 if c and c not in ordered_courses:
                     ordered_courses.append(c)
                 lessons_by_course.setdefault(c, []).append(item)
+        elif confirmed_classes and include_courses is None:
+            # Ground auto free-time proposals strictly in current-semester enrolled courses.
+            enrolled_cf: Dict[str, str] = {}
+            for cls in confirmed_classes:
+                c = (cls.get("course") or "").strip()
+                if c and c.casefold() not in enrolled_cf:
+                    enrolled_cf[c.casefold()] = c
+                    ordered_courses.append(c)
+                    lessons_by_course[c] = list(lessons_by_course_all_cf.get(c.casefold(), []))
         else:
-            with timetable_store.get_connection(db_path=db_path) as conn:
-                lesson_rows = conn.execute(
-                    "SELECT * FROM weekly_lessons ORDER BY id ASC"
-                ).fetchall()
-                for r in lesson_rows:
-                    item = dict(r)
-                    c = (item.get("course") or "").strip()
-                    if c and c not in ordered_courses:
-                        ordered_courses.append(c)
-                    lessons_by_course.setdefault(c, []).append(item)
+            seen_cf: Dict[str, str] = {}
+            for item in lesson_rows:
+                c = (item.get("course") or "").strip()
+                if c:
+                    canonical = seen_cf.setdefault(c.casefold(), c)
+                    if canonical not in ordered_courses:
+                        ordered_courses.append(canonical)
+                    lessons_by_course.setdefault(canonical, []).append(item)
 
             for cls in confirmed_classes:
                 c = (cls.get("course") or "").strip()
-                if c and c not in ordered_courses:
+                if c and c.casefold() not in seen_cf:
+                    seen_cf[c.casefold()] = c
                     ordered_courses.append(c)
 
             for tsk in all_tasks:
                 c = (tsk.get("course") or "").strip()
-                if c and c not in ordered_courses:
+                if c and c.casefold() not in seen_cf:
+                    seen_cf[c.casefold()] = c
                     ordered_courses.append(c)
 
         if not ordered_courses:
@@ -1698,9 +1757,18 @@ def generate_study_plan(
                     break
 
                 _, _, _, chosen_w, chosen_s_idx, alloc_s, alloc_e, alloc_dur = best_candidate
+                t_lessons = lessons_by_course_all_cf.get((task.get("course") or "").strip().casefold(), [])
+                matched_les = next((l for l in t_lessons if (l.get("practice_id") or "").strip()), t_lessons[0] if t_lessons else None)
+                t_lesson_id = matched_les.get("id") if matched_les else None
+                t_practice_id = (matched_les.get("practice_id") or "").strip() or None if matched_les else None
+                t_topic = (matched_les.get("classified_topic") if matched_les else None) or task.get("classified_topic") or task["course"]
+                t_note = f"Hạn nộp: {task['deadline_display']}"
+                if t_practice_id:
+                    t_note += f" | Bài tập đính kèm: /api/learning/export-pdf/{t_practice_id}"
                 proposed_sessions.append({
                     "id": None,
                     "task_id": tid,
+                    "weekly_lesson_id": t_lesson_id,
                     "title": f"Tự học: {task['title']}",
                     "course": task["course"],
                     "weekday": chosen_w,
@@ -1713,11 +1781,11 @@ def generate_study_plan(
                     "locked": False,
                     "session_index": 1,
                     "total_sessions": 1,
-                    "classified_topic": task.get("classified_topic") or task["course"],
+                    "classified_topic": t_topic,
                     "worksheet_id": None,
-                    "practice_id": None,
-                    "exercise_status": "not_generated",
-                    "notes": f"Hạn nộp: {task['deadline_display']}",
+                    "practice_id": t_practice_id,
+                    "exercise_status": "available" if t_practice_id else "not_generated",
+                    "notes": t_note,
                 })
 
                 needed_min -= alloc_dur
@@ -2172,6 +2240,24 @@ def confirm_study_plan(
     if str(draft.get("status") or "") != "draft":
         raise ValueError("Bản nháp kế hoạch học tập không còn hợp lệ (đã được xác nhận hoặc hủy trước đó).")
 
+    draft_sessions = list(draft.get("sessions") or [])
+    draft_by_key: Dict[Tuple[str, int, str], Dict[str, Any]] = {}
+    for ds in draft_sessions:
+        dk = ((ds.get("course") or "").strip().casefold(), int(ds.get("weekday") or 0), str(ds.get("start_time") or "").strip())
+        draft_by_key.setdefault(dk, ds)
+
+    lessons_by_course_cf: Dict[str, Dict[str, Any]] = {}
+    try:
+        with timetable_store.get_connection(db_path=db_path) as conn:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='weekly_lessons'").fetchone():
+                for lr in conn.execute("SELECT * FROM weekly_lessons ORDER BY id ASC").fetchall():
+                    ld = dict(lr)
+                    ck = (ld.get("course") or "").strip().casefold()
+                    if ck and (ck not in lessons_by_course_cf or (ld.get("practice_id") or "").strip()):
+                        lessons_by_course_cf[ck] = ld
+    except Exception:
+        pass
+
     sessions_to_save = reviewed_sessions if reviewed_sessions is not None else draft["sessions"]
     normalized_new: List[Dict[str, Any]] = []
     allowed_draft_sources = ("ai_assistant", "ai_auto_90m", "ai_auto_courses")
@@ -2191,12 +2277,47 @@ def confirm_study_plan(
         if e_min <= s_min:
             raise ValueError(f"Dòng {idx + 1} ({title}): Giờ kết thúc ({et}) phải sau giờ bắt đầu ({st})")
 
-        raw_source = str(s.get("source") or "ai_assistant").strip()
+        draft_match = draft_by_key.get((course.casefold(), w, st))
+        if draft_match is None and idx < len(draft_sessions) and (draft_sessions[idx].get("course") or "").strip().casefold() == course.casefold():
+            draft_match = draft_sessions[idx]
+        lesson_fallback = lessons_by_course_cf.get(course.casefold())
+
+        raw_source = str(s.get("source") or "").strip()
+        if raw_source in ("", "ai_assistant") and draft_match and draft_match.get("source") in allowed_draft_sources:
+            raw_source = str(draft_match["source"])
         safe_source = raw_source if raw_source in allowed_draft_sources else "ai_assistant"
+
+        resolved_practice_id = str(
+            s.get("practice_id")
+            or (draft_match or {}).get("practice_id")
+            or (lesson_fallback or {}).get("practice_id")
+            or ""
+        ).strip()
+        resolved_lesson_id = (
+            s.get("weekly_lesson_id")
+            if s.get("weekly_lesson_id") is not None
+            else (draft_match or {}).get("weekly_lesson_id")
+        )
+        if resolved_lesson_id is None and lesson_fallback is not None:
+            resolved_lesson_id = lesson_fallback.get("id")
+        resolved_topic = str(
+            s.get("classified_topic")
+            or (draft_match or {}).get("classified_topic")
+            or (lesson_fallback or {}).get("classified_topic")
+            or ""
+        ).strip()
+        resolved_ws_id = str(s.get("worksheet_id") or (draft_match or {}).get("worksheet_id") or "").strip()
+        resolved_ex_status = str(
+            s.get("exercise_status")
+            or (draft_match or {}).get("exercise_status")
+            or ("available" if (resolved_practice_id or resolved_ws_id) else "not_generated")
+        ).strip()
+        if resolved_practice_id and resolved_ex_status in ("", "not_generated"):
+            resolved_ex_status = "available"
 
         normalized_new.append({
             "task_id": s.get("task_id"),
-            "weekly_lesson_id": s.get("weekly_lesson_id"),
+            "weekly_lesson_id": resolved_lesson_id,
             "title": title,
             "course": course,
             "weekday": w,
@@ -2209,11 +2330,11 @@ def confirm_study_plan(
             "locked": 1 if s.get("locked") else 0,
             "session_index": int(s.get("session_index") or 1),
             "total_sessions": int(s.get("total_sessions") or 1),
-            "notes": str(s.get("notes") or ""),
-            "classified_topic": str(s.get("classified_topic") or ""),
-            "worksheet_id": str(s.get("worksheet_id") or ""),
-            "practice_id": str(s.get("practice_id") or ""),
-            "exercise_status": str(s.get("exercise_status") or ""),
+            "notes": str(s.get("notes") or (draft_match or {}).get("notes") or ""),
+            "classified_topic": resolved_topic,
+            "worksheet_id": resolved_ws_id,
+            "practice_id": resolved_practice_id,
+            "exercise_status": resolved_ex_status,
             "_is_preserved": False,
         })
 
@@ -2653,6 +2774,8 @@ def get_combined_weekly_schedule(db_path: Optional[Path | str] = None) -> Dict[s
             "course": s["course"],
             "classified_topic": s.get("classified_topic") or "",
             "worksheet_id": s.get("worksheet_id") or "",
+            "practice_id": s.get("practice_id") or None,
+            "exercise_status": s.get("exercise_status") or ("available" if (s.get("practice_id") or s.get("worksheet_id")) else "not_generated"),
             "pdf_url": s.get("pdf_url"),
             "priority": s.get("priority", "medium"),
             "priority_label": s.get("priority_label", "Trung bình"),
@@ -2702,7 +2825,11 @@ def get_full_planner_state(db_path: Optional[Path | str] = None) -> Dict[str, An
     tasks = get_tasks(db_path=db_path)
     sessions = get_study_sessions(db_path=db_path)
     combined = get_combined_weekly_schedule(db_path=db_path)
-    courses = sorted({c["course"] for c in confirmed_classes if c.get("course")} | {t["course"] for t in tasks if t.get("course")})
+    courses = (
+        sorted({c["course"] for c in confirmed_classes if c.get("course")})
+        if confirmed_classes
+        else sorted({t["course"] for t in tasks if t.get("course")})
+    )
     return {
         "confirmed_classes": confirmed_classes,
         "routines": routines,

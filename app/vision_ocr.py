@@ -359,19 +359,41 @@ class VisionOCRManager:
                                 gen_kwargs["repetition_context_size"] = 64
                         except (TypeError, ValueError):
                             pass
-                        res = native_client.generate_from_image(
-                            image_bytes,
-                            **gen_kwargs,
-                        )
+                        def _is_native_truncation_exc(exc: BaseException) -> bool:
+                            msg = str(exc).lower()
+                            return (
+                                "giới hạn độ dài token" in msg
+                                or "cắt cụt" in msg
+                                or "truncat" in msg
+                                or "finish_reason='length'" in msg
+                            )
+
+                        try:
+                            res = native_client.generate_from_image(
+                                image_bytes,
+                                **gen_kwargs,
+                            )
+                        except ValueError as err:
+                            if gen_kwargs.get("max_tokens", 2048) < 4096 and _is_native_truncation_exc(err):
+                                res = {"finish_reason": "length", "is_truncated": True}
+                            else:
+                                raise
                         if (res.get("finish_reason") == "length" or res.get("is_truncated")) and gen_kwargs.get("max_tokens", 2048) < 4096:
                             if cancel_event is not None and cancel_event.is_set():
                                 raise IndexingCancelledError("Đã hủy tác vụ OCR theo yêu cầu dừng.")
                             retry_kwargs = dict(gen_kwargs)
                             retry_kwargs["max_tokens"] = 4096
-                            res = native_client.generate_from_image(
-                                image_bytes,
-                                **retry_kwargs,
-                            )
+                            try:
+                                res = native_client.generate_from_image(
+                                    image_bytes,
+                                    **retry_kwargs,
+                                )
+                            except ValueError as err:
+                                if _is_native_truncation_exc(err):
+                                    raise RuntimeError(
+                                        "Phản hồi của mô hình chạm giới hạn độ dài token (length); kết quả bị cắt cụt."
+                                    ) from err
+                                raise
                         raw_text = res.get("text", "").strip()
                         if res.get("finish_reason") == "length" or res.get("is_truncated"):
                             raise RuntimeError("Phản hồi của mô hình chạm giới hạn độ dài token (length); kết quả bị cắt cụt.")

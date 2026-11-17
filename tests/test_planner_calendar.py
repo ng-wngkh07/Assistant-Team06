@@ -30,3 +30,39 @@ def test_deadline_date_required_and_completed_tasks_excluded():
     text=generate_ics([], '2026-11-09','2026-12-01',deadlines=[task,{**task,'title':'Done','completed':True}],reminder_minutes=0)
     assert 'VALARM' not in text and '[Deadline] Todo' in text and 'Done' not in text
     assert max(len(line.encode()) for line in text.split('\r\n')) <=75
+
+
+def test_ics_rfc5545_apple_google_calendar_compliance():
+    # 1. Deadlines must include valid DTEND after DTSTART for Apple/Google Calendar compatibility
+    task = {'id': 9, 'title': 'Nop bai tap', 'course': 'Dai so', 'deadline_date': '2026-11-12', 'deadline_time': '17:00'}
+    deadline_ics = generate_ics([], '2026-11-09', '2026-12-01', deadlines=[task], reminder_minutes=30)
+    unfolded_deadline = deadline_ics.replace('\r\n ', '')
+    assert 'DTSTART;TZID=Asia/Ho_Chi_Minh:20261112T170000' in unfolded_deadline
+    assert 'DTEND;TZID=Asia/Ho_Chi_Minh:20261112T171500' in unfolded_deadline
+
+    # 2. Blank room must omit empty LOCATION:, and relative PDF URL must only emit URL/ATTACH when absolute
+    session = {
+        'uid': 'study:9',
+        'course': '[Tự học - Đại số tuyến tính] Ôn tập Không gian vector',
+        'weekday': 2,
+        'event_date': '2026-11-10',
+        'start_time': '19:30',
+        'end_time': '21:00',
+        'room': '',
+        'pdf_url': '/api/learning/export-pdf/prac_123',
+    }
+    rel_only_ics = generate_ics([session], '2026-11-09', '2026-12-01').replace('\r\n ', '')
+    assert 'LOCATION:\r\n' not in rel_only_ics
+    assert 'URL:/api/' not in rel_only_ics
+    assert 'ATTACH;FMTTYPE=application/pdf:/api/' not in rel_only_ics
+    assert '/api/learning/export-pdf/prac_123' in rel_only_ics
+
+    abs_ics = generate_ics(
+        [session], '2026-11-09', '2026-12-01', base_url='https://study.example'
+    ).replace('\r\n ', '')
+    assert 'URL:https://study.example/api/learning/export-pdf/prac_123' in abs_ics
+    assert 'ATTACH;FMTTYPE=application/pdf:https://study.example/api/learning/export-pdf/prac_123' in abs_ics
+    assert 'LOCATION:\r\n' not in abs_ics
+    assert max(len(line.encode('utf-8')) for line in generate_ics(
+        [session], '2026-11-09', '2026-12-01', deadlines=[task], base_url='https://study.example'
+    ).split('\r\n')) <= 75

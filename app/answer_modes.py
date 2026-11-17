@@ -73,9 +73,14 @@ def validate_compare_mode(
         return False
 
     if compare_concepts:
+        from app.rag_evidence_validator import _normalize_loanword_terms_cf
+
         c1, c2 = compare_concepts
-        header_str = " ".join(header_cells).casefold()
-        if c1.casefold() not in header_str or c2.casefold() not in header_str:
+        header_str = _normalize_loanword_terms_cf(" ".join(header_cells))
+        if (
+            _normalize_loanword_terms_cf(c1) not in header_str
+            or _normalize_loanword_terms_cf(c2) not in header_str
+        ):
             return False
     else:
         if not header_cells[1] or not header_cells[2]:

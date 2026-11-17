@@ -31,6 +31,11 @@
   let isAuthSubmitting = false;
   let isAuthImeComposing = false;
   let authKeyboardBound = false;
+  let isLoggingOut = false;
+  let readyResolve = null;
+  const readyPromise = new Promise((resolve) => {
+    readyResolve = resolve;
+  });
 
   function isOverlayElementOpen(el) {
     if (!el) return false;
@@ -151,7 +156,16 @@
     );
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.detail || `HTTP ${res.status}`);
+      let msg = `HTTP ${res.status}`;
+      if (typeof data.detail === 'string' && data.detail.trim()) {
+        msg = data.detail;
+      } else if (Array.isArray(data.detail) && data.detail.length) {
+        msg = data.detail
+          .map((item) => (item && typeof item === 'object' ? (item.msg || item.message) : String(item || '')))
+          .filter(Boolean)
+          .join('; ') || msg;
+      }
+      throw new Error(msg);
     }
     return data;
   }
@@ -309,6 +323,16 @@
     if (regBtn) {
       regBtn.hidden = !authConfig.registration_allowed;
     }
+    const titleEl = document.getElementById('account-auth-title');
+    if (titleEl) {
+      titleEl.textContent = authConfig.registration_allowed
+        ? 'Đăng nhập hoặc tạo tài khoản'
+        : 'Đăng nhập';
+    }
+    const triggerBtn = document.getElementById('btn-account-trigger');
+    if (triggerBtn && !currentAccount) {
+      triggerBtn.title = authConfig.registration_allowed ? 'Đăng nhập hoặc tạo tài khoản' : 'Đăng nhập';
+    }
   }
 
   function renderAccountHeaderTrigger() {
@@ -391,6 +415,20 @@
     }
   }
 
+  function canAccessProtectedApis() {
+    return !isLoggingOut && (!authConfig.required || Boolean(currentAccount));
+  }
+
+  function runWhenAuthorized(fn) {
+    if (typeof fn !== 'function') {
+      return readyPromise.then(() => canAccessProtectedApis());
+    }
+    return readyPromise.then(() => {
+      if (!canAccessProtectedApis()) return false;
+      return Promise.resolve(fn()).then(() => true);
+    });
+  }
+
   function reloadAccountScopedState(account) {
     const scope = account?.id ? account.id : 'local';
     const metaEl = document.querySelector('meta[name="study-account-scope"]');
@@ -399,7 +437,12 @@
     }
     window.dispatchEvent(
       new CustomEvent('study:account-changed', {
-        detail: { account: account || null, scope },
+        detail: {
+          account: account || null,
+          scope,
+          required: Boolean(authConfig.required),
+          authorized: !authConfig.required || Boolean(account),
+        },
       })
     );
   }
@@ -474,6 +517,8 @@
   }
 
   async function logout() {
+    if (isLoggingOut) return;
+    isLoggingOut = true;
     const errorEl = document.getElementById('account-popover-error') || document.getElementById('account-auth-error');
     if (errorEl) {
       errorEl.textContent = '';
@@ -482,6 +527,7 @@
     try {
       await apiJson('/api/account/logout', { method: 'POST' });
     } catch (err) {
+      isLoggingOut = false;
       // Failed logout: NEVER clear identity or reload! Show readable error and retain state.
       if (errorEl) {
         errorEl.textContent = err.message || 'Đăng xuất không thành công.';
@@ -694,6 +740,14 @@
     }
     syncRegistrationButtonState();
     renderAccountHeaderTrigger();
+    if (typeof readyResolve === 'function') {
+      readyResolve({
+        account: currentAccount,
+        required: authConfig.required,
+        registration_allowed: authConfig.registration_allowed,
+      });
+      readyResolve = null;
+    }
     if (currentAccount) {
       await notifyFeatureEnter(activeFeature, true);
     }
@@ -702,6 +756,9 @@
   window.StudyAccount = {
     getAccount: () => currentAccount,
     getConfig: () => Object.assign({}, authConfig),
+    canAccessProtectedApis,
+    runWhenAuthorized,
+    whenReady: () => readyPromise,
     openAuthModal,
     closeAuthModal,
     reloadState: () => reloadAccountScopedState(currentAccount),

@@ -301,3 +301,26 @@ def test_conflicting_attachment_and_document_id_is_rejected(lookup, monkeypatch)
     with pytest.raises(Exception) as caught:
         server.requested_source_scope(req)
     assert getattr(caught.value, 'status_code', None) == 400
+
+
+def test_document_by_filename_matches_nfc_nfd_equivalents(tmp_path):
+    import unicodedata
+    src = tmp_path / 'src'
+    src.mkdir()
+    nfd_name = unicodedata.normalize('NFD', 'Chương 1_Đại số.pdf')
+    nfc_name = unicodedata.normalize('NFC', 'Chương 1_Đại số.pdf')
+    assert nfd_name != nfc_name
+    (src / nfd_name).write_bytes(b'%PDF-1.4\nfixture\n%%EOF')
+    db_path = tmp_path / 'knowledge.db'
+    with sqlite3.connect(db_path) as db:
+        db.executescript('''
+            CREATE TABLE documents(id INTEGER PRIMARY KEY, filename TEXT, clean_title TEXT, total_pages INTEGER, status TEXT);
+            CREATE TABLE chunks(id INTEGER PRIMARY KEY, doc_id INTEGER, book_title TEXT, filename TEXT, page_num INTEGER, chunk_index INTEGER, text TEXT, embedding BLOB);
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(text);
+        ''')
+        db.execute('INSERT INTO documents VALUES(1,?,?,10,"indexed")', (nfd_name, 'Đại số'))
+        db.execute('INSERT INTO chunks VALUES(1,1,"Đại số",?,1,0,"Không gian vectơ",NULL)', (nfd_name,))
+        db.execute('INSERT INTO chunks_fts(rowid,text) VALUES(1,"Không gian vectơ")')
+    dl = DocumentLookup(db_path, src)
+    assert dl.document_by_filename(nfc_name) is not None
+    assert dl.document_by_filename(nfc_name)['id'] == 1

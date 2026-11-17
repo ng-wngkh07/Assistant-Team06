@@ -148,3 +148,24 @@ def test_local_legacy_remains_and_remote_is_closed(tmp_path,monkeypatch):
     with TestClient(server.app,client=('198.51.100.5',1234),base_url='https://study.example') as remote:
         assert remote.get('/api/timetable').status_code==401
         assert remote.post('/api/account/register',headers={'Origin':'https://study.example'},json={'username':'alpha','password':'private-example-123'}).status_code==403
+
+
+def test_repeated_valid_logins_not_throttled_and_lax_cookie(clients):
+    a, _ = clients
+    register(a, 'alpha')
+    for _ in range(7):
+        res = a.post('/api/account/login', json={'username': 'alpha', 'password': 'private-example-123'})
+        assert res.status_code == 200, res.text
+        cookie_hdr = res.headers.get('set-cookie', '').lower()
+        assert 'samesite=lax' in cookie_hdr
+        assert 'httponly' in cookie_hdr
+
+    # Four failed attempts followed by a valid login clear the failure window
+    for _ in range(4):
+        assert a.post('/api/account/login', json={'username': 'alpha', 'password': 'wrong-example-123'}).status_code == 401
+    assert a.post('/api/account/login', json={'username': 'alpha', 'password': 'private-example-123'}).status_code == 200
+
+    # Five failed attempts still lock the 6th attempt
+    for _ in range(5):
+        assert a.post('/api/account/login', json={'username': 'alpha', 'password': 'wrong-example-123'}).status_code == 401
+    assert a.post('/api/account/login', json={'username': 'alpha', 'password': 'wrong-example-123'}).status_code == 429

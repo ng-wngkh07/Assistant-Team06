@@ -461,3 +461,56 @@ def test_export_bundle_zip_and_pdf_endpoint(tmp_path, monkeypatch):
             unfolded_ics = ics_text.replace("\r\n ", "").replace("\n ", "")
             assert "ATTACH;FMTTYPE=application/pdf:" in unfolded_ics
             assert "/api/learning/export-pdf/" in unfolded_ics
+
+
+def test_exercise_pdf_export_multi_page_20_questions_no_blank_pages():
+    long_questions = [
+        {
+            "id": f"q{i}",
+            "question": (
+                f"Cho ma trận vuông A cấp 3 và hệ phương trình tuyến tính thuần nhất liên quan đến câu {i}. "
+                "Xác định tính khả nghịch, hạng ma trận và không gian nghiệm khi tham số thay đổi."
+            ),
+            "choices": [
+                {"label": "A", "text": f"Phương án A cho câu {i}: định thức khác 0 nên khả nghịch"},
+                {"label": "B", "text": f"Phương án B cho câu {i}: hạng bằng 2 nên có vô số nghiệm"},
+                {"label": "C", "text": f"Phương án C cho câu {i}: luôn vô nghiệm mọi giá trị"},
+                {"label": "D", "text": f"Phương án D cho câu {i}: không xác định được hạng"},
+            ],
+            "answer": "A",
+            "answer_status": "source_document",
+            "explanation": f"Giải thích chi tiết cho câu {i}: xét định thức và bậc thang theo đúng định nghĩa nguồn.",
+            "source": {
+                "title": "Đại số tuyến tính",
+                "page_num": i,
+                "snippet": f"Trích đoạn nguồn trang {i}: Ma trận vuông A khả nghịch khi và chỉ khi det(A) != 0.",
+            },
+        }
+        for i in range(1, 21)
+    ]
+
+    pdf_bytes = generate_exercise_worksheet_pdf(
+        topic="Ma trận và không gian vector",
+        course="Đại số tuyến tính",
+        difficulty="medium",
+        questions=long_questions,
+    )
+    assert pdf_bytes.startswith(b"%PDF-")
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        assert len(doc) >= 4
+        page_texts = [p.get_text("text") for p in doc]
+        # No page may be blank (footer-only bug left ~70 chars on overflowing page)
+        assert all(len(txt.strip()) > 150 for txt in page_texts), [len(t.strip()) for t in page_texts]
+
+        full_text = "\n".join(page_texts)
+        for i in range(1, 21):
+            assert f"Câu {i}." in full_text
+            assert f"Giải thích chi tiết cho câu {i}" in full_text
+
+        answer_pages = [txt for txt in page_texts if "PHẦN II" in txt or "Giải thích chi tiết cho câu" in txt]
+        assert len(answer_pages) >= 2
+        assert all("Đáp án đối chiếu cuối trang" in txt for txt in answer_pages)
+    finally:
+        doc.close()

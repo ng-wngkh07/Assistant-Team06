@@ -582,3 +582,58 @@ test('onboarding-tour.js: inactive tour is hidden/noninteractive; finish and Esc
   assert.equal(overlay.style.display, 'none');
   assert.equal(overlay.getAttribute('aria-hidden'), 'true');
 });
+
+test('accounts.js formats 422 array errors cleanly and adjusts heading when registration is closed', async () => {
+  const { document, elements } = createDOM();
+  const mockFetch = async (url) => {
+    if (url === '/api/account/status') {
+      return {
+        ok: true,
+        json: async () => ({ account: null, required: true, registration_allowed: false }),
+      };
+    }
+    if (url === '/api/account/login') {
+      return {
+        ok: false,
+        status: 422,
+        json: async () => ({ detail: [{ loc: ['body', 'username'], msg: 'Tên tài khoản chứa ký tự không hợp lệ' }] }),
+      };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+
+  const windowObj = {
+    addEventListener: () => {},
+    dispatchEvent: () => {},
+    location: { reload: () => {} },
+    CustomEvent: class { constructor(t, d) { this.type = t; this.detail = d?.detail; } },
+  };
+  const trigger = document.createElement('button');
+  trigger.id = 'btn-account-trigger';
+
+  const script = fs.readFileSync(path.join(__dirname, '../static/accounts.js'), 'utf8');
+  vm.runInNewContext(script, {
+    document,
+    window: windowObj,
+    fetch: mockFetch,
+    console,
+    Promise,
+    Object,
+    Event: class { constructor(t) { this.type = t; } },
+    CustomEvent: windowObj.CustomEvent,
+  });
+
+  await new Promise((r) => setTimeout(r, 15));
+  windowObj.StudyAccount.openAuthModal();
+  const titleEl = elements.get('account-auth-title');
+  assert.equal(titleEl.textContent, 'Đăng nhập');
+
+  elements.get('account-username').value = 'bad user';
+  elements.get('account-password').value = 'valid-password-1234';
+  elements.get('btn-account-login').dispatchEvent({ type: 'click' });
+  await new Promise((r) => setTimeout(r, 15));
+
+  const errEl = elements.get('account-auth-error');
+  assert.equal(errEl.textContent.includes('[object Object]'), false);
+  assert.equal(errEl.textContent.includes('ký tự không hợp lệ'), true);
+});

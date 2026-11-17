@@ -21,6 +21,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const learningCount = document.getElementById("learning-count");
     const learningDifficulty = document.getElementById("learning-difficulty");
     const btnLearningGenerate = document.getElementById("btn-learning-generate");
+    const btnLearningFlashcards = document.getElementById("btn-learning-flashcards");
     const learningTopicList = document.getElementById("learning-topic-list");
     const learningGenerateStatus = document.getElementById("learning-generate-status");
 
@@ -68,6 +69,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.addEventListener("app-start-practice", startPractice);
     clearScopeButton?.addEventListener("click", () => document.dispatchEvent(new CustomEvent("app-source-cleared")));
     btnLearningGenerate?.addEventListener("click", startLearningGenerate);
+    btnLearningFlashcards?.addEventListener("click", startTopicFlashcardsGenerate);
     btnReviewGenerate?.addEventListener("click", startReviewGenerate);
     btnLearningExercises?.addEventListener("click", searchLearningExercises);
 
@@ -772,6 +774,36 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    async function startTopicFlashcardsGenerate() {
+        const topic = (learningTopic?.value || "").trim();
+        if (!topic) {
+            if (learningGenerateStatus) learningGenerateStatus.textContent = "Vui lòng nhập hoặc chọn chủ đề để tạo Flashcard.";
+            return;
+        }
+        const flashInput = document.getElementById("study-flashcard-count");
+        const countRaw = Number(flashInput?.value || 5);
+        const count = Number.isInteger(countRaw) && countRaw >= 1 && countRaw <= 15 ? countRaw : 5;
+        if (requestPending) return;
+        requestPending = true;
+        if (btnLearningFlashcards) btnLearningFlashcards.disabled = true;
+        if (learningGenerateStatus) learningGenerateStatus.textContent = `⏳ Đang tạo ${count} flashcard cho chủ đề «${topic}»…`;
+        try {
+            const data = await postJson("/api/learning/flashcards", { topic, count });
+            const cards = data.flashcards || [];
+            if (learningGenerateStatus) {
+                learningGenerateStatus.textContent = `✅ Đã tạo ${cards.length} flashcard cho chủ đề «${topic}».`;
+            }
+            if (typeof window !== "undefined" && typeof window.openStudyMaterialModal === "function") {
+                window.openStudyMaterialModal(data, { initialTab: "flashcards" });
+            }
+        } catch (error) {
+            if (learningGenerateStatus) learningGenerateStatus.textContent = error.message;
+        } finally {
+            requestPending = false;
+            if (btnLearningFlashcards) btnLearningFlashcards.disabled = false;
+        }
+    }
+
     async function startReviewGenerate() {
         let topic = (reviewTopic?.value || "").trim();
         if (!topic) {
@@ -1060,8 +1092,21 @@ document.addEventListener("DOMContentLoaded", () => {
     updateSelectedScope();
     updateReviewCount();
     renderReviewList();
-    loadExampleDocuments();
-    loadLearningTopics();
+    if (typeof window !== "undefined" && window.StudyAccount?.runWhenAuthorized) {
+        window.StudyAccount.runWhenAuthorized(() => {
+            loadExampleDocuments();
+            loadLearningTopics();
+        });
+    } else if (typeof window !== "undefined" && window.StudyAccount?.whenReady) {
+        window.StudyAccount.whenReady().then((authState) => {
+            if (authState?.required && !authState.account) return;
+            loadExampleDocuments();
+            loadLearningTopics();
+        });
+    } else {
+        loadExampleDocuments();
+        loadLearningTopics();
+    }
 
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
         window.addEventListener("study:account-changed", (e) => {
@@ -1070,6 +1115,9 @@ document.addEventListener("DOMContentLoaded", () => {
             progressKey = storageScope === "local" ? "study-agent-review-v1" : `study-agent-review-v1-${storageScope}`;
             updateReviewCount();
             renderReviewList();
+            const authCfg = window.StudyAccount?.getConfig?.();
+            if (authCfg?.required && !e?.detail?.account) return;
+            loadExampleDocuments().catch(() => {});
             loadLearningTopics().catch(() => {});
         });
     }

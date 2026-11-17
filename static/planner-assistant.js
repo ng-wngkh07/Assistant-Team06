@@ -37,6 +37,11 @@
   async function loadWeeklyLessons() {
     const tbody = document.getElementById('weekly-lessons-table-body');
     if (!tbody) return;
+    const studyAccount = typeof window !== 'undefined' ? window.StudyAccount : null;
+    if (studyAccount?.canAccessProtectedApis && !studyAccount.canAccessProtectedApis()) {
+      renderWeeklyLessons([]);
+      return;
+    }
     try {
       const res = await fetch('/api/timetable/planner/weekly-lessons');
       const data = await res.json().catch(() => ({}));
@@ -69,7 +74,7 @@
         : '<span class="sched-badge badge-window">📖 Sẽ học trong tuần</span>';
 
       let exActionHtml = '';
-      if (item.practice_id || item.exercise_status === 'available') {
+      if (item.practice_id) {
         exActionHtml = `<button type="button" class="btn btn-sm btn-outline btn-open-lesson-practice" data-practice-id="${esc(item.practice_id)}" style="padding: 3px 8px; font-size: 11px; margin-right: 4px;" title="Mở bộ câu hỏi luyện tập">📝 Bài tập</button>`;
       } else if (item.exercise_status === 'unavailable') {
         exActionHtml = `<button type="button" class="btn btn-sm btn-outline btn-retry-lesson-practice" data-id="${Number(item.id)}" style="padding: 3px 8px; font-size: 11px; margin-right: 4px;" title="Thử tạo lại bài tập từ tài liệu nguồn">🔄 Thử lại</button>`;
@@ -310,8 +315,21 @@
     document.getElementById('form-weekly-lesson')?.addEventListener('submit', handleAddWeeklyLesson);
     document.getElementById('btn-auto-schedule-90m')?.addEventListener('click', handleAutoSchedule90m);
     document.getElementById('btn-export-calendar-bundle')?.addEventListener('click', handleExportCalendarBundleZip);
-    window.addEventListener('study:account-changed', loadWeeklyLessons);
-    loadWeeklyLessons();
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('study:account-changed', () => {
+        loadWeeklyLessons();
+      });
+    }
+    const studyAccount = typeof window !== 'undefined' ? window.StudyAccount : null;
+    if (studyAccount?.runWhenAuthorized) {
+      studyAccount.runWhenAuthorized(loadWeeklyLessons);
+    } else if (studyAccount?.whenReady) {
+      studyAccount.whenReady().then((authState) => {
+        if (!authState?.required || authState.account) loadWeeklyLessons();
+      });
+    } else {
+      loadWeeklyLessons();
+    }
   }
 
   window.ARYMPlannerAssistant = {

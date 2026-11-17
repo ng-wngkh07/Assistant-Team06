@@ -83,6 +83,10 @@
   font-weight: 600 !important;
 }
 
+.chat-header .icon-btn > * {
+  pointer-events: none !important;
+}
+
 .chat-header .mode-switch {
   margin: 0 !important;
   width: auto !important;
@@ -798,6 +802,8 @@ body.sidebar-open .sidebar-backdrop,
   .chat-header .header-left {
     grid-column: 1 / 2 !important;
     grid-row: 1 / 2 !important;
+    position: relative !important;
+    z-index: 3 !important;
     display: flex !important;
     align-items: center !important;
     justify-content: flex-start !important;
@@ -811,11 +817,12 @@ body.sidebar-open .sidebar-backdrop,
     display: none !important;
   }
 
-  /* Target real #btn-open-sidebar, shorten visible label, maintain >= 32px touch target */
+  /* Target real #btn-open-sidebar, shorten visible label, maintain >= 34px touch target */
   .chat-header #btn-open-sidebar {
-    min-width: 34px !important;
-    height: 32px !important;
-    padding: 0 8px !important;
+    min-width: 42px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    padding: 0 10px !important;
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -829,9 +836,10 @@ body.sidebar-open .sidebar-backdrop,
 
   /* #btn-clear-chat */
   .chat-header #btn-clear-chat {
-    min-width: 34px !important;
-    height: 32px !important;
-    padding: 0 8px !important;
+    min-width: 36px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    padding: 0 9px !important;
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -845,6 +853,8 @@ body.sidebar-open .sidebar-backdrop,
   .chat-header .header-right {
     grid-column: 2 / 3 !important;
     grid-row: 1 / 2 !important;
+    position: relative !important;
+    z-index: 3 !important;
     display: flex !important;
     align-items: center !important;
     justify-content: flex-end !important;
@@ -856,7 +866,8 @@ body.sidebar-open .sidebar-backdrop,
   /* Shorten tour replay button */
   .chat-header #btn-replay-tour {
     min-width: 34px !important;
-    height: 32px !important;
+    height: 34px !important;
+    min-height: 34px !important;
     padding: 0 8px !important;
     display: inline-flex !important;
     align-items: center !important;
@@ -870,15 +881,16 @@ body.sidebar-open .sidebar-backdrop,
     display: none !important;
   }
 
-  /* Bound and ellipsis username to prevent squeezing navigation */
+  /* Bound and right-ellipsis username cleanly without slicing leading characters */
   .chat-header #btn-account-trigger {
     max-width: 95px !important;
-    min-width: 34px !important;
-    height: 32px !important;
-    padding: 0 8px !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
+    min-width: 42px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    line-height: 32px !important;
+    padding: 0 10px !important;
+    display: inline-block !important;
+    text-align: left !important;
     font-size: 11px !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
@@ -886,6 +898,10 @@ body.sidebar-open .sidebar-backdrop,
     box-sizing: border-box !important;
     flex-shrink: 1 !important;
     border-radius: 9999px !important;
+  }
+
+  .chat-header #btn-account-trigger:not([data-authenticated="true"]) {
+    text-align: center !important;
   }
 
   /* Row 2: Mode Switch (spans full width across both columns) */
@@ -1005,7 +1021,8 @@ body.sidebar-open .sidebar-backdrop,
   .chat-header #btn-account-trigger {
     max-width: 82px !important;
     font-size: 10.5px !important;
-    padding: 0 6px !important;
+    padding: 0 7px !important;
+    line-height: 32px !important;
   }
 
   .chat-header .mode-button {

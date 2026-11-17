@@ -130,6 +130,13 @@ def answer_mode_instruction(
     )
 
 
+COMPARE_SCOPE_SPLIT_RE = (
+    r"\b(?:trong\s+cuốn|trong\s+sách|trong\s+tài\s+liệu|theo\s+tài\s+liệu|theo\s+sách|"
+    r"của\s+tài\s+liệu|trên\s+tài\s+liệu|trong\s+giáo\s+trình|theo\s+giáo\s+trình|"
+    r"trong\s+bài\s+giảng|theo\s+bài\s+giảng|trong\s+slide|theo\s+slide)\b"
+)
+
+
 def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Optional[Tuple[str, str]]:
     """Extract two distinct concepts for compare mode, or None if not an explicit compare intent."""
     if not is_legacy_compare and not re.search(
@@ -140,8 +147,14 @@ def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Opt
         return None
 
     q = query.strip()
-    q = re.split(r"\b(?:trong cuốn|trong sách|theo tài liệu|theo sách)\b", q, maxsplit=1, flags=re.I)[0].strip()
-    prefix_pattern = r"^(?:hãy\s+)?(?:so\s+sánh|đối\s+chiếu|phân\s+biệt|giải\s+thích\s+sự\s+khác\s+nhau|sự\s+khác\s+biệt|điểm\s+khác\s+biệt)\s+(?:giữa\s+)?"
+    q = re.split(COMPARE_SCOPE_SPLIT_RE, q, maxsplit=1, flags=re.I)[0].strip()
+    prefix_pattern = (
+        r"^(?:hãy\s+)?(?:(?:so\s+sánh|đối\s+chiếu|phân\s+biệt)"
+        r"(?:\s+(?:ngắn\s+gọn|nhanh|chi\s+tiết|cụ\s+thể|tóm\s+tắt))?"
+        r"(?:\s+(?:(?:sự|những|các)\s+)?(?:điểm\s+)?(?:giống(?:\s+nhau)?(?:\s+và\s+khác(?:\s+nhau)?)?|khác\s+nhau|khác\s+biệt))?"
+        r"|giải\s+thích\s+(?:sự|điểm)\s+khác\s+(?:nhau|biệt)"
+        r"|(?:sự|điểm)\s+khác\s+(?:nhau|biệt))\s+(?:giữa\s+)?"
+    )
     q_cleaned = re.sub(prefix_pattern, "", q, flags=re.I).strip()
     if q_cleaned.lower().startswith("giữa "):
         q_cleaned = q_cleaned[5:].strip()

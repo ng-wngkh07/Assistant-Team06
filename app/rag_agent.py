@@ -27,7 +27,14 @@ from app.trained_client import TrainedModelClient
 from app.answer_format import clean_answer, extract_citation_claims, normalize_math_notation
 from app.evaluation_metrics import has_repetition, has_language_drift
 from app.query_normalizer import normalize_query, normalize_query_with_model, is_unclear_query
-from app.dialogue import dialogue_intent, build_context, context_capacity, ContextLimitError
+from app.dialogue import (
+    DialogueBusyError,
+    dialogue_intent,
+    build_context,
+    context_capacity,
+    ContextLimitError,
+)
+from app.gpu_lock import GPUBusyError, IndexingCancelledError
 from app.answer_modes import validate_mode_format, get_mode_retry_prompt, validate_compare_mode
 from app.token_counter import get_exact_token_counter
 from app.source_consistency import differing_value_reference_signatures, inconsistent_prime_extraction_example
@@ -1096,12 +1103,25 @@ class PsychologyAgent:
             attach_quality = getattr(self.searcher, "_attach_page_quality_metadata", None)
             if callable(attach_quality):
                 attach_quality(retrieved_chunks)
-            if any(
-                (c.get("page_quality") or {}).get("needs_review")
-                and "unrepresented_formula_or_diagram_suspected"
-                in ((c.get("page_quality") or {}).get("warnings") or [])
-                for c in retrieved_chunks
-            ):
+
+            def _has_unverified_visual(chunk: dict) -> bool:
+                pq = chunk.get("page_quality") or {}
+                return bool(
+                    pq.get("needs_review")
+                    and "unrepresented_formula_or_diagram_suspected" in (pq.get("warnings") or [])
+                )
+
+            if source_page is not None:
+                blocked_visual = any(_has_unverified_visual(c) for c in retrieved_chunks)
+            else:
+                safe_visual_chunks = [c for c in retrieved_chunks if not _has_unverified_visual(c)]
+                if safe_visual_chunks:
+                    retrieved_chunks = safe_visual_chunks
+                    blocked_visual = False
+                else:
+                    blocked_visual = any(_has_unverified_visual(c) for c in retrieved_chunks)
+
+            if blocked_visual:
                 reason = "source_visual_content_unverified"
                 message = insufficient_evidence_message(reason, search_scope)
                 yield {"type": "token", "content": message}
@@ -1378,6 +1398,8 @@ class PsychologyAgent:
             "num_predict": max_gen_tokens,
             "num_ctx": capacity,
         }
+        if is_mlx_model(model) and isinstance(generator, TrainedModelClient):
+            primary_kwargs["context_prefix_marker"] = "\n<user_query>"
         if use_source_lines and supports_schema and admitted_primary_keys:
             primary_kwargs["response_schema"] = _build_qa_response_schema(
                 admitted_primary_keys,
@@ -1390,6 +1412,8 @@ class PsychologyAgent:
         gen_calls = 1
         try:
             raw_answer = "".join(generator.chat_stream(**primary_kwargs))
+        except (GPUBusyError, DialogueBusyError, IndexingCancelledError):
+            raise
         except Exception as e:
             logger.error("Inference exception during primary generation: %s", e)
             yield {
@@ -1684,6 +1708,7 @@ class PsychologyAgent:
                     if (not use_source_lines or len(source_ids) != 1 or not isinstance(span, list)
                             or len(span) != 2 or any(type(n) is not int for n in span)):
                         source_selection_failed = True
+                        logger.info("Claim rejected: invalid evidence_lines span=%r sids=%s", span, source_ids)
                         _append_source_feedback(
                             "evidence_lines phải có đúng hai số nguyên [dòng đầu, dòng cuối], "
                             "không liệt kê từng dòng. Chọn hai đầu của một đoạn liên tục "
@@ -1694,6 +1719,7 @@ class PsychologyAgent:
                     first, last = span
                     if 1 <= last < first <= len(lines):
                         source_selection_failed = True
+                        logger.info("Claim rejected: reversed evidence_lines=%r sids=%s", span, source_ids)
                         _append_source_feedback(
                             f"{source_ids[0]}: phạm vi dòng [{first}, {last}] bị ngược (số đầu > số cuối); "
                             f"viết tăng dần [{last}, {first}] trong L1 đến L{len(lines)}."
@@ -1701,6 +1727,7 @@ class PsychologyAgent:
                         return "error", ("citation_invalid", source_ids)
                     if not 1 <= first <= last <= len(lines):
                         source_selection_failed = True
+                        logger.info("Claim rejected: out-of-range evidence_lines=%r len=%d sids=%s", span, len(lines), source_ids)
                         _append_source_feedback(
                             f"{source_ids[0]} chỉ có L1 đến L{len(lines)}. "
                             "Chọn lại hai đầu phạm vi trong các dòng hiện có; không tạo thêm dòng."
@@ -1710,6 +1737,7 @@ class PsychologyAgent:
                         binding = re.compile(rf'\b{re.escape(name)}\s*\(\s*{re.escape(arg)}\s*\)\s*=')
                         premise = max((n for n, line in enumerate(lines[:last], 1) if binding.search(line)), default=0)
                         if premise and first > premise:
+                            logger.info("Claim rejected: missing premise L%d for %s(%s) span=%r sids=%s", premise, name, arg, span, source_ids)
                             _append_source_feedback(
                                 f"{source_ids[0]}: phạm vi bằng chứng phải bao gồm L{premise}, dòng định nghĩa {name}({arg}), cùng kết luận."
                             )
@@ -1717,6 +1745,7 @@ class PsychologyAgent:
                     selected = '\n'.join(lines[first-1:last])
                     if not selected.strip():
                         source_selection_failed = True
+                        logger.info("Claim rejected: empty selected lines span=%r sids=%s", span, source_ids)
                         non_empty = [f"L{idx}" for idx, line in enumerate(lines, 1) if line.strip()]
                         non_empty_hint = (
                             f" (dòng có nội dung: {', '.join(non_empty[:10])})"
@@ -1728,6 +1757,7 @@ class PsychologyAgent:
                         )
                         return "error", ("citation_invalid", source_ids)
                     if quote is not None and (not isinstance(quote, str) or ' '.join(quote.split()) != ' '.join(selected.split())):
+                        logger.info("Claim rejected: quote mismatch vs evidence_lines sids=%s", source_ids)
                         return "error", ("citation_invalid", source_ids)
                     quote = selected
                 cited_texts = [raw_sources_map.get(sid, "") for sid in source_ids]
@@ -1735,6 +1765,7 @@ class PsychologyAgent:
                     item_text, cited_texts, query, effective_chat_history
                 )
                 if ungrounded_terms:
+                    logger.info("Claim rejected: ungrounded_terms=%s sids=%s", ungrounded_terms[:3], source_ids)
                     _append_source_feedback(
                         f"{', '.join(source_ids)}: không dùng thuật ngữ từ lượt trước hoặc ngoài tài liệu "
                         f"({', '.join(ungrounded_terms[:3])}) khi không có trong đoạn nguồn đã trích."
@@ -1742,6 +1773,7 @@ class PsychologyAgent:
                     return "error", ("citation_invalid", source_ids)
                 if require_quote or quote is not None:
                     if len(source_ids) != 1 or not isinstance(quote, str) or not quote.strip():
+                        logger.info("Claim rejected: missing/multi quote sids=%s", source_ids)
                         return "error", ("citation_invalid", ["invalid"])
                     # Decode the context transport only until a literal source
                     # slice matches. Never decode or rewrite the source itself.
@@ -1755,6 +1787,7 @@ class PsychologyAgent:
                             break
                         normalized_quote = decoded
                     if not normalized_quote or normalized_quote not in normalized_source:
+                        logger.info("Claim rejected: quote not in source sids=%s", source_ids)
                         return "error", ("citation_invalid", source_ids)
                     # A question may contain the inputs, but cannot substantiate
                     # a numeric result that is absent from the chosen evidence.
@@ -1763,6 +1796,7 @@ class PsychologyAgent:
 
                     if not claim_numbers.issubset(quote_numbers) or not claim_unparsed.issubset(quote_unparsed):
                         source_selection_failed = True
+                        logger.info("Claim rejected: numeric mismatch claim=%s quote=%s sids=%s", claim_numbers - quote_numbers, claim_unparsed - quote_unparsed, source_ids)
                         _append_source_feedback(
                             format_numeric_mismatch_feedback(
                                 source_ids[0],
@@ -1806,9 +1840,9 @@ class PsychologyAgent:
                     return "error", ("citation_invalid", ["invalid"])
                 item["text"] = normalized_text
 
-                if compare_concepts:
-                    # This repair is an extractive side-by-side definition,
-                    # so each chosen source must contain the actual quote.
+                if compare_concepts and not (require_quote or quote is not None):
+                    # Legacy unquoted compare repair uses item["text"] itself as the verbatim quote.
+                    # Structured quoted claims already passed verbatim quote/line validation above.
                     for sid in source_ids:
                         source_text = raw_sources_map.get(sid, "")
                         if item["text"].strip() not in source_text:
@@ -1837,7 +1871,6 @@ class PsychologyAgent:
                 if (
                     collect_accepted is not None
                     and valid_items
-                    and not compare_concepts
                     and not formula_transcription_failed
                 ):
                     collect_accepted.clear()
@@ -1983,9 +2016,16 @@ class PsychologyAgent:
                 yield {"type": "done", "citations": [], "response_kind": "generation_failed", "failure_reason": "language_drift", "search_scope": search_scope, "generation_calls": 1}
                 return
             if repetitive_answer(raw_answer, len(retrieved_chunks)):
-                yield {"type": "token", "content": "Mô hình chưa tạo được câu trả lời đáng tin cậy cho câu hỏi này. Hãy thử diễn đạt câu hỏi cụ thể hơn."}
-                yield {"type": "done", "citations": [], "response_kind": "generation_failed", "failure_reason": "repetitive_output", "search_scope": search_scope, "generation_calls": 1}
-                return
+                if not citations_by_id:
+                    yield {"type": "token", "content": "Mô hình chưa tạo được câu trả lời đáng tin cậy cho câu hỏi này. Hãy thử diễn đạt câu hỏi cụ thể hơn."}
+                    yield {"type": "done", "citations": [], "response_kind": "generation_failed", "failure_reason": "repetitive_output", "search_scope": search_scope, "generation_calls": 1}
+                    return
+                accepted_from_primary.clear()
+                _append_source_feedback("Không lặp lại cùng một câu hoặc cùng một nhận định nhiều lần; tóm gọn thành 1–3 claims khác nhau.")
+                valid_ids = []
+                invalid_ids = ["invalid"]
+                initial_failure_reason = "repetitive_output"
+                failure_reason = "repetitive_output"
 
         if valid_ids and not invalid_ids:
             pos_conflict = check_positional_sequence_contradiction(
@@ -2070,8 +2110,6 @@ class PsychologyAgent:
                 repair_system_prompt = source_system_prompt
                 if not formula_transcription_failed and MLX_SOURCE_LINE_CONTRACT not in repair_system_prompt:
                     repair_system_prompt += "\n" + MLX_SOURCE_LINE_CONTRACT
-                if compare_concepts:
-                    repair_system_prompt += " Xuất hai claims đối chiếu; text mỗi claim trích nguyên văn định nghĩa đầy đủ của một khái niệm từ nguồn."
 
             if matched_answer_ids:
                 repair_system_prompt += (
@@ -2097,7 +2135,7 @@ class PsychologyAgent:
 
             def _build_repair_content(*, include_draft: bool = True, include_accepted: bool = True) -> str:
                 escaped_query = _escape_data_content(resolved_query)
-                if compare_concepts:
+                if compare_concepts and not use_source_lines:
                     c1, c2 = compare_concepts
                     return (
                         f"{repair_context}\n\n"
@@ -2154,8 +2192,9 @@ class PsychologyAgent:
                             "Start directly with facts inside that claim's selected lines; never echo opening clauses, question scenarios, or numbers from <user_query> unless literally written inside those selected lines."
                         )
                     if compare_concepts:
+                        c1, c2 = compare_concepts
                         line_parts.append(
-                            "Xuất hai claims đối chiếu; text mỗi claim trích nguyên văn định nghĩa đầy đủ của một khái niệm từ nguồn."
+                            f"Xuất ít nhất hai claims đối chiếu «{_escape_data_content(c1)}» (claim đầu) và «{_escape_data_content(c2)}» (claim sau); mỗi claim dùng một source_id và giữ đúng số, công thức và điều kiện trong các dòng đã chọn."
                         )
                     if matched_answer_ids:
                         line_parts.append(
@@ -2273,6 +2312,8 @@ class PsychologyAgent:
                 gen_calls = 2
                 try:
                     repair_raw = "".join(generator.chat_stream(**repair_kwargs))
+                except (GPUBusyError, DialogueBusyError, IndexingCancelledError):
+                    raise
                 except Exception as e:
                     logger.error("Inference exception during repair generation: %s", e)
                     yield {
@@ -2441,6 +2482,50 @@ class PsychologyAgent:
                 invalid_ids = ["invalid"]
                 failure_reason = "positional_contradiction"
 
+        if (invalid_ids or not valid_ids) and accepted_from_primary and not formula_transcription_failed and failure_reason != "positional_contradiction":
+            salvaged_claims = [entry["claim"] for entry in accepted_from_primary]
+            salvaged_sids = {sid for c in salvaged_claims for sid in c.get("source_ids", [])}
+            # Never salvage generic claims from unrelated sources when the query asks about specific
+            # technical acronyms/hyphenated identifiers absent from every salvaged source.
+            from app.rag_evidence_validator import _ROMAN_OR_COMMON_ACRONYMS
+            req_idents = [
+                m.group(1)
+                for m in re.finditer(r"\b([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+|[A-Z][A-Z0-9]{1,9})\b", resolved_query or "")
+                if m.group(1).upper() not in _ROMAN_OR_COMMON_ACRONYMS
+            ]
+            salvaged_src_blob = " ".join(safe_texts_budgeted.get(sid, "") for sid in salvaged_sids)
+            missing_all_idents = bool(req_idents) and not any(
+                re.search(rf"\b{re.escape(ident)}\b", salvaged_src_blob, re.I)
+                or ("-" in ident and ident.replace("-", "").lower() in re.sub(r"[^a-z0-9]", "", salvaged_src_blob.lower()))
+                for ident in req_idents
+            )
+            if (not matched_answer_ids or matched_answer_ids.intersection(salvaged_sids)) and not missing_all_idents:
+                salv_answer, salv_val, salv_claims_map, salv_quotes_map = _render_claims(salvaged_claims)
+                salv_clean = clean_answer(salv_answer)
+                if (
+                    salv_val
+                    and salv_clean
+                    and re.search(r"\w", salv_clean, re.UNICODE)
+                    and not has_language_drift(salv_clean)
+                    and not repetitive_answer(salv_answer, len(retrieved_chunks))
+                    and not check_positional_sequence_contradiction(
+                        resolved_query,
+                        salv_answer,
+                        {sid: safe_texts_budgeted[sid] for sid in salv_val if sid in safe_texts_budgeted},
+                    )
+                ):
+                    logger.info(
+                        "Salvaged %d validated Call 1 claim(s) after repair failed (%s).",
+                        len(salvaged_claims),
+                        failure_reason,
+                    )
+                    raw_answer = salv_answer
+                    valid_ids = salv_val
+                    invalid_ids = []
+                    structured_claims_map = salv_claims_map
+                    evidence_quotes_map = salv_quotes_map
+                    failure_reason = None
+
         if invalid_ids or not valid_ids:
             logger.warning("Model answer lacks complete source attribution; unknown ids: %s", invalid_ids)
             if failure_reason == "positional_contradiction":
@@ -2504,8 +2589,14 @@ class PsychologyAgent:
             ]
             admitted_context_block = "<context>\n" + "\n\n".join(admitted_context_parts) + "\n</context>"
             catalog = build_evidence_catalog(sources_text_map)
+            auditor_draft_claims = extract_draft_claims(raw_answer)
+            use_compact_auditor = bool(auditor_draft_claims)
             auditor_messages = build_auditor_messages(
-                query, raw_answer, admitted_context_block, sources_map=sources_text_map
+                query,
+                raw_answer,
+                admitted_context_block,
+                sources_map=sources_text_map,
+                compact=use_compact_auditor,
             )
             try:
                 auditor_tokens = None
@@ -2516,8 +2607,15 @@ class PsychologyAgent:
                         pass
                 if auditor_tokens is None:
                     auditor_tokens = sum(len(m["content"].encode("utf-8")) for m in auditor_messages) + 256
-                auditor_claim_count = max(1, len(extract_draft_claims(raw_answer)))
-                target_auditor_predict = min(1800, max(1000, auditor_claim_count * 160 + 400))
+                auditor_claim_count = max(1, len(auditor_draft_claims))
+                target_auditor_predict = min(
+                    1800,
+                    max(
+                        1000,
+                        auditor_claim_count * (80 if use_compact_auditor else 160)
+                        + (200 if use_compact_auditor else 400),
+                    ),
+                )
                 available_auditor_headroom = capacity - auditor_tokens
                 if available_auditor_headroom >= 600:
                     auditor_num_predict = min(target_auditor_predict, available_auditor_headroom)
@@ -2535,6 +2633,7 @@ class PsychologyAgent:
                         auditor_kwargs["response_schema"] = build_auditor_response_schema(
                             set(sources_text_map.keys()),
                             evidence_catalog=catalog,
+                            claim_count=len(auditor_draft_claims) if use_compact_auditor else None,
                         )
                     gen_calls += 1
                     auditor_raw = "".join(generator.chat_stream(**auditor_kwargs))
@@ -2568,6 +2667,8 @@ class PsychologyAgent:
                         check_status = status
                 else:
                     check_status = "unverified"
+            except (GPUBusyError, DialogueBusyError, IndexingCancelledError):
+                raise
             except Exception as e:
                 logger.warning("Auditor call failed: %s", e)
                 check_status = "unverified"
@@ -2579,6 +2680,32 @@ class PsychologyAgent:
 
         is_truncated = getattr(generator, "last_done_reason", None) == "length"
 
+        # If every surviving claim across citations is merely a pure abstention ("không có thông tin..."),
+        # never emit unrelated document citations or label it as a grounded answer.
+        all_claims_list = [
+            c for cit in citations for c in (cit.get("claims") or []) if isinstance(c, str) and c.strip()
+        ]
+        _abstention_re = re.compile(
+            r"(?:^(?:theo\s+tài\s+liệu[^,.]*,\s*)?(?:tài\s+liệu\s+)?(?:hiện\s+)?(?:chưa|không)\s+"
+            r"(?:có|chứa|đề\s+cập|cung\s+cấp|nêu|ghi\s+nhận|nhắc\s+đến)\s+(?:đủ\s+)?thông\s+tin\b|"
+            r"(?:tài\s+liệu|nguồn|văn\s+bản|đoạn\s+trích)\s+(?:được\s+cung\s+cấp\s+)?(?:không|chưa)\s+"
+            r"(?:có\s+thông\s+tin|đề\s+cập|cung\s+cấp|nêu|chứa|nói)\s+(?:về|đến|tới|thông\s+tin)?\b)",
+            re.IGNORECASE,
+        )
+
+        def _is_pure_abstention(text: str) -> bool:
+            t = re.sub(r"\[S\d+\]", "", text or "").strip()
+            return bool(t and len(t) <= 320 and _abstention_re.search(t) and len(re.split(r"[.!?]+", t.strip(" .!?"))) <= 2)
+
+        only_abstention = False
+        if citations and (
+            (all_claims_list and all(_is_pure_abstention(c) for c in all_claims_list))
+            or (not all_claims_list and _is_pure_abstention(answer))
+        ):
+            only_abstention = True
+            citations = []
+            failure_reason = None
+
         review_notice = None
         if any(c.get("page_quality", {}).get("needs_review") for c in citations):
             review_notice = (
@@ -2588,12 +2715,18 @@ class PsychologyAgent:
 
         yield {"type": "citations", "citations": citations}
         yield {"type": "token", "content": answer}
+        response_kind = (
+            "insufficient_evidence"
+            if only_abstention
+            else ("answer" if (citations and check_status != "unverified") else "generation_failed")
+        )
         yield {
             "type": "done",
             "citations": citations,
             "is_truncated": is_truncated,
             "is_broad": is_broad,
-            "response_kind": "answer" if (citations and check_status != "unverified") else "generation_failed",
+            "response_kind": response_kind,
+            **({"insufficient_reason": "no_evidence_in_sources"} if only_abstention else {}),
             "failure_reason": failure_reason,
             "answer_mode": answer_mode,
             "processing_level": processing_level,

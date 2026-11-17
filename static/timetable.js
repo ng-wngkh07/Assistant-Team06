@@ -219,9 +219,22 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     // Load initial confirmed schedule, restore any active draft, and load planner state
-    loadConfirmedSchedule();
     restoreDraftLocally();
-    loadFullPlannerState();
+    if (typeof window !== "undefined" && window.StudyAccount?.runWhenAuthorized) {
+        window.StudyAccount.runWhenAuthorized(() => {
+            loadConfirmedSchedule();
+            loadFullPlannerState();
+        });
+    } else if (typeof window !== "undefined" && window.StudyAccount?.whenReady) {
+        window.StudyAccount.whenReady().then((authState) => {
+            if (authState?.required && !authState.account) return;
+            loadConfirmedSchedule();
+            loadFullPlannerState();
+        });
+    } else {
+        loadConfirmedSchedule();
+        loadFullPlannerState();
+    }
 
     // -------------------------------------------------------------
     // Drag & Drop / File Selection
@@ -642,6 +655,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             });
             saveDraftStateLocally();
+            refreshDraftLiveWarnings();
             confirmStatus.textContent = `Đã cập nhật giờ cho ${count} môn có tiết "${targetPeriod}".`;
             confirmStatus.style.color = count ? "#16a34a" : "#dc2626";
         });
@@ -1815,6 +1829,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const tr = document.createElement("tr");
         tr.dataset.taskId = item.task_id !== null && item.task_id !== undefined ? String(item.task_id) : "";
+        tr.dataset.weeklyLessonId = item.weekly_lesson_id !== null && item.weekly_lesson_id !== undefined ? String(item.weekly_lesson_id) : "";
+        tr.dataset.classifiedTopic = item.classified_topic || "";
+        tr.dataset.practiceId = item.practice_id || "";
+        tr.dataset.worksheetId = item.worksheet_id || "";
+        tr.dataset.exerciseStatus = item.exercise_status || "";
+        tr.dataset.source = item.source || "ai_assistant";
         tr.dataset.sessionIndex = String(item.session_index || 1);
         tr.dataset.totalSessions = String(item.total_sessions || 1);
         tr.dataset.notes = item.notes || "";
@@ -1875,12 +1895,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (btnAddPlanDraftRow) {
         btnAddPlanDraftRow.addEventListener("click", () => {
+            const firstKnownCourse = (plannerState.known_courses && plannerState.known_courses[0]) || "";
+            if (!firstKnownCourse) {
+                if (plannerConfirmStatus) {
+                    plannerConfirmStatus.textContent = "⚠️ Chưa có môn học nào trong Thời khóa biểu kỳ này. Hãy lưu Thời khóa biểu trước.";
+                    plannerConfirmStatus.style.color = "#d97706";
+                }
+                return;
+            }
             appendPlanDraftRow({
                 weekday: 1,
                 start_time: "19:00",
                 end_time: "20:00",
                 title: "Tự học bổ sung",
-                course: (plannerState.known_courses && plannerState.known_courses[0]) || "Tự chọn",
+                course: firstKnownCourse,
                 priority: "medium",
                 locked: true
             });
@@ -1926,6 +1954,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 sessions.push({
                     task_id: tidRaw ? parseInt(tidRaw, 10) : null,
+                    weekly_lesson_id: tr.dataset.weeklyLessonId ? parseInt(tr.dataset.weeklyLessonId, 10) : null,
                     weekday,
                     start_time,
                     end_time,
@@ -1933,7 +1962,11 @@ document.addEventListener("DOMContentLoaded", () => {
                     course,
                     priority,
                     locked,
-                    source: "ai_assistant",
+                    source: tr.dataset.source || "ai_assistant",
+                    classified_topic: tr.dataset.classifiedTopic || "",
+                    practice_id: tr.dataset.practiceId || "",
+                    worksheet_id: tr.dataset.worksheetId || "",
+                    exercise_status: tr.dataset.exerciseStatus || "",
                     session_index: parseInt(tr.dataset.sessionIndex || "1", 10),
                     total_sessions: parseInt(tr.dataset.totalSessions || "1", 10),
                     notes: tr.dataset.notes || ""
@@ -2186,7 +2219,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 btnEx.style.padding = "2px 6px";
                 btnEx.style.marginRight = "4px";
 
-                if (item.exercise_status === "available" || item.practice_id) {
+                if (item.practice_id) {
                     btnEx.title = "Mở bài tập luyện tập";
                     btnEx.textContent = "📝 Bài tập";
                     btnEx.addEventListener("click", () => {
@@ -2332,7 +2365,9 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-        window.addEventListener("study:account-changed", () => {
+        window.addEventListener("study:account-changed", (ev) => {
+            const authCfg = window.StudyAccount?.getConfig?.();
+            if (authCfg?.required && !ev?.detail?.account) return;
             loadConfirmedSchedule().catch(() => {});
             loadFullPlannerState().catch(() => {});
         });

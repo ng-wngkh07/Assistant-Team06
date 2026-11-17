@@ -1384,7 +1384,14 @@ class PracticeService:
                 continue
 
             had_candidates = True
-            verify_timeout = min(180.0, max(1.0, total_deadline - (time.monotonic() - start_time)))
+            # Dedicated verification budget prevents slow primary generation (e.g. 90-160s on 9B)
+            # from starving follow-up 2-step MLX proof verification (candidates[:3] + [3:]) into 422 timeouts.
+            from app.model_resolver import is_mlx_model as _is_mlx_verify
+            verify_timeout = (
+                240.0
+                if _is_mlx_verify(model)
+                else min(180.0, max(120.0, total_deadline - (time.monotonic() - start_time)))
+            )
             try:
                 verified = self._verify_questions(
                     candidates, passage_by_id, model,

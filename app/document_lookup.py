@@ -3,6 +3,7 @@
 import logging
 import sqlite3
 import sys
+import unicodedata
 from contextlib import closing
 from pathlib import Path
 from typing import Optional
@@ -115,8 +116,18 @@ class DocumentLookup:
             clauses.append("d.id=?")
             params.append(doc_id)
         if filename is not None:
-            clauses.append("d.filename=?")
-            params.append(filename)
+            variants = list(dict.fromkeys([
+                filename,
+                unicodedata.normalize("NFC", filename),
+                unicodedata.normalize("NFD", filename),
+            ]))
+            if len(variants) == 1:
+                clauses.append("d.filename=?")
+                params.append(variants[0])
+            else:
+                placeholders = ",".join("?" for _ in variants)
+                clauses.append(f"d.filename IN ({placeholders})")
+                params.extend(variants)
         where_sql = f"WHERE {' AND '.join(clauses)} " if clauses else ""
         order_sql = "ORDER BY d.clean_title, d.id" if (doc_id is None and filename is None) else ""
         sql = (

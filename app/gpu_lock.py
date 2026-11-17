@@ -21,6 +21,7 @@ import os
 import threading
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Generator, Optional, Tuple
@@ -29,6 +30,22 @@ from app.config import BASE_DIR, DATA_DIR
 from app.ollama_client import OllamaClient
 
 logger = logging.getLogger("gpu_lock")
+
+_in_background_gpu_scope: ContextVar[bool] = ContextVar("in_background_gpu_scope", default=False)
+_DEFAULT_BACKGROUND_COOLDOWN_SECONDS = 120.0
+
+
+def _default_background_cooldown_seconds() -> float:
+    """Return how long background OCR/embedding defers after interactive GPU activity."""
+    raw = os.environ.get("STUDY_BACKGROUND_GPU_COOLDOWN_SECONDS", "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return 0.0
+    return _DEFAULT_BACKGROUND_COOLDOWN_SECONDS
 
 
 def resolve_gpu_runtime_dir() -> Path:
@@ -171,6 +188,58 @@ class GPULockManager:
         self._local = threading.local()
         self._evictors_lock = threading.Lock()
         self._resident_evictors: list = []
+        self._fg_lock = threading.Lock()
+        self._fg_waiters = 0
+        self._fg_active = 0
+        self._last_fg_activity_mono = 0.0
+        self._bg_cancel_events: set[threading.Event] = set()
+
+    def note_foreground_activity(self) -> None:
+        """Record interactive foreground activity and preempt active background GPU work."""
+        with self._fg_lock:
+            self._last_fg_activity_mono = time.monotonic()
+            events = list(self._bg_cancel_events)
+        for evt in events:
+            evt.set()
+
+    def should_yield_background(self, cooldown_seconds: Optional[float] = None) -> bool:
+        """Return True when background OCR/vectorization must defer to foreground users."""
+        cd = _default_background_cooldown_seconds() if cooldown_seconds is None else max(0.0, float(cooldown_seconds))
+        with self._fg_lock:
+            if self._fg_waiters > 0 or self._fg_active > 0:
+                return True
+            last = self._last_fg_activity_mono
+        if cd > 0.0 and last > 0.0 and (time.monotonic() - last) < cd:
+            return True
+        return False
+
+    def background_yield_remaining(self, cooldown_seconds: Optional[float] = None) -> float:
+        """Return remaining seconds background work should wait before retrying GPU access."""
+        cd = _default_background_cooldown_seconds() if cooldown_seconds is None else max(0.0, float(cooldown_seconds))
+        with self._fg_lock:
+            if self._fg_waiters > 0 or self._fg_active > 0:
+                return min(15.0, max(1.0, cd if cd > 0.0 else 5.0))
+            last = self._last_fg_activity_mono
+        if cd > 0.0 and last > 0.0:
+            return max(0.0, cd - (time.monotonic() - last))
+        return 0.0
+
+    @contextmanager
+    def background_scope(self, cancel_event: Optional[threading.Event] = None) -> Generator[None, None, None]:
+        """Mark the current thread/task as deferrable background GPU work (e.g., src_watcher)."""
+        if cancel_event is not None:
+            with self._fg_lock:
+                self._bg_cancel_events.add(cancel_event)
+            if self.should_yield_background():
+                cancel_event.set()
+        token = _in_background_gpu_scope.set(True)
+        try:
+            yield
+        finally:
+            _in_background_gpu_scope.reset(token)
+            if cancel_event is not None:
+                with self._fg_lock:
+                    self._bg_cancel_events.discard(cancel_event)
 
     def register_resident_evictor(self, callback, role: Optional[str] = None) -> None:
         """Register a callback invoked to release resident workers before training or heavyweight swaps."""
@@ -527,19 +596,33 @@ class GPULockManager:
                 self._local.inference_depth -= 1
             return
 
+        is_bg = bool(_in_background_gpu_scope.get())
+        if is_bg and self.should_yield_background():
+            raise GPUBusyError(NATIVE_BUSY_MESSAGE)
+
         for path in (self.lock_path, self.state_path, self.intent_path, self.native_lock_path):
             path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = None
         native_fd = None
+        fg_waiting_registered = False
+        fg_active_registered = False
         try:
             lock_fd = os.open(str(self.lock_path), os.O_RDWR | os.O_CREAT, 0o666)
             native_fd = os.open(str(self.native_lock_path), os.O_RDWR | os.O_CREAT, 0o666)
+            if not is_bg:
+                with self._fg_lock:
+                    self._fg_waiters += 1
+                    fg_waiting_registered = True
+                self.note_foreground_activity()
+
             start_time = time.time()
             acquired = False
 
             while time.time() - start_time < timeout:
                 if cancel_event is not None and cancel_event.is_set():
                     raise IndexingCancelledError("Đã hủy chờ tài nguyên GPU theo yêu cầu dừng.")
+                if is_bg and self.should_yield_background():
+                    raise GPUBusyError(NATIVE_BUSY_MESSAGE)
                 st = self.get_status()
                 if st.get("busy"):
                     raise GPUBusyError(st.get("message", BUSY_MESSAGE))
@@ -574,6 +657,14 @@ class GPULockManager:
                 os.set_inheritable(lock_fd, True)
                 os.set_inheritable(native_fd, True)
 
+            if fg_waiting_registered:
+                with self._fg_lock:
+                    self._fg_waiters = max(0, self._fg_waiters - 1)
+                    fg_waiting_registered = False
+                    self._fg_active += 1
+                    fg_active_registered = True
+                    self._last_fg_activity_mono = time.monotonic()
+
             self._local.inference_depth = 1
             self._local.active_fds = (lock_fd, native_fd)
             yield (lock_fd, native_fd)
@@ -581,6 +672,13 @@ class GPULockManager:
         finally:
             self._local.inference_depth = 0
             self._local.active_fds = None
+            if fg_waiting_registered or fg_active_registered:
+                with self._fg_lock:
+                    if fg_waiting_registered:
+                        self._fg_waiters = max(0, self._fg_waiters - 1)
+                    if fg_active_registered:
+                        self._fg_active = max(0, self._fg_active - 1)
+                        self._last_fg_activity_mono = time.monotonic()
             if native_fd is not None:
                 try:
                     os.close(native_fd)

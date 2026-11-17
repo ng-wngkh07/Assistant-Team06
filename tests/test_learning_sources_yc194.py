@@ -271,3 +271,39 @@ def test_exam_time_advice_is_not_curriculum_evidence_for_topic_questions(service
     learning.practice_service.generate_from_passages = lambda **kw: captured.update(kw) or {}
     learning.generate(topic='Trí nhớ', count=3, difficulty='hard', model='test-model')
     assert [p['page_num'] for p in captured['passages']] == [1]
+
+
+def test_flashcards_attribute_exact_source_when_two_books_share_page_num(service):
+    learning, db = service
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            'INSERT INTO chunks(id,doc_id,book_title,filename,page_num,chunk_index,text) VALUES(10,1,?,?,?,?,?)',
+            ('Tâm lý A', 'memory.pdf', 12, 0, 'Trí nhớ làm việc lưu trữ thông tin trong vài giây ngắn ngủi.'),
+        )
+        conn.execute(
+            'INSERT INTO chunks(id,doc_id,book_title,filename,page_num,chunk_index,text) VALUES(11,2,?,?,?,?,?)',
+            ('Cơ học B', 'other.pdf', 12, 0, 'Trí nhớ ngắn hạn xử lý chuỗi ký tự cơ bản nhanh chóng.'),
+        )
+
+    class _StubMgr:
+        def generate_flashcards_from_passages(self, passages, **kwargs):
+            return {
+                'flashcards': [
+                    {
+                        'id': 1,
+                        'front': 'Card from book B',
+                        'back': 'nhanh chóng',
+                        'evidence_quote': 'Trí nhớ ngắn hạn xử lý chuỗi ký tự cơ bản nhanh chóng.',
+                        'page_num': 12,
+                    }
+                ],
+                'generation': {'flashcards': 'model'},
+            }
+
+    learning._select_topic_passages = lambda topic, limit=6: [
+        {'doc_id': 1, 'book_title': 'Tâm lý A', 'filename': 'memory.pdf', 'page_num': 12, 'text': 'Trí nhớ làm việc lưu trữ thông tin trong vài giây ngắn ngủi.'},
+        {'doc_id': 2, 'book_title': 'Cơ học B', 'filename': 'other.pdf', 'page_num': 12, 'text': 'Trí nhớ ngắn hạn xử lý chuỗi ký tự cơ bản nhanh chóng.'},
+    ]
+    res = learning.flashcards(topic='Trí nhớ', count=1, model='test-model', material_manager=_StubMgr())
+    assert res['flashcards'][0]['doc_id'] == 2
+    assert res['flashcards'][0]['source_title'] == 'Cơ học B'

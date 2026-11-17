@@ -276,3 +276,62 @@ def test_repair_with_extra_closing_brace_still_fails_closed():
     assert result['response_kind'] == 'generation_failed'
     assert not result['citations']
     assert len(calls) == 2
+
+
+def test_claim_citing_unrelated_source_for_query_identifier_or_pure_abstention_is_blocked():
+    from app.rag_evidence_validator import has_relevant_evidence, find_ungrounded_technical_terms
+
+    # 1. Explicit uppercase/hyphenated query subjects absent from cited source are flagged
+    flagged = find_ungrounded_technical_terms(
+        "IFS và L-System là các công cụ mô hình hóa fractal.",
+        ["Thiên tài có nhiều nét tâm lý đặc biệt trong sáng tạo nghệ thuật."],
+        "Trong bài giảng Đồ họa Fractal, IFS và L-System dùng để làm gì?",
+    )
+    assert any(t.upper() == "IFS" for t in flagged)
+    assert any("L-System" in t for t in flagged)
+
+    # 2. Pure abstention citing an unrelated source must return insufficient_evidence with [] citations
+    oos_res, _ = run(
+        {"claims": [{"text": "Theo tài liệu trong thư viện, không có thông tin về giá vàng SJC hôm nay ở Việt Nam.", "source_ids": ["S1"]}]},
+        chunks=[make_chunk("Trò chơi có chiến lược cân bằng Nash trong lý thuyết trò chơi.", semantic_score=0.6)],
+        query="Theo tài liệu trong thư viện, giá vàng SJC hôm nay ở Việt Nam là bao nhiêu?",
+    )
+    assert oos_res["response_kind"] == "insufficient_evidence"
+    assert oos_res["citations"] == []
+
+    # 3. Scoped upload conversational comparison with hyphenated technical terms passes evidence gate
+    cache_chunk = make_chunk(
+        "3. Chính sách ghi Write-Back và Write-Through\n"
+        "Write-Through ghi đồng thời dữ liệu mới vào cả cache và bộ nhớ chính.\n"
+        "Write-Back chỉ cập nhật dữ liệu trong cache và bật bit Dirty.",
+        semantic_score=None,
+    )
+    assert has_relevant_evidence("Trong tài liệu vừa tải lên, Write-Back khác Write-Through ở điểm nào?", [cache_chunk])
+    # Domain OOS must still fail closed
+    assert not has_relevant_evidence("Theo tài liệu trong thư viện, giá vàng SJC hôm nay ở Việt Nam là bao nhiêu?", [make_chunk("Giá trị kỳ vọng của hàm lợi ích.", semantic_score=0.0)])
+
+    # 4. When Call 1 includes both an off-topic claim from an unrelated doc and an invalid claim about query
+    # identifiers, and repair fails, rag_agent must NOT salvage the off-topic claim if all salvaged sources lack query identifiers.
+    unrelated_chunk = make_chunk("Trong sinh vật học, cấu trúc nhánh cây tuân theo quy luật tỷ lệ tự nhiên.", doc_id=1, page_num=269, semantic_score=0.7)
+    class ParaphraseBypassModel:
+        def __init__(self):
+            self.calls = 0
+        def chat_stream(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                yield json.dumps({
+                    "claims": [
+                        {"text": "Trong sinh vật học, cấu trúc nhánh cây tuân theo quy luật tỷ lệ.", "source_ids": ["S1"], "evidence_quote": "Trong sinh vật học, cấu trúc nhánh cây tuân theo quy luật tỷ lệ tự nhiên."},
+                        {"text": "IFS và L-System là công cụ mô hình hóa.", "source_ids": ["S1"], "evidence_quote": "Trong sinh vật học, cấu trúc nhánh cây tuân theo quy luật tỷ lệ tự nhiên."},
+                    ]
+                }, ensure_ascii=False)
+            else:
+                yield json.dumps({
+                    "claims": [
+                        {"text": "IFS và L-System giúp mô hình hóa sinh vật học.", "source_ids": ["S1"]},
+                    ]
+                }, ensure_ascii=False)
+    bypass_agent = PsychologyAgent(searcher=RecordingSearcher([unrelated_chunk]), ollama=ParaphraseBypassModel(), translator=NoTranslation())
+    bypass_res = bypass_agent.process_query_sync("Trong bài giảng Đồ họa Fractal, IFS và L-System dùng để làm gì?", model="test", embed_model=None, processing_level="standard")
+    assert bypass_res["response_kind"] == "generation_failed"
+    assert bypass_res["citations"] == []

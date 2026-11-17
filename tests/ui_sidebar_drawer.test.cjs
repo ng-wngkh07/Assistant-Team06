@@ -524,6 +524,11 @@ test('SID-04 HTML script order and CSS layer hierarchy prevent backdrop/collapse
   assert.match(spatialCss, /\.sidebar-backdrop\s*\{[\s\S]*?pointer-events:\s*none\s*!important/);
   assert.match(spatialCss, /body\.sidebar-open\s+\.sidebar-backdrop[\s\S]*?pointer-events:\s*auto\s*!important/);
   assert.match(spatialCss, /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.sidebar\s*\{[\s\S]*?bottom:\s*112px\s*!important/);
+  assert.match(spatialCss, /\.chat-header\s+\.icon-btn\s*>\s*\*\s*\{[\s\S]*?pointer-events:\s*none\s*!important/);
+  assert.match(spatialCss, /\.chat-header\s+#btn-account-trigger\s*\{[\s\S]*?text-align:\s*left\s*!important/);
+  assert.match(styleCss, /\.session-bar\s*\{[\s\S]*?z-index:\s*45;/);
+  assert.match(styleCss, /@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.session-bar\s*\{[\s\S]*?flex-direction:\s*column;/);
+  assert.match(styleCss, /\.card-face-body\s*\{[\s\S]*?min-height:\s*0;/);
 });
 
 test('SID-01 & SID-03: Desktop single controller, repeated toggles, no duplicate handlers, persisted state', () => {

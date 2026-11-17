@@ -63,3 +63,40 @@ def test_reviewed_or_other_quality_warning_does_not_trigger_formula_guard(needs_
     result, calls = answer(needs_review, warnings)
     assert result["insufficient_reason"] != "source_visual_content_unverified"
     assert calls > 0
+
+
+def test_whole_doc_filters_single_unreviewed_page_when_verified_chunks_exist():
+    class MultiPageDocSearcher:
+        def search_hybrid(self, query, **kwargs):
+            return [
+                {
+                    "doc_id": 140,
+                    "book_title": "Discrete Math",
+                    "filename": "cosologic.pdf",
+                    "page_num": 45,
+                    "chunk_index": 0,
+                    "text": "Quy tắc Modus Ponens cho phép suy ra q từ p và p kéo theo q.",
+                    "safe_text": "Quy tắc Modus Ponens cho phép suy ra q từ p và p kéo theo q.",
+                    "page_quality": {"needs_review": False, "warnings": ["unrepresented_formula_or_diagram_suspected"]},
+                },
+                {
+                    "doc_id": 140,
+                    "book_title": "Discrete Math",
+                    "filename": "cosologic.pdf",
+                    "page_num": 44,
+                    "chunk_index": 0,
+                    "text": "Trang 44 chưa kiểm định công thức.",
+                    "safe_text": "Trang 44 chưa kiểm định công thức.",
+                    "page_quality": {"needs_review": True, "warnings": ["unrepresented_formula_or_diagram_suspected"]},
+                },
+            ]
+
+    model = Model()
+    agent = PsychologyAgent(searcher=MultiPageDocSearcher(), ollama=model, translator=Translator())
+    result = agent.process_query_sync(
+        "Quy tắc Modus Ponens là gì?", source_document_id=140, model="test-ollama", embed_model=None,
+    )
+    assert result["response_kind"] == "answer"
+    assert result["insufficient_reason"] != "source_visual_content_unverified"
+    assert result["citations"] and result["citations"][0]["page_num"] == 45
+    assert model.calls >= 1

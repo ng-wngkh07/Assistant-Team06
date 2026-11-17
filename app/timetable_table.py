@@ -8,6 +8,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -16,10 +17,40 @@ import tempfile
 import unicodedata
 from pathlib import Path
 from PIL import Image, ImageOps, ImageDraw
-from app.config import BASE_DIR, OLLAMA_BASE_URL, OLLAMA_AUX_CHAT_MODEL, VISION_TIMEOUT_SECONDS
+from app.config import BASE_DIR, DATA_DIR, OLLAMA_BASE_URL, OLLAMA_AUX_CHAT_MODEL, VISION_TIMEOUT_SECONDS
 from app.gpu_lock import gpu_coordinator, GPUBusyError
 
-VERSION = 'registered-table-literal-v4-registration-hold'
+VERSION = 'registered-table-literal-v5-registration-hold'
+_CYRILLIC_TO_ASCII = str.maketrans("АВСЕНІКМОРТХавсенікмортх", "ABCEHIKMOPTXabcehikmoptx")
+
+
+def _normalize_ocr_code_lookalikes(text: str) -> str:
+    """Normalize Cyrillic uppercase/lowercase homoglyphs sometimes emitted by OCR on Latin codes."""
+    return (text or "").translate(_CYRILLIC_TO_ASCII)
+
+
+def _find_apple_vision_ocr() -> Path | None:
+    """Locate the native macOS Apple Vision OCR binary across checkout, DATA_DIR, and runtime roots."""
+    candidates: list[Path] = []
+    env_bin = os.getenv("STUDY_APPLE_VISION_OCR_BIN", "").strip()
+    if env_bin:
+        candidates.append(Path(env_bin))
+    candidates.extend([
+        Path(BASE_DIR) / "data/runtime/apple_vision_ocr",
+        Path(DATA_DIR) / "runtime/apple_vision_ocr",
+        Path(DATA_DIR).parent / "runtime/apple_vision_ocr",
+    ])
+    try:
+        candidates.append(Path(sys.executable).resolve().parents[2] / "data/runtime/apple_vision_ocr")
+    except IndexError:
+        pass
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                return cand
+        except OSError:
+            continue
+    return None
 
 
 def _find_tesseract_executable() -> str | None:
@@ -39,7 +70,7 @@ def _find_tesseract_executable() -> str | None:
 def cache_is_current(record):
     """Reuse exact-image results only while the OCR engine and auxiliary model match."""
     if not isinstance(record,dict) or record.get('version')!=VERSION: return False
-    path = (Path(BASE_DIR)/'data/runtime/apple_vision_ocr') if record.get('engine')=='apple-vision' else Path(shutil.which('tesseract') or '/nonexistent')
+    path = (_find_apple_vision_ocr() or Path('/nonexistent')) if record.get('engine')=='apple-vision' else Path(_find_tesseract_executable() or '/nonexistent')
     if not path.is_file(): return False
     digest=hashlib.sha256(path.read_bytes()).hexdigest()
     room_vision=record.get('room_vision')
@@ -82,22 +113,45 @@ def classify_registration_hold(lines):
     """
     text = ' '.join(_fold(line.get('text', '')) for line in lines)
     compact = re.sub(r'\s+', '', text)
-    if 'dangky' not in compact or 'monhoc' not in compact:
+    if 'dangky' not in compact or ('monhoc' not in compact and 'hocphan' not in compact):
         return None
     if (all(marker in compact for marker in ('thoigianbatdau', 'thoigianketthuc'))
             or ('dotdangky' in compact and 'thoigiandangky' in compact)):
         return {'classification': 'registration_windows', 'entries': [], 'source_cells': [],
                 'uncertainties': ['Ảnh chứa thời hạn đăng ký, không phải các buổi học; không dùng ngày đăng ký để tạo lịch học.']}
-    clock_range = re.search(r'\d{1,2}\s*[:g]\s*\d{2}\s*[-–→>]\s*\d{1,2}\s*[:g]\s*\d{2}', text)
-    if 'chuabiet' in compact and not clock_range:
+    clock_range = re.search(r'\d{1,2}\s*[:g]\s*\d{2}\s*[-–→>]+\s*\d{1,2}\s*[:g]\s*\d{2}', text)
+    is_reg_results = (
+        ('ketquadangky' in compact or ('mahocphan' in compact and 'tenhocphan' in compact))
+        and ('ngaydangky' in compact or 'sotinchi' in compact or 'hinhthucdangky' in compact)
+        and not clock_range
+        and not any(tok in compact for tok in ('thu2', 'thu3', 'thu4', 'thu5', 'thu6', 'thu7', 'chunhat', 'phonghoc', 'giobatdau', 'sotiet'))
+    )
+    if ('chuabiet' in compact and not clock_range) or is_reg_results:
         partial_entries = []
         seen_courses = set()
         for line in lines:
-            raw_line = (line.get('text') or '').strip()
-            code_match = re.search(r'\b([A-Z]{2,8}\d{3,8})\b(?:\s*[-–:]\s*(.+))?', raw_line)
+            raw_line = _normalize_ocr_code_lookalikes((line.get('text') or '').strip())
+            code_match = re.search(r'\b(?:\d{2,4})?([A-Z]{2,8}\.?\d{3,8}[A-Z]?)(?:_[A-Z0-9]+)?\b(?:\s*[-–:]\s*(.+))?', raw_line)
             if code_match:
-                c_code = code_match.group(1).strip()
-                c_name = (code_match.group(2) or '').strip() or c_code
+                c_code = code_match.group(1).replace('.', '').strip()
+                if re.fullmatch(r'HK\d+', c_code):
+                    continue
+                c_name = (code_match.group(2) or '').strip()
+                if not c_name and len(line.get('bounds', [])) == 4:
+                    ax, ay, aw, _ah = line['bounds']
+                    row_candidates = []
+                    for other in lines:
+                        ob = other.get('bounds', [])
+                        ot = (other.get('text') or '').strip()
+                        if len(ob) != 4 or not ot or ot == raw_line or re.fullmatch(r'\d+(?:[./]\d+)*', ot):
+                            continue
+                        if ob[0] > ax + aw * 0.5 and abs(ob[1] - ay) <= 0.025:
+                            if not re.search(r'^\d{2}/\d{2}/\d{4}\b|^(?:kế\s*hoạch|ngoài\s*kế\s*hoạch|học\s*vượt|st[t]|tên\s*học\s*phần)', ot, re.I):
+                                row_candidates.append((ob[0], ot))
+                    if row_candidates:
+                        row_candidates.sort(key=lambda x: x[0])
+                        c_name = row_candidates[0][1]
+                c_name = c_name or c_code
                 if c_code not in seen_courses:
                     seen_courses.add(c_code)
                     partial_entries.append({
@@ -110,8 +164,13 @@ def classify_registration_hold(lines):
                         'period': None,
                         'missing_fields': ['weekday', 'start_time', 'end_time'],
                     })
+        msg = (
+            'Ảnh là bảng Kết quả đăng ký học phần (chỉ có danh sách môn và ngày đăng ký, chưa có thứ, tiết/giờ học hay phòng học). Các môn đọc được đã giữ lại trong bảng nháp để bạn điền bổ sung hoặc gửi ảnh Thời khóa biểu đã xếp.'
+            if is_reg_results
+            else 'Ảnh đăng ký ghi lịch Chưa biết và chưa có khoảng giờ học. Các môn đọc được đã giữ lại trong bảng nháp để bạn điền bổ sung trực tiếp thứ và giờ học (hoặc gửi thêm ảnh lịch đã xếp).'
+        )
         return {'classification': 'incomplete_registration', 'entries': [], 'partial_entries': partial_entries, 'source_cells': [],
-                'uncertainties': ['Ảnh đăng ký ghi lịch Chưa biết và chưa có khoảng giờ học. Các môn đọc được đã giữ lại trong bảng nháp để bạn điền bổ sung trực tiếp thứ và giờ học (hoặc gửi thêm ảnh lịch đã xếp).']}
+                'uncertainties': [msg]}
     return None
 
 
@@ -137,7 +196,7 @@ def grid_weekday_evidence(lines):
         return {}
     codes = {}
     for line in lines:
-        match = re.fullmatch(r'\(([A-Z]{2,8}\d{4,10})\)', line.get('text', '').strip())
+        match = re.fullmatch(r'\(([A-Z]{2,8}\d{4,10}[A-Z]{0,3})\)', line.get('text', '').strip())
         if match and len(line.get('bounds', [])) == 4:
             codes.setdefault(match.group(1), []).append(line)
     result = {}
@@ -155,9 +214,76 @@ def grid_weekday_evidence(lines):
     return result
 
 
+def grid_room_evidence(lines):
+    """Extract literal room codes, period spans, and start/end clocks stacked around unique grid course-code anchors."""
+    codes = {}
+    for line in lines:
+        norm_text = _normalize_ocr_code_lookalikes(str(line.get('text', '')).strip())
+        if re.match(r'^LHP\b', norm_text, re.IGNORECASE):
+            continue
+        match = re.search(r'\(([A-Z]{2,8}\d{4,10}[A-Z]{0,3})\)', norm_text)
+        if match and len(line.get('bounds', [])) == 4:
+            codes.setdefault(match.group(1), []).append(line)
+
+    room_pat = re.compile(
+        r'^(?:(?:P\.?\s*|Phòng\s+)?[A-Z]\d?(?:[-.]\d{2,4}[A-Z]?|\d{2,4}[A-Z]?))$',
+        re.IGNORECASE,
+    )
+    skip_prefix = re.compile(r'^(?:LHP|GV|Email|Số\s*tiết|Tiết|Giờ)\b', re.IGNORECASE)
+    period_pat = re.compile(r'^tiet\s*[:.]?\s*(\d{1,2})\s*[-–]\s*(\d{1,2})\b', re.IGNORECASE)
+    clock_pat = re.compile(
+        r'^gio(?:\s*(?:bat\s*dau|hoc))?\s*[:.]?\s*(\d{1,2})\s*[hg:]\s*(\d{2})(?:\s*[-–→>]+\s*(\d{1,2})\s*[hg:]\s*(\d{2}))?',
+        re.IGNORECASE,
+    )
+    result = {}
+    for code, occurrences in codes.items():
+        if len(occurrences) != 1:
+            continue
+        anchor = occurrences[0]
+        ax, ay, aw, _ah = anchor['bounds']
+        acx = ax + aw / 2
+        above = []
+        cell_meta = {}
+        for line in lines:
+            raw_text = str(line.get('text', '')).strip()
+            text = _normalize_ocr_code_lookalikes(raw_text)
+            folded = _fold(raw_text)
+            bounds = line.get('bounds', [])
+            if not text or len(bounds) != 4:
+                continue
+            lx, ly, lw, _lh = bounds
+            lcx = lx + lw / 2
+            dy = ly - ay
+            if len(text) <= 24 and not skip_prefix.match(text) and code not in text:
+                if 0.0 < dy <= 0.16 and abs(lcx - acx) <= 0.09 and room_pat.fullmatch(text):
+                    above.append((dy, text, bounds))
+            if -0.22 <= dy <= 0.05 and abs(lcx - acx) <= 0.10:
+                pm = period_pat.match(folded)
+                if pm:
+                    cell_meta['period'] = f"{int(pm.group(1))}-{int(pm.group(2))}"
+                cm = clock_pat.match(folded)
+                if cm:
+                    sh, sm = int(cm.group(1)), int(cm.group(2))
+                    if 0 <= sh <= 23 and 0 <= sm <= 59:
+                        cell_meta['start_time'] = f"{sh:02d}:{sm:02d}"
+                    if cm.group(3) and cm.group(4):
+                        eh, em = int(cm.group(3)), int(cm.group(4))
+                        if 0 <= eh <= 23 and 0 <= em <= 59:
+                            cell_meta['end_time'] = f"{eh:02d}:{em:02d}"
+        if above or cell_meta:
+            record = {'course_code_bounds': anchor['bounds'], **cell_meta}
+            if above:
+                above.sort(key=lambda item: item[0])
+                _, room_text, room_bounds = above[0]
+                record['room'] = room_text
+                record['room_bounds'] = room_bounds
+            result[code] = record
+    return result
+
+
 def local_ocr_identity():
-    paths = [Path(BASE_DIR)/'data/runtime/apple_vision_ocr', Path(shutil.which('tesseract') or '/nonexistent')]
-    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in paths if p.is_file()}
+    paths = [p for p in (_find_apple_vision_ocr(), Path(_find_tesseract_executable() or '/nonexistent')) if p and p.is_file()]
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 
 
 def read_grid_weekdays(image_bytes):
@@ -170,6 +296,22 @@ def read_grid_weekdays(image_bytes):
         for record in evidence.values():
             record.update(engine=engine, engine_digest=digest)
         return evidence
+
+
+def read_grid_cell_evidence(image_bytes):
+    """Return both column weekday and cell room corroboration from a single OCR pass."""
+    with tempfile.TemporaryDirectory(prefix='timetable-columns-') as td:
+        path = Path(td) / 'input.png'
+        with Image.open(io.BytesIO(image_bytes)) as original:
+            ImageOps.exif_transpose(original).convert('RGB').save(path, 'PNG')
+        lines, engine, digest = read_local_lines(path)
+        weekdays = grid_weekday_evidence(lines)
+        rooms = grid_room_evidence(lines)
+        for record in weekdays.values():
+            record.update(engine=engine, engine_digest=digest)
+        for record in rooms.values():
+            record.update(engine=engine, engine_digest=digest)
+        return weekdays, rooms
 
 
 def parse_registered_table(lines, room_reader=None):
@@ -268,8 +410,8 @@ def parse_registered_table(lines, room_reader=None):
 
 
 def read_local_lines(path):
-    binary=Path(BASE_DIR)/'data/runtime/apple_vision_ocr'
-    if binary.is_file():
+    binary = _find_apple_vision_ocr()
+    if binary and binary.is_file():
         try:
             r=subprocess.run([str(binary),str(path)],capture_output=True,text=True,timeout=25)
             data=json.loads(r.stdout)

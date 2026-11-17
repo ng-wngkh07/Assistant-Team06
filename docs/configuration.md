@@ -29,7 +29,7 @@ See `.env.example` and `app/config.py` for current defaults.
 | `KNOWLEDGE_PACK_PATH`, `KNOWLEDGE_PACK_SHA256` | Prepared library archive and trusted publisher digest; set both together for explicit `--install-pack --profile local` |
 | `MLX_MODEL_DIR`, `MLX_BGE_MODEL_DIR` | Optional paths to the installed native QA and embedding artifacts |
 | `MLX_CONTEXT_TOKENS` | Operational context budget for the MLX backend |
-| `MLX_PREFILL_STEP_SIZE` | Optional bounded MLX prefill chunk size (`128` default; clamped to `64..1024`) |
+| `MLX_PREFILL_STEP_SIZE` | Optional bounded MLX prefill chunk size (`256` default in `TrainedModelClient` worker env, `128` fallback in direct `mlx_infer.py`; clamped to `64..1024`) |
 | `HOST`, `PORT` | Listening address and port |
 
 The sample leaves QA selection to the platform default. Existing process variables take precedence, so review stale model overrides during migration. The Mac requires a separate native MLX runtime and locally installed weights; see [macOS setup](../README_MAC.md). An unavailable selected artifact must fail visibly rather than choose a different model.
@@ -56,6 +56,8 @@ The `scripts/dev.py` `.env` loader accepts its explicit `ENV_KEYS` allowlist (`S
 | `STUDY_ACCOUNT_MAX_STORAGE_MB` | Maximum non-deduplicated upload storage in MiB per account (default `250`) |
 | `STUDY_MIN_FREE_DISK_MB` | Minimum free disk headroom threshold for `/api/health` infrastructure warning (`512` default) and `backend_service.py` preflight |
 | `STUDY_DISABLE_STARTUP_WARMUP` | Disable background startup warmup of the resident MLX prefix KV cache on macOS (`1` disables; default `0`) |
+| `STUDY_PUBLIC_URL` | Optional public `http(s)` origin used to qualify relative document `URL:`/`ATTACH:` links in exported `.ics` calendars (falls back to `request.base_url`) |
+| `STUDY_APPLE_VISION_OCR_BIN` | Optional explicit path to the macOS native `apple_vision_ocr` helper binary for registered-table timetable extraction |
 
 For example, a loopback local session with account login and watched shared sources:
 
@@ -75,7 +77,7 @@ Use an ignored private operator environment file for deployment paths and source
 
 ## Automatic source ingestion
 
-`STUDY_SRC_AUTO_WATCH=1` (alias `AGENT_SRC_AUTO_WATCH`) enables the backend-managed watcher; default is off. `STUDY_SRC_WATCH_POLL_SECONDS` defaults to `2.0`, and `STUDY_SRC_WATCH_DEBOUNCE_SECONDS` to `1.5`. Export them in the launching environment before startup. The local profile does not otherwise rebuild an existing library automatically.
+`STUDY_SRC_AUTO_WATCH=1` (alias `AGENT_SRC_AUTO_WATCH`) enables the backend-managed watcher; default is off. `STUDY_SRC_WATCH_POLL_SECONDS` defaults to `2.0`, `STUDY_SRC_WATCH_DEBOUNCE_SECONDS` to `1.5`, and `STUDY_BACKGROUND_GPU_COOLDOWN_SECONDS` defaults to `120` so background OCR/vectorization yields to interactive requests. Export them in the launching environment before startup. The local profile does not otherwise rebuild an existing library automatically.
 
 Settled new supported files under `AGENT_SRC_DIR` are indexed incrementally under the corpus writer lock and model coordinator. Status is visible through the library UI and `/api/storage` or `/api/status`; private state lives at `AGENT_DATA_DIR/runtime/src_watcher_state.json`. Extraction/indexing is retrieval preparation, not model training or source approval.
 
