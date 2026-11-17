@@ -243,6 +243,16 @@ def is_heading_or_toc_chunk(text: str) -> bool:
         if section_lines > 0 and section_lines >= len(lines) - 1:
             return True
 
+    if len(lines) <= 2 and len(t) <= 48:
+        # Filter bare slide/section dividers (e.g. "L-System", "Tổng quan Fractal",
+        # "This page intentionally left blank") that carry no propositional content.
+        if not re.search(r"[.=≠≤≥≈:;?!()]", t) and not re.search(
+            r"\b(?:là|gồm|gọi|được|dùng|means|is|are)\b",
+            t,
+            re.IGNORECASE,
+        ):
+            return True
+
     return False
 
 

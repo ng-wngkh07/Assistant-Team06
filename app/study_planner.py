@@ -768,6 +768,22 @@ def delete_task(task_id: int, db_path: Optional[Path | str] = None) -> bool:
 # ==============================================================================
 
 
+def _sync_practice_notes(notes: str, practice_id: Optional[str]) -> str:
+    """Keep session notes aligned once a persistent practice set is attached."""
+    raw = str(notes or "")
+    p_id = str(practice_id or "").strip()
+    if not p_id:
+        return raw
+    cleaned = re.sub(r"\s*\(Chưa có bài tập PDF đính kèm\)", "", raw).strip()
+    cleaned = re.sub(r"(?:\s*\|\s*)+$", "", cleaned).strip()
+    pdf_path = f"/api/learning/export-pdf/{p_id}"
+    if "/api/learning/export-pdf/" in cleaned:
+        return re.sub(r"/api/learning/export-pdf/[^\s|]+", pdf_path, cleaned)
+    if "/api/timetable/worksheets/" in cleaned:
+        return cleaned
+    return f"{cleaned} | Bài tập đính kèm: {pdf_path}" if cleaned else f"Bài tập đính kèm: {pdf_path}"
+
+
 def _enrich_session(row_dict: Dict[str, Any]) -> Dict[str, Any]:
     d = dict(row_dict)
     w = int(d.get("weekday") or 1)
@@ -799,6 +815,8 @@ def _enrich_session(row_dict: Dict[str, Any]) -> Dict[str, Any]:
 
     if p_id:
         d["pdf_url"] = f"/api/learning/export-pdf/{p_id}"
+        if d.get("notes"):
+            d["notes"] = _sync_practice_notes(d["notes"], p_id)
     elif ws_id:
         d["pdf_url"] = f"/api/timetable/worksheets/{ws_id}.pdf"
     else:
@@ -868,12 +886,18 @@ def update_session_practice(
         cols = {r[1] for r in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
         updates = []
         params = []
+        p_id_clean = str(practice_id or "").strip()
         if "practice_id" in cols:
             updates.append("practice_id = ?")
-            params.append(str(practice_id or "").strip())
+            params.append(p_id_clean)
         if "exercise_status" in cols:
             updates.append("exercise_status = ?")
             params.append(str(exercise_status or "").strip())
+        if "notes" in cols and p_id_clean:
+            row = conn.execute("SELECT notes FROM study_sessions WHERE id = ?", (int(session_id),)).fetchone()
+            if row is not None:
+                updates.append("notes = ?")
+                params.append(_sync_practice_notes(row[0], p_id_clean))
         if not updates:
             return False
         params.append(int(session_id))
@@ -2750,6 +2774,8 @@ def get_combined_weekly_schedule(db_path: Optional[Path | str] = None) -> Dict[s
             "course": s["course"],
             "classified_topic": s.get("classified_topic") or "",
             "worksheet_id": s.get("worksheet_id") or "",
+            "practice_id": s.get("practice_id") or None,
+            "exercise_status": s.get("exercise_status") or ("available" if (s.get("practice_id") or s.get("worksheet_id")) else "not_generated"),
             "pdf_url": s.get("pdf_url"),
             "priority": s.get("priority", "medium"),
             "priority_label": s.get("priority_label", "Trung bình"),

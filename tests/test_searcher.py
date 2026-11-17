@@ -65,6 +65,9 @@ def test_slide_outline_prefixed_with_trang_number_is_filtered_as_toc():
         "Hệ L-System được đề xuất năm 1968 để mô hình hóa cấu trúc phân nhánh của thực vật thông qua tập luật viết lại song song."
     )
     assert is_heading_or_toc_chunk(slide_toc) is True
+    assert is_heading_or_toc_chunk("L-System") is True
+    assert is_heading_or_toc_chunk("Tổng quan Fractal") is True
+    assert is_heading_or_toc_chunk("IFS là hệ hàm lặp co.") is False
     assert is_heading_or_toc_chunk(slide_real) is False
 
 
