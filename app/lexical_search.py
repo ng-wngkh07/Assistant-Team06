@@ -12,22 +12,34 @@ STOPWORDS = {
     "là", "gì", "thế", "nào", "sao", "ra", "như", "được", "có", "của", "trong", "ở", "về",
     "cho", "với", "theo", "và", "hoặc", "hay", "những", "các", "một", "này", "đó", "kia",
     "bởi", "tại", "khi", "để", "thì", "mà", "nếu", "bị", "do", "từ", "hãy", "nêu", "biết",
+    "bài", "giảng", "tài", "liệu", "sách", "giáo", "trình", "dùng", "làm", "nói", "giải",
+    "thích", "trình", "bày", "so", "sánh", "phân", "tích", "bao", "nhiêu", "đây", "vậy",
+    "ấy", "câu", "hỏi", "trên", "dưới", "học",
 }
 
 
 def clean_fts_query(query: str) -> str:
     """Sanitize query string for FTS5 syntax, avoiding syntax errors with special chars."""
-    cleaned = re.sub(r'["\'\*\^\:\(\)\[\]\{\}\+\-\~]', " ", query)
-    words = [w.strip() for w in cleaned.split() if w.strip()]
+    cleaned = re.sub(r"[^\w\s]", " ", query, flags=re.UNICODE)
+    words = [
+        w.strip()
+        for w in cleaned.split()
+        if w.strip() and not (len(w.strip()) == 1 and w.strip().isalpha())
+    ]
+    if not words:
+        words = [w.strip() for w in cleaned.split() if w.strip()]
     if not words:
         return ""
     meaningful = [w for w in words if w.lower() not in STOPWORDS]
     target_words = meaningful if meaningful else words
-    terms = [f'"{w}"*' for w in target_words]
-    w_lower = [w.lower() for w in words]
+    terms = [
+        (f'"{w}"' if (w.isupper() and len(w) <= 5) else f'"{w}"*')
+        for w in target_words
+    ]
+    w_lower = [w.lower() for w in re.findall(r"\w+", query)]
     if "xạ" in w_lower and "tuyến" in w_lower:
         terms.extend(['"xạtuyến"*', '"sốtuyến"*'])
-    return " OR ".join(terms)
+    return " OR ".join(dict.fromkeys(terms))
 
 
 def extract_document_scope_tokens(query: str) -> List[str]:

@@ -2485,7 +2485,21 @@ class PsychologyAgent:
         if (invalid_ids or not valid_ids) and accepted_from_primary and not formula_transcription_failed and failure_reason != "positional_contradiction":
             salvaged_claims = [entry["claim"] for entry in accepted_from_primary]
             salvaged_sids = {sid for c in salvaged_claims for sid in c.get("source_ids", [])}
-            if not matched_answer_ids or matched_answer_ids.intersection(salvaged_sids):
+            # Never salvage generic claims from unrelated sources when the query asks about specific
+            # technical acronyms/hyphenated identifiers absent from every salvaged source.
+            from app.rag_evidence_validator import _ROMAN_OR_COMMON_ACRONYMS
+            req_idents = [
+                m.group(1)
+                for m in re.finditer(r"\b([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+|[A-Z][A-Z0-9]{1,9})\b", resolved_query or "")
+                if m.group(1).upper() not in _ROMAN_OR_COMMON_ACRONYMS
+            ]
+            salvaged_src_blob = " ".join(safe_texts_budgeted.get(sid, "") for sid in salvaged_sids)
+            missing_all_idents = bool(req_idents) and not any(
+                re.search(rf"\b{re.escape(ident)}\b", salvaged_src_blob, re.I)
+                or ("-" in ident and ident.replace("-", "").lower() in re.sub(r"[^a-z0-9]", "", salvaged_src_blob.lower()))
+                for ident in req_idents
+            )
+            if (not matched_answer_ids or matched_answer_ids.intersection(salvaged_sids)) and not missing_all_idents:
                 salv_answer, salv_val, salv_claims_map, salv_quotes_map = _render_claims(salvaged_claims)
                 salv_clean = clean_answer(salv_answer)
                 if (

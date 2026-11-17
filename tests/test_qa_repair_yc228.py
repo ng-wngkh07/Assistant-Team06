@@ -309,3 +309,29 @@ def test_claim_citing_unrelated_source_for_query_identifier_or_pure_abstention_i
     assert has_relevant_evidence("Trong tài liệu vừa tải lên, Write-Back khác Write-Through ở điểm nào?", [cache_chunk])
     # Domain OOS must still fail closed
     assert not has_relevant_evidence("Theo tài liệu trong thư viện, giá vàng SJC hôm nay ở Việt Nam là bao nhiêu?", [make_chunk("Giá trị kỳ vọng của hàm lợi ích.", semantic_score=0.0)])
+
+    # 4. When Call 1 includes both an off-topic claim from an unrelated doc and an invalid claim about query
+    # identifiers, and repair fails, rag_agent must NOT salvage the off-topic claim if all salvaged sources lack query identifiers.
+    unrelated_chunk = make_chunk("Trong sinh vật học, cấu trúc nhánh cây tuân theo quy luật tỷ lệ tự nhiên.", doc_id=1, page_num=269, semantic_score=0.7)
+    class ParaphraseBypassModel:
+        def __init__(self):
+            self.calls = 0
+        def chat_stream(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                yield json.dumps({
+                    "claims": [
+                        {"text": "Trong sinh vật học, cấu trúc nhánh cây tuân theo quy luật tỷ lệ.", "source_ids": ["S1"], "evidence_quote": "Trong sinh vật học, cấu trúc nhánh cây tuân theo quy luật tỷ lệ tự nhiên."},
+                        {"text": "IFS và L-System là công cụ mô hình hóa.", "source_ids": ["S1"], "evidence_quote": "Trong sinh vật học, cấu trúc nhánh cây tuân theo quy luật tỷ lệ tự nhiên."},
+                    ]
+                }, ensure_ascii=False)
+            else:
+                yield json.dumps({
+                    "claims": [
+                        {"text": "IFS và L-System giúp mô hình hóa sinh vật học.", "source_ids": ["S1"]},
+                    ]
+                }, ensure_ascii=False)
+    bypass_agent = PsychologyAgent(searcher=RecordingSearcher([unrelated_chunk]), ollama=ParaphraseBypassModel(), translator=NoTranslation())
+    bypass_res = bypass_agent.process_query_sync("Trong bài giảng Đồ họa Fractal, IFS và L-System dùng để làm gì?", model="test", embed_model=None, processing_level="standard")
+    assert bypass_res["response_kind"] == "generation_failed"
+    assert bypass_res["citations"] == []

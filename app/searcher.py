@@ -810,6 +810,35 @@ class HybridSearcher:
                     except Exception:
                         pass
 
+                # 3.5 Distinctive named technical identifiers / acronyms (e.g. IFS, L-System, Write-Back, Fractal)
+                ident_tokens = re.findall(
+                    r"\b(?:[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+|[A-Z]{2,}[A-Za-z0-9]*)\b",
+                    query,
+                )
+                ident_clauses = []
+                for ident in dict.fromkeys(ident_tokens):
+                    if "-" in ident:
+                        parts = [p for p in ident.split("-") if p]
+                        if parts:
+                            ident_clauses.append("(" + " AND ".join(f'"{p}"' for p in parts) + ")")
+                    elif len(ident) >= 2:
+                        ident_clauses.append(f'"{ident}"')
+                if ident_clauses:
+                    clauses_to_run = ident_clauses if len(ident_clauses) <= 4 else [" OR ".join(ident_clauses)]
+                    per_clause_limit = max(fetch_limit // len(clauses_to_run), 25)
+                    for clause in clauses_to_run:
+                        try:
+                            i_rows = conn.execute(f"""
+                                SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num,
+                                       c.chunk_index, c.text, bm25(chunks_fts) as rank_score
+                                FROM chunks_fts f JOIN chunks c ON f.rowid = c.id
+                                WHERE chunks_fts MATCH ? {doc_filter}
+                                ORDER BY rank_score ASC LIMIT ?
+                            """, (f"text : ({clause})", *doc_params, per_clause_limit)).fetchall()
+                            phrase_rows.extend(i_rows)
+                        except Exception:
+                            pass
+
                 # 4. Broader OR terms query
                 cursor = conn.execute(f"""
                     SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num, c.chunk_index, c.text,
@@ -822,6 +851,20 @@ class HybridSearcher:
                 """, (fts_query, *doc_params, fetch_limit))
 
                 rows = phrase_rows + cursor.fetchall()
+                unique_idents = list(dict.fromkeys(ident_tokens))
+                doc_ident_sets: dict[int, set[str]] = {}
+                if unique_idents:
+                    for r in rows:
+                        r_txt = r["text"]
+                        did = r["doc_id"]
+                        hits = doc_ident_sets.setdefault(did, set())
+                        for ident in unique_idents:
+                            if ident in hits:
+                                continue
+                            if re.search(rf"\b{re.escape(ident)}\b", r_txt, re.I) or (
+                                "-" in ident and re.search(rf"\b{re.escape(ident.replace('-', ' '))}\b", r_txt, re.I)
+                            ):
+                                hits.add(ident)
                 seen = set()
                 scored_candidates = []
                 for r in rows:
@@ -832,17 +875,37 @@ class HybridSearcher:
                     # SQLite BM25 is negative: greater magnitude is a better match.
                     relevance = 10.0 * raw_score / (1.0 + raw_score)
 
-                    # Prioritize named document scope using unaccented matching
+                    # Prioritize named document scope using exact ASCII-folded tokens (Đ/đ -> d/D before NFD)
                     if scope_tokens:
                         import unicodedata
-                        fn_ascii = unicodedata.normalize("NFD", r["filename"]).encode("ascii", "ignore").decode().lower()
-                        scope_ascii = [unicodedata.normalize("NFD", tok).encode("ascii", "ignore").decode().lower() for tok in scope_tokens]
-                        matches = sum(1 for tok in scope_ascii if tok in fn_ascii)
-                        if matches > 0:
-                            relevance += (matches / len(scope_ascii)) * 30.0
+                        def _fold_scope(s: str) -> str:
+                            s = (s or "").replace("đ", "d").replace("Đ", "D")
+                            return unicodedata.normalize("NFD", s).encode("ascii", "ignore").decode("ascii").lower()
+                        fn_ascii = _fold_scope(f"{r['filename']} {r['book_title'] or ''}")
+                        fn_words = set(re.findall(r"[a-z0-9]+", fn_ascii))
+                        scope_ascii = [tok for tok in (_fold_scope(t) for t in scope_tokens) if len(tok) >= 2]
+                        if scope_ascii:
+                            matches = sum(
+                                1 for tok in scope_ascii
+                                if tok in fn_words or (len(tok) >= 5 and tok in fn_ascii)
+                            )
+                            if matches > 0:
+                                relevance += (matches / len(scope_ascii)) * 30.0
 
                     txt = r["text"]
                     txt_lower = txt.lower()
+                    if unique_idents:
+                        matched_idents = 0
+                        for ident in unique_idents:
+                            if re.search(rf"\b{re.escape(ident)}\b", txt, re.I) or (
+                                "-" in ident and re.search(rf"\b{re.escape(ident.replace('-', ' '))}\b", txt, re.I)
+                            ):
+                                matched_idents += 1
+                        if matched_idents:
+                            relevance += matched_idents * 14.0
+                        doc_cov = len(doc_ident_sets.get(r["doc_id"], ()))
+                        if doc_cov >= 2:
+                            relevance += doc_cov * 12.0
                     txt_norm = re.sub(r"xạtuyến", "xạ tuyến", txt_lower)
 
                     locally_attached, has_explanation, is_cat = check_local_definition_and_catalog(txt, concept_phrases)
@@ -1670,20 +1733,64 @@ class HybridSearcher:
 
         # For broad queries, allow more chunks per book (up to 4) so multi-chapter concepts are retained
         book_limit = max_per_book if max_per_book is not None else (4 if is_broad else 2)
+        hyb_idents = list(dict.fromkeys(re.findall(
+            r"\b(?:[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+|[A-Z]{2,}[A-Za-z0-9]*)\b",
+            query_clean,
+        )))
+
+        def _chunk_idents(txt: str) -> set[str]:
+            if len(hyb_idents) < 2:
+                return set()
+            matched = set()
+            for ident in hyb_idents:
+                if re.search(rf"\b{re.escape(ident)}\b", txt, re.I) or (
+                    "-" in ident and re.search(rf"\b{re.escape(ident.replace('-', ' '))}\b", txt, re.I)
+                ):
+                    matched.add(ident.casefold())
+            return matched
 
         diverse = []
         per_book = {}
+        per_book_idents: dict[str, set[str]] = {}
+        deferred_same_book = []
         for item in combined:
             rel = _content_relevance(item["text"])
             if rel < -0.4:
                 continue
             filename = item["filename"]
+            used_slots = per_book.get(filename, 0)
+            if used_slots >= book_limit:
+                continue
+            c_idents = _chunk_idents(item["text"])
+            covered_so_far = per_book_idents.get(filename, set())
+            # When filling remaining slots in a book and multi-identifier coverage is possible,
+            # defer redundant slots that repeat an already-covered identifier until uncovered ones are tried.
+            if used_slots >= 1 and len(hyb_idents) >= 2 and c_idents and c_idents.issubset(covered_so_far):
+                has_later_uncovered = any(
+                    later is not item
+                    and later["filename"] == filename
+                    and _content_relevance(later["text"]) >= -0.4
+                    and bool(_chunk_idents(later["text"]) - covered_so_far)
+                    for later in combined
+                )
+                if has_later_uncovered:
+                    deferred_same_book.append(item)
+                    continue
+            diverse.append(item)
+            per_book[filename] = used_slots + 1
+            if c_idents:
+                per_book_idents.setdefault(filename, set()).update(c_idents)
+            if len(diverse) >= top_k:
+                break
+
+        for item in deferred_same_book:
+            if len(diverse) >= top_k:
+                break
+            filename = item["filename"]
             if per_book.get(filename, 0) >= book_limit:
                 continue
             diverse.append(item)
             per_book[filename] = per_book.get(filename, 0) + 1
-            if len(diverse) >= top_k:
-                break
 
         # If top_k not reached, fill with remaining relevant candidates from matching books
         # but NEVER force unrelated filler or negative-relevance items just to reach top_k.
