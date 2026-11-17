@@ -74,7 +74,7 @@
         : '<span class="sched-badge badge-window">📖 Sẽ học trong tuần</span>';
 
       let exActionHtml = '';
-      if (item.practice_id || item.exercise_status === 'available') {
+      if (item.practice_id) {
         exActionHtml = `<button type="button" class="btn btn-sm btn-outline btn-open-lesson-practice" data-practice-id="${esc(item.practice_id)}" style="padding: 3px 8px; font-size: 11px; margin-right: 4px;" title="Mở bộ câu hỏi luyện tập">📝 Bài tập</button>`;
       } else if (item.exercise_status === 'unavailable') {
         exActionHtml = `<button type="button" class="btn btn-sm btn-outline btn-retry-lesson-practice" data-id="${Number(item.id)}" style="padding: 3px 8px; font-size: 11px; margin-right: 4px;" title="Thử tạo lại bài tập từ tài liệu nguồn">🔄 Thử lại</button>`;

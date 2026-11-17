@@ -198,8 +198,15 @@ def is_heading_or_toc_chunk(text: str) -> bool:
         if prose_lines < 2:
             return True
 
-    has_toc_header = any(top_tl.startswith(prefix) for prefix in ("mục lục", "table of contents")) or (
-        top_tl.startswith("nội dung") and any(w in tl for w in ("chương trình", "mục lục", "chi tiết", "bài giảng", "khóa học"))
+    first_tl = top_tl
+    if len(content_lines) >= 2 and re.match(r"^(?:trang|slide|page)\s*\d+\b", top_tl):
+        first_tl = content_lines[1].strip().lower()
+    has_toc_header = any(first_tl.startswith(prefix) for prefix in ("mục lục", "table of contents")) or (
+        first_tl.startswith("nội dung")
+        and (
+            any(w in tl for w in ("chương trình", "mục lục", "chi tiết", "bài giảng", "khóa học"))
+            or not any(len(l) > 60 for l in content_lines)
+        )
     )
     if has_toc_header:
         substantive = [

@@ -627,7 +627,7 @@ class StudyMaterialManager:
             ev_quote = q.get("evidence_quote")
             if not isinstance(ev_quote, str) or not ev_quote.strip():
                 continue
-            if not any(ev_quote in chunk_text for chunk_text in page_chunks[p_num]):
+            if not any(self._quote_matches_chunk(ev_quote, chunk_text) for chunk_text in page_chunks[p_num]):
                 continue
             choices = q.get("choices")
             norm_choices = []
@@ -732,7 +732,7 @@ class StudyMaterialManager:
                 proposals = []
                 for index, item in enumerate(batch,1):
                     full_source = next(text for text in page_chunks[item['page_num']]
-                                       if item['evidence_quote'] in text)
+                                       if self._quote_matches_chunk(item['evidence_quote'], text))
                     passages_for_review[index] = {'safe_text': sanitize_for_prompt_context(full_source)}
                     proposals.append({**item,'source':{'chunk_id':index,'snippet':item['evidence_quote']}})
                 try:
@@ -805,14 +805,14 @@ class StudyMaterialManager:
             ev_quote = f.get("evidence_quote")
             if not isinstance(ev_quote, str) or not ev_quote.strip():
                 continue
-            if not any(ev_quote in chunk_text for chunk_text in page_chunks[p_num]):
+            if not any(self._quote_matches_chunk(ev_quote, chunk_text) for chunk_text in page_chunks[p_num]):
                 continue
             answer_text = html.unescape(back).strip()
-            if answer_text not in ev_quote or answer_text == ev_quote.strip():
+            masked = self._mask_answer_in_quote(ev_quote, answer_text)
+            if masked is None:
                 continue
             if any(item['back'].casefold() == answer_text.casefold() for item in valid_flashcards):
                 continue
-            masked = ev_quote.replace(answer_text, "[…]", 1)
             source_question = f"Điền phần còn thiếu trong trích đoạn:\n{masked}\nPhần […] là gì?"
             valid_flashcards.append({
                 "id": f.get("id") if isinstance(f.get("id"), int) else (len(valid_flashcards) + 1),
@@ -1487,6 +1487,32 @@ class StudyMaterialManager:
     def fallback_generate_flashcards(self, passages: List[Dict[str, Any]], count: int = 5) -> List[Dict[str, Any]]:
         return fallback_generate_flashcards(passages, count=count)
 
+    @staticmethod
+    def _quote_matches_chunk(ev_quote: str, chunk_text: str) -> bool:
+        """Verify evidence quote against chunk text, tolerating PDF soft line-wraps."""
+        if not ev_quote or not chunk_text:
+            return False
+        if ev_quote in chunk_text:
+            return True
+        return re.sub(r"\s+", " ", ev_quote).strip() in re.sub(r"\s+", " ", chunk_text).strip()
+
+    @staticmethod
+    def _mask_answer_in_quote(ev_quote: str, answer_text: str) -> Optional[str]:
+        """Replace answer span inside ev_quote even when soft PDF linebreaks split words."""
+        if not ev_quote or not answer_text:
+            return None
+        if answer_text in ev_quote:
+            if answer_text == ev_quote.strip():
+                return None
+            return ev_quote.replace(answer_text, "[…]", 1)
+        tokens = [re.escape(tok) for tok in answer_text.split()]
+        if not tokens:
+            return None
+        match = re.search(r"\s+".join(tokens), ev_quote)
+        if not match or match.group(0).strip() == ev_quote.strip():
+            return None
+        return ev_quote[:match.start()] + "[…]" + ev_quote[match.end():]
+
     def list_available_documents(self, indexed_docs: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
         """Return indexed documents plus uploaded session materials and discoverable local study files."""
         import sqlite3
@@ -1512,8 +1538,11 @@ class StudyMaterialManager:
             seen_filenames.add(fname)
             results.append(d)
 
-        with self._lock:
-            cached_records = list(self._materials.values())
+        if hasattr(self, "list_materials"):
+            cached_records = self.list_materials()
+        else:
+            with self._lock:
+                cached_records = list(self._materials.values())
 
         for mat in reversed(cached_records):
             fname = mat.get("filename")
@@ -1522,6 +1551,7 @@ class StudyMaterialManager:
             seen_filenames.add(fname)
             results.append({
                 "id": mat.get("doc_id"),
+                "material_id": mat.get("id") or mat.get("material_id"),
                 "filename": fname,
                 "clean_title": mat.get("clean_title") or fname,
                 "total_pages": mat.get("total_pages") or 1,
@@ -1649,10 +1679,14 @@ class StudyMaterialManager:
             raw_bytes = self._raw_files.get(material.get("id"))
         if raw_bytes is not None:
             setattr(extracted, "_raw_bytes", raw_bytes)
-        return self.generate_materials_from_pages(
+        record = self.generate_materials_from_pages(
             extracted, quiz_count=quiz_count, flashcard_count=flashcard_count,
             difficulty=difficulty, model=model,
         )
+        persist_fn = getattr(self, "persist_material_record", None)
+        if callable(persist_fn):
+            persist_fn(record, raw_bytes=raw_bytes)
+        return record
 
     @staticmethod
     def _unverified_visual_pages(filename: str, page_from: int, page_to: int) -> List[int]:

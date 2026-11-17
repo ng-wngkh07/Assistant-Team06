@@ -24,7 +24,7 @@ from app import timetable_store
 logger = logging.getLogger(__name__)
 
 VLM_MODEL_NAME = OLLAMA_AUX_CHAT_MODEL
-PROMPT_VERSION = "v6-timetable-literal-cells"
+PROMPT_VERSION = "v7-timetable-literal-cells"
 MAX_IMAGE_BYTES = 15 * 1024 * 1024  # 15 MB
 MAX_PIXELS = 40_000_000  # Decompression safety (e.g. 8000x5000)
 MAX_INFERENCE_EDGE = 1600
@@ -78,8 +78,8 @@ QUY TẮC TRÍCH XUẤT:
 }
 
 2. Với trường weekday_label: BẮT BUỘC chép nguyên văn chữ hoặc nhãn thứ xuất hiện trên cột/hàng của ảnh (ví dụ: "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ nhật", "Monday", "Wednesday"...). Tuyệt đối không tự suy diễn số. Nếu không có nhãn thứ rõ ràng, để null.
-3. Với start_time và end_time: Chỉ điền chuỗi 24h "HH:MM" (ví dụ "07:30", "09:00") khi trong ảnh CÓ GIỜ ĐỒNG HỒ CỤ THỂ. Nếu trong ảnh CHỈ CÓ TIẾT (ví dụ Tiết 1-3, Tiết 7-9) mà KHÔNG có giờ đồng hồ cụ thể, BẮT BUỘC để giá trị là null (không điền chuỗi "null").
-4. Với period: Điền chuỗi tiết học nếu có (ví dụ "1-3", "Tiết 1-3"), không có để null.
+3. Với start_time và end_time: Chỉ điền chuỗi 24h "HH:MM" (ví dụ "07:30", "09:00"; nếu ảnh ghi "12g45" thì chuẩn hóa thành "12:45") khi trong ảnh CÓ GIỜ ĐỒNG HỒ CỤ THỂ. Nếu ảnh chỉ ghi "Giờ bắt đầu" mà không có giờ kết thúc thì điền start_time và để end_time=null; nếu ảnh CHỈ CÓ TIẾT (ví dụ Tiết 1-3, Tiết 7-9) mà KHÔNG có giờ đồng hồ cụ thể, BẮT BUỘC để giá trị là null (không điền chuỗi "null").
+4. Với period: Điền khoảng tiết học từ dòng "Tiết" (ví dụ "Tiết: 7-11" -> "7-11", "Tiết 1-3" -> "1-3"), KHÔNG lấy giá trị ở dòng "Số tiết" (tổng số lượng tiết); không có để null.
 5. Với room: Điền tên hoặc mã phòng học thực tế trên ảnh (ví dụ "A101", "B203", "F1-509"), không có để null. TUYỆT ĐỐI KHÔNG lấy mã lớp học phần (LHP), mã nhóm, hoặc mã môn học làm phòng học.
 6. Đọc cẩn thận từng chữ tên môn học đúng chính tả tiếng Việt/Anh trên ảnh. Mọi trường không rõ ràng đều để null. Tuyệt đối không tự quy đổi tiết học sang giờ đồng hồ."""
 
@@ -214,7 +214,7 @@ def format_clock_time(val: Any) -> Optional[str]:
     s = str(val).strip()
     if s.lower() in ("null", "none", "không rõ", "chưa rõ", "n/a"):
         return None
-    match = re.search(r"\b(\d{1,2})[h:](\d{2})\b", s)
+    match = re.search(r"\b(\d{1,2})[hg:](\d{2})\b", s)
     if match:
         h, m = int(match.group(1)), int(match.group(2))
         if 0 <= h <= 23 and 0 <= m <= 59:
@@ -564,11 +564,16 @@ def call_vlm_extract(
                 weekday = None
         start_time = format_clock_time(item.get("start_time"))
         end_time = format_clock_time(item.get("end_time"))
+        if start_time and end_time and end_time <= start_time:
+            end_time = None
+            uncertainties.append(
+                f"{course}: giờ kết thúc đọc được không lớn hơn giờ bắt đầu ({start_time}); vui lòng kiểm tra và nhập lại giờ kết thúc."
+            )
         period = str(item["period"]).strip() if item.get("period") else None
         room = str(item["room"]).strip() if item.get("room") else None
-
-        if (not start_time or not end_time) and period:
-            has_periods_without_clock_time = True
+        if room:
+            from app.timetable_table import _normalize_ocr_code_lookalikes
+            room = _normalize_ocr_code_lookalikes(room)
 
         normalized_entries.append({
             "course": course,
@@ -579,13 +584,7 @@ def call_vlm_extract(
             "room": room,
         })
 
-    if has_periods_without_clock_time:
-        uncertainties.append(
-            "Phát hiện buổi học ghi theo tiết nhưng chưa có giờ bắt đầu/kết thúc cụ thể. "
-            "Vui lòng nhập giờ hoặc áp dụng bảng quy đổi tiết học."
-        )
-
-    # Corroborate grid column weekday and cell room only from a unique, literal course-code anchor.
+    # Corroborate grid column weekday and cell room/period/clock only from a unique, literal course-code anchor.
     # Never fill a missing column by guessing or treating OCR as training approval.
     from app.timetable_table import read_grid_cell_evidence
     has_grid_codes = any(re.search(r'[A-Z]{2,8}\d{4,10}[A-Z]{0,3}', e.get('course') or '') for e in normalized_entries)
@@ -610,9 +609,27 @@ def call_vlm_extract(
                 entry['weekday_evidence'] = evidence
             if code in room_evidence:
                 r_ev = room_evidence[code]
-                if entry.get('room') != r_ev['room']:
+                if r_ev.get('room') and entry.get('room') != r_ev['room']:
                     entry['room'] = r_ev['room']
+                if r_ev.get('period') and entry.get('period') != r_ev['period']:
+                    entry['period'] = r_ev['period']
+                if r_ev.get('start_time') and not entry.get('start_time'):
+                    entry['start_time'] = r_ev['start_time']
+                if r_ev.get('end_time') and not entry.get('end_time') and (
+                    not entry.get('start_time') or r_ev['end_time'] > entry['start_time']
+                ):
+                    entry['end_time'] = r_ev['end_time']
                 entry['room_evidence'] = r_ev
+
+    has_periods_without_clock_time = any(
+        (not e.get("start_time") or not e.get("end_time")) and e.get("period")
+        for e in normalized_entries
+    )
+    if has_periods_without_clock_time:
+        uncertainties.append(
+            "Phát hiện buổi học ghi theo tiết nhưng chưa có giờ bắt đầu/kết thúc cụ thể. "
+            "Vui lòng nhập giờ hoặc áp dụng bảng quy đổi tiết học."
+        )
 
     # Check time slot conflicts
     conflicts = detect_conflicts(normalized_entries)

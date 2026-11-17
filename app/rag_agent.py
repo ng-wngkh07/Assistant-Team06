@@ -2666,6 +2666,32 @@ class PsychologyAgent:
 
         is_truncated = getattr(generator, "last_done_reason", None) == "length"
 
+        # If every surviving claim across citations is merely a pure abstention ("không có thông tin..."),
+        # never emit unrelated document citations or label it as a grounded answer.
+        all_claims_list = [
+            c for cit in citations for c in (cit.get("claims") or []) if isinstance(c, str) and c.strip()
+        ]
+        _abstention_re = re.compile(
+            r"(?:^(?:theo\s+tài\s+liệu[^,.]*,\s*)?(?:tài\s+liệu\s+)?(?:hiện\s+)?(?:chưa|không)\s+"
+            r"(?:có|chứa|đề\s+cập|cung\s+cấp|nêu|ghi\s+nhận|nhắc\s+đến)\s+(?:đủ\s+)?thông\s+tin\b|"
+            r"(?:tài\s+liệu|nguồn|văn\s+bản|đoạn\s+trích)\s+(?:được\s+cung\s+cấp\s+)?(?:không|chưa)\s+"
+            r"(?:có\s+thông\s+tin|đề\s+cập|cung\s+cấp|nêu|chứa|nói)\s+(?:về|đến|tới|thông\s+tin)?\b)",
+            re.IGNORECASE,
+        )
+
+        def _is_pure_abstention(text: str) -> bool:
+            t = re.sub(r"\[S\d+\]", "", text or "").strip()
+            return bool(t and len(t) <= 320 and _abstention_re.search(t) and len(re.split(r"[.!?]+", t.strip(" .!?"))) <= 2)
+
+        only_abstention = False
+        if citations and (
+            (all_claims_list and all(_is_pure_abstention(c) for c in all_claims_list))
+            or (not all_claims_list and _is_pure_abstention(answer))
+        ):
+            only_abstention = True
+            citations = []
+            failure_reason = None
+
         review_notice = None
         if any(c.get("page_quality", {}).get("needs_review") for c in citations):
             review_notice = (
@@ -2675,12 +2701,18 @@ class PsychologyAgent:
 
         yield {"type": "citations", "citations": citations}
         yield {"type": "token", "content": answer}
+        response_kind = (
+            "insufficient_evidence"
+            if only_abstention
+            else ("answer" if (citations and check_status != "unverified") else "generation_failed")
+        )
         yield {
             "type": "done",
             "citations": citations,
             "is_truncated": is_truncated,
             "is_broad": is_broad,
-            "response_kind": "answer" if (citations and check_status != "unverified") else "generation_failed",
+            "response_kind": response_kind,
+            **({"insufficient_reason": "no_evidence_in_sources"} if only_abstention else {}),
             "failure_reason": failure_reason,
             "answer_mode": answer_mode,
             "processing_level": processing_level,

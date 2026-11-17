@@ -655,6 +655,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             });
             saveDraftStateLocally();
+            refreshDraftLiveWarnings();
             confirmStatus.textContent = `Đã cập nhật giờ cho ${count} môn có tiết "${targetPeriod}".`;
             confirmStatus.style.color = count ? "#16a34a" : "#dc2626";
         });
@@ -2218,7 +2219,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 btnEx.style.padding = "2px 6px";
                 btnEx.style.marginRight = "4px";
 
-                if (item.exercise_status === "available" || item.practice_id) {
+                if (item.practice_id) {
                     btnEx.title = "Mở bài tập luyện tập";
                     btnEx.textContent = "📝 Bài tập";
                     btnEx.addEventListener("click", () => {

@@ -51,3 +51,16 @@ def test_multiline_checkpoint_ends_before_next_numbered_theory_heading():
     assert [x['id'] for x in exercises] == ['1.1', '1.2']
     assert 'What is a memory address?' in exercises[0]['question']
     assert 'Programs and Java' not in exercises[1]['question']
+
+
+@pytest.mark.parametrize('back_matter', [
+    '497\nGlossary\nNeural code Representation of stimuli. (2)\nPerception Conscious sensory experience. (3)',
+    'Implicit memory Unawareness during retrieval. See also Knowing. (6)\nNerve fiber See Axon. (2)',
+    'Subject Index\nAttention, 112\nMemory, 240',
+])
+def test_back_matter_glossary_and_index_are_excluded_from_theory(back_matter):
+    assert not _is_theory_chunk(back_matter)
+
+
+def test_prose_mentioning_word_index_or_glossary_is_kept_as_theory():
+    assert _is_theory_chunk('In Python lists, index lookup by integer offset runs in constant O(1) time.')

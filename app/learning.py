@@ -205,6 +205,22 @@ def _is_theory_chunk(raw_text: Any, heading_context: Optional[Any] = None) -> bo
     if not lines:
         return False
 
+    # Back-matter Glossary / Index / Bibliography blocks hold dictionary pointers rather than chapter theory.
+    head_folded = [_normalize_text(re.sub(r"^#{1,6}\s*", "", ln)) for ln in lines[:4]]
+    if any(
+        ln in {
+            "glossary", "index", "subject index", "author index",
+            "references", "bibliography", "bang thuat ngu", "chi muc",
+            "tai lieu tham khao",
+        }
+        for ln in head_folded
+    ):
+        return False
+    glossary_ref_endings = len(re.findall(r"\.\s*\(\d{1,2}(?:,\s*\d{1,2})*\)\s*$", text, re.MULTILINE))
+    see_also_pointers = len(re.findall(r"\bSee\s+(?:also\s+)?[A-Z]", text))
+    if glossary_ref_endings >= 2 or (see_also_pointers >= 2 and glossary_ref_endings >= 1):
+        return False
+
     # Standalone Markdown headings do not supply substantive question evidence.
     if all(re.match(r"^#{1,6}(?:\s+|$)", ln) for ln in lines):
         return False
@@ -686,29 +702,45 @@ class LearningService:
             count=count,
             model=model or DEFAULT_CHAT_MODEL,
         )
-        page_to_doc: dict[int, dict[str, Any]] = {}
+        page_to_docs: dict[int, list[dict[str, Any]]] = {}
         pages_preview = []
         for p in selected_passages:
             p_num = int(p.get("page_num", 1))
             src_title = p.get("book_title") or p.get("filename") or topic
-            page_to_doc.setdefault(
-                p_num,
-                {"doc_id": p.get("doc_id"), "title": src_title, "filename": p.get("filename")},
-            )
+            doc_meta = {
+                "doc_id": p.get("doc_id"),
+                "title": src_title,
+                "filename": p.get("filename"),
+                "text": str(p.get("text") or ""),
+            }
+            page_to_docs.setdefault(p_num, []).append(doc_meta)
             pages_preview.append({
                 "page_num": p_num,
                 "doc_id": p.get("doc_id"),
                 "source_title": src_title,
-                "text": str(p.get("text") or ""),
+                "text": doc_meta["text"],
             })
-        cards = [
-            {
+
+        def _resolve_card_source(card: dict[str, Any]) -> dict[str, Any]:
+            c_page = int(card.get("page_num", 1))
+            candidates = page_to_docs.get(c_page) or []
+            if len(candidates) <= 1:
+                return candidates[0] if candidates else {}
+            ev = re.sub(r"\s+", " ", str(card.get("evidence_quote") or "")).strip()
+            if ev:
+                for cand in candidates:
+                    if ev in re.sub(r"\s+", " ", cand["text"]).strip():
+                        return cand
+            return candidates[0]
+
+        cards = []
+        for c in (record.get("flashcards") or []):
+            matched_src = _resolve_card_source(c)
+            cards.append({
                 **c,
-                "source_title": page_to_doc.get(int(c.get("page_num", 1)), {}).get("title") or topic,
-                "doc_id": page_to_doc.get(int(c.get("page_num", 1)), {}).get("doc_id"),
-            }
-            for c in (record.get("flashcards") or [])
-        ]
+                "source_title": matched_src.get("title") or topic,
+                "doc_id": matched_src.get("doc_id"),
+            })
         return {
             **record,
             "topic": topic,

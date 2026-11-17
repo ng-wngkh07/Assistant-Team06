@@ -407,6 +407,72 @@ def test_09c_missing_documents_truthfully_reports_unavailable(tmp_path, monkeypa
     assert updated_sess["practice_id"] is None
 
 
+def test_09c_session_exercise_strips_tu_hoc_course_prefix_and_generic_review_subtitle(tmp_path, monkeypatch):
+    """Auto-generated session titles like 'Tự học Đại số tuyến tính: Ôn tập Đại số tuyến tính'
+    must resolve to the enrolled course/topic rather than searching documents for the literal 'Tự học ...' prefix.
+    """
+    test_db = tmp_path / "session_topic_unwrap.db"
+    monkeypatch.setenv("TIMETABLE_DB_PATH", str(test_db))
+
+    with _connect(test_db) as conn:
+        c1 = conn.execute(
+            """
+            INSERT INTO study_sessions (
+                plan_id, task_id, title, course, weekday, start_time, end_time,
+                duration_minutes, priority, source, completed, locked,
+                session_index, total_sessions, notes, created_at,
+                classified_topic, worksheet_id, practice_id, exercise_status
+            ) VALUES (
+                'p2', NULL, 'Tự học Đại số tuyến tính: Ôn tập Đại số tuyến tính', 'Đại số tuyến tính',
+                1, '19:00', '20:30', 90, 'medium', 'ai_auto_90m', 0, 0, 1, 1,
+                '', '2026-11-16T00:00:00Z', 'Đại số tuyến tính', '', '', 'not_generated'
+            )
+            """
+        )
+        sid_generic = c1.lastrowid
+        c2 = conn.execute(
+            """
+            INSERT INTO study_sessions (
+                plan_id, task_id, title, course, weekday, start_time, end_time,
+                duration_minutes, priority, source, completed, locked,
+                session_index, total_sessions, notes, created_at,
+                classified_topic, worksheet_id, practice_id, exercise_status
+            ) VALUES (
+                'p2', NULL, 'Tự học Đại số tuyến tính: Không gian vector', 'Đại số tuyến tính',
+                2, '19:00', '20:30', 90, 'medium', 'ai_auto_90m', 0, 0, 1, 1,
+                '', '2026-11-16T00:00:00Z', 'Đại số tuyến tính', '', '', 'not_generated'
+            )
+            """
+        )
+        sid_specific = c2.lastrowid
+        conn.commit()
+
+    from app import server as _srv
+
+    seen_topics = []
+
+    class _CaptureLearningService:
+        def generate(self, topic: str, count: int = 3, **kwargs):
+            seen_topics.append(topic)
+            return {
+                "practice_id": f"prac_{len(seen_topics)}",
+                "topic": topic,
+                "count": 1,
+                "questions": [
+                    {"id": "q1", "question": f"Hỏi về {topic}?", "choices": {"A": "1", "B": "2", "C": "3", "D": "4"}, "answer": "A"}
+                ],
+            }
+
+    monkeypatch.setattr(_srv, "learning_service", _CaptureLearningService(), raising=False)
+    client = TestClient(app)
+
+    res1 = client.post(f"/api/timetable/planner/sessions/{sid_generic}/exercise/generate")
+    assert res1.status_code == 200
+    res2 = client.post(f"/api/timetable/planner/sessions/{sid_specific}/exercise/generate")
+    assert res2.status_code == 200
+    assert seen_topics == ["Đại số tuyến tính", "Không gian vector"]
+
+
 # ==============================================================================
 # 09-D: BACKWARD API COMPATIBILITY & ROUTE DELEGATION
 # ==============================================================================

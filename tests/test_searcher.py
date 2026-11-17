@@ -54,3 +54,15 @@ def test_duplicate_pdf_aliases_do_not_displace_distinct_evidence(tmp_path, monke
     monkeypatch.setattr(searcher, "search_fts", lambda *_args, **_kwargs: rows)
     result = searcher.search_hybrid("trí nhớ", top_k=2, embed_model=None)
     assert [r["chunk_id"] for r in result] == [1, 3]
+
+
+def test_slide_outline_prefixed_with_trang_number_is_filtered_as_toc():
+    from app.lexical_search import is_heading_or_toc_chunk
+
+    slide_toc = "Trang 2\nNội dung\nTổng quan Fractal\nIFS\nL-System\nTập Maldelbrot"
+    slide_real = (
+        "Trang 57\nHệ L-System\n"
+        "Hệ L-System được đề xuất năm 1968 để mô hình hóa cấu trúc phân nhánh của thực vật thông qua tập luật viết lại song song."
+    )
+    assert is_heading_or_toc_chunk(slide_toc) is True
+    assert is_heading_or_toc_chunk(slide_real) is False

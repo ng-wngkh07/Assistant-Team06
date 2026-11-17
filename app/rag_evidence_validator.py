@@ -23,6 +23,9 @@ def _normalize_loanword_terms_cf(text: str) -> str:
 def weak_keyword_evidence(query: str, chunks: list[dict]) -> bool:
     """Require substantial lexical coverage for keyword-only retrieval, separating concept from directives."""
     query = re.sub(r"\bphát\s+biểu\b", " ", query, flags=re.I)
+    query = re.sub(r"\b(?:vừa|mới|đã)\s+tải\s+lên\b", " ", query, flags=re.I)
+    query = re.sub(r"\b(?:ở|về)\s+điểm\s+nào\b|\bđiểm\s+gì\b|\bkhác\s+(?:biệt\s+)?(?:gì|nhau)\b", " ", query, flags=re.I)
+    query = re.sub(r"\bkhác\b(?=\s+[\w-]+(?:\s+[\w-]+){0,4}\s*(?:$|[?!.,]|(?:\s+(?:nào|sao)\b)))", " ", query, flags=re.I)
     all_query_words = [w for w in re.findall(r"\w+", query.casefold()) if len(w) >= 2 and w not in QUERY_STOPWORDS]
     if not all_query_words:
         return True
@@ -271,7 +274,7 @@ def has_relevant_evidence(query: str, chunks: list[dict]) -> bool:
         return False
     if not weak_keyword_evidence(query, chunks):
         return True
-    return max((chunk.get("semantic_score", 0) for chunk in chunks), default=0) >= 0.52
+    return max(((chunk.get("semantic_score") or 0) for chunk in chunks), default=0) >= 0.52
 
 
 def repetitive_answer(answer: str, source_count: int) -> bool:
@@ -585,13 +588,27 @@ def _is_predominantly_ascii_source(text: str) -> bool:
     return (ascii_letters / len(letters)) >= 0.75
 
 
+_ROMAN_OR_COMMON_ACRONYMS = {
+    "II", "III", "IV", "VI", "VII", "VIII", "IX", "XI", "XII",
+    "AI", "ML", "DL", "NN", "RL", "NLP", "CV", "CS", "IT", "DB", "OS", "OK",
+}
+
+
+_QUERY_ABSTENTION_RE = re.compile(
+    r"(?:tài\s+liệu|nguồn|văn\s+bản|đoạn\s+trích|sách).*?"
+    r"(?:không|chưa)\s+(?:có|chứa|đề\s+cập|cung\s+cấp|nêu|ghi\s+nhận|nhắc\s+đến|nói)"
+    r"|^\s*(?:hiện\s+)?(?:không|chưa)\s+có\s+(?:đủ\s+)?thông\s+tin\b",
+    re.IGNORECASE,
+)
+
+
 def find_ungrounded_technical_terms(
     claim_text: str,
     cited_sources: List[str],
     query: str,
     chat_history: List[Dict[str, Any]] | None = None,
 ) -> List[str]:
-    """Detect ASCII technical terms copied from prior turns or fabricated in English sources."""
+    """Detect ASCII technical terms copied from prior turns, query subjects absent from cited sources, or fabricated in English sources."""
     if not claim_text or not cited_sources:
         return []
     combined_source = " ".join(s for s in cited_sources if s)
@@ -610,6 +627,24 @@ def find_ungrounded_technical_terms(
         if key not in seen_flagged:
             seen_flagged.add(key)
             flagged.append(term)
+
+    if query and not _QUERY_ABSTENTION_RE.search(claim_text):
+        # Named ASCII acronyms / hyphenated identifiers explicitly asked by the query and asserted in the claim
+        # must exist in the cited source (unless excluded common translated acronyms).
+        for m in re.finditer(r"\b([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+|[A-Z][A-Z0-9]{1,9})\b", query):
+            ident = m.group(1)
+            if ident.upper() in _ROMAN_OR_COMMON_ACRONYMS:
+                continue
+            if "-" in ident:
+                if _ascii_phrase_present(ident, claim_words, claim_nospace) or re.search(rf"\b{re.escape(ident)}\b", claim_text, re.I):
+                    if not (
+                        _ascii_phrase_present(ident, source_words, source_nospace)
+                        or re.search(rf"\b{re.escape(ident)}\b", combined_source, re.I)
+                    ):
+                        _record(ident)
+            elif re.search(rf"\b{re.escape(ident)}\b", claim_text):
+                if not re.search(rf"\b{re.escape(ident)}\b", combined_source, re.I):
+                    _record(ident)
 
     if chat_history:
         history_text = " ".join(

@@ -490,6 +490,14 @@ async def serve_index():
         return HTMLResponse(content=content, headers={"Cache-Control": "no-store", "Vary": "Cookie"})
     return HTMLResponse(content="<h1>Study QA Agent Backend Running</h1><p>index.html not found in static/</p>")
 
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def serve_favicon():
+    icon = STATIC_DIR / "logo.jpg"
+    if icon.is_file():
+        return FileResponse(path=str(icon), media_type="image/jpeg")
+    return Response(status_code=204)
+
 def _requires_mlx_model():
     from app.model_resolver import is_mlx_model
     return is_mlx_model(DEFAULT_CHAT_MODEL)

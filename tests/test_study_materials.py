@@ -1642,3 +1642,133 @@ def test_upload_study_set_generate_and_pdf_export_e2e(client, monkeypatch):
     )
     assert scan_res.status_code == 422
     assert any(kw in scan_res.json()["detail"].lower() for kw in ("hình ảnh", "văn bản", "scan", "ocr", "đọc"))
+
+
+def test_flashcards_tolerate_pdf_soft_linewrap_inside_evidence_quote(monkeypatch):
+    manager = StudyMaterialManager()
+    monkeypatch.setattr(manager.ollama, "check_health", lambda: False)
+    page_text = "Tính đóng \ngói (Encapsulation) che giấu dữ liệu nội bộ của đối tượng."
+
+    class SoftWrapClient:
+        last_done_reason = "stop"
+
+        def check_health(self):
+            return True
+
+        def chat_complete(self, **kwargs):
+            import json as _json
+            self.last_done_reason = "stop"
+            prompt = kwargs["messages"][-1]["content"]
+            if "flashcards" in prompt.lower():
+                return _json.dumps(
+                    {
+                        "flashcards": [
+                            {
+                                "front": "Tính chất nào che giấu dữ liệu nội bộ?",
+                                "back": "đóng gói",
+                                "evidence_quote": page_text,
+                                "page_num": 1,
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            return _json.dumps({"questions": []})
+
+    from app.pdf_extractor import PDFExtractionResult
+    monkeypatch.setattr(manager, "ollama", SoftWrapClient())
+    extracted = PDFExtractionResult(filename="oop.pdf", filepath=Path("oop.pdf"))
+    extracted.clean_title = "OOP"
+    extracted.total_pages = 1
+    extracted.total_chars = len(page_text)
+    extracted.extracted_pages = [{"page_num": 1, "text": page_text}]
+    record = manager.generate_materials_from_pages(extracted, quiz_count=0, flashcard_count=1, model="test-ollama")
+    assert record["generation"]["flashcards"] == "model"
+    assert len(record["flashcards"]) == 1
+    assert "[…]" in record["flashcards"][0]["front"]
+    assert record["flashcards"][0]["back"] == "đóng gói"
+
+
+def test_account_private_generate_from_library_persists_across_restart_and_lists_material_id(tmp_path, monkeypatch):
+    import json as _json
+    from app.accounts import account_id
+    from app.account_services import make_material_manager
+    from app.pdf_extractor import PDFExtractionResult
+    from app import server as _srv
+
+    monkeypatch.setenv("STUDY_ACCOUNTS_DIR", str(tmp_path / "accounts"))
+    tok = account_id.set("cc" * 16)
+    try:
+        mgr1 = make_material_manager()
+
+        class MockStudyModel:
+            last_done_reason = "stop"
+
+            def check_health(self):
+                return True
+
+            def chat_complete(self, **kwargs):
+                self.last_done_reason = "stop"
+                prompt = kwargs["messages"][0]["content"]
+                if "Kiểm định độc lập từng câu" in prompt:
+                    return _json.dumps({
+                        "checks": [{
+                            "index": 1,
+                            "source_basis": "Write-Back chỉ cập nhật cache và bật bit Dirty.",
+                            "matching_choices": "A",
+                            "input_audit": "Đầy đủ dữ kiện.",
+                            "independent_solution": "Write-Back chỉ cập nhật cache.",
+                            "choice_comparison": "Khớp A.",
+                            "explanation_audit": "Chuẩn.",
+                            "supported": True,
+                            "explanation_supported": True,
+                            "unique_answer": True,
+                            "qualifiers_preserved": True,
+                            "difficulty_matches": True,
+                            "verified_answer": "A",
+                        }]
+                    }, ensure_ascii=False)
+                if "flashcards" in prompt.lower():
+                    return _json.dumps({
+                        "flashcards": [{
+                            "front": "Write-Back cập nhật đâu?",
+                            "back": "bit Dirty",
+                            "evidence_quote": "Write-Back chỉ cập nhật cache và bật bit Dirty.",
+                            "page_num": 1,
+                        }]
+                    }, ensure_ascii=False)
+                return _json.dumps({
+                    "questions": [{
+                        "question": "Write-Back thực hiện gì khi ghi dữ liệu?",
+                        "choices": {"A": "Chỉ cập nhật cache và bật bit Dirty", "B": "Ghi ngay RAM", "C": "Xóa cache", "D": "Khóa bus"},
+                        "answer": "A",
+                        "explanation": "Theo tài liệu trang 1.",
+                        "evidence_quote": "Write-Back chỉ cập nhật cache và bật bit Dirty.",
+                        "page_num": 1,
+                    }]
+                }, ensure_ascii=False)
+
+        monkeypatch.setattr(_srv, "DEFAULT_CHAT_MODEL", "test-ollama")
+        raw_bytes = "Write-Back chỉ cập nhật cache và bật bit Dirty.".encode("utf-8")
+        ext = mgr1.extract_document("private_notes.txt", raw_bytes)
+        ext._raw_bytes = raw_bytes
+        rec1 = mgr1.store_extracted_document(ext)
+
+        monkeypatch.setattr(mgr1, "ollama", MockStudyModel())
+        rec2 = mgr1.generate_from_library_document(
+            material_id=rec1["id"], quiz_count=1, flashcard_count=1, difficulty="easy", model="test-ollama"
+        )
+        assert rec2["id"] != rec1["id"]
+        assert len(rec2["flashcards"]) == 1
+
+        # Simulate backend restart: brand-new PrivateMaterials manager must load persisted rec2 and expose material_id
+        mgr2 = make_material_manager()
+        loaded = mgr2.get_material(rec2["id"])
+        assert loaded is not None
+        assert len(loaded["flashcards"]) == 1
+        assert len(loaded["quiz"]) == 1
+        docs = mgr2.list_available_documents([])
+        priv = next(d for d in docs if d["filename"] == "private_notes.txt")
+        assert priv["material_id"] in (rec1["id"], rec2["id"])
+    finally:
+        account_id.reset(tok)

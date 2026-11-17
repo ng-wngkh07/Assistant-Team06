@@ -126,3 +126,101 @@ def test_grid_room_corroboration_replaces_lhp_code_with_literal_cell_room(monkey
     draft = timetable_vision.call_vlm_extract(buf.getvalue(), 'img_hash_lhp', 'week.jpg')
     assert draft['entries'][0]['room'] == 'F1-509'
     assert draft['entries'][0]['weekday'] == 1
+
+
+def test_hcmute_registration_results_table_is_held_out_of_confirmed_schedule_entries():
+    obs = [
+        {'text': 'KẾT QUẢ ĐĂNG KÝ HỌC PHẦN', 'bounds': [0.03, 0.90, 0.28, 0.04]},
+        {'text': 'Mã học phần', 'bounds': [0.12, 0.67, 0.07, 0.03]},
+        {'text': 'Tên học phần', 'bounds': [0.38, 0.67, 0.07, 0.03]},
+        {'text': 'Số tín chỉ', 'bounds': [0.61, 0.67, 0.05, 0.03]},
+        {'text': 'Ngày đăng ký', 'bounds': [0.72, 0.67, 0.07, 0.03]},
+        {'text': '261DSAL220229E_03FIE', 'bounds': [0.09, 0.55, 0.12, 0.02]},
+        {'text': 'Data Structure and Algorithm', 'bounds': [0.35, 0.55, 0.14, 0.02]},
+        {'text': '11/08/2026 09:03:48', 'bounds': [0.71, 0.55, 0.10, 0.02]},
+    ]
+    held = timetable_table.classify_registration_hold(obs)
+    assert held is not None
+    assert held['classification'] == 'incomplete_registration'
+    assert held['entries'] == []
+    assert any(p['course_code'] == 'DSAL220229E' and 'Data Structure' in p['course'] for p in held['partial_entries'])
+
+
+def test_grid_corroborates_cyrillic_room_tiet_range_12g45_and_clears_equal_end_time(monkeypatch, tmp_path):
+    import io
+    import json as _json
+    from PIL import Image
+    from app import timetable_store, timetable_vision
+
+    monkeypatch.setenv('TIMETABLE_DB_PATH', str(tmp_path / 'tt_afternoon.db'))
+    with timetable_store.get_connection():
+        pass
+    monkeypatch.setattr(timetable_table, 'extract_registered_table', lambda _b: None)
+
+    assert timetable_vision.format_clock_time('12g45') == '12:45'
+
+    # Note Cyrillic 'А' (\u0410) in room 'А3-303' and 'Số tiết: 2' above 'Tiết: 7-8'
+    observations = [
+        {'text': '\u04103-303', 'bounds': [0.70, 0.72, 0.06, 0.02]},
+        {'text': 'Data Structure and Algorithm', 'bounds': [0.66, 0.68, 0.14, 0.02]},
+        {'text': '(DSAL220229E)', 'bounds': [0.69, 0.66, 0.09, 0.02]},
+        {'text': 'Số tiết: 2', 'bounds': [0.71, 0.62, 0.05, 0.02]},
+        {'text': 'Tiết: 7-8', 'bounds': [0.71, 0.60, 0.05, 0.02]},
+        {'text': 'Giờ bắt đầu: 12g45', 'bounds': [0.69, 0.58, 0.09, 0.02]},
+    ]
+    ev = timetable_table.grid_room_evidence(observations)['DSAL220229E']
+    assert ev['room'] == 'A3-303'
+    assert ev['period'] == '7-8'
+    assert ev['start_time'] == '12:45'
+
+    monkeypatch.setattr(timetable_table, 'read_grid_cell_evidence', lambda _b: ({}, {'DSAL220229E': ev}))
+
+    class _FakeVision:
+        @classmethod
+        def available(cls):
+            return True
+
+        def get_identity(self):
+            return 'fake-vlm-afternoon'
+
+        def generate_from_image(self, _img, **_kwargs):
+            return {
+                'text': _json.dumps({
+                    'entries': [
+                        {
+                            'course': 'Data Structure and Algorithm (DSAL220229E)',
+                            'weekday_label': None,
+                            'start_time': None,
+                            'end_time': None,
+                            'period': '2',
+                            'room': '\u04103-303',
+                        },
+                        {
+                            'course': 'BAFI3182',
+                            'weekday_label': 'Thứ 3',
+                            'start_time': '12:00',
+                            'end_time': '12:00',
+                            'period': None,
+                            'room': '05',
+                        },
+                    ],
+                    'uncertainties': [],
+                })
+            }
+
+    from app import native_vision
+    monkeypatch.setattr(native_vision, 'NativeVisionClient', _FakeVision)
+    monkeypatch.setattr(timetable_vision.gpu_coordinator, 'check_inference_allowed', lambda: (True, ''))
+    monkeypatch.setattr(timetable_vision.sys, 'platform', 'darwin')
+
+    buf = io.BytesIO()
+    img = Image.new('RGB', (120, 80), 'white')
+    img.putpixel((10, 10), (20, 20, 20))
+    img.save(buf, format='PNG')
+    draft = timetable_vision.call_vlm_extract(buf.getvalue(), 'img_hash_hcmute', 'afternoon.jpg')
+    e0, e1 = draft['entries']
+    assert e0['room'] == 'A3-303'
+    assert e0['period'] == '7-8'
+    assert e0['start_time'] == '12:45'
+    assert e1['start_time'] == '12:00' and e1['end_time'] is None
+    assert any('không lớn hơn giờ bắt đầu' in u for u in draft['uncertainties'])

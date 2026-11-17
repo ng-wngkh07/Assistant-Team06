@@ -814,10 +814,24 @@ async def generate_session_exercise_endpoint(session_id: int):
             practice = await run_in_threadpool(_srv.practice_service.get_session, pid)
             return {"status": "ok", "session": updated, "practice": practice}
 
-    raw_title = str(session.get("title") or "")
-    if raw_title.startswith("Tự học:"):
-        raw_title = raw_title.replace("Tự học:", "", 1).strip()
-    topic = (raw_title or session.get("classified_topic") or session.get("course") or "").strip()
+    raw_title = str(session.get("title") or "").strip()
+    course = str(session.get("course") or "").strip()
+    classified_topic = str(session.get("classified_topic") or "").strip()
+    cleaned_title = re.sub(r"^Tự\s*học(?:\s+[^:]+)?\s*:\s*", "", raw_title, flags=re.IGNORECASE).strip()
+    cleaned_title = re.sub(r"^Tự\s*học\s+", "", cleaned_title, flags=re.IGNORECASE).strip()
+    base_course = re.sub(r"\s*\([^)]*\)\s*$", "", course).strip()
+    is_generic_review = bool(
+        cleaned_title
+        and re.match(r"^(?:ôn\s*tập|luyện\s*tập|tự\s*học|bài\s*tập)\b", cleaned_title, re.IGNORECASE)
+        and (
+            not base_course
+            or base_course.casefold() in cleaned_title.casefold()
+            or len(cleaned_title.split()) <= 3
+        )
+    )
+    if is_generic_review:
+        cleaned_title = ""
+    topic = (cleaned_title or classified_topic or course).strip()
     if not topic:
         raise HTTPException(status_code=422, detail="Phiên học chưa có chủ đề hoặc môn học để tạo bài tập.")
 
