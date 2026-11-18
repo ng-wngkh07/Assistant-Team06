@@ -430,6 +430,29 @@ class NativeEmbeddingClient:
             return list(cmd) + ["--stream"]
         return None
 
+    @staticmethod
+    def _cleanup_stream_worker_proc(
+        proc: Optional[subprocess.Popen],
+        *,
+        grace_seconds: float = 0.3,
+        close_stdin: bool = False,
+    ) -> None:
+        if proc is None:
+            return
+        if close_stdin:
+            try:
+                if proc.stdin is not None:
+                    proc.stdin.close()
+            except OSError:
+                pass
+        _terminate_owned_worker(proc, grace_seconds=grace_seconds)
+        with _ACTIVE_WORKERS_LOCK:
+            _ACTIVE_WORKERS.discard(proc)
+        if isinstance(proc, _STDLIB_POPEN) and isinstance(getattr(proc, "pid", None), int):
+            unreg_fn = getattr(gpu_coordinator, "unregister_resident_process", None)
+            if callable(unreg_fn):
+                unreg_fn(proc.pid)
+
     @classmethod
     def _evict_stream_worker_locked(cls, *, expected_state: Optional[dict] = None) -> None:
         state = cls._stream_worker
@@ -447,16 +470,7 @@ class NativeEmbeddingClient:
         # Hold _stream_lock through termination and worker-set removal so concurrent callers
         # or gpu_coordinator never observe eviction complete before the child is actually dead.
         cls._stream_worker = None
-        proc = state.get("proc")
-        if proc is not None:
-            try:
-                if proc.stdin is not None:
-                    proc.stdin.close()
-            except OSError:
-                pass
-            _terminate_owned_worker(proc, grace_seconds=0.5)
-            with _ACTIVE_WORKERS_LOCK:
-                _ACTIVE_WORKERS.discard(proc)
+        cls._cleanup_stream_worker_proc(state.get("proc"), grace_seconds=0.5, close_stdin=True)
 
     @classmethod
     def evict_stream_worker(cls) -> None:
@@ -513,6 +527,10 @@ class NativeEmbeddingClient:
         proc = subprocess.Popen(cmd, **popen_kwargs)
         with _ACTIVE_WORKERS_LOCK:
             _ACTIVE_WORKERS.add(proc)
+        if isinstance(proc, _STDLIB_POPEN) and isinstance(getattr(proc, "pid", None), int):
+            reg_fn = getattr(gpu_coordinator, "register_resident_process", None)
+            if callable(reg_fn):
+                reg_fn(proc.pid, role="mlx_embedding")
 
         out_q: "queue.Queue[Optional[str]]" = queue.Queue()
         stderr_tail: "deque[str]" = deque(maxlen=64)
@@ -565,14 +583,7 @@ class NativeEmbeddingClient:
             state["model_identity"] = ready_data.get("model_identity")
             return state
         except Exception:
-            try:
-                if proc.stdin is not None:
-                    proc.stdin.close()
-            except OSError:
-                pass
-            _terminate_owned_worker(proc, grace_seconds=0.3)
-            with _ACTIVE_WORKERS_LOCK:
-                _ACTIVE_WORKERS.discard(proc)
+            cls._cleanup_stream_worker_proc(proc, grace_seconds=0.3, close_stdin=True)
             raise
 
     @classmethod
@@ -641,9 +652,7 @@ class NativeEmbeddingClient:
                 ):
                     if state is not None:
                         cls._stream_worker = None
-                        _terminate_owned_worker(state["proc"], grace_seconds=0.3)
-                        with _ACTIVE_WORKERS_LOCK:
-                            _ACTIVE_WORKERS.discard(state["proc"])
+                        cls._cleanup_stream_worker_proc(state.get("proc"), grace_seconds=0.3)
                     state = cls._spawn_stream_worker(
                         cmd=cmd,
                         model_dir=resolved_dir,
@@ -675,18 +684,14 @@ class NativeEmbeddingClient:
                 except (EOFError, BrokenPipeError, OSError) as exc:
                     if cls._stream_worker is state:
                         cls._stream_worker = None
-                    _terminate_owned_worker(state["proc"], grace_seconds=0.3)
-                    with _ACTIVE_WORKERS_LOCK:
-                        _ACTIVE_WORKERS.discard(state["proc"])
+                    cls._cleanup_stream_worker_proc(state.get("proc"), grace_seconds=0.3)
                     if attempt == 0:
                         continue
                     raise RuntimeError(f"Lỗi chạy native MLX embedding: {exc}") from exc
                 except BaseException:
                     if cls._stream_worker is state:
                         cls._stream_worker = None
-                    _terminate_owned_worker(state["proc"], grace_seconds=0.3)
-                    with _ACTIVE_WORKERS_LOCK:
-                        _ACTIVE_WORKERS.discard(state["proc"])
+                    cls._cleanup_stream_worker_proc(state.get("proc"), grace_seconds=0.3)
                     raise
         raise RuntimeError("Lỗi chạy native MLX embedding stream worker")
 
