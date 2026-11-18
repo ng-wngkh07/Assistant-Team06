@@ -144,8 +144,15 @@ class TrainedModelClient:
         return env
 
     @classmethod
+    def _cancel_startup_warmup_signal(cls) -> None:
+        """Signal any pending or active startup warmup thread to cancel without blocking."""
+        with cls._warmup_lock:
+            cls._startup_warmup_cancel.set()
+
+    @classmethod
     def evict_stream_worker(cls) -> None:
         """Stop any idle resident native MLX inference worker to free unified memory."""
+        cls._cancel_startup_warmup_signal()
         _INFER_STREAM_WORKER.evict()
 
     @classmethod
@@ -470,6 +477,11 @@ class TrainedModelClient:
         ))
         return "".join(tokens)
 
+
+gpu_coordinator.register_resident_evictor(
+    TrainedModelClient._cancel_startup_warmup_signal,
+    role="mlx_infer",
+)
 
 _INFER_STREAM_WORKER = ResidentStreamWorker(
     command_fn=TrainedModelClient._stream_worker_command,

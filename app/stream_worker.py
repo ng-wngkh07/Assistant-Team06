@@ -11,10 +11,12 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.config import BASE_DIR
 from app.gpu_lock import IndexingCancelledError, gpu_coordinator
+
+_STDLIB_POPEN = subprocess.Popen
 
 
 def terminate_process_tree(proc: Optional[subprocess.Popen], grace_seconds: float = 0.5) -> None:
@@ -77,6 +79,7 @@ class ResidentStreamWorker:
         evict_roles_on_use: Optional[set[str]] = None,
         error_prefix: str = "Không thể chạy worker MLX",
         cancel_message: str = "Đã hủy tác vụ MLX theo yêu cầu dừng.",
+        coordinator: Optional[Any] = None,
     ) -> None:
         self._command_fn = command_fn
         self._env_fn = env_fn
@@ -85,15 +88,20 @@ class ResidentStreamWorker:
         self._evict_roles_on_use = set(evict_roles_on_use) if evict_roles_on_use else None
         self._error_prefix = error_prefix
         self._cancel_message = cancel_message
+        self._coordinator = coordinator
         self._lock = threading.Lock()
         self._proc: Optional[subprocess.Popen] = None
         self._read_buffer: bytes = b""
         self._idle_timer: Optional[threading.Timer] = None
+        coord = self._active_coordinator()
         if role is not None:
-            gpu_coordinator.register_resident_evictor(self.evict, role=role)
+            coord.register_resident_evictor(self.evict, role=role)
         else:
-            gpu_coordinator.register_resident_evictor(self.evict)
+            coord.register_resident_evictor(self.evict)
         atexit.register(self.evict)
+
+    def _active_coordinator(self) -> Any:
+        return self._coordinator if self._coordinator is not None else gpu_coordinator
 
     def _cancel_idle_timer_locked(self) -> None:
         timer = self._idle_timer
@@ -119,7 +127,12 @@ class ResidentStreamWorker:
         proc = self._proc
         self._proc = None
         self._read_buffer = b""
+        pid = getattr(proc, "pid", None) if isinstance(proc, _STDLIB_POPEN) else None
         terminate_process_tree(proc, grace_seconds=grace_seconds)
+        if isinstance(pid, int):
+            unreg_fn = getattr(self._active_coordinator(), "unregister_resident_process", None)
+            if callable(unreg_fn):
+                unreg_fn(pid)
 
     def evict(self) -> None:
         """Stop any idle resident worker and release its resources."""
@@ -146,6 +159,10 @@ class ResidentStreamWorker:
         proc = subprocess.Popen(self._command_fn(), **popen_kwargs)
         self._proc = proc
         self._read_buffer = b""
+        if isinstance(proc, _STDLIB_POPEN) and isinstance(getattr(proc, "pid", None), int):
+            reg_fn = getattr(self._active_coordinator(), "register_resident_process", None)
+            if callable(reg_fn):
+                reg_fn(proc.pid, role=self.role)
         return proc
 
     def _write_locked(
@@ -227,7 +244,7 @@ class ResidentStreamWorker:
         import json
 
         if self._evict_roles_on_use:
-            gpu_coordinator.evict_resident_workers(roles=self._evict_roles_on_use)
+            self._active_coordinator().evict_resident_workers(roles=self._evict_roles_on_use)
         payload_line = (json.dumps(payload_obj, ensure_ascii=False) + "\n").encode("utf-8")
         deadline = time.monotonic() + max(1.0, float(timeout))
         with self._lock:
@@ -279,7 +296,7 @@ class ResidentStreamWorker:
                             if self.role:
                                 peer_roles.discard(self.role)
                             if peer_roles:
-                                gpu_coordinator.evict_resident_workers(roles=peer_roles)
+                                self._active_coordinator().evict_resident_workers(roles=peer_roles)
                             gc.collect()
                             continue
                         detail = stderr_tail or str(exc)

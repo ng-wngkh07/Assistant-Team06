@@ -604,3 +604,135 @@ def test_resident_stream_worker_evicts_peer_roles_on_oom_retry(monkeypatch):
     assert attempts[0] == 2
     assert evict_calls[0] == {"mlx_vision"}
     assert len(evict_calls) >= 2 and {"mlx_embedding", "mlx_vision"}.issubset(evict_calls[1])
+
+
+def _worker_hold_training_with_events(lock_file, state_file, entered_event, release_event):
+    mgr = GPULockManager(lock_path=Path(lock_file), state_path=Path(state_file))
+    with mgr.acquire_for_training(timeout=5.0, evict_ollama=False):
+        entered_event.set()
+        release_event.wait(timeout=10.0)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX cross-process training lock and signal eviction")
+def test_cross_process_training_evicts_server_resident_stream_worker(tmp_path):
+    import json
+    from app.stream_worker import ResidentStreamWorker
+
+    lock_file = tmp_path / "gpu.lock"
+    state_file = tmp_path / "gpu_state.json"
+    mgr_server = GPULockManager(lock_path=lock_file, state_path=state_file)
+
+    echo_script = (
+        "import json, sys\n"
+        "for line in sys.stdin:\n"
+        "    line = line.strip()\n"
+        "    if not line:\n"
+        "        continue\n"
+        "    obj = json.loads(line)\n"
+        "    obj['done'] = True\n"
+        "    print(json.dumps(obj), flush=True)\n"
+    )
+    worker = ResidentStreamWorker(
+        command_fn=lambda: [sys.executable, "-c", echo_script],
+        env_fn=lambda: dict(os.environ),
+        idle_ttl=180.0,
+        role="mlx_infer",
+        coordinator=mgr_server,
+    )
+
+    entered = multiprocessing.Event()
+    release = multiprocessing.Event()
+    p_trainer = None
+    try:
+        res1 = worker.request_json({"ping": 1})
+        assert res1 == {"ping": 1, "done": True}
+        assert worker._proc is not None
+        worker_pid = worker._proc.pid
+        assert is_pid_alive(worker_pid)
+        reg = json.loads(mgr_server.resident_workers_path.read_text(encoding="utf-8"))
+        assert any(entry.get("worker_pid") == worker_pid for entry in reg.get("workers", []))
+
+        p_trainer = multiprocessing.Process(
+            target=_worker_hold_training_with_events,
+            args=(str(lock_file), str(state_file), entered, release),
+        )
+        p_trainer.start()
+        assert entered.wait(timeout=5.0)
+
+        deadline = time.monotonic() + 2.5
+        while time.monotonic() < deadline:
+            if worker._proc is None and not is_pid_alive(worker_pid):
+                break
+            time.sleep(0.02)
+
+        assert worker._proc is None
+        assert not is_pid_alive(worker_pid)
+
+        release.set()
+        p_trainer.join(timeout=5.0)
+        assert p_trainer.exitcode == 0
+
+        res2 = worker.request_json({"ping": 2})
+        assert res2 == {"ping": 2, "done": True}
+        assert worker._proc is not None
+        assert worker._proc.pid != worker_pid
+    finally:
+        release.set()
+        if p_trainer is not None and p_trainer.is_alive():
+            p_trainer.terminate()
+            p_trainer.join(timeout=2.0)
+        worker.evict()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX cross-process signal eviction")
+def test_cross_process_training_fallback_terminates_unmonitored_resident_worker(tmp_path):
+    import json
+    import signal
+
+    lock_file = tmp_path / "gpu.lock"
+    state_file = tmp_path / "gpu_state.json"
+    mgr = GPULockManager(lock_path=lock_file, state_path=state_file)
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        start_new_session=True,
+    )
+    try:
+        assert is_pid_alive(proc.pid)
+        mgr.resident_workers_path.write_text(
+            json.dumps(
+                {
+                    "workers": [
+                        {
+                            "owner_pid": os.getpid(),
+                            "worker_pid": proc.pid,
+                            "role": "mlx_infer",
+                            "registered_at": "2026-11-18T00:00:00+00:00",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        with mgr.acquire_for_training(timeout=5.0, evict_ollama=False):
+            rc = proc.wait(timeout=2.0)
+            assert rc in (-signal.SIGTERM, -signal.SIGKILL)
+            reg = json.loads(mgr.resident_workers_path.read_text(encoding="utf-8"))
+            assert reg["workers"] == []
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2.0)
+
+
+def test_trained_client_registers_warmup_cancel_evictor():
+    """TrainedModelClient warmup cancellation signal must register under mlx_infer."""
+    from app.gpu_lock import gpu_coordinator
+    from app.trained_client import TrainedModelClient
+
+    with gpu_coordinator._evictors_lock:
+        registered = list(gpu_coordinator._resident_evictors)
+    assert any(
+        cb == TrainedModelClient._cancel_startup_warmup_signal and role == "mlx_infer"
+        for cb, role in registered
+    )

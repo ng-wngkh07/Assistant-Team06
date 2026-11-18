@@ -18,6 +18,8 @@ from app import file_lock as fcntl
 import json
 import logging
 import os
+import signal
+import subprocess
 import threading
 import time
 from contextlib import contextmanager
@@ -30,6 +32,8 @@ from app.config import BASE_DIR, DATA_DIR
 from app.ollama_client import OllamaClient
 
 logger = logging.getLogger("gpu_lock")
+
+_STDLIB_RUN = subprocess.run
 
 _in_background_gpu_scope: ContextVar[bool] = ContextVar("in_background_gpu_scope", default=False)
 _DEFAULT_BACKGROUND_COOLDOWN_SECONDS = 120.0
@@ -93,6 +97,30 @@ def is_pid_alive(pid: Optional[int]) -> bool:
         return True
     except OSError as err:
         return err.errno == errno.EPERM
+
+
+def _is_process_running(pid: Optional[int]) -> bool:
+    """Return True if pid is alive and (on POSIX) not an exited zombie process."""
+    if not is_pid_alive(pid):
+        return False
+    if fcntl.WINDOWS or os.name != "posix":
+        return True
+    try:
+        res = _STDLIB_RUN(
+            ["ps", "-p", str(int(pid)), "-o", "stat="],
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+            check=False,
+        )
+        if res.returncode != 0:
+            return is_pid_alive(pid)
+        stat = (res.stdout or "").strip()
+        if not stat:
+            return False
+        return not stat.startswith("Z")
+    except Exception:
+        return is_pid_alive(pid)
 
 
 def _read_state_file(state_path: Path = STATE_FILE) -> Dict[str, Any]:
@@ -181,6 +209,8 @@ class GPULockManager:
         self.state_path = state_path
         self.intent_path = intent_path or (lock_path.parent / (lock_path.stem + "_intent" + lock_path.suffix))
         self.native_lock_path = native_lock_path or (lock_path.parent / "native_worker.lock")
+        self.resident_workers_path = self.lock_path.parent / (self.lock_path.stem + "_resident_workers.json")
+        self.resident_lock_path = self.lock_path.parent / (self.lock_path.stem + "_resident_workers.lock")
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.intent_path.parent.mkdir(parents=True, exist_ok=True)
@@ -188,6 +218,10 @@ class GPULockManager:
         self._local = threading.local()
         self._evictors_lock = threading.Lock()
         self._resident_evictors: list = []
+        self._resident_proc_lock = threading.Lock()
+        self._owned_resident_pids: Dict[int, Optional[str]] = {}
+        self._monitor_thread: Optional[threading.Thread] = None
+        self._monitor_stop = threading.Event()
         self._fg_lock = threading.Lock()
         self._fg_waiters = 0
         self._fg_active = 0
@@ -264,6 +298,231 @@ class GPULockManager:
                 cb()
             except Exception:
                 logger.warning("Resident worker eviction failed", exc_info=True)
+
+    @contextmanager
+    def _with_resident_registry_lock(self) -> Generator[None, None, None]:
+        """Serialize cross-process mutations to gpu_resident_workers.json."""
+        self.resident_lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(self.resident_lock_path), os.O_RDWR | os.O_CREAT, 0o666)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def _read_resident_registry_unlocked(self) -> list[Dict[str, Any]]:
+        if not self.resident_workers_path.exists():
+            return []
+        try:
+            data = json.loads(self.resident_workers_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        if not isinstance(data, dict):
+            return []
+        workers = data.get("workers")
+        if not isinstance(workers, list):
+            return []
+        return [dict(item) for item in workers if isinstance(item, dict)]
+
+    def _write_resident_registry_unlocked(self, workers: list[Dict[str, Any]]) -> None:
+        self.resident_workers_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "workers": workers,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        temp_file = self.resident_workers_path.parent / (
+            f"{self.resident_workers_path.stem}_{os.getpid()}_{time.time_ns()}.tmp"
+        )
+        try:
+            temp_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            temp_file.replace(self.resident_workers_path)
+        finally:
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except OSError:
+                    pass
+
+    def register_resident_process(self, worker_pid: Optional[int], role: Optional[str] = None) -> None:
+        """Track a live child resident worker PID for cross-process training eviction."""
+        if not isinstance(worker_pid, int) or isinstance(worker_pid, bool) or worker_pid <= 0:
+            return
+        with self._resident_proc_lock:
+            self._owned_resident_pids[worker_pid] = role
+            self._ensure_resident_monitor_locked()
+        with self._with_resident_registry_lock():
+            existing = self._read_resident_registry_unlocked()
+            kept = [
+                entry
+                for entry in existing
+                if entry.get("worker_pid") != worker_pid
+                and is_pid_alive(entry.get("worker_pid"))
+                and is_pid_alive(entry.get("owner_pid"))
+            ]
+            kept.append({
+                "owner_pid": os.getpid(),
+                "worker_pid": worker_pid,
+                "role": role,
+                "registered_at": datetime.now(timezone.utc).isoformat(),
+            })
+            self._write_resident_registry_unlocked(kept)
+
+    def unregister_resident_process(self, worker_pid: Optional[int]) -> None:
+        """Remove a resident worker PID after local termination and reaping."""
+        if not isinstance(worker_pid, int) or isinstance(worker_pid, bool) or worker_pid <= 0:
+            return
+        with self._resident_proc_lock:
+            self._owned_resident_pids.pop(worker_pid, None)
+        with self._with_resident_registry_lock():
+            existing = self._read_resident_registry_unlocked()
+            kept = [
+                entry
+                for entry in existing
+                if entry.get("worker_pid") != worker_pid
+                and is_pid_alive(entry.get("worker_pid"))
+                and is_pid_alive(entry.get("owner_pid"))
+            ]
+            if kept or existing:
+                self._write_resident_registry_unlocked(kept)
+
+    def _ensure_resident_monitor_locked(self) -> None:
+        if self._monitor_thread is None or not self._monitor_thread.is_alive():
+            self._monitor_stop.clear()
+            thread = threading.Thread(
+                target=self._resident_monitor_loop,
+                name="gpu-resident-evict-monitor",
+                daemon=True,
+            )
+            self._monitor_thread = thread
+            thread.start()
+
+    def _resident_monitor_loop(self) -> None:
+        while not self._monitor_stop.wait(timeout=0.05):
+            with self._resident_proc_lock:
+                dead_pids = [pid for pid in self._owned_resident_pids if not is_pid_alive(pid)]
+                for pid in dead_pids:
+                    self._owned_resident_pids.pop(pid, None)
+                if not self._owned_resident_pids:
+                    if self._monitor_thread is threading.current_thread():
+                        self._monitor_thread = None
+                    break
+            state_data = _read_state_file(self.state_path)
+            if state_data.get("state") in (STATE_WAITING, STATE_TRAINING):
+                if self.get_status().get("busy"):
+                    self.evict_resident_workers()
+
+    def _terminate_pid_best_effort(self, pid: int, terminate_timeout: float = 1.5) -> bool:
+        """Terminate an unmonitored/stubborn resident worker PID or POSIX session group."""
+        if fcntl.WINDOWS or os.name != "posix":
+            return False
+        if not _is_process_running(pid):
+            return False
+        kill_pg = False
+        try:
+            kill_pg = os.getpgid(pid) == pid
+        except OSError:
+            kill_pg = False
+        try:
+            if kill_pg:
+                os.killpg(pid, signal.SIGTERM)
+            else:
+                os.kill(pid, signal.SIGTERM)
+        except OSError:
+            return not _is_process_running(pid)
+
+        term_deadline = time.monotonic() + min(0.5, max(0.05, float(terminate_timeout)))
+        while _is_process_running(pid) and time.monotonic() < term_deadline:
+            time.sleep(0.02)
+
+        if _is_process_running(pid):
+            try:
+                if kill_pg:
+                    os.killpg(pid, signal.SIGKILL)
+                else:
+                    os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            kill_deadline = time.monotonic() + max(0.1, float(terminate_timeout))
+            while _is_process_running(pid) and time.monotonic() < kill_deadline:
+                time.sleep(0.02)
+        return not _is_process_running(pid)
+
+    def evict_cross_process_resident_workers(
+        self,
+        roles: Optional[set[str]] = None,
+        grace_seconds: float = 0.35,
+        terminate_timeout: float = 1.5,
+    ) -> list[int]:
+        """Wait briefly for peer owners to self-evict, then kill remaining resident workers."""
+        if not self.resident_workers_path.exists():
+            return []
+
+        def _matching_live_entries() -> list[Dict[str, Any]]:
+            with self._with_resident_registry_lock():
+                entries = self._read_resident_registry_unlocked()
+            matched = []
+            for entry in entries:
+                role = entry.get("role")
+                if roles is not None and role not in roles:
+                    continue
+                wpid = entry.get("worker_pid")
+                if isinstance(wpid, int) and not isinstance(wpid, bool) and wpid > 0 and _is_process_running(wpid):
+                    matched.append(entry)
+            return matched
+
+        live_entries = _matching_live_entries()
+        if not live_entries:
+            with self._with_resident_registry_lock():
+                entries = self._read_resident_registry_unlocked()
+                kept = [
+                    e for e in entries
+                    if _is_process_running(e.get("worker_pid")) and _is_process_running(e.get("owner_pid"))
+                ]
+                if len(kept) != len(entries):
+                    self._write_resident_registry_unlocked(kept)
+            return []
+
+        if any(entry.get("owner_pid") != os.getpid() for entry in live_entries) and grace_seconds > 0:
+            deadline = time.monotonic() + float(grace_seconds)
+            while time.monotonic() < deadline:
+                time.sleep(0.02)
+                live_entries = _matching_live_entries()
+                if not live_entries:
+                    break
+
+        evicted_pids: list[int] = []
+        current_pid = os.getpid()
+        for entry in live_entries:
+            wpid = entry.get("worker_pid")
+            owner_pid = entry.get("owner_pid")
+            if not isinstance(wpid, int) or isinstance(wpid, bool) or wpid <= 0:
+                continue
+            if wpid == current_pid or wpid == owner_pid:
+                continue
+            if self._terminate_pid_best_effort(wpid, terminate_timeout=terminate_timeout):
+                evicted_pids.append(wpid)
+
+        with self._with_resident_registry_lock():
+            entries = self._read_resident_registry_unlocked()
+            kept = [
+                e for e in entries
+                if e.get("worker_pid") not in evicted_pids
+                and _is_process_running(e.get("worker_pid"))
+                and _is_process_running(e.get("owner_pid"))
+            ]
+            if len(kept) != len(entries):
+                self._write_resident_registry_unlocked(kept)
+
+        return evicted_pids
 
     def get_status(self) -> Dict[str, Any]:
         """Return current GPU state, auto-healing stale state if all holder processes died.
@@ -505,8 +764,9 @@ class GPULockManager:
                 STATE_TRAINING, pid=current_pid, extra=extra_info, state_path=self.state_path
             )
 
-            # Evict process-local persistent MLX workers so unified memory is freed before training
+            # Evict process-local and cross-process persistent MLX workers so unified memory is freed before training
             self.evict_resident_workers()
+            self.evict_cross_process_resident_workers()
 
             # Evict resident Ollama models if enabled
             if evict_ollama:
