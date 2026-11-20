@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, List, Optional
 
-MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB
 MIN_EXTRACT_CHARS = 40
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 

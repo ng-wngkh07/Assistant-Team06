@@ -16,10 +16,10 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 MAX_POST_BODY_BYTES = 128 * 1024  # 128 KiB limit for chat and learning endpoints
 MAX_API_MUTATION_BODY_BYTES = 256 * 1024  # 256 KiB limit for all other API mutation endpoints
-MAX_UPLOAD_BODY_BYTES = 28 * 1024 * 1024  # 28 MiB limit for encoded upload envelope
+MAX_UPLOAD_BODY_BYTES = 140 * 1024 * 1024  # 140 MiB limit for encoded 100 MB upload envelope
 
 CHAT_BODY_LIMIT_DETAIL = "Dung lượng yêu cầu vượt quá giới hạn 128 KiB."
-UPLOAD_BODY_LIMIT_DETAIL = "Dung lượng yêu cầu tải lên vượt quá giới hạn 28 MiB."
+UPLOAD_BODY_LIMIT_DETAIL = "Dung lượng yêu cầu tải lên vượt quá giới hạn 140 MiB."
 
 
 @dataclass(frozen=True)

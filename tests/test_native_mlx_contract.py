@@ -4,7 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
-import subprocess
+import subprocess  # nosec B404
 import sys
 import types
 
@@ -38,9 +38,9 @@ def _worker(tmp_path, monkeypatch, *, nested=True, input_count=40, max_tokens=50
     class AutoTokenizer:
         @staticmethod
         def from_pretrained(path, **kwargs):
-            assert Path(path).resolve() == model.resolve()
-            assert kwargs.get('local_files_only') is True
-            assert kwargs.get('trust_remote_code') is False
+            assert Path(path).resolve() == model.resolve()  # nosec B101
+            assert kwargs.get('local_files_only') is True  # nosec B101
+            assert kwargs.get('trust_remote_code') is False  # nosec B101
             return tokenizer
 
     def load(path, **kwargs):
@@ -88,52 +88,52 @@ def test_structured_native_request_installs_schema_constraint_before_generation(
     monkeypatch.setitem(sys.modules, 'mlx_vlm.structured', types.SimpleNamespace(
         build_json_schema_logits_processor=lambda tokenizer, value: observed.append(value) or constraint))
     module.main()
-    assert observed == [schema]
+    assert observed == [schema]  # nosec B101
     processors = calls['generation'][0]['logits_processors']
-    assert processors[-1] is constraint
+    assert processors[-1] is constraint  # nosec B101
     for p in processors:
         if isinstance(p, dict):
-            assert p.get('presence_penalty', 0.0) == 0.0
+            assert p.get('presence_penalty', 0.0) == 0.0  # nosec B101
     payload = json.loads(output.getvalue())
-    assert payload['generation_profile']['presence_penalty'] == 0.0
+    assert payload['generation_profile']['presence_penalty'] == 0.0  # nosec B101
 
 
 def test_nested_qwen35_capacity_is_read_before_local_generation(tmp_path, monkeypatch):
     module, calls, output = _worker(tmp_path, monkeypatch)
     module.main()
     result = json.loads(output.getvalue())
-    assert result['context_limit'] == 100
-    assert result['input_tokens'] == 40
-    assert result['answer'] == 'Đã kiểm tra.'
-    assert len(calls['loads']) == 1
-    assert calls['generation'][0]['max_tokens'] == 50
+    assert result['context_limit'] == 100  # nosec B101
+    assert result['input_tokens'] == 40  # nosec B101
+    assert result['answer'] == 'Đã kiểm tra.'  # nosec B101
+    assert len(calls['loads']) == 1  # nosec B101
+    assert calls['generation'][0]['max_tokens'] == 50  # nosec B101
 
 
 def test_native_prompt_disables_hidden_thinking_in_the_actual_template(tmp_path, monkeypatch):
     module, calls, output = _worker(tmp_path, monkeypatch, nested=False)
     module.main()
-    assert calls['templates'][0].get('enable_thinking') is False
-    assert calls['templates'][0]['add_generation_prompt'] is True
-    assert calls['generation'][0]['prompt'] == 'formatted local prompt'
+    assert calls['templates'][0].get('enable_thinking') is False  # nosec B101
+    assert calls['templates'][0]['add_generation_prompt'] is True  # nosec B101
+    assert calls['generation'][0]['prompt'] == 'formatted local prompt'  # nosec B101
 
 
 def test_native_qa_keeps_deterministic_sampling_and_uses_anti_loop_profile(tmp_path, monkeypatch):
     module, calls, output = _worker(tmp_path, monkeypatch)
     module.main()
     generation = calls['generation'][0]
-    assert generation['sampler']['temp'] == 0.0
-    assert generation['logits_processors'][0] == {
+    assert generation['sampler']['temp'] == 0.0  # nosec B101
+    assert generation['logits_processors'][0] == {  # nosec B101
         'presence_penalty': 1.5, 'presence_context_size': 2048,
     }
-    assert json.loads(output.getvalue())['done_reason'] == 'stop'
+    assert json.loads(output.getvalue())['done_reason'] == 'stop'  # nosec B101
 
 
 def test_over_budget_request_never_loads_weights(tmp_path, monkeypatch):
     module, calls, output = _worker(tmp_path, monkeypatch, input_count=60)
     with pytest.raises(ValueError, match='110|token'):
         module.main()
-    assert calls['loads'] == []
-    assert calls['generation'] == []
+    assert calls['loads'] == []  # nosec B101
+    assert calls['generation'] == []  # nosec B101
 
 
 def test_missing_selected_tokenizer_never_uses_legacy_3b(tmp_path, monkeypatch):
@@ -144,7 +144,7 @@ def test_missing_selected_tokenizer_never_uses_legacy_3b(tmp_path, monkeypatch):
     monkeypatch.setattr(token_counter, 'BASE_DIR', tmp_path)
     monkeypatch.setattr(token_counter, 'MLX_MODEL_DIR', tmp_path / 'missing-selected-base')
     monkeypatch.setattr(model_resolver, 'MLX_9B_DIR', tmp_path / 'missing-selected-base')
-    assert token_counter._find_model_dir('qwen3.5-9b-4bit') is None
+    assert token_counter._find_model_dir('qwen3.5-9b-4bit') is None  # nosec B101
 
 
 @pytest.mark.parametrize('name', ['unrelated-9b-model', 'qwen3.5-9b-4bit-typo', 'unrelated-3b-model'])
@@ -154,14 +154,14 @@ def test_unknown_model_name_cannot_resolve_to_an_installed_base(name):
         resolve_mlx_model_dir(name)
 
 
-@pytest.mark.parametrize('shard_name', ['../outside.safetensors', '/tmp/outside.safetensors', ['not-a-path'], None])
+@pytest.mark.parametrize('shard_name', ['../outside.safetensors', '/tmp/outside.safetensors', ['not-a-path'], None])  # nosec B108
 def test_malformed_or_escaping_shard_map_fails_closed(tmp_path, shard_name):
     from app.trained_client import TrainedModelClient
     model = tmp_path/'model';model.mkdir()
     (model/'config.json').write_text('{}')
     (model/'tokenizer.json').write_text('{}')
     (model/'model.safetensors.index.json').write_text(json.dumps({'weight_map':{'layer.weight':shard_name}}))
-    assert TrainedModelClient._verify_weights(model) is False
+    assert TrainedModelClient._verify_weights(model) is False  # nosec B101
 
 
 def test_sharded_model_missing_one_weight_file_is_unavailable(tmp_path):
@@ -172,7 +172,7 @@ def test_sharded_model_missing_one_weight_file_is_unavailable(tmp_path):
     (model/'first.safetensors').write_bytes(b'fixture')
     index={'weight_map':{'a':'first.safetensors','b':'second.safetensors'}}
     (model/'model.safetensors.index.json').write_text(json.dumps(index))
-    assert TrainedModelClient._verify_weights(model) is False
+    assert TrainedModelClient._verify_weights(model) is False  # nosec B101
 
 
 @pytest.mark.skipif(sys.platform != 'darwin', reason='Mac deployment default; Windows keeps its explicit local compatibility path')
@@ -181,10 +181,10 @@ def test_mac_default_names_native_9b_without_an_environment_override(tmp_path):
     env.pop('MLX_MODEL_DIR', None); env.pop('MLX_9B_MODEL_DIR', None)
     env['AGENT_DATA_DIR'] = str(tmp_path)
     code = 'import json; from app.config import DEFAULT_CHAT_MODEL, MLX_MODEL_DIR; print(json.dumps([DEFAULT_CHAT_MODEL,str(MLX_MODEL_DIR)]))'
-    result = subprocess.run([sys.executable, '-c', code], cwd=ROOT, env=env, capture_output=True, text=True, check=True)
+    result = subprocess.run([sys.executable, '-c', code], cwd=ROOT, env=env, capture_output=True, text=True, check=True)  # nosec B603
     name, directory = json.loads(result.stdout)
-    assert '9b' in name.casefold() and ':' not in name
-    assert Path(directory).name == 'qwen3.5-9b-4bit'
+    assert '9b' in name.casefold() and ':' not in name  # nosec B101
+    assert Path(directory).name == 'qwen3.5-9b-4bit'  # nosec B101
 
 
 @pytest.mark.parametrize('reason,count', [('stop', 7), ('length', 50), (None, 7)])
@@ -193,9 +193,9 @@ def test_worker_reports_actual_generation_finish_and_usage(tmp_path, monkeypatch
     module, calls, output = _worker(tmp_path, monkeypatch, finish_reason=reason, generation_tokens=count)
     module.main()
     result = json.loads(output.getvalue())
-    assert result['done_reason'] == reason
-    assert result['is_truncated'] is (reason == 'length')
-    assert result['output_tokens'] == count
+    assert result['done_reason'] == reason  # nosec B101
+    assert result['is_truncated'] is (reason == 'length')  # nosec B101
+    assert result['output_tokens'] == count  # nosec B101
 
 
 def test_mac_selected_alias_never_changes_backend_when_weights_are_missing(monkeypatch):
@@ -203,16 +203,16 @@ def test_mac_selected_alias_never_changes_backend_when_weights_are_missing(monke
     from app.trained_client import TrainedModelClient
     monkeypatch.setattr(model_resolver, 'sys', types.SimpleNamespace(platform='darwin'))
     monkeypatch.setattr(TrainedModelClient, 'available', staticmethod(lambda *a, **kw: False))
-    assert model_resolver.is_mlx_model('qwen3.5-9b-4bit') is True
-    assert model_resolver.is_mlx_model('qwen3.5:9b') is True
+    assert model_resolver.is_mlx_model('qwen3.5-9b-4bit') is True  # nosec B101
+    assert model_resolver.is_mlx_model('qwen3.5:9b') is True  # nosec B101
 
 
 def test_selected_model_override_is_independent_of_isolated_data_directory(tmp_path):
     env = os.environ.copy()
     env.update(AGENT_DATA_DIR=str(tmp_path/'isolated-data'), MLX_MODEL_DIR=str(tmp_path/'reviewed-9b'), DEFAULT_CHAT_MODEL='qwen3.5-9b-4bit')
     code = 'from app.model_resolver import resolve_mlx_model_dir; print(resolve_mlx_model_dir("qwen3.5-9b-4bit"))'
-    result = subprocess.run([sys.executable, '-c', code], cwd=ROOT, env=env, capture_output=True, text=True, check=True)
-    assert Path(result.stdout.strip()) == tmp_path/'reviewed-9b'
+    result = subprocess.run([sys.executable, '-c', code], cwd=ROOT, env=env, capture_output=True, text=True, check=True)  # nosec B603
+    assert Path(result.stdout.strip()) == tmp_path/'reviewed-9b'  # nosec B101
 
 
 def test_native_bridge_preserves_one_system_message_for_exact_budget(tmp_path, monkeypatch):
@@ -231,18 +231,18 @@ def test_native_bridge_preserves_one_system_message_for_exact_budget(tmp_path, m
             'output_tokens': 7, 'is_truncated': False}))
     monkeypatch.setattr(trained_client.subprocess, 'run', run)
     messages = [{'role':'system','content':'Use the supplied sources.'}, {'role':'user','content':'Entropy là gì?'}]
-    assert ''.join(client.chat_stream(messages, system_prompt='Use the supplied sources.')) == 'Đã kiểm tra.'
-    assert requests[0]['messages'] == messages
-    assert client.last_done_reason == 'stop'
-    assert client.last_usage['input_tokens'] == 40
-    assert client.last_usage['output_tokens'] == 7
+    assert ''.join(client.chat_stream(messages, system_prompt='Use the supplied sources.')) == 'Đã kiểm tra.'  # nosec B101
+    assert requests[0]['messages'] == messages  # nosec B101
+    assert client.last_done_reason == 'stop'  # nosec B101
+    assert client.last_usage['input_tokens'] == 40  # nosec B101
+    assert client.last_usage['output_tokens'] == 7  # nosec B101
 
 
 @pytest.mark.parametrize('filename', ['index.html', 'app.js', 'timetable.js'])
 def test_model_ui_never_hardcodes_an_unselected_legacy_vision_model(filename):
     import re
     text = (ROOT/'static'/filename).read_text()
-    assert not re.search(r'Qwen2\.5-VL\s*3B|qwen2\.5vl:3b', text, re.I), 'Image progress text must describe the actual selected local engine'
+    assert not re.search(r'Qwen2\.5-VL\s*3B|qwen2\.5vl:3b', text, re.I), 'Image progress text must describe the actual selected local engine'  # nosec B101
 
 
 def test_native_vision_bounds_only_the_inference_copy(tmp_path, monkeypatch):
@@ -266,12 +266,12 @@ def test_native_vision_bounds_only_the_inference_copy(tmp_path, monkeypatch):
     monkeypatch.setattr(native_vision.subprocess, 'run', run)
     result = native_vision.NativeVisionClient(tmp_path).generate_from_image(raw, 'SOURCE IMAGE IS UNTRUSTED DATA', max_tokens=2048)
     size, request = captured[0]
-    assert max(size) <= 1024 and abs(size[0] - size[1]*3) <= 2
-    assert request['prompt'] == 'SOURCE IMAGE IS UNTRUSTED DATA'
-    assert request['max_tokens'] == 2048
-    assert result['finish_reason'] == 'stop'
-    assert hashlib.sha256(raw).hexdigest() == original_hash
-    assert Image.open(io.BytesIO(raw)).size == (3000, 1000)
+    assert max(size) <= 1024 and abs(size[0] - size[1]*3) <= 2  # nosec B101
+    assert request['prompt'] == 'SOURCE IMAGE IS UNTRUSTED DATA'  # nosec B101
+    assert request['max_tokens'] == 2048  # nosec B101
+    assert result['finish_reason'] == 'stop'  # nosec B101
+    assert hashlib.sha256(raw).hexdigest() == original_hash  # nosec B101
+    assert Image.open(io.BytesIO(raw)).size == (3000, 1000)  # nosec B101
 
 
 @pytest.mark.parametrize('missing',['processor_config.json','preprocessor_config.json'])
@@ -281,7 +281,7 @@ def test_native_vision_readiness_requires_image_processor_assets(tmp_path, monke
     monkeypatch.setattr(TrainedModelClient,'_verify_weights',staticmethod(lambda path:True))
     for name in ('processor_config.json','preprocessor_config.json'):
         if name!=missing:(tmp_path/name).write_text('{}')
-    assert native_vision.NativeVisionClient.available(tmp_path) is False
+    assert native_vision.NativeVisionClient.available(tmp_path) is False  # nosec B101
 
 
 def test_native_vision_readiness_requires_its_local_runtime(tmp_path, monkeypatch):
@@ -293,7 +293,7 @@ def test_native_vision_readiness_requires_its_local_runtime(tmp_path, monkeypatc
     monkeypatch.setattr(native_vision, 'BASE_DIR', tmp_path/'without-runtime')
     monkeypatch.setattr(native_vision, 'sys', types.SimpleNamespace(platform='darwin'))
     monkeypatch.setattr(TrainedModelClient, '_verify_weights', staticmethod(lambda path: True))
-    assert native_vision.NativeVisionClient.available(model) is False
+    assert native_vision.NativeVisionClient.available(model) is False  # nosec B101
 
 
 @pytest.mark.parametrize('changed_file', ['model.safetensors', 'tokenizer.json', 'preprocessor_config.json', 'chat_template.jinja'])
@@ -312,21 +312,21 @@ def test_native_calendar_cache_identity_changes_with_actual_artifact_bytes(tmp_p
     path.write_text('asset-v2')
     os.utime(path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
     second = timetable_vision.get_vlm_digest()
-    assert first != second, 'A fixed repository label must not reuse OCR after local assets change'
+    assert first != second, 'A fixed repository label must not reuse OCR after local assets change'  # nosec B101
 
 
 def test_native_prefill_bounds_peak_memory_and_reports_phases(tmp_path, monkeypatch):
     module, calls, output = _worker(tmp_path, monkeypatch)
     module.main()
     result = json.loads(output.getvalue())
-    assert calls['generation'][0]['prefill_step_size'] == 128
+    assert calls['generation'][0]['prefill_step_size'] == 128  # nosec B101
     timing = result['timings']
-    assert timing['load_seconds'] >= 0
-    assert timing['first_token_seconds'] >= 0
-    assert timing['generation_seconds'] >= timing['first_token_seconds']
-    assert timing['prompt_tokens_per_second'] == 20.0
-    assert timing['generation_tokens_per_second'] == 5.0
-    assert timing['peak_memory_gb'] == 5.4
+    assert timing['load_seconds'] >= 0  # nosec B101
+    assert timing['first_token_seconds'] >= 0  # nosec B101
+    assert timing['generation_seconds'] >= timing['first_token_seconds']  # nosec B101
+    assert timing['prompt_tokens_per_second'] == 20.0  # nosec B101
+    assert timing['generation_tokens_per_second'] == 5.0  # nosec B101
+    assert timing['peak_memory_gb'] == 5.4  # nosec B101
 
 
 @pytest.mark.parametrize('mode', ['accepted', 'absent', 'wrong_path', 'ordinary_qa'])
@@ -351,14 +351,14 @@ def test_native_worker_requires_acceptance_path_and_exact_scope(tmp_path, monkey
     monkeypatch.setitem(sys.modules, 'mlx_vlm.structured', types.SimpleNamespace(build_json_schema_logits_processor=lambda *args: object()))
     if mode != 'accepted':
         with pytest.raises(ValueError, match='nghiệm thu'): module.main()
-        assert calls['loads'] == []
+        assert calls['loads'] == []  # nosec B101
     else:
         module.main()
         result = json.loads(output.getvalue())
-        assert calls['loads'][0][1]['adapter_path'] == str(adapter)
-        assert result['adapter_sha256'] == 'fixture'
-        assert result['adapter_scope'] == 'single_question_practice_review'
-    assert approvals == [False]
+        assert calls['loads'][0][1]['adapter_path'] == str(adapter)  # nosec B101
+        assert result['adapter_sha256'] == 'fixture'  # nosec B101
+        assert result['adapter_scope'] == 'single_question_practice_review'  # nosec B101
+    assert approvals == [False]  # nosec B101
 
 
 @pytest.mark.parametrize('mode', ['accepted', 'legacy_acceptance', 'altered_prompt'])
@@ -374,7 +374,7 @@ def test_native_grounded_adapter_cannot_cross_review_profiles(tmp_path, monkeypa
     prompt = native_grounded_review_prompt(item)
     if mode == 'altered_prompt':
         altered = prompt.replace('Use ONLY source as evidence.', 'Use background knowledge as evidence.')
-        assert altered != prompt
+        assert altered != prompt  # nosec B101
         prompt = altered
     value.update(adapter_path=str(adapter), seed=42, temperature=0, messages=[{'role': 'system', 'content': practice_adapter.SYSTEM_PROMPT}, {'role': 'user', 'content': prompt}], response_schema=native_grounded_review_schema(1, None))
     profile = practice_adapter.COMPACT_REVIEW_PROFILE if mode == 'legacy_acceptance' else practice_adapter.GROUNDED_REVIEW_PROFILE
@@ -384,13 +384,13 @@ def test_native_grounded_adapter_cannot_cross_review_profiles(tmp_path, monkeypa
     monkeypatch.setitem(sys.modules, 'mlx_vlm.structured', types.SimpleNamespace(build_json_schema_logits_processor=lambda *args: object()))
     if mode != 'accepted':
         with pytest.raises(ValueError, match='nghiệm thu'): module.main()
-        assert calls['loads'] == []
+        assert calls['loads'] == []  # nosec B101
     else:
         module.main()
         result = json.loads(output.getvalue())
-        assert result['adapter_loaded'] is True
-        assert result['adapter_review_profile'] == practice_adapter.GROUNDED_REVIEW_PROFILE
-        assert calls['loads'][0][1]['adapter_path'] == str(adapter)
+        assert result['adapter_loaded'] is True  # nosec B101
+        assert result['adapter_review_profile'] == practice_adapter.GROUNDED_REVIEW_PROFILE  # nosec B101
+        assert calls['loads'][0][1]['adapter_path'] == str(adapter)  # nosec B101
 
 
 def test_native_vision_worker_applies_response_schema_and_repetition_penalty(tmp_path, monkeypatch):
@@ -469,13 +469,13 @@ def test_native_vision_worker_applies_response_schema_and_repetition_penalty(tmp
     module.main()
 
     result = json.loads(out.getvalue())
-    assert result['finish_reason'] == 'stop'
-    assert observed['schema'] == [(tok, schema)]
+    assert result['finish_reason'] == 'stop'  # nosec B101
+    assert observed['schema'] == [(tok, schema)]  # nosec B101
     gen_proc, gen_kw = observed['generate'][0]
-    assert gen_proc is processor
-    assert gen_kw['logits_processors'] == [schema_proc]
-    assert gen_kw['repetition_penalty'] == 1.05
-    assert gen_kw['repetition_context_size'] == 64
+    assert gen_proc is processor  # nosec B101
+    assert gen_kw['logits_processors'] == [schema_proc]  # nosec B101
+    assert gen_kw['repetition_penalty'] == 1.05  # nosec B101
+    assert gen_kw['repetition_context_size'] == 64  # nosec B101
 
 
 def test_native_ocr_passes_transcript_schema_and_retries_length_up_to_4096(tmp_path, monkeypatch):
@@ -519,13 +519,13 @@ def test_native_ocr_passes_transcript_schema_and_retries_length_up_to_4096(tmp_p
     mgr = vision_ocr.VisionOCRManager(cache_dir=tmp_path / 'ocr_cache')
     rec = mgr.ocr_image_bytes(raw, hashlib.sha256(raw).hexdigest(), 'dense.pdf', 1)
 
-    assert len(calls) == 2
-    assert calls[0]['max_tokens'] == 2048
-    assert calls[1]['max_tokens'] == 4096
-    assert calls[0]['response_schema'] == vision_ocr.TRANSCRIPT_JSON_SCHEMA
-    assert calls[0]['repetition_penalty'] == 1.05
-    assert calls[0]['repetition_context_size'] == 64
-    assert rec['raw_text'] == 'Quote "GDP" and \\frac{Y}{P}'
+    assert len(calls) == 2  # nosec B101
+    assert calls[0]['max_tokens'] == 2048  # nosec B101
+    assert calls[1]['max_tokens'] == 4096  # nosec B101
+    assert calls[0]['response_schema'] == vision_ocr.TRANSCRIPT_JSON_SCHEMA  # nosec B101
+    assert calls[0]['repetition_penalty'] == 1.05  # nosec B101
+    assert calls[0]['repetition_context_size'] == 64  # nosec B101
+    assert rec['raw_text'] == 'Quote "GDP" and \\frac{Y}{P}'  # nosec B101
 
 
 def test_native_vision_ocr_retries_4096_when_native_client_raises_truncation_value_error(
@@ -574,9 +574,9 @@ def test_native_vision_ocr_retries_4096_when_native_client_raises_truncation_val
     mgr = vision_ocr.VisionOCRManager(cache_dir=tmp_path / 'ocr_cache')
     rec = mgr.ocr_image_bytes(raw, hashlib.sha256(raw).hexdigest(), 'dense_real.pdf', 1)
 
-    assert calls == [2048, 4096]
-    assert rec['raw_text'] == 'Recovered full dense page'
-    assert rec['status'] == 'CAPTURED_PENDING_REVIEW'
+    assert calls == [2048, 4096]  # nosec B101
+    assert rec['raw_text'] == 'Recovered full dense page'  # nosec B101
+    assert rec['status'] == 'CAPTURED_PENDING_REVIEW'  # nosec B101
 
 
 def test_native_vision_status_identity_caches_stat_signature_and_detects_mutation(
@@ -622,16 +622,16 @@ def test_native_vision_status_identity_caches_stat_signature_and_detects_mutatio
 
     try:
         cold = client.get_status_identity()
-        assert cold.startswith('mlx-vision-sha256:')
-        assert shard_reads == 1
+        assert cold.startswith('mlx-vision-sha256:')  # nosec B101
+        assert shard_reads == 1  # nosec B101
 
         for _ in range(3):
-            assert client.get_status_identity() == cold
-        assert shard_reads == 1
+            assert client.get_status_identity() == cold  # nosec B101
+        assert shard_reads == 1  # nosec B101
 
         # Explicit get_identity() always reads actual bytes.
-        assert client.get_identity() == cold
-        assert shard_reads == 2
+        assert client.get_identity() == cold  # nosec B101
+        assert shard_reads == 2  # nosec B101
 
         # Replacing shard1 with identical byte length must invalidate stat cache immediately.
         staging = tmp_path / 'shard1.tmp'
@@ -639,10 +639,10 @@ def test_native_vision_status_identity_caches_stat_signature_and_detects_mutatio
         staging.replace(shard1)
 
         updated = client.get_status_identity()
-        assert updated != cold
-        assert shard_reads == 3
-        assert client.get_status_identity() == updated
-        assert shard_reads == 3
+        assert updated != cold  # nosec B101
+        assert shard_reads == 3  # nosec B101
+        assert client.get_status_identity() == updated  # nosec B101
+        assert shard_reads == 3  # nosec B101
     finally:
         native_vision.NativeVisionClient.clear_status_identity_cache()
 
@@ -689,17 +689,17 @@ def test_ocr_image_bytes_reuses_preverified_model_digest_via_status_identity(tmp
     rec1 = mgr.ocr_image_bytes(
         raw, hashlib.sha256(raw).hexdigest(), 'doc.pdf', 1, preverified_model_digest='vision-digest-A'
     )
-    assert rec1['model_digest'] == 'vision-digest-A'
-    assert len(status_calls) == 1
-    assert len(full_calls) == 0
+    assert rec1['model_digest'] == 'vision-digest-A'  # nosec B101
+    assert len(status_calls) == 1  # nosec B101
+    assert len(full_calls) == 0  # nosec B101
 
     # Mismatched preverified digest forces full byte re-verification.
     rec2 = mgr.ocr_image_bytes(
         raw, hashlib.sha256(raw).hexdigest(), 'doc.pdf', 2, preverified_model_digest='stale-digest'
     )
-    assert rec2['model_digest'] == 'vision-digest-A'
-    assert len(status_calls) == 2
-    assert len(full_calls) == 1
+    assert rec2['model_digest'] == 'vision-digest-A'  # nosec B101
+    assert len(status_calls) == 2  # nosec B101
+    assert len(full_calls) == 1  # nosec B101
 
 
 def test_mlx_infer_stream_reuses_model_and_deep_clones_hybrid_prefix_cache(tmp_path, monkeypatch, capsys):
@@ -838,22 +838,22 @@ def test_mlx_infer_stream_reuses_model_and_deep_clones_hybrid_prefix_cache(tmp_p
 
     runpy.run_path(str(ROOT / 'app/mlx_infer.py'), run_name='__main__')
     lines = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line.strip()]
-    assert not [evt for evt in lines if 'error' in evt], f'Unexpected error events: {lines}'
+    assert not [evt for evt in lines if 'error' in evt], f'Unexpected error events: {lines}'  # nosec B101
     done_events = [evt for evt in lines if evt.get('done')]
     token_events = [evt for evt in lines if 'token' in evt]
 
-    assert len(load_calls) == 1
-    assert sum(prefill_calls) == done_events[0]['review_cache']['prefix_tokens']
-    assert prefill_counts_at_gen == [len(prefill_calls), len(prefill_calls)]  # Req 2 reused cached prefix without prefill
-    assert len(token_events) == 4  # 2 streamed token chunks per request
-    assert len(done_events) == 2
-    assert done_events[0]['answer'] == 'Trả lời.'
-    assert done_events[0]['review_cache']['reused_tokens'] == 0
-    assert done_events[0]['review_cache']['prefix_tokens'] >= 64
-    assert done_events[1]['timings']['load_seconds'] == 0.0
-    assert done_events[1]['review_cache']['reused_tokens'] == done_events[0]['review_cache']['prefix_tokens']
-    assert isinstance(gen_calls[1]['prompt'], list)  # Suffix tokens only after prompt_cache
-    assert observed_layer1_states == [[9, 9], [9, 9]]  # In-place mutation did not corrupt snapshot
+    assert len(load_calls) == 1  # nosec B101
+    assert sum(prefill_calls) == done_events[0]['review_cache']['prefix_tokens']  # nosec B101
+    assert prefill_counts_at_gen == [len(prefill_calls), len(prefill_calls)]  # Req 2 reused cached prefix without prefill  # nosec B101
+    assert len(token_events) == 4  # 2 streamed token chunks per request  # nosec B101
+    assert len(done_events) == 2  # nosec B101
+    assert done_events[0]['answer'] == 'Trả lời.'  # nosec B101
+    assert done_events[0]['review_cache']['reused_tokens'] == 0  # nosec B101
+    assert done_events[0]['review_cache']['prefix_tokens'] >= 64  # nosec B101
+    assert done_events[1]['timings']['load_seconds'] == 0.0  # nosec B101
+    assert done_events[1]['review_cache']['reused_tokens'] == done_events[0]['review_cache']['prefix_tokens']  # nosec B101
+    assert isinstance(gen_calls[1]['prompt'], list)  # Suffix tokens only after prompt_cache  # nosec B101
+    assert observed_layer1_states == [[9, 9], [9, 9]]  # In-place mutation did not corrupt snapshot  # nosec B101
 
 
 def test_mlx_vision_stream_reuses_loaded_model_and_schema_processor(tmp_path, monkeypatch, capsys):
@@ -916,10 +916,10 @@ def test_mlx_vision_stream_reuses_loaded_model_and_schema_processor(tmp_path, mo
     runpy.run_path(str(ROOT / 'app/mlx_vision.py'), run_name='__main__')
     results = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line.strip()]
 
-    assert len(results) == 2
-    assert len(load_calls) == 1
-    assert len(schema_calls) == 2
-    assert all(r['text'] == '{"text":"Page text"}' and r['finish_reason'] == 'stop' for r in results)
+    assert len(results) == 2  # nosec B101
+    assert len(load_calls) == 1  # nosec B101
+    assert len(schema_calls) == 2  # nosec B101
+    assert all(r['text'] == '{"text":"Page text"}' and r['finish_reason'] == 'stop' for r in results)  # nosec B101
 
 
 def test_native_vision_uses_resident_stream_worker_and_evicts_on_cancel(monkeypatch, tmp_path):
@@ -955,12 +955,12 @@ def test_native_vision_uses_resident_stream_worker_and_evicts_on_cancel(monkeypa
     )
 
     out = client.generate_from_image(raw, 'OCR page', max_tokens=256)
-    assert out['text'] == 'OK'
-    assert len(seen_requests) == 1
-    assert seen_requests[0]['prompt'] == 'OCR page'
+    assert out['text'] == 'OK'  # nosec B101
+    assert len(seen_requests) == 1  # nosec B101
+    assert seen_requests[0]['prompt'] == 'OCR page'  # nosec B101
 
     native_vision.cancel_active_vision_workers()
-    assert len(evict_calls) == 1
+    assert len(evict_calls) == 1  # nosec B101
 
 
 def test_mlx_infer_stream_warmup_prepopulates_prefix_cache_before_first_query(tmp_path, monkeypatch, capsys):
@@ -1081,17 +1081,17 @@ def test_mlx_infer_stream_warmup_prepopulates_prefix_cache_before_first_query(tm
     runpy.run_path(str(ROOT / 'app/mlx_infer.py'), run_name='__main__')
     events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line.strip()]
     done_events = [evt for evt in events if evt.get('done')]
-    assert len(done_events) == 2
+    assert len(done_events) == 2  # nosec B101
 
     warmup_evt, query_evt = done_events
-    assert warmup_evt['op'] == 'warmup'
-    assert warmup_evt['ok'] is True
-    assert len(warmup_evt['warmed_prefixes']) == 2
-    assert len(load_calls) == 1
-    assert len(gen_calls) == 1  # Warmup never invoked stream_generate
-    assert query_evt['timings']['load_seconds'] == 0.0
-    assert query_evt['review_cache']['reused_tokens'] == warmup_evt['warmed_prefixes'][0]['prefix_tokens']
-    assert gen_calls[0]['prefill_count'] == len(prefill_calls)  # Zero extra prefill during first user query
+    assert warmup_evt['op'] == 'warmup'  # nosec B101
+    assert warmup_evt['ok'] is True  # nosec B101
+    assert len(warmup_evt['warmed_prefixes']) == 2  # nosec B101
+    assert len(load_calls) == 1  # nosec B101
+    assert len(gen_calls) == 1  # Warmup never invoked stream_generate  # nosec B101
+    assert query_evt['timings']['load_seconds'] == 0.0  # nosec B101
+    assert query_evt['review_cache']['reused_tokens'] == warmup_evt['warmed_prefixes'][0]['prefix_tokens']  # nosec B101
+    assert gen_calls[0]['prefill_count'] == len(prefill_calls)  # Zero extra prefill during first user query  # nosec B101
 
 
 def test_mlx_infer_stream_caches_compiled_schema_with_clone_and_supports_prefill_step_size(tmp_path, monkeypatch, capsys):
@@ -1218,10 +1218,202 @@ def test_mlx_infer_stream_caches_compiled_schema_with_clone_and_supports_prefill
     runpy.run_path(str(ROOT / 'app/mlx_infer.py'), run_name='__main__')
     events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line.strip()]
     done_events = [evt for evt in events if evt.get('done')]
-    assert len(done_events) == 2
-    assert len(compile_calls) == 1, 'Identical schema should compile once and clone for subsequent requests'
-    assert done_events[0]['timings']['schema_compile_seconds'] >= 0.0
-    assert done_events[1]['timings']['schema_compile_seconds'] >= 0.0
-    assert gen_kwargs_seen[0]['prefill_step_size'] == 256
-    assert gen_kwargs_seen[0]['logits_processors'][-1].tag == 'compiled-0-clone-1'
-    assert gen_kwargs_seen[1]['logits_processors'][-1].tag == 'compiled-0-clone-2'
+    assert len(done_events) == 2  # nosec B101
+    assert len(compile_calls) == 1, 'Identical schema should compile once and clone for subsequent requests'  # nosec B101
+    assert done_events[0]['timings']['schema_compile_seconds'] >= 0.0  # nosec B101
+    assert done_events[1]['timings']['schema_compile_seconds'] >= 0.0  # nosec B101
+    assert gen_kwargs_seen[0]['prefill_step_size'] == 256  # nosec B101
+    assert gen_kwargs_seen[0]['logits_processors'][-1].tag == 'compiled-0-clone-1'  # nosec B101
+    assert gen_kwargs_seen[1]['logits_processors'][-1].tag == 'compiled-0-clone-2'  # nosec B101
+
+
+def test_mlx_infer_multi_adapter_hot_swap_avoids_base_reload(tmp_path, monkeypatch):
+    import socket
+    from collections import OrderedDict
+
+    monkeypatch.setattr(socket.socket, 'connect', socket.socket.connect)
+    monkeypatch.setattr(socket, 'create_connection', socket.create_connection)
+    mx = types.ModuleType('mlx.core')
+    mx.random = types.SimpleNamespace(seed=lambda _: None)
+    mx.clear_cache = lambda: None
+    mlx_pkg = types.ModuleType('mlx')
+    mlx_pkg.core = mx
+    lm = types.ModuleType('mlx_lm')
+    sampler = types.ModuleType('mlx_lm.sample_utils')
+    sampler.make_sampler = lambda **k: None
+    sampler.make_logits_processors = lambda **k: []
+    utils_mod = types.ModuleType('mlx_lm.utils')
+
+    model_dir = tmp_path / 'model'
+    model_dir.mkdir()
+    adp_a = tmp_path / 'adp_a'
+    adp_a.mkdir()
+    (adp_a / 'adapters.safetensors').write_bytes(b'a')
+    adp_b = tmp_path / 'adp_b'
+    adp_b.mkdir()
+    (adp_b / 'adapters.safetensors').write_bytes(b'b')
+
+    base_q = object()
+    lora_q_a = types.SimpleNamespace(linear=base_q, lora_a=1, lora_b=2)
+    lora_q_b = types.SimpleNamespace(linear=base_q, lora_a=3, lora_b=4)
+
+    class FakeModel:
+        def __init__(self):
+            self.q_proj = base_q
+
+        def named_modules(self):
+            return [('q_proj', self.q_proj)]
+
+    model_inst = FakeModel()
+    load_calls = []
+
+    def fake_load(path, adapter_path=None):
+        load_calls.append(adapter_path)
+        if adapter_path == str(adp_a):
+            model_inst.q_proj = lora_q_a
+        return model_inst, 'tok'
+
+    def fake_load_adapters(m, adapter_path):
+        assert m is model_inst and adapter_path == str(adp_b)  # nosec B101
+        m.q_proj = lora_q_b
+        return m
+
+    lm.load = fake_load
+    lm.stream_generate = lambda *a, **k: iter(())
+    utils_mod.load_adapters = fake_load_adapters
+    for name, mod in [
+        ('mlx', mlx_pkg),
+        ('mlx.core', mx),
+        ('mlx_lm', lm),
+        ('mlx_lm.sample_utils', sampler),
+        ('mlx_lm.utils', utils_mod),
+    ]:
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    spec = importlib.util.spec_from_file_location('mlx_infer_hotswap_test', ROOT / 'app' / 'mlx_infer.py')
+    mlx_infer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mlx_infer)
+
+    state = {
+        'cfg': {},
+        'tok': {},
+        'model_key': None,
+        'model': None,
+        'loaded_tok': None,
+        'lora_bindings': None,
+        'base_slots': {},
+        'lora_banks': OrderedDict(),
+        'prefix_caches': OrderedDict({'keep': 'kv_snap'}),
+        'context_prefix_cache': OrderedDict(),
+        'schema_processors': OrderedDict(),
+    }
+
+    mlx_infer._ensure_loaded_model(model_dir, adp_a, state, adapter_sha256='sha_a')
+    assert model_inst.q_proj is lora_q_a and len(load_calls) == 1  # nosec B101
+
+    mlx_infer._ensure_loaded_model(model_dir, adp_b, state, adapter_sha256='sha_b')
+    assert model_inst.q_proj is lora_q_b and len(load_calls) == 1  # nosec B101
+
+    mlx_infer._ensure_loaded_model(model_dir, adp_a, state, adapter_sha256='sha_a')
+    assert model_inst.q_proj is lora_q_a and len(load_calls) == 1  # nosec B101
+
+    mlx_infer._ensure_loaded_model(model_dir, None, state)
+    assert model_inst.q_proj is base_q and len(load_calls) == 1  # nosec B101
+    assert state['prefix_caches'].get('keep') == 'kv_snap'  # nosec B101
+
+    sparse_state = {
+        'cfg': {},
+        'tok': {},
+        'model_key': None,
+        'model': None,
+        'loaded_tok': None,
+        'lora_bindings': None,
+        'base_slots': {},
+        'lora_banks': OrderedDict(),
+        'context_prefix_cache': OrderedDict(),
+        'schema_processors': OrderedDict(),
+    }
+    mlx_infer._ensure_loaded_model(model_dir, None, sparse_state)
+    assert sparse_state['model'] is model_inst and len(load_calls) == 2  # nosec B101
+
+
+def test_mlx_infer_detects_streaming_repetition_loop(monkeypatch):
+    import socket
+
+    monkeypatch.setattr(socket.socket, 'connect', socket.socket.connect)
+    monkeypatch.setattr(socket, 'create_connection', socket.create_connection)
+    mx = types.ModuleType('mlx.core')
+    mx.random = types.SimpleNamespace(seed=lambda _: None)
+    mx.clear_cache = lambda: None
+    mlx_pkg = types.ModuleType('mlx')
+    mlx_pkg.core = mx
+    lm = types.ModuleType('mlx_lm')
+    lm.load = lambda *a, **k: (None, None)
+    lm.stream_generate = lambda *a, **k: iter(())
+    sampler = types.ModuleType('mlx_lm.sample_utils')
+    sampler.make_sampler = lambda **k: None
+    sampler.make_logits_processors = lambda **k: []
+    for name, mod in [
+        ('mlx', mlx_pkg),
+        ('mlx.core', mx),
+        ('mlx_lm', lm),
+        ('mlx_lm.sample_utils', sampler),
+    ]:
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    spec = importlib.util.spec_from_file_location('mlx_infer_loop_test', ROOT / 'app' / 'mlx_infer.py')
+    mlx_infer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mlx_infer)
+
+    unit = 'rotateLeft gán T1->left=x; rotateRight gán T1->right=x; '
+    assert mlx_infer._has_streaming_repetition_loop('{"claims":[{"text":"' + unit * 4) is True  # nosec B101
+    assert mlx_infer._has_streaming_repetition_loop('{"claims":[{"text":"rotateLeft gán T1->left=x;","source_ids":["S1"],"evidence_lines":[2,3]}]}') is False  # nosec B101
+
+
+def test_mlx_infer_detects_paraphrased_clause_loop_and_allows_clean_multi_claim(monkeypatch):
+    import socket
+
+    monkeypatch.setattr(socket.socket, 'connect', socket.socket.connect)
+    monkeypatch.setattr(socket, 'create_connection', socket.create_connection)
+    mx = types.ModuleType('mlx.core')
+    mx.random = types.SimpleNamespace(seed=lambda _: None)
+    mx.clear_cache = lambda: None
+    mlx_pkg = types.ModuleType('mlx')
+    mlx_pkg.core = mx
+    lm = types.ModuleType('mlx_lm')
+    lm.load = lambda *a, **k: (None, None)
+    lm.stream_generate = lambda *a, **k: iter(())
+    sampler = types.ModuleType('mlx_lm.sample_utils')
+    sampler.make_sampler = lambda **k: None
+    sampler.make_logits_processors = lambda **k: []
+    for name, mod in [
+        ('mlx', mlx_pkg),
+        ('mlx.core', mx),
+        ('mlx_lm', lm),
+        ('mlx_lm.sample_utils', sampler),
+    ]:
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    spec = importlib.util.spec_from_file_location('mlx_infer_clause_loop_test', ROOT / 'app' / 'mlx_infer.py')
+    mlx_infer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mlx_infer)
+
+    repeated_text = (
+        '{"claims":[{"text":"rotateLeft xoay nút x qua nhánh phải (x->right) còn rotateRight xoay qua nhánh trái; '
+        'rotateLeft gán T2=T1->left còn rotateRight gán T2=T1->right; '
+        'rotateLeft gán x->right=T2 còn rotateRight gán x->left=T2; '
+        'rotateLeft xoay qua nhánh phải còn rotateRight xoay qua nhánh trái; '
+        'rotateLeft gán T2=T1->left còn rotateRight gán T2=T1->right; '
+        'rotateLeft gán x->right=T2 còn rotateRight gán x->left=T2; '
+        'rotateLeft gán T2=T1->left còn rotateRight gán T2=T1->right; '
+        'rotateLeft trả về T1 còn rotateRight cũng trả về T1."}]}'
+    )
+    assert mlx_infer._has_streaming_repetition_loop(repeated_text) is True  # nosec B101
+
+    legitimate = (
+        '{"claims":['
+        '{"text":"rotateLeft đặt AVLNodes* T1=x->right; AVLNodes* T2=T1->left; gán T1->left=x và x->right=T2 rồi trả về T1.","source_ids":["S1"],"evidence_lines":[2,7]},'
+        '{"text":"rotateRight đặt AVLNodes* T1=x->left; AVLNodes* T2=T1->right; gán T1->right=x và x->left=T2; x->height dùng max(getHeight(x->left),getHeight(x->right)) với giá trị xấp xỉ 3.14.","source_ids":["S2"],"evidence_lines":[2,7]}'
+        ']}'
+    )
+    assert mlx_infer._has_streaming_repetition_loop(legitimate) is False  # nosec B101

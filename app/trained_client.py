@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import sys
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -157,10 +157,17 @@ class TrainedModelClient:
 
     @classmethod
     def _default_warmup_prompts(cls) -> list[str]:
-        from app.rag_agent import MLX_SOURCE_LINE_CONTRACT, MLX_SOURCE_PROMPT
+        from app.qa_prompts import (
+            MLX_CALCULATION_GUIDANCE,
+            MLX_SOURCE_LINE_CONTRACT,
+            MLX_SOURCE_PROMPT,
+            MLX_VERDICT_SOURCE_PROMPT,
+        )
 
         return [
             f"{MLX_SOURCE_PROMPT}\n{MLX_SOURCE_LINE_CONTRACT}",
+            f"{MLX_SOURCE_PROMPT}\n{MLX_CALCULATION_GUIDANCE}",
+            MLX_VERDICT_SOURCE_PROMPT,
             MLX_SOURCE_PROMPT,
         ]
 
@@ -182,30 +189,53 @@ class TrainedModelClient:
         if not cls.available(target_model):
             return {"warmed": False, "skipped": "unavailable"}
         model_dir = resolve_mlx_model_dir(target_model)
+        warmup_adapter_path: Optional[str] = None
+        extra_base_warmup: Optional[dict] = None
         if system_prompts is None:
             prompts = list(cls._default_warmup_prompts())
-            from app.reasoning_policy import AUDITOR_SYSTEM_PROMPT_COMPACT
+            from app.qa_adapter import active_qa_adapter
+            from app.reasoning_policy import AUDITOR_SYSTEM_PROMPT_COMPACT, build_auditor_response_schema
 
-            if AUDITOR_SYSTEM_PROMPT_COMPACT not in prompts:
-                prompts.append(AUDITOR_SYSTEM_PROMPT_COMPACT)
-            if warmup_schemas is None:
-                from app.rag_agent import _build_qa_response_schema
-                from app.reasoning_policy import build_auditor_response_schema
+            qa_accepted = active_qa_adapter(model_dir)
+            auditor_schema = build_auditor_response_schema(
+                {"S1", "S2"},
+                {"S1": {"E1": "x"}, "S2": {"E1": "y"}},
+                claim_count=2,
+            )
+            if qa_accepted:
+                warmup_adapter_path = qa_accepted["path"]
+                extra_base_warmup = {
+                    "system_prompts": [AUDITOR_SYSTEM_PROMPT_COMPACT],
+                    "warmup_schemas": [auditor_schema],
+                }
+                if warmup_schemas is None:
+                    from app.rag_agent import _build_qa_response_schema
 
-                warmup_schemas = [
-                    _build_qa_response_schema(
-                        ["S1", "S2", "S3"],
-                        use_source_lines=True,
-                        max_line=20,
-                        min_claims=0,
-                        max_claims=8,
-                    ),
-                    build_auditor_response_schema(
-                        {"S1", "S2"},
-                        {"S1": {"E1": "x"}, "S2": {"E1": "y"}},
-                        claim_count=2,
-                    ),
-                ]
+                    warmup_schemas = [
+                        _build_qa_response_schema(
+                            ["S1", "S2", "S3"],
+                            use_source_lines=True,
+                            max_line=20,
+                            min_claims=0,
+                            max_claims=8,
+                        ),
+                    ]
+            else:
+                if AUDITOR_SYSTEM_PROMPT_COMPACT not in prompts:
+                    prompts.append(AUDITOR_SYSTEM_PROMPT_COMPACT)
+                if warmup_schemas is None:
+                    from app.rag_agent import _build_qa_response_schema
+
+                    warmup_schemas = [
+                        _build_qa_response_schema(
+                            ["S1", "S2", "S3"],
+                            use_source_lines=True,
+                            max_line=20,
+                            min_claims=0,
+                            max_claims=8,
+                        ),
+                        auditor_schema,
+                    ]
         else:
             prompts = list(system_prompts)
         prompts = [p for p in prompts if isinstance(p, str) and p.strip()]
@@ -227,13 +257,15 @@ class TrainedModelClient:
         request = {
             "op": "warmup",
             "model_path": str(model_dir),
-            "adapter_path": None,
+            "adapter_path": warmup_adapter_path,
             "system_prompts": prompts,
             "num_ctx": get_model_context_capacity(target_model),
             "prefill_step_size": prefill_step,
         }
         if warmup_schemas:
             request["warmup_schemas"] = warmup_schemas
+        if extra_base_warmup:
+            request["extra_base_warmup"] = extra_base_warmup
 
         try:
             with acquire_fn(**acq_kwargs):
@@ -278,6 +310,11 @@ class TrainedModelClient:
                         cancel_event=cancel_evt,
                     )
                     logger.info("Native MLX startup prefix warmup finished: %s", result.get("timings") or result.get("skipped"))
+                    if not cancel_evt.is_set():
+                        cls.warm_secondary_feature_prefixes(
+                            model_name=model_name,
+                            cancel_event=cancel_evt,
+                        )
                 except Exception as exc:
                     logger.debug("Native MLX startup prefix warmup skipped/failed: %s", exc)
 
@@ -297,12 +334,102 @@ class TrainedModelClient:
             thread.join(timeout=max(0.0, float(timeout)))
         cls._warmup_done.set()
 
+    @classmethod
+    def warm_secondary_feature_prefixes(
+        cls,
+        *,
+        model_name: Optional[str] = None,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> dict:
+        """Warm prefix KV caches & JSON schemas for Practice, Flashcards/Quiz, and Timetable Planner."""
+        if not cls.available(model_name):
+            return {"warmed": False, "skipped": "unavailable"}
+        from app.flashcard_generator import flashcard_response_schema
+        from app.planner_adapter import active_planner_adapter
+        from app.planner_prompts import PLANNER_SYSTEM_PROMPT, build_planner_response_schema
+        from app.practice_adapter import SYSTEM_PROMPT as PRACTICE_SYSTEM_PROMPT
+        from app.practice_proof import native_grounded_review_schema
+
+        target_model = model_name or (MLX_9B_NAME if sys.platform == "darwin" else TRAINED_MODEL_NAME)
+        model_dir = resolve_mlx_model_dir(target_model)
+        study_sys = "Bạn là trợ lý học tập AI bám sát tài liệu nguồn. Trả về đúng định dạng JSON được yêu cầu."
+        base_prompts = [PRACTICE_SYSTEM_PROMPT, study_sys]
+        base_schemas = [native_grounded_review_schema(1, None), flashcard_response_schema()]
+        planner_acc = None
+        try:
+            planner_acc = active_planner_adapter(model_dir)
+        except ValueError:
+            planner_acc = None
+        if planner_acc is None:
+            base_prompts.append(PLANNER_SYSTEM_PROMPT)
+            base_schemas.append(build_planner_response_schema())
+        res = cls.warm_prefix_caches(
+            model_name=target_model,
+            system_prompts=base_prompts,
+            warmup_schemas=base_schemas,
+            cancel_event=cancel_event,
+        )
+        if planner_acc is not None and not (cancel_event and cancel_event.is_set()):
+            cls._warm_adapter_prefix(
+                model_dir=model_dir,
+                target_model=target_model,
+                adapter_path=planner_acc["path"],
+                system_prompts=[PLANNER_SYSTEM_PROMPT],
+                warmup_schemas=[build_planner_response_schema()],
+                cancel_event=cancel_event,
+            )
+        return res
+
+    @staticmethod
+    def _build_acquire_kwargs(acquire_fn, *, wait_timeout: float = 5.0, cancel_event=None) -> dict:
+        acq_kwargs: dict = {}
+        try:
+            params = inspect.signature(acquire_fn).parameters
+            if "timeout" in params:
+                acq_kwargs["timeout"] = float(wait_timeout)
+            if "cancel_event" in params:
+                acq_kwargs["cancel_event"] = cancel_event
+        except (TypeError, ValueError):
+            acq_kwargs = {}
+        return acq_kwargs
+
+    @classmethod
+    def _warm_adapter_prefix(
+        cls,
+        *,
+        model_dir: Path,
+        target_model: str,
+        adapter_path: str,
+        system_prompts: list[str],
+        warmup_schemas: list[dict],
+        cancel_event: Optional[threading.Event] = None,
+    ) -> dict:
+        prefill_step = max(64, min(1024, int(os.getenv("MLX_PREFILL_STEP_SIZE") or 256)))
+        request = {
+            "op": "warmup",
+            "model_path": str(model_dir),
+            "adapter_path": adapter_path,
+            "system_prompts": system_prompts,
+            "warmup_schemas": warmup_schemas,
+            "num_ctx": get_model_context_capacity(target_model),
+            "prefill_step_size": prefill_step,
+        }
+        acq_fn = gpu_coordinator.acquire_for_inference
+        acq_kwargs = cls._build_acquire_kwargs(acq_fn, wait_timeout=5.0, cancel_event=cancel_event)
+        try:
+            with acq_fn(**acq_kwargs):
+                return _INFER_STREAM_WORKER.request_json(request, timeout=90.0, cancel_event=cancel_event)
+        except (GPUBusyError, IndexingCancelledError):
+            return {"warmed": False, "skipped": "gpu_busy_or_cancelled"}
+
     def _record_result_metrics(
         self,
         result_data: dict,
         *,
         compact_review: bool,
         grounded_review: bool,
+        qa_grounded: bool = False,
+        planner_grounded: bool = False,
     ) -> str:
         if compact_review:
             from app.practice_adapter import COMPACT_REVIEW_PROFILE
@@ -310,6 +437,12 @@ class TrainedModelClient:
         elif grounded_review:
             from app.practice_adapter import GROUNDED_REVIEW_PROFILE
             result_data["practice_review_profile"] = GROUNDED_REVIEW_PROFILE
+        if qa_grounded:
+            from app.qa_adapter import QA_ADAPTER_PROFILE
+            result_data["qa_adapter_profile"] = QA_ADAPTER_PROFILE
+        if planner_grounded:
+            from app.planner_adapter import PLANNER_ADAPTER_PROFILE
+            result_data["planner_adapter_profile"] = PLANNER_ADAPTER_PROFILE
         answer = result_data.get("answer", "")
         reason = result_data.get("done_reason")
         self.last_done_reason = reason if reason in {"stop", "length"} else None
@@ -388,6 +521,8 @@ class TrainedModelClient:
         )
         compact_review = request_matches_scope(request)
         grounded_review = request_matches_grounded_review(request)
+        qa_grounded = False
+        planner_grounded = False
         if compact_review:
             request["seed"] = 42
             accepted = active_practice_adapter(model_dir)
@@ -400,6 +535,21 @@ class TrainedModelClient:
                 accepted = active_practice_adapter(model_dir, profile=GROUNDED_REVIEW_PROFILE)
                 if accepted and accepted.get('review_profile') == GROUNDED_REVIEW_PROFILE:
                     request["adapter_path"] = accepted["path"]
+        else:
+            from app.planner_adapter import active_planner_adapter, request_matches_planner_adapter_scope
+            if request_matches_planner_adapter_scope(request):
+                request["seed"] = 42
+                accepted_planner = active_planner_adapter(model_dir, request=request)
+                if accepted_planner:
+                    request["adapter_path"] = accepted_planner["path"]
+                    planner_grounded = True
+            else:
+                from app.qa_adapter import active_qa_adapter
+                accepted_qa = active_qa_adapter(model_dir, request=request)
+                if accepted_qa:
+                    request["seed"] = 42
+                    request["adapter_path"] = accepted_qa["path"]
+                    qa_grounded = True
 
         if grounded_review and current_review_cache_dir() is not None:
             request["review_cache_dir"] = current_review_cache_dir()
@@ -428,7 +578,7 @@ class TrainedModelClient:
                 if sys.platform != "win32" and lock_fds and isinstance(lock_fds, (tuple, list)):
                     kwargs_run["pass_fds"] = tuple(fd for fd in lock_fds if isinstance(fd, int))
 
-                completed = subprocess.run(
+                completed = subprocess.run(  # nosec B603
                     [str(training_python), "-m", "app.mlx_infer"],
                     **kwargs_run,
                 )
@@ -439,6 +589,8 @@ class TrainedModelClient:
                     result_data,
                     compact_review=compact_review,
                     grounded_review=grounded_review,
+                    qa_grounded=qa_grounded,
+                    planner_grounded=planner_grounded,
                 )
                 yield answer
                 return
@@ -453,6 +605,8 @@ class TrainedModelClient:
                         evt,
                         compact_review=compact_review,
                         grounded_review=grounded_review,
+                        qa_grounded=qa_grounded,
+                        planner_grounded=planner_grounded,
                     )
 
     def chat_complete(

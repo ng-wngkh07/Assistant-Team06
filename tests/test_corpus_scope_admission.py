@@ -29,15 +29,15 @@ def test_scope_helper_loads_real_yc188_exclusions():
     if not policy.exists():
         pytest.skip("Private YC-188 policy/source manifest is available only on the corpus host")
     scope = get_validated_scope()
-    assert scope["has_exclusions"] is True
-    assert scope["decision_id"] == "YC-188"
-    assert scope["approved_count"] == 13
-    assert len(scope["page_set"]) == 13
-    assert ("cslt/slides/chapter10.pdf", 2) in scope["page_set"]
-    assert ("cslt/slides/chapter10.pdf", 46) in scope["page_set"]
-    assert ("cslt/slides/chapter09-pointer.pdf", 42) in scope["page_set"]
-    assert ("cslt/slides/chapter05-numbered.pdf", 66) in scope["page_set"]
-    assert ("Toàn Thư Tâm Lý Học - Motofumi Fukahori & Phương Hoa (dịch).pdf", 5) in scope["page_set"]
+    assert scope["has_exclusions"] is True  # nosec B101
+    assert scope["decision_id"] == "YC-188"  # nosec B101
+    assert scope["approved_count"] == 13  # nosec B101
+    assert len(scope["page_set"]) == 13  # nosec B101
+    assert ("cslt/slides/chapter10.pdf", 2) in scope["page_set"]  # nosec B101
+    assert ("cslt/slides/chapter10.pdf", 46) in scope["page_set"]  # nosec B101
+    assert ("cslt/slides/chapter09-pointer.pdf", 42) in scope["page_set"]  # nosec B101
+    assert ("cslt/slides/chapter05-numbered.pdf", 66) in scope["page_set"]  # nosec B101
+    assert ("Toàn Thư Tâm Lý Học - Motofumi Fukahori & Phương Hoa (dịch).pdf", 5) in scope["page_set"]  # nosec B101
 
 
 def test_producer_blocks_native_chunks_from_excluded_pages(tmp_path, monkeypatch):
@@ -60,11 +60,11 @@ def test_producer_blocks_native_chunks_from_excluded_pages(tmp_path, monkeypatch
 
     # When page is NOT excluded: chunk allowed
     monkeypatch.setattr("app.corpus_scope.get_excluded_pages", lambda root=None: set())
-    assert is_chunk_allowed_in_training(doc_meta, 1, doc_content) is True
+    assert is_chunk_allowed_in_training(doc_meta, 1, doc_content) is True  # nosec B101
 
     # When page IS excluded: chunk must be blocked immediately
     monkeypatch.setattr("app.corpus_scope.get_excluded_pages", lambda root=None: {("test_doc.txt", 1)})
-    assert is_chunk_allowed_in_training(doc_meta, 1, doc_content) is False
+    assert is_chunk_allowed_in_training(doc_meta, 1, doc_content) is False  # nosec B101
 
 
 def test_fine_tune_rejects_excluded_page_in_train_split(tmp_path):
@@ -188,9 +188,9 @@ def test_producer_accepts_pre_validated_excluded_pages_context(tmp_path):
     }
 
     # Pass pre-validated set directly: blocked without disk policy re-read
-    assert is_chunk_allowed_in_training(doc_meta, 1, doc_content, excluded_pages={("test_doc.txt", 1)}) is False
+    assert is_chunk_allowed_in_training(doc_meta, 1, doc_content, excluded_pages={("test_doc.txt", 1)}) is False  # nosec B101
     # When not in set: admitted
-    assert is_chunk_allowed_in_training(doc_meta, 1, doc_content, excluded_pages=set()) is True
+    assert is_chunk_allowed_in_training(doc_meta, 1, doc_content, excluded_pages=set()) is True  # nosec B101
 
 
 def test_audit_corpus_safe_error_handling_when_db_corrupt(tmp_path):
@@ -204,12 +204,12 @@ def test_audit_corpus_safe_error_handling_when_db_corrupt(tmp_path):
     # Empty corrupt database
     (data / "knowledge_base.db").write_bytes(b"SQLite format 3\x00corrupt")
     result = audit_corpus(tmp_path)
-    assert result["complete"] is False
-    assert result["total_pages"] == 0
-    assert result["in_scope_pages"] == 0
-    assert result["excluded_page_count"] == 0
-    assert result["complete_all_sources"] is False
-    assert any(f.get("kind") == "audit_error" for f in result.get("failures", []))
+    assert result["complete"] is False  # nosec B101
+    assert result["total_pages"] == 0  # nosec B101
+    assert result["in_scope_pages"] == 0  # nosec B101
+    assert result["excluded_page_count"] == 0  # nosec B101
+    assert result["complete_all_sources"] is False  # nosec B101
+    assert any(f.get("kind") == "audit_error" for f in result.get("failures", []))  # nosec B101
 
 
 def test_exclusion_manifest_rejects_ancestor_symlink(tmp_path):
@@ -238,4 +238,48 @@ def test_producer_type_annotations_are_resolvable():
     """Resolve annotations even on Python versions that defer their evaluation."""
     from typing import get_type_hints
     hints = get_type_hints(is_chunk_allowed_in_training)
-    assert hints["return"] is bool
+    assert hints["return"] is bool  # nosec B101
+
+
+def test_exclusion_manifest_relocates_legacy_image_across_nfc_nfd_project_name(tmp_path):
+    """Legacy image path in NFD must relocate cleanly when CLI root uses NFC."""
+    import unicodedata
+
+    project_root = tmp_path / unicodedata.normalize("NFC", "agent học tập")
+    src = project_root / "src"
+    src.mkdir(parents=True)
+    note = src / "note.txt"
+    note.write_text("Excluded page test content.", encoding="utf-8")
+
+    img = project_root / "data/evaluation/corpus-review/img.png"
+    img.parent.mkdir(parents=True)
+    img.write_bytes(b"png-fixture")
+
+    legacy_nfd_project = unicodedata.normalize("NFD", "agent học tập")
+    legacy_image_path = f"/legacy/location/{legacy_nfd_project}/data/evaluation/corpus-review/img.png"
+    manifest = {
+        "schema": "approved-page-exclusions-v1",
+        "decision_id": "YC-188",
+        "approved_by": "user",
+        "approved_at": "2026-10-10T18:40:15+07:00",
+        "approval": "EXCLUDE_TEST_PAGE",
+        "approved_count": 1,
+        "pages": [{
+            "filename": "note.txt",
+            "page": 1,
+            "source_sha256": hashlib.sha256(note.read_bytes()).hexdigest(),
+            "image_path": legacy_image_path,
+            "image_sha256": hashlib.sha256(img.read_bytes()).hexdigest(),
+            "reason": ["Legacy relocation test across NFD/NFC project folder names."],
+        }],
+    }
+    manifest_file = project_root / "data/runtime/exclusions.json"
+    manifest_file.parent.mkdir(parents=True)
+    manifest_file.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    scope = validate_page_exclusion_manifest(
+        project_root,
+        {"path": "data/runtime/exclusions.json", "sha256": hashlib.sha256(manifest_file.read_bytes()).hexdigest()},
+        {"note.txt": note},
+    )
+    assert scope["page_set"] == {("note.txt", 1)}  # nosec B101

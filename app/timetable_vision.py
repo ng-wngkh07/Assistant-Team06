@@ -443,8 +443,12 @@ def call_vlm_extract(
                 native_vlm = NativeVisionClient()
                 v_res = native_vlm.generate_from_image(
                     image_bytes,
-                    prompt=SYSTEM_PROMPT + "\nĐọc tất cả các buổi học trong ảnh. Chỉ xuất JSON.",
+                    prompt=(
+                        SYSTEM_PROMPT
+                        + "\nĐọc tất cả các buổi học trong ảnh. Chỉ xuất JSON một dòng gọn theo schema, không markdown."
+                    ),
                     timeout_seconds=max(timeout_seconds, 360),
+                    response_schema=OUTPUT_SCHEMA,
                 )
                 raw_response = v_res.get("text", "").strip()
             except ValueError as ve:

@@ -81,16 +81,16 @@ def test_import_safety_and_default_disabled_auto_watch(tmp_path):
     """WATCH-01/WATCH-05: auto_watch defaults to False and importing app.server does not mutate DB."""
     client = TestClient(server.app)
     storage = client.get("/api/storage")
-    assert storage.status_code == 200
+    assert storage.status_code == 200  # nosec B101
     payload = storage.json()
-    assert payload["auto_watch"] is False
-    assert payload["watcher"]["enabled"] is False
-    assert payload["watcher"]["running"] is False
+    assert payload["auto_watch"] is False  # nosec B101
+    assert payload["watcher"]["enabled"] is False  # nosec B101
+    assert payload["watcher"]["running"] is False  # nosec B101
 
     status_res = client.get("/api/status")
-    assert status_res.status_code == 200
-    assert status_res.json()["storage"]["auto_watch"] is False
-    assert status_res.json()["storage"]["watcher"]["running"] is False
+    assert status_res.status_code == 200  # nosec B101
+    assert status_res.json()["storage"]["auto_watch"] is False  # nosec B101
+    assert status_res.json()["storage"]["watcher"]["running"] is False  # nosec B101
 
 
 def test_watch01_lifespan_auto_indexes_dropped_files_and_exposes_lookup(tmp_path, monkeypatch):
@@ -131,9 +131,9 @@ def test_watch01_lifespan_auto_indexes_dropped_files_and_exposes_lookup(tmp_path
     monkeypatch.setattr(server, "src_watcher", watcher)
 
     with TestClient(server.app) as client:
-        assert watcher.get_status()["running"] is True
+        assert watcher.get_status()["running"] is True  # nosec B101
 
-        assert _wait_until(
+        assert _wait_until(  # nosec B101
             lambda: "startup_lesson.txt" in test_indexer.get_indexed_files_map(),
             timeout=5.0,
         )
@@ -144,34 +144,34 @@ def test_watch01_lifespan_auto_indexes_dropped_files_and_exposes_lookup(tmp_path
         dropped_pdf = nested_dir / "dropped_chapter.pdf"
         _make_text_pdf(dropped_pdf, "Noi dung PDF moi tha vao thu muc nguon WATCH01_PDF_TOKEN.")
 
-        assert _wait_until(
+        assert _wait_until(  # nosec B101
             lambda: "week_02/dropped_chapter.pdf" in test_indexer.get_indexed_files_map(),
             timeout=5.0,
         )
 
         docs_res = client.get("/api/documents")
-        assert docs_res.status_code == 200
+        assert docs_res.status_code == 200  # nosec B101
         doc_names = {d["filename"]: d for d in docs_res.json()["documents"]}
-        assert "startup_lesson.txt" in doc_names
-        assert "week_02/dropped_chapter.pdf" in doc_names
+        assert "startup_lesson.txt" in doc_names  # nosec B101
+        assert "week_02/dropped_chapter.pdf" in doc_names  # nosec B101
 
         pdf_id = doc_names["week_02/dropped_chapter.pdf"]["id"]
         orig_res = client.get(f"/api/documents/{pdf_id}/original")
-        assert orig_res.status_code == 200
-        assert len(orig_res.content) > 100
+        assert orig_res.status_code == 200  # nosec B101
+        assert len(orig_res.content) > 100  # nosec B101
 
         storage_res = client.get("/api/storage").json()
-        assert storage_res["auto_watch"] is True
-        assert storage_res["watcher"]["running"] is True
-        assert storage_res["watcher"]["indexed_count"] >= 2
-        assert storage_res["watcher"]["last_scan_at"] is not None
+        assert storage_res["auto_watch"] is True  # nosec B101
+        assert storage_res["watcher"]["running"] is True  # nosec B101
+        assert storage_res["watcher"]["indexed_count"] >= 2  # nosec B101
+        assert storage_res["watcher"]["last_scan_at"] is not None  # nosec B101
 
         status_res = client.get("/api/status").json()
-        assert status_res["storage"]["auto_watch"] is True
-        assert status_res["storage"]["watcher"]["indexed_count"] >= 2
+        assert status_res["storage"]["auto_watch"] is True  # nosec B101
+        assert status_res["storage"]["watcher"]["indexed_count"] >= 2  # nosec B101
 
     # Shutdown cleanly stopped the watcher
-    assert watcher.get_status()["running"] is False
+    assert watcher.get_status()["running"] is False  # nosec B101
 
 
 def test_watch02_debounce_filtering_symlinks_and_idempotency(tmp_path):
@@ -213,27 +213,27 @@ def test_watch02_debounce_filtering_symlinks_and_idempotency(tmp_path):
     )
 
     first = watcher.scan_once()
-    assert "growing.txt" not in _indexed_map_or_empty(db_path)
-    assert watcher.get_status()["pending_count"] == 1
-    assert first["indexed"] == 0
+    assert "growing.txt" not in _indexed_map_or_empty(db_path)  # nosec B101
+    assert watcher.get_status()["pending_count"] == 1  # nosec B101
+    assert first["indexed"] == 0  # nosec B101
 
     # Grow file before debounce expires -> resets settle timer
     time.sleep(0.08)
     growing.write_text("Phan 1 dang chep... Phan 2 da day du noi dung.", encoding="utf-8")
     second = watcher.scan_once()
-    assert "growing.txt" not in _indexed_map_or_empty(db_path)
-    assert second["indexed"] == 0
+    assert "growing.txt" not in _indexed_map_or_empty(db_path)  # nosec B101
+    assert second["indexed"] == 0  # nosec B101
 
     # After settling beyond debounce window, file is indexed with complete content
     time.sleep(0.3)
     third = watcher.scan_once()
-    assert third["indexed"] == 1
+    assert third["indexed"] == 1  # nosec B101
     indexed = _indexed_map_or_empty(db_path)
-    assert set(indexed.keys()) == {"growing.txt"}
+    assert set(indexed.keys()) == {"growing.txt"}  # nosec B101
 
     with KnowledgeIndexer(db_path=db_path, src_dir=src_dir).get_connection() as conn:
         chunk_texts = [r[0] for r in conn.execute("SELECT text FROM chunks").fetchall()]
-    assert any("Phan 2 da day du noi dung" in t for t in chunk_texts)
+    assert any("Phan 2 da day du noi dung" in t for t in chunk_texts)  # nosec B101
 
     # Repeated scans & fresh watcher restart must NOT duplicate docs or chunks
     chunk_count_before = len(chunk_texts)
@@ -248,8 +248,8 @@ def test_watch02_debounce_filtering_symlinks_and_idempotency(tmp_path):
     watcher_restarted.scan_once()
 
     with KnowledgeIndexer(db_path=db_path, src_dir=src_dir).get_connection() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
-        assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == chunk_count_before
+        assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1  # nosec B101
+        assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == chunk_count_before  # nosec B101
 
 
 def _indexed_map_or_empty(db_path: Path):
@@ -290,19 +290,19 @@ def test_watch03_corrupt_scan_backoff_and_recovery_on_content_change(tmp_path):
     watcher.scan_once()
 
     st = watcher.get_status()
-    assert st["needs_ocr_count"] == 1
-    assert st["error_count"] == 1
+    assert st["needs_ocr_count"] == 1  # nosec B101
+    assert st["error_count"] == 1  # nosec B101
     # Next immediate scan must obey backoff and NOT increment attempt counter or spin
     watcher.scan_once()
     items = {item["filename"]: item for item in watcher.get_status()["items"]}
-    assert items["scan_only.pdf"]["status"] == "needs_ocr"
-    assert items["corrupt.pdf"]["status"] == "error"
-    assert items["corrupt.pdf"]["attempts"] == 1
+    assert items["scan_only.pdf"]["status"] == "needs_ocr"  # nosec B101
+    assert items["corrupt.pdf"]["status"] == "error"  # nosec B101
+    assert items["corrupt.pdf"]["attempts"] == 1  # nosec B101
 
     # Sanitized public error message must never leak filesystem paths or tracebacks
     err_msg = items["corrupt.pdf"]["message"]
-    assert str(tmp_path) not in err_msg
-    assert "Traceback" not in err_msg
+    assert str(tmp_path) not in err_msg  # nosec B101
+    assert "Traceback" not in err_msg  # nosec B101
 
     # Replacing corrupt file with valid PDF bytes clears old error state immediately
     _make_text_pdf(corrupt, "Da sua xong PDF hop le WATCH03_RECOVERED.")
@@ -311,12 +311,12 @@ def test_watch03_corrupt_scan_backoff_and_recovery_on_content_change(tmp_path):
     watcher.scan_once()
 
     items_after = {item["filename"]: item for item in watcher.get_status()["items"]}
-    assert items_after["corrupt.pdf"]["status"] == "indexed"
-    assert watcher.get_status()["error_count"] == 0
+    assert items_after["corrupt.pdf"]["status"] == "indexed"  # nosec B101
+    assert watcher.get_status()["error_count"] == 0  # nosec B101
 
     indexed_map = KnowledgeIndexer(db_path=db_path, src_dir=src_dir).get_indexed_files_map()
-    assert indexed_map["scan_only.pdf"]["status"] == "scanned_unocred"
-    assert indexed_map["corrupt.pdf"]["status"] == "indexed"
+    assert indexed_map["scan_only.pdf"]["status"] == "scanned_unocred"  # nosec B101
+    assert indexed_map["corrupt.pdf"]["status"] == "indexed"  # nosec B101
 
 
 def test_watch04_preserves_seed_corpus_flags_changed_sources_and_recovers_crash(tmp_path):
@@ -370,7 +370,7 @@ def test_watch04_preserves_seed_corpus_flags_changed_sources_and_recovers_crash(
     watcher.scan_once()
 
     # Brand new doc indexed, seed doc & chunks untouched byte-for-byte
-    assert "brand_new.txt" in seed_indexer.get_indexed_files_map()
+    assert "brand_new.txt" in seed_indexer.get_indexed_files_map()  # nosec B101
     with seed_indexer.get_connection() as conn:
         seed_doc_after = dict(
             conn.execute("SELECT * FROM documents WHERE filename = ?", ("seed_notes.txt",)).fetchone()
@@ -383,8 +383,8 @@ def test_watch04_preserves_seed_corpus_flags_changed_sources_and_recovers_crash(
                 (seed_doc_after["id"],),
             ).fetchall()
         ]
-    assert seed_doc_after["file_hash"] == seed_doc_before["file_hash"]
-    assert seed_chunks_after == seed_chunks_before
+    assert seed_doc_after["file_hash"] == seed_doc_before["file_hash"]  # nosec B101
+    assert seed_chunks_after == seed_chunks_before  # nosec B101
 
     # Modify already-indexed seed source on disk -> must flag needs_update without silent overwrite!
     seed_file.write_text("Noi dung seed da bi thay doi tren dia!", encoding="utf-8")
@@ -393,10 +393,10 @@ def test_watch04_preserves_seed_corpus_flags_changed_sources_and_recovers_crash(
     watcher.scan_once()
 
     w_status = watcher.get_status()
-    assert w_status["needs_update_count"] == 1
+    assert w_status["needs_update_count"] == 1  # nosec B101
     w_items = {it["filename"]: it for it in w_status["items"]}
-    assert w_items["seed_notes.txt"]["status"] == "needs_update"
-    assert w_items["seed_notes.txt"]["stale"] is True
+    assert w_items["seed_notes.txt"]["status"] == "needs_update"  # nosec B101
+    assert w_items["seed_notes.txt"]["stale"] is True  # nosec B101
 
     # Seed chunks in DB remain un-overwritten, and indexer status does not advertise stale doc as current
     with seed_indexer.get_connection() as conn:
@@ -408,12 +408,12 @@ def test_watch04_preserves_seed_corpus_flags_changed_sources_and_recovers_crash(
                 (seed_doc_before["id"],),
             ).fetchall()
         ]
-    assert unchanged_chunks == seed_chunks_before
+    assert unchanged_chunks == seed_chunks_before  # nosec B101
 
     kb_status = KnowledgeIndexer(db_path=db_path, src_dir=src_dir).get_status()
     seed_entry = next(d for d in kb_status["documents"] if d["filename"] == "seed_notes.txt")
-    assert seed_entry["passages_current"] is False
-    assert seed_entry["sync_status"] == "needs_update"
+    assert seed_entry["passages_current"] is False  # nosec B101
+    assert seed_entry["sync_status"] == "needs_update"  # nosec B101
 
 
 def test_watch05_gpu_busy_defers_truthfully_and_health_stays_nonblocking(tmp_path, monkeypatch):
@@ -467,16 +467,16 @@ def test_watch05_gpu_busy_defers_truthfully_and_health_stays_nonblocking(tmp_pat
 
     with TestClient(server.app) as client:
         # While GPU busy, health stays fast 200 and watcher defers cleanly
-        assert client.get("/api/health").status_code == 200
-        assert _wait_until(
+        assert client.get("/api/health").status_code == 200  # nosec B101
+        assert _wait_until(  # nosec B101
             lambda: watcher.get_status()["waiting_gpu_count"] == 1,
             timeout=3.0,
         )
-        assert "vector_doc.txt" not in _indexed_map_or_empty(db_path)
+        assert "vector_doc.txt" not in _indexed_map_or_empty(db_path)  # nosec B101
 
         # Free GPU -> real vectors written with provenance
         gpu_busy["active"] = False
-        assert _wait_until(
+        assert _wait_until(  # nosec B101
             lambda: "vector_doc.txt" in _indexed_map_or_empty(db_path),
             timeout=3.0,
         )
@@ -489,8 +489,8 @@ def test_watch05_gpu_busy_defers_truthfully_and_health_stays_nonblocking(tmp_pat
         prov = conn.execute(
             "SELECT model_digest FROM corpus_vector_provenance LIMIT 1"
         ).fetchone()
-    assert row[0] >= 1 and row[1] == row[0]
-    assert prov is not None and prov[0] == "bge-m3-mlx-fp16@testdigest"
+    assert row[0] >= 1 and row[1] == row[0]  # nosec B101
+    assert prov is not None and prov[0] == "bge-m3-mlx-fp16@testdigest"  # nosec B101
 
 
 def test_watch06_stale_retrieval_tree_and_writer_lock_serialization(tmp_path):
@@ -506,7 +506,7 @@ def test_watch06_stale_retrieval_tree_and_writer_lock_serialization(tmp_path):
     seed_indexer, _, _, _ = _create_seed_corpus(src_dir, db_path)
     sidecar_db = data_dir / "retrieval_tree.db"
     build_tree(source_db=db_path, shadow_db=sidecar_db)
-    assert sidecar_db.is_file()
+    assert sidecar_db.is_file()  # nosec B101
 
     # Watch & index a brand new document after retrieval_tree.db was built
     new_doc = src_dir / "fresh_topic.txt"
@@ -526,8 +526,8 @@ def test_watch06_stale_retrieval_tree_and_writer_lock_serialization(tmp_path):
     # Sidecar retrieval_tree.db staleness must fall back rather than hiding the newly indexed doc
     searcher = HybridSearcher(db_path=db_path)
     hits = searcher.search_hybrid("WATCH06_UNIQUE_NEEDLE", top_k=5, embed_model=None)
-    assert any(h["filename"] == "fresh_topic.txt" for h in hits)
-    assert searcher.last_topic_routing["fallback_reason"] == "stale_or_invalid_tree"
+    assert any(h["filename"] == "fresh_topic.txt" for h in hits)  # nosec B101
+    assert searcher.last_topic_routing["fallback_reason"] == "stale_or_invalid_tree"  # nosec B101
 
     # Writer lock serialization: concurrent thread holding corpus_writer_lock blocks second writer cleanly
     order = []
@@ -542,7 +542,7 @@ def test_watch06_stale_retrieval_tree_and_writer_lock_serialization(tmp_path):
             order.append("w1_exit")
 
     def writer_two():
-        assert entered.wait(timeout=2.0)
+        assert entered.wait(timeout=2.0)  # nosec B101
         with corpus_writer_lock(db_path):
             order.append("w2_enter")
 
@@ -550,12 +550,12 @@ def test_watch06_stale_retrieval_tree_and_writer_lock_serialization(tmp_path):
     t2 = threading.Thread(target=writer_two)
     t1.start()
     t2.start()
-    assert entered.wait(timeout=2.0)
+    assert entered.wait(timeout=2.0)  # nosec B101
     time.sleep(0.05)
     released.set()
     t1.join(timeout=3.0)
     t2.join(timeout=3.0)
-    assert order == ["w1_enter", "w1_exit", "w2_enter"]
+    assert order == ["w1_enter", "w1_exit", "w2_enter"]  # nosec B101
 
 
 def test_account_user_does_not_receive_host_paths_from_storage_or_watcher(tmp_path, monkeypatch):
@@ -566,19 +566,19 @@ def test_account_user_does_not_receive_host_paths_from_storage_or_watcher(tmp_pa
     with TestClient(server.app) as client:
         reg = client.post(
             "/api/account/register",
-            json={"username": "student_watch", "password": "VeryLongPassword123!"},
+            json={"username": "student_watch", "password": "VeryLongPassword123!"},  # nosec B105
             headers={"X-Study-Request": "1"},
         )
-        assert reg.status_code == 200
+        assert reg.status_code == 200  # nosec B101
 
         storage = client.get("/api/storage")
-        assert storage.status_code == 200
+        assert storage.status_code == 200  # nosec B101
         s_data = storage.json()
-        assert "sources_dir" not in s_data or s_data["sources_dir"] is None
-        assert "data_dir" not in s_data or s_data["data_dir"] is None
-        assert s_data["source_scope"] == "operator_managed_shared_src"
-        assert s_data["uploads_scope"] == "account_private_isolated"
-        assert "watcher" in s_data
+        assert "sources_dir" not in s_data or s_data["sources_dir"] is None  # nosec B101
+        assert "data_dir" not in s_data or s_data["data_dir"] is None  # nosec B101
+        assert s_data["source_scope"] == "operator_managed_shared_src"  # nosec B101
+        assert s_data["uploads_scope"] == "account_private_isolated"  # nosec B101
+        assert "watcher" in s_data  # nosec B101
 
 
 def test_watch04_missing_source_flagged_without_deleting_existing_index(tmp_path):
@@ -604,14 +604,14 @@ def test_watch04_missing_source_flagged_without_deleting_existing_index(tmp_path
     watcher.scan_once()
 
     w_status = watcher.get_status()
-    assert w_status["missing_source_count"] == 1
+    assert w_status["missing_source_count"] == 1  # nosec B101
     item = next(it for it in w_status["items"] if it["filename"] == "seed_notes.txt")
-    assert item["status"] == "missing_source"
-    assert item["stale"] is True
+    assert item["status"] == "missing_source"  # nosec B101
+    assert item["stale"] is True  # nosec B101
 
     with seed_indexer.get_connection() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM documents WHERE filename = ?", ("seed_notes.txt",)).fetchone()[0] == 1
-        assert conn.execute("SELECT COUNT(*) FROM chunks WHERE doc_id = ?", (seed_doc_before["id"],)).fetchone()[0] == len(seed_chunks_before)
+        assert conn.execute("SELECT COUNT(*) FROM documents WHERE filename = ?", ("seed_notes.txt",)).fetchone()[0] == 1  # nosec B101
+        assert conn.execute("SELECT COUNT(*) FROM chunks WHERE doc_id = ?", (seed_doc_before["id"],)).fetchone()[0] == len(seed_chunks_before)  # nosec B101
 
 
 def test_watch02_identity_recheck_aborts_commit_if_file_changes_mid_extraction(tmp_path, monkeypatch):
@@ -643,8 +643,8 @@ def test_watch02_identity_recheck_aborts_commit_if_file_changes_mid_extraction(t
     except FileModifiedDuringIndexingError:
         raised = True
 
-    assert raised is True
-    assert indexer.get_indexed_files_map() == {}
+    assert raised is True  # nosec B101
+    assert indexer.get_indexed_files_map() == {}  # nosec B101
 
 
 def test_watch03_exhausts_backoff_and_watch05_fts_only_truthfulness(tmp_path):
@@ -681,11 +681,11 @@ def test_watch03_exhausts_backoff_and_watch05_fts_only_truthfulness(tmp_path):
     watcher.scan_once()  # must remain exhausted at attempts == 2
 
     items = {it["filename"]: it for it in watcher.get_status()["items"]}
-    assert items["bad.pdf"]["status"] == "error"
-    assert items["bad.pdf"]["attempts"] == 2
-    assert items["fts_only.txt"]["status"] == "indexed"
-    assert items["fts_only.txt"]["vectors_ready"] is False
-    assert items["fts_only.txt"]["embedding_status"] == "fts_only"
+    assert items["bad.pdf"]["status"] == "error"  # nosec B101
+    assert items["bad.pdf"]["attempts"] == 2  # nosec B101
+    assert items["fts_only.txt"]["status"] == "indexed"  # nosec B101
+    assert items["fts_only.txt"]["vectors_ready"] is False  # nosec B101
+    assert items["fts_only.txt"]["embedding_status"] == "fts_only"  # nosec B101
 
 
 def test_watch06_dual_watchers_and_manual_index_compatible(tmp_path, monkeypatch):
@@ -721,11 +721,11 @@ def test_watch06_dual_watchers_and_manual_index_compatible(tmp_path, monkeypatch
     t2.join(timeout=5.0)
 
     w1_status = w1.get_status()
-    assert w1_status["needs_update_count"] == 1
-    assert "concurrent_doc.txt" in _indexed_map_or_empty(db_path)
+    assert w1_status["needs_update_count"] == 1  # nosec B101
+    assert "concurrent_doc.txt" in _indexed_map_or_empty(db_path)  # nosec B101
 
     with seed_indexer.get_connection() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM documents WHERE filename = ?", ("concurrent_doc.txt",)).fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM documents WHERE filename = ?", ("concurrent_doc.txt",)).fetchone()[0] == 1  # nosec B101
 
     # Manual POST /api/index explicitly updates changed source and syncs watcher state
     monkeypatch.setattr(server, "SRC_DIR", src_dir)
@@ -736,11 +736,11 @@ def test_watch06_dual_watchers_and_manual_index_compatible(tmp_path, monkeypatch
 
     client = TestClient(server.app)
     res = client.post("/api/index", json={"force": False, "ocr": False})
-    assert res.status_code == 200
-    assert res.json()["status"] == "success"
-    assert w1.get_status()["needs_update_count"] == 0
+    assert res.status_code == 200  # nosec B101
+    assert res.json()["status"] == "success"  # nosec B101
+    assert w1.get_status()["needs_update_count"] == 0  # nosec B101
     kb = KnowledgeIndexer(db_path=db_path, src_dir=src_dir).get_status()
-    assert kb["stale_documents"] == 0
+    assert kb["stale_documents"] == 0  # nosec B101
 
 
 def test_stale_ocr_unavailable_transitions_to_ocr_queued_when_available(tmp_path, monkeypatch):
@@ -803,18 +803,118 @@ def test_stale_ocr_unavailable_transitions_to_ocr_queued_when_available(tmp_path
     watcher.scan_once()
     item1 = watcher.get_status()["items"][0]
     pstates1 = watcher._items["scanned_two_pages.pdf"]["ocr_progress"]["page_states"]
-    assert pstates1["1"]["reason_code"] == "ocr_unavailable"
-    assert pstates1["2"]["reason_code"] == "ocr_unavailable"
-    assert item1["reason_code"] == "ocr_unavailable"
+    assert pstates1["1"]["reason_code"] == "ocr_unavailable"  # nosec B101
+    assert pstates1["2"]["reason_code"] == "ocr_unavailable"  # nosec B101
+    assert item1["reason_code"] == "ocr_unavailable"  # nosec B101
 
     # Pass 2: OCR becomes available with batch budget 1 -> page 1 captured, page 2 refreshed to ocr_queued
     avail_flag["ready"] = True
     watcher.scan_once()
     item2 = watcher.get_status()["items"][0]
     pstates2 = watcher._items["scanned_two_pages.pdf"]["ocr_progress"]["page_states"]
-    assert pstates2["1"]["status"] == "captured_pending_review"
-    assert pstates2["2"]["status"] == "ocr_queued"
-    assert pstates2["2"]["reason_code"] == "queued"
-    assert item2["reason_code"] == "ocr_queued"
+    assert pstates2["1"]["status"] == "captured_pending_review"  # nosec B101
+    assert pstates2["2"]["status"] == "ocr_queued"  # nosec B101
+    assert pstates2["2"]["reason_code"] == "queued"  # nosec B101
+    assert item2["reason_code"] == "ocr_queued"  # nosec B101
 
+
+def test_idle_scan_caches_vectors_and_reviews_and_invalidates_on_change(tmp_path, monkeypatch):
+    """Steady-state idle scans skip SQLite vector hashing and review JSON parsing until files or DB change."""
+    import app.source_page_reviews as spr
+    from app.indexer import pack_vector
+    from app.src_watcher import SrcWatcher
+
+    src_dir = tmp_path / "src"
+    data_dir = tmp_path / "data"
+    src_dir.mkdir()
+    data_dir.mkdir()
+    db_path = data_dir / "knowledge_base.db"
+
+    (src_dir / "a.txt").write_text("Noi dung tai lieu A cho kiem thu cache.", encoding="utf-8")
+    (src_dir / "b.txt").write_text("Noi dung tai lieu B cho kiem thu cache.", encoding="utf-8")
+
+    seed_indexer = KnowledgeIndexer(db_path=db_path, src_dir=src_dir)
+    identity = "custom-test-embed@sha256:test"
+    monkeypatch.setattr(KnowledgeIndexer, "_resolve_active_embedding_digest", lambda self, conn=None, **kw: identity)
+    monkeypatch.setattr(KnowledgeIndexer, "backfill_missing_embeddings", lambda *a, **kw: 0)
+
+    seed_indexer.index_file(src_dir / "a.txt", embed_model=None)
+    seed_indexer.index_file(src_dir / "b.txt", embed_model=None)
+    blob = pack_vector([1.0] + [0.0] * 1023)
+    blob_sha = hashlib.sha256(blob).hexdigest()
+    with seed_indexer.get_connection() as conn:
+        for cid, txt in conn.execute("SELECT id, text FROM chunks").fetchall():
+            conn.execute("UPDATE chunks SET embedding = ? WHERE id = ?", (blob, cid))
+            conn.execute(
+                "INSERT INTO corpus_vector_provenance VALUES (?, ?, ?, ?, 1024, 1, ?)",
+                (cid, hashlib.sha256(txt.encode("utf-8")).hexdigest(), identity, blob_sha, "2026-11-20T00:00:00Z"),
+            )
+        conn.commit()
+
+    review_calls = {"n": 0}
+    vec_summary_calls = {"n": 0}
+    save_calls = {"n": 0}
+    orig_reviews = spr.latest_page_reviews
+    orig_summary = KnowledgeIndexer._compatible_vectors_summary
+
+    def spy_reviews(root):
+        review_calls["n"] += 1
+        return orig_reviews(root)
+
+    def spy_summary(self, *a, **kw):
+        vec_summary_calls["n"] += 1
+        return orig_summary(self, *a, **kw)
+
+    monkeypatch.setattr(spr, "latest_page_reviews", spy_reviews)
+    monkeypatch.setattr(KnowledgeIndexer, "_compatible_vectors_summary", spy_summary)
+
+    watcher = SrcWatcher(
+        src_dir=src_dir,
+        db_path=db_path,
+        data_dir=data_dir,
+        debounce_seconds=0.0,
+        embed_model="custom-test-embed",
+    )
+    orig_save = watcher._save_state
+
+    def spy_save():
+        save_calls["n"] += 1
+        return orig_save()
+
+    monkeypatch.setattr(watcher, "_save_state", spy_save)
+
+    # Scan 1: warms caches and saves initial state
+    s1 = watcher.scan_once()
+    assert s1["skipped"] == 2  # nosec B101
+    assert watcher.get_status()["indexed_count"] == 2  # nosec B101
+    assert review_calls["n"] == 1  # nosec B101
+    assert vec_summary_calls["n"] == 1  # nosec B101
+    assert save_calls["n"] == 1  # nosec B101
+    assert len(watcher._verified_vector_cache) == 2  # nosec B101
+
+    # Scan 2 (unchanged idle): skips review JSONs, SQLite vector hashing, and state disk rewrite
+    s2 = watcher.scan_once()
+    assert s2["skipped"] == 2  # nosec B101
+    assert watcher.get_status()["indexed_count"] == 2  # nosec B101
+    assert review_calls["n"] == 1  # nosec B101
+    assert vec_summary_calls["n"] == 1  # nosec B101
+    assert save_calls["n"] == 1  # nosec B101
+
+    # DB mutation (drop embedding for a.txt) invalidates vector cache on next scan
+    with sqlite3.connect(db_path) as conn:
+        a_doc_id = conn.execute("SELECT id FROM documents WHERE filename = 'a.txt'").fetchone()[0]
+        conn.execute("UPDATE chunks SET embedding = NULL WHERE doc_id = ?", (a_doc_id,))
+        conn.commit()
+
+    watcher.scan_once()
+    assert vec_summary_calls["n"] == 3  # 1 batch summary + 1 post-backfill check for a.txt only  # nosec B101
+    assert review_calls["n"] == 1  # nosec B101
+    assert save_calls["n"] == 2  # nosec B101
+    items_by_name = {it["filename"]: it for it in watcher.get_status()["items"]}
+    assert items_by_name["a.txt"]["vectors_ready"] is False  # nosec B101
+    assert items_by_name["b.txt"]["vectors_ready"] is True  # nosec B101
+
+    # Manual sync_after_review clears review snapshot cache cleanly
+    watcher.sync_after_review()
+    assert review_calls["n"] == 2  # nosec B101
 

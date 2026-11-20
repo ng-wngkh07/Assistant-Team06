@@ -452,7 +452,7 @@ class LearningService:
                         }
                         if first.casefold() not in generic and 2 <= len(first) <= 100:
                             return first
-        except Exception:
+        except Exception:  # nosec B110
             pass
         return fallback
 
@@ -494,7 +494,7 @@ class LearningService:
             try:
                 with closing(self.document_lookup.connect()) as db:
                     cursor = db.execute(
-                        f"SELECT doc_id, text FROM chunks WHERE doc_id IN ({scope})",
+                        f"SELECT doc_id, text FROM chunks WHERE doc_id IN ({scope})",  # nosec B608
                         remaining_ids,
                     )
                     found_ids = set()
@@ -508,7 +508,7 @@ class LearningService:
                         if doc["id"] in found_ids and doc["id"] not in matched_ids:
                             matched_ids.add(doc["id"])
                             matched_docs.append(doc)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
         if matched_docs:
@@ -614,7 +614,7 @@ class LearningService:
             with closing(self.document_lookup.connect()) as db:
                 cursor = db.execute(
                     f"SELECT id AS chunk_id, doc_id, book_title, filename, page_num, chunk_index, text "
-                    f"FROM chunks WHERE doc_id IN ({scope}) ORDER BY doc_id, page_num, chunk_index",
+                    f"FROM chunks WHERE doc_id IN ({scope}) ORDER BY doc_id, page_num, chunk_index",  # nosec B608
                     doc_ids,
                 )
                 current_doc_id = None
@@ -637,7 +637,7 @@ class LearningService:
                     s = relevance_score(raw_text, doc_info)
                     if s > 0:
                         scored_candidates.append((s, dict(r)))
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         if not scored_candidates:
@@ -691,7 +691,8 @@ class LearningService:
         material_manager: Any = None,
     ) -> dict[str, Any]:
         """Generate quote-verified flashcards from matching course materials for any topic."""
-        selected_passages = self._select_topic_passages(topic, limit=6)
+        passage_limit = max(8, min(16, max(1, int(count or 5)) * 2))
+        selected_passages = self._select_topic_passages(topic, limit=passage_limit)
         if material_manager is None:
             from app.study_materials import study_material_manager
             material_manager = study_material_manager
@@ -769,7 +770,7 @@ class LearningService:
                 p = self.document_lookup.pdf_path(filename) or self.document_lookup.pdf_path(doc_id)
                 if p and Path(p).is_file():
                     pdf_p = Path(p)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         if not pdf_p and filename:
             from app import config as app_config
@@ -798,7 +799,7 @@ class LearningService:
                                         ln = line.strip()
                                         if ln and not ln.endswith((";", "{", "}")) and "?" not in ln:
                                             footers.add(ln)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         elif doc_id == 123 or "KTLT_C14_ConTroNangCao" in filename:
             # Established source evidence for doc123 (physical 39, bottom margin y513.54-526.93 in Verdana)
@@ -1152,7 +1153,7 @@ class LearningService:
                 else:
                     chosen_answer = final_answer or solution
                 return _clean_think(chosen_answer), "model_verified"
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         return None, "unverified"

@@ -73,7 +73,7 @@ Operators can publish the loopback backend (`http://127.0.0.1:8000`) over HTTPS 
    ```caddyfile
    your-study-host.duckdns.org {
        request_body {
-           max_size 28MiB
+           max_size 140MiB
        }
        reverse_proxy 127.0.0.1:8000
    }

@@ -24,6 +24,26 @@ from mlx_vlm import generate, load
 from mlx_vlm.prompt_utils import apply_chat_template
 
 
+def _get_or_compile_vision_schema(tokenizer, response_schema: dict, model_cache: dict | None):
+    """Compile and cache MLX-VLM JSON schema logits processors across requests."""
+    from mlx_vlm.structured import build_json_schema_logits_processor
+
+    if model_cache is None:
+        return build_json_schema_logits_processor(tokenizer, response_schema)
+    schema_cache = model_cache.setdefault("schema_processors", {})
+    key = (id(tokenizer), json.dumps(response_schema, sort_keys=True, ensure_ascii=False))
+    cached = schema_cache.get(key)
+    if cached is not None:
+        return cached.clone() if callable(getattr(cached, "clone", None)) else cached
+    compiled = build_json_schema_logits_processor(tokenizer, response_schema)
+    if callable(getattr(compiled, "clone", None)):
+        if len(schema_cache) >= 8:
+            schema_cache.clear()
+        schema_cache[key] = compiled
+        return compiled.clone()
+    return compiled
+
+
 def _run_vision_request(request: dict, model_cache: dict | None = None) -> dict:
     model_path = Path(request["model_path"])
     image_path = request["image_path"]
@@ -68,10 +88,8 @@ def _run_vision_request(request: dict, model_cache: dict | None = None) -> dict:
     if response_schema is not None:
         if not isinstance(response_schema, dict):
             raise ValueError("response_schema phải là JSON object.")
-        from mlx_vlm.structured import build_json_schema_logits_processor
-
         tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
-        options["logits_processors"] = [build_json_schema_logits_processor(tokenizer, response_schema)]
+        options["logits_processors"] = [_get_or_compile_vision_schema(tokenizer, response_schema, model_cache)]
     response = generate(
         model,
         processor,

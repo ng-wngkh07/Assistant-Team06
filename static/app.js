@@ -3248,9 +3248,9 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        if (file.size > 20 * 1024 * 1024) {
+        if (file.size > 100 * 1024 * 1024) {
             if (inputEl) inputEl.value = "";
-            alert("Tệp vượt quá kích thước cho phép (tối đa 20MB). Vui lòng chọn tệp nhỏ hơn.");
+            alert("Tệp vượt quá kích thước cho phép (tối đa 100MB). Vui lòng chọn tệp nhỏ hơn.");
             return;
         }
 

@@ -104,15 +104,16 @@ def test_validation_disallowed_extension():
     manager = StudyMaterialManager()
     with pytest.raises(StudyMaterialError) as exc:
         manager.validate_file("malicious.exe", b"binary content")
-    assert "kh\u00f4ng \u0111\u01b0\u1ee3c h\u1ed7 tr\u1ee3" in str(exc.value)
+    assert "kh\u00f4ng \u0111\u01b0\u1ee3c h\u1ed7 tr\u1ee3" in str(exc.value)  # nosec B101
 
 
 def test_validation_oversized_file():
     manager = StudyMaterialManager()
-    oversized = b"x" * (21 * 1024 * 1024)
+    oversized = b"x" * (100 * 1024 * 1024 + 1)
     with pytest.raises(StudyMaterialError) as exc:
         manager.validate_file("big.txt", oversized)
-    assert "v\u01b0\u1ee3t qu\u00e1 gi\u1edbi h\u1ea1n cho ph\u00e9p" in str(exc.value)
+    assert "v\u01b0\u1ee3t qu\u00e1 gi\u1edbi h\u1ea1n cho ph\u00e9p" in str(exc.value)  # nosec B101
+    assert "100MB" in str(exc.value)  # nosec B101
 
 
 def test_deterministic_fallback_quiz_and_flashcards():
@@ -129,15 +130,15 @@ def test_deterministic_fallback_quiz_and_flashcards():
     ]
     
     quiz = manager.fallback_generate_quiz(sample_pages, count=3)
-    assert quiz == []  # Retired: generic distractors must never masquerade as a quiz.
+    assert quiz == []  # Retired: generic distractors must never masquerade as a quiz.  # nosec B101
 
     flashcards = manager.fallback_generate_flashcards(sample_pages, count=5)
-    assert len(flashcards) >= 1
+    assert len(flashcards) >= 1  # nosec B101
     for f in flashcards:
-        assert "front" in f
-        assert "back" in f
-        assert "page_num" in f
-        assert "evidence_quote" in f
+        assert "front" in f  # nosec B101
+        assert "back" in f  # nosec B101
+        assert "page_num" in f  # nosec B101
+        assert "evidence_quote" in f  # nosec B101
 
 
 def test_api_upload_material_text_file(client):
@@ -149,15 +150,15 @@ def test_api_upload_material_text_file(client):
         "filename": "lich_su.txt",
         "file_base64": b64
     })
-    assert res.status_code == 200
+    assert res.status_code == 200  # nosec B101
     data = res.json()
-    assert data["status"] == "success"
+    assert data["status"] == "success"  # nosec B101
     material = data["material"]
-    assert material["filename"] == "lich_su.txt"
-    assert material["quiz"] == []
-    assert material["generation"]["quiz"] == "unavailable"
-    assert len(material["flashcards"]) >= 1
-    assert material["id"] in study_material_manager.materials_cache
+    assert material["filename"] == "lich_su.txt"  # nosec B101
+    assert material["quiz"] == []  # nosec B101
+    assert material["generation"]["quiz"] == "unavailable"  # nosec B101
+    assert len(material["flashcards"]) >= 1  # nosec B101
+    assert material["id"] in study_material_manager.materials_cache  # nosec B101
 
 
 def test_api_get_material_by_id(client):
@@ -169,24 +170,24 @@ def test_api_get_material_by_id(client):
         "filename": "algorithms.txt",
         "file_base64": b64
     })
-    assert upload_res.status_code == 200
+    assert upload_res.status_code == 200  # nosec B101
     mat_id = upload_res.json()["material"]["id"]
     
     get_res = client.get(f"/api/materials/{mat_id}")
-    assert get_res.status_code == 200
-    assert get_res.json()["id"] == mat_id
+    assert get_res.status_code == 200  # nosec B101
+    assert get_res.json()["id"] == mat_id  # nosec B101
     
     # Not found case
     not_found = client.get("/api/materials/nonexistent_id_12345")
-    assert not_found.status_code == 404
+    assert not_found.status_code == 404  # nosec B101
 
 
 def test_api_list_library_documents(client):
     res = client.get("/api/materials/documents")
-    assert res.status_code == 200
+    assert res.status_code == 200  # nosec B101
     data = res.json()
-    assert "documents" in data
-    assert isinstance(data["documents"], list)
+    assert "documents" in data  # nosec B101
+    assert isinstance(data["documents"], list)  # nosec B101
 
 
 def test_api_generate_from_library_document(client):
@@ -219,15 +220,15 @@ def test_api_generate_from_library_document(client):
         "difficulty": "easy",
             "filename": test_filename
         })
-        assert res.status_code == 200
+        assert res.status_code == 200  # nosec B101
         data = res.json()
-        assert data["status"] == "success"
+        assert data["status"] == "success"  # nosec B101
         material = data["material"]
-        assert material["quiz"] == []
-        assert material["generation"]["quiz"] == "unavailable"
-        assert len(material["flashcards"]) >= 1
-        assert material["flashcards"][0]["page_num"] == 1
-        assert "Newton" in material["flashcards"][0]["evidence_quote"]
+        assert material["quiz"] == []  # nosec B101
+        assert material["generation"]["quiz"] == "unavailable"  # nosec B101
+        assert len(material["flashcards"]) >= 1  # nosec B101
+        assert material["flashcards"][0]["page_num"] == 1  # nosec B101
+        assert "Newton" in material["flashcards"][0]["evidence_quote"]  # nosec B101
     finally:
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
@@ -259,13 +260,13 @@ def test_api_upload_image_png_and_jpeg(client, monkeypatch):
         "filename": "dinh_ly_pythagoras.png",
         "file_base64": b64_png,
     })
-    assert res_png.status_code == 200
+    assert res_png.status_code == 200  # nosec B101
     data_png = res_png.json()
-    assert data_png["status"] == "success"
-    assert data_png["material"]["filename"] == "dinh_ly_pythagoras.png"
-    assert data_png["material"]["quiz"] == []
-    assert data_png["material"]["generation"]["quiz"] == "unavailable"
-    assert len(data_png["material"]["flashcards"]) >= 1
+    assert data_png["status"] == "success"  # nosec B101
+    assert data_png["material"]["filename"] == "dinh_ly_pythagoras.png"  # nosec B101
+    assert data_png["material"]["quiz"] == []  # nosec B101
+    assert data_png["material"]["generation"]["quiz"] == "unavailable"  # nosec B101
+    assert len(data_png["material"]["flashcards"]) >= 1  # nosec B101
 
     # 2. JPEG support with explicit recognized text; unreadable images are rejected separately.
     buf_jpg = io.BytesIO()
@@ -277,13 +278,13 @@ def test_api_upload_image_png_and_jpeg(client, monkeypatch):
         "filename": "so_do_tam_ly_hoc_nhan_thuc.jpg",
         "file_base64": b64_jpg,
     })
-    assert res_jpg.status_code == 200
+    assert res_jpg.status_code == 200  # nosec B101
     data_jpg = res_jpg.json()
-    assert data_jpg["status"] == "success"
-    assert data_jpg["material"]["filename"] == "so_do_tam_ly_hoc_nhan_thuc.jpg"
-    assert data_jpg["material"]["quiz"] == []
-    assert data_jpg["material"]["generation"]["quiz"] == "unavailable"
-    assert len(data_jpg["material"]["flashcards"]) >= 1
+    assert data_jpg["status"] == "success"  # nosec B101
+    assert data_jpg["material"]["filename"] == "so_do_tam_ly_hoc_nhan_thuc.jpg"  # nosec B101
+    assert data_jpg["material"]["quiz"] == []  # nosec B101
+    assert data_jpg["material"]["generation"]["quiz"] == "unavailable"  # nosec B101
+    assert len(data_jpg["material"]["flashcards"]) >= 1  # nosec B101
 
 
 def test_api_upload_image_with_primary_ocr_mocked(client, monkeypatch):
@@ -311,12 +312,12 @@ def test_api_upload_image_with_primary_ocr_mocked(client, monkeypatch):
         "filename": "bai_giang_tri_nho.png",
         "file_base64": b64_png,
     })
-    assert res.status_code == 200
+    assert res.status_code == 200  # nosec B101
     material = res.json()["material"]
-    assert material["total_pages"] == 1
-    assert material["quiz"] == []
-    assert material["generation"]["quiz"] == "unavailable"
-    assert len(material["flashcards"]) >= 1
+    assert material["total_pages"] == 1  # nosec B101
+    assert material["quiz"] == []  # nosec B101
+    assert material["generation"]["quiz"] == "unavailable"  # nosec B101
+    assert len(material["flashcards"]) >= 1  # nosec B101
 
 
 def test_api_upload_corrupted_image_rejected(client):
@@ -326,8 +327,8 @@ def test_api_upload_corrupted_image_rejected(client):
         "filename": "broken.png",
         "file_base64": b64,
     })
-    assert res.status_code == 422
-    assert "bị hỏng" in res.json()["detail"] or "không đúng định dạng" in res.json()["detail"]
+    assert res.status_code == 422  # nosec B101
+    assert "bị hỏng" in res.json()["detail"] or "không đúng định dạng" in res.json()["detail"]  # nosec B101
 
 
 def test_chat_attach_button_left_alignment_and_full_width_bottom_toolbar():
@@ -336,11 +337,11 @@ def test_chat_attach_button_left_alignment_and_full_width_bottom_toolbar():
     css = (root / "static/style.css").read_text(encoding="utf-8")
     html = (root / "static/index.html").read_text(encoding="utf-8")
 
-    assert "align-items: stretch;" in css
-    assert ".chat-attach-wrapper" in css
-    assert "margin-right: auto;" in css
-    assert 'id="chat-attach-wrapper"' in html
-    assert 'id="btn-chat-attach"' in html
+    assert "align-items: stretch;" in css  # nosec B101
+    assert ".chat-attach-wrapper" in css  # nosec B101
+    assert "margin-right: auto;" in css  # nosec B101
+    assert 'id="chat-attach-wrapper"' in html  # nosec B101
+    assert 'id="btn-chat-attach"' in html  # nosec B101
 
 
 def test_attachment_preview_card_modal_structure_and_centered_chat_layout(client):
@@ -352,53 +353,53 @@ def test_attachment_preview_card_modal_structure_and_centered_chat_layout(client
     js = (root / "static/app.js").read_text(encoding="utf-8")
 
     # Compact attachment banner retains reader access and removal controls.
-    assert 'id="chat-attachment-preview-tray"' in html
-    assert ".chat-attachment-card" in css
-    assert ".attachment-card-open" in css
-    assert ".attachment-doc-sheet" not in css
-    assert "buildDocSheetPreviewHtml" not in js
-    assert 'class="attachment-card-open"' in js
-    assert ".attachment-card-remove" in css
-    assert "upsertAttachmentPreviewCard" in js
-    assert "removeAttachmentPreviewCard" in js
+    assert 'id="chat-attachment-preview-tray"' in html  # nosec B101
+    assert ".chat-attachment-card" in css  # nosec B101
+    assert ".attachment-card-open" in css  # nosec B101
+    assert ".attachment-doc-sheet" not in css  # nosec B101
+    assert "buildDocSheetPreviewHtml" not in js  # nosec B101
+    assert 'class="attachment-card-open"' in js  # nosec B101
+    assert ".attachment-card-remove" in css  # nosec B101
+    assert "upsertAttachmentPreviewCard" in js  # nosec B101
+    assert "removeAttachmentPreviewCard" in js  # nosec B101
 
     # 2. Ensure #ocr-modal is closed BEFORE #library-picker-modal and #study-material-modal
     ocr_idx = html.index('id="ocr-modal"')
     lib_idx = html.index('id="library-picker-modal"')
     study_idx = html.index('id="study-material-modal"')
     ocr_segment = html[ocr_idx:lib_idx]
-    assert ocr_segment.count("<div") == ocr_segment.count("</div>"), (
+    assert ocr_segment.count("<div") == ocr_segment.count("</div>"), (  # nosec B101
         "#ocr-modal must be completely closed before #library-picker-modal so study modals are not hidden inside #ocr-modal"
     )
-    assert lib_idx < study_idx
+    assert lib_idx < study_idx  # nosec B101
 
     # 3. Ensure welcome-card & bento-hub hide on has-chat and centered chat layout guarantees
-    assert (
+    assert (  # nosec B101
         ".messages-container.has-chat .welcome-card" in spatial_css
         or ".messages-container.has-chat .welcome-card" in css
     )
-    assert "display: none !important;" in spatial_css or "display: none !important;" in css
-    assert ".messages-container.has-chat .arym-bento-grid" in spatial_css
-    assert ".messages-container > .message:not(.welcome-card)" in spatial_css
-    assert "margin: 0 auto !important;" in spatial_css
-    assert "transform: translateY(-16px)" not in spatial_css and "transform: translateY(-16px)" not in html
-    assert ".message.study-card-message" in css
-    assert "arym-bento-grid" in html
+    assert "display: none !important;" in spatial_css or "display: none !important;" in css  # nosec B101
+    assert ".messages-container.has-chat .arym-bento-grid" in spatial_css  # nosec B101
+    assert ".messages-container > .message:not(.welcome-card)" in spatial_css  # nosec B101
+    assert "margin: 0 auto !important;" in spatial_css  # nosec B101
+    assert "transform: translateY(-16px)" not in spatial_css and "transform: translateY(-16px)" not in html  # nosec B101
+    assert ".message.study-card-message" in css  # nosec B101
+    assert "arym-bento-grid" in html  # nosec B101
 
     # 4. Ensure /api/materials/documents lists available documents and /api/materials/generate-from-library works
     docs_res = client.get("/api/materials/documents")
-    assert docs_res.status_code == 200
+    assert docs_res.status_code == 200  # nosec B101
     docs = docs_res.json().get("documents", [])
-    assert len(docs) >= 1
+    assert len(docs) >= 1  # nosec B101
     first_doc_name = docs[0]["filename"]
 
     gen_res = client.post("/api/materials/generate-from-library", json={"filename": first_doc_name, "difficulty":"easy"})
-    assert gen_res.status_code == 200
+    assert gen_res.status_code == 200  # nosec B101
     mat = gen_res.json()["material"]
-    assert mat["quiz"] == []
-    assert mat["generation"]["quiz"] == "unavailable"
-    assert len(mat["flashcards"]) >= 1
-    assert len(mat.get("pages", [])) >= 1
+    assert mat["quiz"] == []  # nosec B101
+    assert mat["generation"]["quiz"] == "unavailable"  # nosec B101
+    assert len(mat["flashcards"]) >= 1  # nosec B101
+    assert len(mat.get("pages", [])) >= 1  # nosec B101
 
 
 def test_ingest_to_src_without_auto_quiz_and_on_demand_generate(client, tmp_path, monkeypatch):
@@ -411,10 +412,10 @@ def test_ingest_to_src_without_auto_quiz_and_on_demand_generate(client, tmp_path
     js = (root / "static/app.js").read_text(encoding="utf-8")
 
     # Verify dedicated button & content viewer modal exist
-    assert 'id="btn-create-quiz-flashcard"' in html
-    assert 'id="document-content-modal"' in html
-    assert "openDocumentContentViewer" in js
-    assert "generateStudySetForActiveAttachment" in js
+    assert 'id="btn-create-quiz-flashcard"' in html  # nosec B101
+    assert 'id="document-content-modal"' in html  # nosec B101
+    assert "openDocumentContentViewer" in js  # nosec B101
+    assert "generateStudySetForActiveAttachment" in js  # nosec B101
 
     temp_src = tmp_path / "src"
     temp_db = tmp_path / "knowledge_base.db"
@@ -435,32 +436,32 @@ def test_ingest_to_src_without_auto_quiz_and_on_demand_generate(client, tmp_path
         "generate_study_set": False,
         "persist_to_src": True,
     })
-    assert res.status_code == 200
+    assert res.status_code == 200  # nosec B101
     mat = res.json()["material"]
-    assert mat["saved_to_src"] is True
-    assert mat["src_path"] == "src/cay_nhi_phan.txt"
-    assert mat["study_generated"] is False
-    assert mat["quiz"] == []
-    assert mat["flashcards"] == []
-    assert len(mat["pages"]) == 1
-    assert "cây nhị phân" in mat["pages"][0]["text"]
-    assert (temp_src / "cay_nhi_phan.txt").is_file()
+    assert mat["saved_to_src"] is True  # nosec B101
+    assert mat["src_path"] == "src/cay_nhi_phan.txt"  # nosec B101
+    assert mat["study_generated"] is False  # nosec B101
+    assert mat["quiz"] == []  # nosec B101
+    assert mat["flashcards"] == []  # nosec B101
+    assert len(mat["pages"]) == 1  # nosec B101
+    assert "cây nhị phân" in mat["pages"][0]["text"]  # nosec B101
+    assert (temp_src / "cay_nhi_phan.txt").is_file()  # nosec B101
 
     with sqlite3.connect(temp_db) as conn:
         row = conn.execute("SELECT id, filename, status FROM documents WHERE filename = ?", ("cay_nhi_phan.txt",)).fetchone()
-        assert row is not None
-        assert row[2] == "indexed"
+        assert row is not None  # nosec B101
+        assert row[2] == "indexed"  # nosec B101
         chunks = conn.execute("SELECT COUNT(*) FROM chunks WHERE doc_id = ?", (row[0],)).fetchone()[0]
-        assert chunks >= 1
+        assert chunks >= 1  # nosec B101
 
     # Step 2: Click dedicated button to generate Quiz & Flashcard on demand
     gen_res = client.post("/api/materials/generate-from-library", json={"filename": "cay_nhi_phan.txt", "difficulty":"easy"})
-    assert gen_res.status_code == 200
+    assert gen_res.status_code == 200  # nosec B101
     gen_mat = gen_res.json()["material"]
-    assert gen_mat["study_generated"] is True
-    assert gen_mat["quiz"] == []
-    assert gen_mat["generation"]["quiz"] == "unavailable"
-    assert len(gen_mat["flashcards"]) >= 1
+    assert gen_mat["study_generated"] is True  # nosec B101
+    assert gen_mat["quiz"] == []  # nosec B101
+    assert gen_mat["generation"]["quiz"] == "unavailable"  # nosec B101
+    assert len(gen_mat["flashcards"]) >= 1  # nosec B101
 
 
 def test_upload_webp_study_material(client, monkeypatch):
@@ -480,12 +481,12 @@ def test_upload_webp_study_material(client, monkeypatch):
         "flashcard_count": 2,
         "persist_to_src": False,
     })
-    assert res.status_code == 200
+    assert res.status_code == 200  # nosec B101
     mat = res.json()["material"]
-    assert mat["filename"] == "diagram.webp"
-    assert mat["quiz"] == []
-    assert mat["generation"]["quiz"] == "unavailable"
-    assert len(mat["flashcards"]) >= 1
+    assert mat["filename"] == "diagram.webp"  # nosec B101
+    assert mat["quiz"] == []  # nosec B101
+    assert mat["generation"]["quiz"] == "unavailable"  # nosec B101
+    assert len(mat["flashcards"]) >= 1  # nosec B101
 
 
 def test_canvas_document_viewer_ui_contract():
@@ -496,37 +497,37 @@ def test_canvas_document_viewer_ui_contract():
     js = (root / "static/app.js").read_text(encoding="utf-8")
 
     # 1. Canvas Top Bar Controls & Action buttons
-    assert 'id="document-content-modal"' in html
-    assert 'class="modal canvas-document-modal"' in html
-    assert 'class="canvas-top-bar"' in html
-    assert 'id="btn-canvas-zoom-out"' in html
-    assert 'id="btn-canvas-zoom-in"' in html
-    assert 'id="canvas-zoom-label"' in html
-    assert 'id="btn-canvas-download"' in html
-    assert 'id="btn-canvas-expand"' in html
-    assert 'id="btn-doc-content-generate"' in html
-    assert 'id="btn-close-doc-content-modal"' in html
+    assert 'id="document-content-modal"' in html  # nosec B101
+    assert 'class="modal canvas-document-modal"' in html  # nosec B101
+    assert 'class="canvas-top-bar"' in html  # nosec B101
+    assert 'id="btn-canvas-zoom-out"' in html  # nosec B101
+    assert 'id="btn-canvas-zoom-in"' in html  # nosec B101
+    assert 'id="canvas-zoom-label"' in html  # nosec B101
+    assert 'id="btn-canvas-download"' in html  # nosec B101
+    assert 'id="btn-canvas-expand"' in html  # nosec B101
+    assert 'id="btn-doc-content-generate"' in html  # nosec B101
+    assert 'id="btn-close-doc-content-modal"' in html  # nosec B101
 
     # 2. Canvas Document Sheet structure
-    assert 'id="canvas-doc-sheet"' in html
-    assert 'id="doc-content-pages-list"' in html
-    assert 'class="canvas-doc-flow"' in html
+    assert 'id="canvas-doc-sheet"' in html  # nosec B101
+    assert 'id="doc-content-pages-list"' in html  # nosec B101
+    assert 'class="canvas-doc-flow"' in html  # nosec B101
 
     # 3. Canvas CSS & User message attachment pill
-    assert ".canvas-doc-sheet" in css
-    assert ".canvas-h1" in css
-    assert ".canvas-h2" in css
-    assert ".canvas-callout-box" in css
-    assert ".canvas-page-divider" in css
-    assert ".message-attachment-card" in css
-    assert ".message-attachment-icon" in css
-    assert ".message-attachment-meta" in css
-    assert "gradient(" not in css, "Flat design rule: No gradient in style.css"
+    assert ".canvas-doc-sheet" in css  # nosec B101
+    assert ".canvas-h1" in css  # nosec B101
+    assert ".canvas-h2" in css  # nosec B101
+    assert ".canvas-callout-box" in css  # nosec B101
+    assert ".canvas-page-divider" in css  # nosec B101
+    assert ".message-attachment-card" in css  # nosec B101
+    assert ".message-attachment-icon" in css  # nosec B101
+    assert ".message-attachment-meta" in css  # nosec B101
+    assert "gradient(" not in css, "Flat design rule: No gradient in style.css"  # nosec B101
 
     # 4. Canvas JS methods & Zoom logic
-    assert "formatCanvasBlock" in js
-    assert "applyCanvasZoom" in js
-    assert "openDocumentContentViewer" in js
+    assert "formatCanvasBlock" in js  # nosec B101
+    assert "applyCanvasZoom" in js  # nosec B101
+    assert "openDocumentContentViewer" in js  # nosec B101
 
 
 def test_chat_immediate_query_with_attachment(client, tmp_path, monkeypatch):
@@ -556,7 +557,7 @@ def test_chat_immediate_query_with_attachment(client, tmp_path, monkeypatch):
         "generate_study_set": False,
         "persist_to_src": True,
     })
-    assert res.status_code == 200
+    assert res.status_code == 200  # nosec B101
 
     # 2. Directly ask question or request summary using attachment_filename
     mock_llm_response = [
@@ -580,42 +581,42 @@ def test_chat_immediate_query_with_attachment(client, tmp_path, monkeypatch):
         "attachment_filename": "On_Tap_Vat_Ly_12.txt",
         "save_history": False,
     })
-    assert chat_res.status_code == 200
+    assert chat_res.status_code == 200  # nosec B101
     data = chat_res.json()
-    assert len(data.get("citations", [])) >= 1
-    assert "On_Tap_Vat_Ly_12" in data["citations"][0]["filename"]
-    assert "Vật lý nhiệt" in data["answer"] or "VẬT LÝ" in data["answer"]
+    assert len(data.get("citations", [])) >= 1  # nosec B101
+    assert "On_Tap_Vat_Ly_12" in data["citations"][0]["filename"]  # nosec B101
+    assert "Vật lý nhiệt" in data["answer"] or "VẬT LÝ" in data["answer"]  # nosec B101
 
 
 def test_extract_docx_hierarchical_structure_and_tables():
     fixture_path = Path(__file__).parent / "fixtures" / "documents" / "On_Tap_Hoa_Hoc_12.docx"
     res = PDFExtractor.extract_docx(fixture_path)
-    assert res.error_message is None
+    assert res.error_message is None  # nosec B101
     # Must NOT fragment into 67 single-line pages! Must be 3 cohesive pages.
-    assert res.total_pages == 3
-    assert res.total_chars >= 3500
-    assert res.unit_name == "trang"
+    assert res.total_pages == 3  # nosec B101
+    assert res.total_chars >= 3500  # nosec B101
+    assert res.unit_name == "trang"  # nosec B101
 
     # Check Page 1 has Ester & Lipid & Callout
     p1 = res.extracted_pages[0]
-    assert p1["page_num"] == 1
-    assert "ESTER - LIPID - XÀ PHÒNG" in p1["text"]
-    assert any(b["type"] == "callout" for b in p1["blocks"])
+    assert p1["page_num"] == 1  # nosec B101
+    assert "ESTER - LIPID - XÀ PHÒNG" in p1["text"]  # nosec B101
+    assert any(b["type"] == "callout" for b in p1["blocks"])  # nosec B101
 
     # Check Page 2 has Carbohydrates & Table
     p2 = res.extracted_pages[1]
-    assert p2["page_num"] == 2
-    assert "CARBOHYDRATE" in p2["text"]
+    assert p2["page_num"] == 2  # nosec B101
+    assert "CARBOHYDRATE" in p2["text"]  # nosec B101
     table_blocks = [b for b in p2["blocks"] if b["type"] == "table"]
-    assert len(table_blocks) >= 1
-    assert "Monosaccharide" in table_blocks[0]["text"]
-    assert "Disaccharide" in table_blocks[0]["text"]
+    assert len(table_blocks) >= 1  # nosec B101
+    assert "Monosaccharide" in table_blocks[0]["text"]  # nosec B101
+    assert "Disaccharide" in table_blocks[0]["text"]  # nosec B101
 
     # Check Page 3 has Polymer & Kim loại
     p3 = res.extracted_pages[2]
-    assert p3["page_num"] == 3
-    assert "POLYMER" in p3["text"]
-    assert "KIM LOẠI" in p3["text"]
+    assert p3["page_num"] == 3  # nosec B101
+    assert "POLYMER" in p3["text"]  # nosec B101
+    assert "KIM LOẠI" in p3["text"]  # nosec B101
 
 
 def test_extract_docx_edge_cases(tmp_path):
@@ -625,20 +626,20 @@ def test_extract_docx_edge_cases(tmp_path):
     empty_f = tmp_path / "empty.docx"
     empty_f.write_bytes(b"")
     res1 = PDFExtractor.extract_docx(empty_f)
-    assert "rỗng" in (res1.error_message or "").lower()
+    assert "rỗng" in (res1.error_message or "").lower()  # nosec B101
 
     # 2. Corrupt non-zip file
     corrupt_f = tmp_path / "corrupt.docx"
     corrupt_f.write_bytes(b"Plain text disguised as docx")
     res2 = PDFExtractor.extract_docx(corrupt_f)
-    assert "hợp lệ" in (res2.error_message or "").lower()
+    assert "hợp lệ" in (res2.error_message or "").lower()  # nosec B101
 
     # 3. Zip file without word/document.xml
     fake_zip = tmp_path / "fake.docx"
     with zipfile.ZipFile(fake_zip, "w") as z:
         z.writestr("notes.txt", "hello")
     res3 = PDFExtractor.extract_docx(fake_zip)
-    assert "word/document.xml" in (res3.error_message or "")
+    assert "word/document.xml" in (res3.error_message or "")  # nosec B101
 
 
 def test_chat_immediate_qa_docx_chemistry_summary_and_specific(client, tmp_path, monkeypatch):
@@ -661,9 +662,9 @@ def test_chat_immediate_qa_docx_chemistry_summary_and_specific(client, tmp_path,
         "generate_study_set": False,
         "persist_to_src": True,
     })
-    assert res.status_code == 200
+    assert res.status_code == 200  # nosec B101
     material = res.json()["material"]
-    assert material["total_pages"] == 3
+    assert material["total_pages"] == 3  # nosec B101
 
     # 2. Ask summary query: "tóm tắt nội dung có trong file"
     # The model mock must cite only passages admitted under the real budget.
@@ -675,7 +676,7 @@ def test_chat_immediate_qa_docx_chemistry_summary_and_specific(client, tmp_path,
         self.last_done_reason = "stop"
         prompt = kwargs["messages"][-1]["content"]
         passages = re.findall(r'<document id="(S\d+)"[^>]*>\s*(.*?)\s*</document>', prompt, re.S)
-        assert passages, "The attachment overview must supply real admitted passages"
+        assert passages, "The attachment overview must supply real admitted passages"  # nosec B101
         for source_id, text in passages:
             excerpt = " ".join(unescape(text).split()[:30])
             yield f"{excerpt} [{source_id}]\n"
@@ -687,13 +688,13 @@ def test_chat_immediate_qa_docx_chemistry_summary_and_specific(client, tmp_path,
         "attachment_filename": "On_Tap_Hoa_Hoc_12.docx",
         "save_history": False,
     })
-    assert chat_res.status_code == 200
+    assert chat_res.status_code == 200  # nosec B101
     data = chat_res.json()
-    assert len(data.get("citations", [])) >= 1
+    assert len(data.get("citations", [])) >= 1  # nosec B101
     # Must only cite On_Tap_Hoa_Hoc_12.docx
     for cit in data["citations"]:
-        assert "On_Tap_Hoa_Hoc_12" in cit["filename"]
-    assert "Ester" in data["answer"] or "HÓA HỌC" in data["answer"]
+        assert "On_Tap_Hoa_Hoc_12" in cit["filename"]  # nosec B101
+    assert "Ester" in data["answer"] or "HÓA HỌC" in data["answer"]  # nosec B101
 
 
 def test_chat_multiturn_followup_preserves_document_context(client, tmp_path, monkeypatch):
@@ -716,11 +717,11 @@ def test_chat_multiturn_followup_preserves_document_context(client, tmp_path, mo
         "generate_study_set": False,
         "persist_to_src": True,
     })
-    assert upload_res.status_code == 200
+    assert upload_res.status_code == 200  # nosec B101
 
     # 2. Turn 1 with attachment
     sess_res = client.post("/api/sessions", json={})
-    assert sess_res.status_code == 200
+    assert sess_res.status_code == 200  # nosec B101
     session_id = sess_res.json()["id"]
 
     mock_turn1 = ["Ester no đơn chức có công thức CnH2nO2 (n >= 2) [S1]."]
@@ -737,8 +738,8 @@ def test_chat_multiturn_followup_preserves_document_context(client, tmp_path, mo
         "session_id": session_id,
         "save_history": True,
     })
-    assert res1.status_code == 200
-    assert len(res1.json().get("citations", [])) >= 1
+    assert res1.status_code == 200  # nosec B101
+    assert len(res1.json().get("citations", [])) >= 1  # nosec B101
 
     # 3. Turn 2 (Follow-up WITHOUT passing attachment_filename explicitly)
     mock_turn2 = ["Phản ứng xà phòng hóa là thủy phân trong môi trường kiềm tạo muối và alcohol [S1]."]
@@ -754,10 +755,10 @@ def test_chat_multiturn_followup_preserves_document_context(client, tmp_path, mo
         "session_id": session_id,
         "save_history": True,
     })
-    assert res2.status_code == 200
+    assert res2.status_code == 200  # nosec B101
     data2 = res2.json()
-    assert len(data2.get("citations", [])) >= 1
-    assert "On_Tap_Hoa_Hoc_12" in data2["citations"][0]["filename"]
+    assert len(data2.get("citations", [])) >= 1  # nosec B101
+    assert "On_Tap_Hoa_Hoc_12" in data2["citations"][0]["filename"]  # nosec B101
 
 
 def test_download_material_raw_binary(client, tmp_path, monkeypatch):
@@ -778,19 +779,19 @@ def test_download_material_raw_binary(client, tmp_path, monkeypatch):
         "generate_study_set": False,
         "persist_to_src": True,
     })
-    assert upload_res.status_code == 200
+    assert upload_res.status_code == 200  # nosec B101
 
     # 2. Download raw file
     dl_res = client.get("/api/materials/download?filename=On_Tap_Hoa_Hoc_12.docx")
-    assert dl_res.status_code == 200
-    assert dl_res.content == raw_bytes
-    assert "openxmlformats" in dl_res.headers.get("content-type", "")
-    assert "attachment" in dl_res.headers.get("content-disposition", "")
-    assert "On_Tap_Hoa_Hoc_12.docx" in dl_res.headers.get("content-disposition", "")
+    assert dl_res.status_code == 200  # nosec B101
+    assert dl_res.content == raw_bytes  # nosec B101
+    assert "openxmlformats" in dl_res.headers.get("content-type", "")  # nosec B101
+    assert "attachment" in dl_res.headers.get("content-disposition", "")  # nosec B101
+    assert "On_Tap_Hoa_Hoc_12.docx" in dl_res.headers.get("content-disposition", "")  # nosec B101
 
     # 3. Nonexistent file returns 404
     bad_res = client.get("/api/materials/download?filename=ghost_file.docx")
-    assert bad_res.status_code == 404
+    assert bad_res.status_code == 404  # nosec B101
 
 
 def test_unreadable_image_api_rejects_before_persisting_or_generating(client, monkeypatch):
@@ -815,8 +816,8 @@ def test_unreadable_image_api_rejects_before_persisting_or_generating(client, mo
         'file_base64': base64.b64encode(data.getvalue()).decode('ascii'),
         'persist_to_src': True,
     })
-    assert response.status_code == 422
-    assert not study_material_manager.materials_cache
+    assert response.status_code == 422  # nosec B101
+    assert not study_material_manager.materials_cache  # nosec B101
 
 
 def _persist_upload(client, filename, text):
@@ -834,21 +835,21 @@ def test_upload_with_existing_name_preserves_both_sources_and_document_scope(cli
     original = 'Bản nguồn ban đầu: mã nhận diện là ALPHA-271. Đây là tài liệu học tập cần được giữ nguyên.'
     incoming = 'Bản nguồn mới: mã nhận diện là BETA-392. Nội dung upload phải là một nguồn độc lập.'
     first = _persist_upload(client, 'same-name.txt', original)
-    assert first.status_code == 200
+    assert first.status_code == 200  # nosec B101
     first_mat = first.json()['material']
     second = _persist_upload(client, 'same-name.txt', incoming)
-    assert second.status_code == 200
+    assert second.status_code == 200  # nosec B101
     second_mat = second.json()['material']
-    assert (cfg.SRC_DIR / 'same-name.txt').read_text(encoding='utf-8') == original
-    assert second_mat['filename'] != first_mat['filename']
-    assert second_mat['doc_id'] != first_mat['doc_id']
-    assert (cfg.SRC_DIR / second_mat['filename']).read_text(encoding='utf-8') == incoming
-    assert second_mat['src_path'] == f"src/{second_mat['filename']}"
+    assert (cfg.SRC_DIR / 'same-name.txt').read_text(encoding='utf-8') == original  # nosec B101
+    assert second_mat['filename'] != first_mat['filename']  # nosec B101
+    assert second_mat['doc_id'] != first_mat['doc_id']  # nosec B101
+    assert (cfg.SRC_DIR / second_mat['filename']).read_text(encoding='utf-8') == incoming  # nosec B101
+    assert second_mat['src_path'] == f"src/{second_mat['filename']}"  # nosec B101
     with sqlite3.connect(cfg.DB_PATH) as db:
         old_text = ' '.join(r[0] for r in db.execute('SELECT text FROM chunks WHERE doc_id=?', (first_mat['doc_id'],)))
         new_text = ' '.join(r[0] for r in db.execute('SELECT text FROM chunks WHERE doc_id=?', (second_mat['doc_id'],)))
-    assert 'ALPHA-271' in old_text and 'BETA-392' not in old_text
-    assert 'BETA-392' in new_text and 'ALPHA-271' not in new_text
+    assert 'ALPHA-271' in old_text and 'BETA-392' not in old_text  # nosec B101
+    assert 'BETA-392' in new_text and 'ALPHA-271' not in new_text  # nosec B101
 
 
 @pytest.mark.parametrize('failure_point', ['_prepare_chunk_rows', '_insert_chunk_rows'])
@@ -863,13 +864,13 @@ def test_upload_index_failure_is_reported_and_does_not_publish_a_source(client, 
     monkeypatch.setattr(KnowledgeIndexer, failure_point, fail)
     response = _persist_upload(client, 'failed-upload.txt',
         'Tài liệu tổng hợp có đủ văn bản. Lỗi lưu chỉ mục phải được thông báo rõ ràng cho người dùng.')
-    assert response.status_code == 503
-    assert 'private-storage-diagnostic-marker' not in response.text
-    assert not (cfg.SRC_DIR / 'failed-upload.txt').exists()
-    assert study_material_manager.resolve_raw_file(filename='failed-upload.txt') is None
-    assert not study_material_manager.materials_cache
+    assert response.status_code == 503  # nosec B101
+    assert 'private-storage-diagnostic-marker' not in response.text  # nosec B101
+    assert not (cfg.SRC_DIR / 'failed-upload.txt').exists()  # nosec B101
+    assert study_material_manager.resolve_raw_file(filename='failed-upload.txt') is None  # nosec B101
+    assert not study_material_manager.materials_cache  # nosec B101
     with sqlite3.connect(cfg.DB_PATH) as db:
-        assert db.execute('SELECT id,filename,file_hash FROM documents ORDER BY id').fetchall() == before
+        assert db.execute('SELECT id,filename,file_hash FROM documents ORDER BY id').fetchall() == before  # nosec B101
 
 
 def test_uploading_identical_file_twice_keeps_one_stable_source(client):
@@ -880,12 +881,12 @@ def test_uploading_identical_file_twice_keeps_one_stable_source(client):
     with sqlite3.connect(cfg.DB_PATH) as db:
         before = db.execute('SELECT text FROM chunks WHERE doc_id=? ORDER BY chunk_index', (first['doc_id'],)).fetchall()
     second = _persist_upload(client, 'repeat.txt', text).json()['material']
-    assert first['doc_id'] == second['doc_id']
-    assert first['filename'] == second['filename']
+    assert first['doc_id'] == second['doc_id']  # nosec B101
+    assert first['filename'] == second['filename']  # nosec B101
     with sqlite3.connect(cfg.DB_PATH) as db:
-        assert db.execute('SELECT COUNT(*) FROM documents WHERE filename=?', (first['filename'],)).fetchone()[0] == 1
-        assert db.execute('SELECT text FROM chunks WHERE doc_id=? ORDER BY chunk_index', (first['doc_id'],)).fetchall() == before
-        assert db.execute('SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH ?', ('"UNIQUE-619"',)).fetchone()[0] >= 1
+        assert db.execute('SELECT COUNT(*) FROM documents WHERE filename=?', (first['filename'],)).fetchone()[0] == 1  # nosec B101
+        assert db.execute('SELECT text FROM chunks WHERE doc_id=? ORDER BY chunk_index', (first['doc_id'],)).fetchall() == before  # nosec B101
+        assert db.execute('SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH ?', ('"UNIQUE-619"',)).fetchone()[0] >= 1  # nosec B101
 
 
 def test_repeated_upload_does_not_replace_existing_reviewed_chunks(client):
@@ -901,11 +902,11 @@ def test_repeated_upload_does_not_replace_existing_reviewed_chunks(client):
         before = db.execute('SELECT id,text,embedding FROM chunks WHERE doc_id=? ORDER BY id', (first['doc_id'],)).fetchall()
         quality_before = db.execute('SELECT * FROM document_source_quality WHERE doc_id=?', (first['doc_id'],)).fetchone()
     second = _persist_upload(client, 'reviewed.txt', text)
-    assert second.status_code == 200
-    assert second.json()['material']['doc_id'] == first['doc_id']
+    assert second.status_code == 200  # nosec B101
+    assert second.json()['material']['doc_id'] == first['doc_id']  # nosec B101
     with sqlite3.connect(cfg.DB_PATH) as db:
-        assert db.execute('SELECT id,text,embedding FROM chunks WHERE doc_id=? ORDER BY id', (first['doc_id'],)).fetchall() == before
-        assert db.execute('SELECT * FROM document_source_quality WHERE doc_id=?', (first['doc_id'],)).fetchone() == quality_before
+        assert db.execute('SELECT id,text,embedding FROM chunks WHERE doc_id=? ORDER BY id', (first['doc_id'],)).fetchall() == before  # nosec B101
+        assert db.execute('SELECT * FROM document_source_quality WHERE doc_id=?', (first['doc_id'],)).fetchone() == quality_before  # nosec B101
 
 
 def test_concurrent_uploads_with_same_name_keep_each_source(monkeypatch):
@@ -923,13 +924,13 @@ def test_concurrent_uploads_with_same_name_keep_each_source(monkeypatch):
         return result.filename, info['doc_id'], text
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(ingest, range(4)))
-    assert len({name for name, _, _ in results}) == 4
-    assert len({doc_id for _, doc_id, _ in results}) == 4
+    assert len({name for name, _, _ in results}) == 4  # nosec B101
+    assert len({doc_id for _, doc_id, _ in results}) == 4  # nosec B101
     with sqlite3.connect(cfg.DB_PATH) as db:
         for name, doc_id, text in results:
-            assert (cfg.SRC_DIR / name).read_text() == text
+            assert (cfg.SRC_DIR / name).read_text() == text  # nosec B101
             chunks = ' '.join(r[0] for r in db.execute('SELECT text FROM chunks WHERE doc_id=?', (doc_id,)))
-            assert text in chunks
+            assert text in chunks  # nosec B101
 
 
 @pytest.mark.parametrize('busy_kind, expected_status', [('gpu', 503), ('dialogue', 409)])
@@ -945,9 +946,9 @@ def test_upload_preserves_busy_status_during_embedding_admission(client, monkeyp
         raise (GPUBusyError if busy_kind == 'gpu' else DialogueBusyError)('Resource busy; retry later.')
     monkeypatch.setattr(OllamaClient, 'check_health', busy)
     response = _persist_upload(client, 'busy-source.txt', 'This source must not bypass resource admission while another model operation owns the resource.')
-    assert response.status_code == expected_status
-    assert response.headers['retry-after'] == '2'
-    assert not (cfg.SRC_DIR / 'busy-source.txt').exists()
+    assert response.status_code == expected_status  # nosec B101
+    assert response.headers['retry-after'] == '2'  # nosec B101
+    assert not (cfg.SRC_DIR / 'busy-source.txt').exists()  # nosec B101
 
 
 def test_upload_does_not_claim_vectors_ready_when_chunk_embedding_fails(client, monkeypatch):
@@ -961,12 +962,12 @@ def test_upload_does_not_claim_vectors_ready_when_chunk_embedding_fails(client, 
     monkeypatch.setattr(OllamaClient, 'get_batch_embeddings', lambda self, texts, **kw: [None] * len(texts))
     response = _persist_upload(client, 'keyword-only.txt', 'Keyword searchable content survives an unavailable vector response. Distinct marker SEARCH-823 must remain in the source.')
     # Either retain honest keyword-only rows or fail closed before publishing.
-    assert response.status_code in (200, 503)
+    assert response.status_code in (200, 503)  # nosec B101
     if response.status_code == 200:
         material = response.json()['material']
-        assert material['chunks_indexed'] > 0
-        assert material.get('vectors_ready') is False
-        assert material.get('embedding_status') == 'offline_keyword_only'
+        assert material['chunks_indexed'] > 0  # nosec B101
+        assert material.get('vectors_ready') is False  # nosec B101
+        assert material.get('embedding_status') == 'offline_keyword_only'  # nosec B101
 
 
 def test_upload_with_no_searchable_chunks_fails_before_publishing(client, monkeypatch):
@@ -974,9 +975,9 @@ def test_upload_with_no_searchable_chunks_fails_before_publishing(client, monkey
     from app.indexer import KnowledgeIndexer
     monkeypatch.setattr(KnowledgeIndexer, '_prepare_chunk_rows', lambda *args, **kwargs: [])
     response = _persist_upload(client, 'no-searchable-chunks.txt', 'Readable source material must not be advertised as ready when no searchable chunk has been prepared.')
-    assert response.status_code == 503
-    assert not (cfg.SRC_DIR / 'no-searchable-chunks.txt').exists()
-    assert not study_material_manager.materials_cache
+    assert response.status_code == 503  # nosec B101
+    assert not (cfg.SRC_DIR / 'no-searchable-chunks.txt').exists()  # nosec B101
+    assert not study_material_manager.materials_cache  # nosec B101
 
 
 def test_upload_acquires_model_resource_coordinator_before_embedding(client, monkeypatch):
@@ -1001,8 +1002,8 @@ def test_upload_acquires_model_resource_coordinator_before_embedding(client, mon
     monkeypatch.setattr(OllamaClient, 'get_embedding', embedding)
     monkeypatch.setattr(OllamaClient, 'get_batch_embeddings', lambda self, texts, **kw: [[0.1] * 1024 for _ in texts])
     response = _persist_upload(client, 'resource-admission.txt', 'Native text upload must acquire the existing model resource coordinator before any embedding probe or batch inference.')
-    assert response.status_code == 503
-    assert not calls
+    assert response.status_code == 503  # nosec B101
+    assert not calls  # nosec B101
 
 
 def test_failed_concurrent_repeat_cannot_delete_successful_upload(monkeypatch):
@@ -1041,13 +1042,13 @@ def test_failed_concurrent_repeat_cannot_delete_successful_upload(monkeypatch):
                 second_finished.set()
     with ThreadPoolExecutor(max_workers=2) as pool:
         failed = pool.submit(ingest, True)
-        assert preparing_first.wait(timeout=3)
+        assert preparing_first.wait(timeout=3)  # nosec B101
         succeeded = pool.submit(ingest, False)
         first_result, second_result = failed.result(timeout=5), succeeded.result(timeout=5)
-    assert isinstance(first_result, RuntimeError)
-    assert (cfg.SRC_DIR / 'concurrent-failure.txt').read_text() == text
+    assert isinstance(first_result, RuntimeError)  # nosec B101
+    assert (cfg.SRC_DIR / 'concurrent-failure.txt').read_text() == text  # nosec B101
     with sqlite3.connect(cfg.DB_PATH) as db:
-        assert db.execute('SELECT text FROM chunks WHERE doc_id=?', (second_result['doc_id'],)).fetchone()[0] == text
+        assert db.execute('SELECT text FROM chunks WHERE doc_id=?', (second_result['doc_id'],)).fetchone()[0] == text  # nosec B101
 
 
 @pytest.mark.parametrize('generate_study_set', [False, True])
@@ -1061,11 +1062,11 @@ def test_successful_session_only_upload_keeps_original_download(client, generate
         'persist_to_src': False,
         'generate_study_set': generate_study_set,
     })
-    assert response.status_code == 200
-    assert not (cfg.SRC_DIR / 'session-only-source.txt').exists()
+    assert response.status_code == 200  # nosec B101
+    assert not (cfg.SRC_DIR / 'session-only-source.txt').exists()  # nosec B101
     download = client.get('/api/materials/download', params={'material_id': response.json()['material']['id']})
-    assert download.status_code == 200
-    assert download.content == raw
+    assert download.status_code == 200  # nosec B101
+    assert download.content == raw  # nosec B101
 
 
 @pytest.mark.parametrize("correct,distractors", [
@@ -1076,7 +1077,7 @@ def test_successful_session_only_upload_keeps_original_download(client, generate
 ])
 def test_source_cloze_rejects_overlapping_zero_conditions(correct, distractors):
     from app.study_materials import _zero_condition_distractors_are_disjoint
-    assert not _zero_condition_distractors_are_disjoint(correct, distractors)
+    assert not _zero_condition_distractors_are_disjoint(correct, distractors)  # nosec B101
 
 
 @pytest.mark.parametrize("correct,distractors", [
@@ -1087,7 +1088,7 @@ def test_source_cloze_rejects_overlapping_zero_conditions(correct, distractors):
 ])
 def test_source_cloze_keeps_nonoverlapping_zero_conditions_and_text(correct, distractors):
     from app.study_materials import _zero_condition_distractors_are_disjoint
-    assert _zero_condition_distractors_are_disjoint(correct, distractors)
+    assert _zero_condition_distractors_are_disjoint(correct, distractors)  # nosec B101
 
 
 
@@ -1104,7 +1105,7 @@ def test_quiz_rejects_weaker_nonzero_option_next_to_positive_condition():
     source.extracted_pages = [{"page_num": 1, "text": text}]
     source.total_chars = len(text); source.total_pages = 1
     result = StudyMaterialManager(Client()).generate_materials_from_pages(source, model="test-ollama", quiz_count=1, difficulty="easy")
-    assert result["generation"]["quiz"] == "unavailable"
+    assert result["generation"]["quiz"] == "unavailable"  # nosec B101
 
 
 
@@ -1115,12 +1116,12 @@ def test_quiz_rejects_weaker_nonzero_option_next_to_positive_condition():
 ])
 def test_information_unit_quiz_distractors_must_be_concrete_unit_values(answer, distractors):
     from app.study_materials import _information_unit_distractors_match
-    assert not _information_unit_distractors_match(answer, distractors)
+    assert not _information_unit_distractors_match(answer, distractors)  # nosec B101
 
 
 def test_information_unit_quiz_allows_concrete_alternatives():
     from app.study_materials import _information_unit_distractors_match
-    assert _information_unit_distractors_match("one bit", ["zero bits", "two bits", "three bits"])
+    assert _information_unit_distractors_match("one bit", ["zero bits", "two bits", "three bits"])  # nosec B101
 
 
 @pytest.mark.skipif(__import__('sys').platform != 'darwin', reason='Mac direct MLX upload integration')
@@ -1150,18 +1151,18 @@ def test_uploaded_material_gets_native_vectors_without_any_daemon_probe(client, 
         'filename': 'native-entropy.txt',
         'file_base64': base64.b64encode(source.encode()).decode(),
     })
-    assert response.status_code == 200, response.text
-    assert legacy_calls == []
-    assert native_calls
+    assert response.status_code == 200, response.text  # nosec B101
+    assert legacy_calls == []  # nosec B101
+    assert native_calls  # nosec B101
     with sqlite3.connect(DB_PATH) as db:
         rows = db.execute('''SELECT c.text,c.embedding,p.text_sha256,p.vector_sha256,p.model_digest,p.dimensions,p.full_text
             FROM chunks c JOIN documents d ON d.id=c.doc_id
             LEFT JOIN corpus_vector_provenance p ON p.chunk_id=c.id WHERE d.filename=?''', ('native-entropy.txt',)).fetchall()
-    assert rows
+    assert rows  # nosec B101
     for text, blob, text_sha, vector_sha, identity, dimensions, full_text in rows:
-        assert text_sha == hashlib.sha256(text.encode()).hexdigest()
-        assert vector_sha == hashlib.sha256(blob).hexdigest()
-        assert identity == BGE_NATIVE_IDENTITY and dimensions == 1024 and full_text == 1
+        assert text_sha == hashlib.sha256(text.encode()).hexdigest()  # nosec B101
+        assert vector_sha == hashlib.sha256(blob).hexdigest()  # nosec B101
+        assert identity == BGE_NATIVE_IDENTITY and dimensions == 1024 and full_text == 1  # nosec B101
 
 
 @pytest.mark.parametrize('busy_kind, expected_status', [('gpu', 503), ('dialogue', 409)])
@@ -1185,10 +1186,10 @@ def test_native_upload_preserves_busy_admission_before_vector_inference(client, 
         yield
     monkeypatch.setattr(sm.gpu_coordinator, 'acquire_for_inference', busy)
     response = _persist_upload(client, 'native-busy-source.txt', 'Native upload must preserve resource admission and cannot bypass an active model operation.')
-    assert response.status_code == expected_status
-    assert response.headers['retry-after'] == '2'
-    assert not (cfg.SRC_DIR / 'native-busy-source.txt').exists()
-    assert calls == []
+    assert response.status_code == expected_status  # nosec B101
+    assert response.headers['retry-after'] == '2'  # nosec B101
+    assert not (cfg.SRC_DIR / 'native-busy-source.txt').exists()  # nosec B101
+    assert calls == []  # nosec B101
 
 
 def test_resolve_safe_source_file_nested_and_traversal(tmp_path):
@@ -1202,19 +1203,19 @@ def test_resolve_safe_source_file_nested_and_traversal(tmp_path):
 
     # Nested path as stored in documents
     found1 = resolve_safe_source_file("cslt/tieng Viet/lecture_2D_2.pptx", search_dirs=search_dirs)
-    assert found1 == sample_file
+    assert found1 == sample_file  # nosec B101
 
     # Path with leading src/
     found2 = resolve_safe_source_file("src/cslt/tieng Viet/lecture_2D_2.pptx", search_dirs=search_dirs)
-    assert found2 == sample_file
+    assert found2 == sample_file  # nosec B101
 
     # Just basename
     found3 = resolve_safe_source_file("lecture_2D_2.pptx", search_dirs=search_dirs)
-    assert found3 == sample_file
+    assert found3 == sample_file  # nosec B101
 
     # Path traversal attack must be rejected
-    assert resolve_safe_source_file("../../../secret.txt", search_dirs=search_dirs) is None
-    assert resolve_safe_source_file("cslt/../../etc/passwd", search_dirs=search_dirs) is None
+    assert resolve_safe_source_file("../../../secret.txt", search_dirs=search_dirs) is None  # nosec B101
+    assert resolve_safe_source_file("cslt/../../etc/passwd", search_dirs=search_dirs) is None  # nosec B101
 
 
 def test_merge_chunk_texts_provenance_and_repeats():
@@ -1227,7 +1228,7 @@ def test_merge_chunk_texts_provenance_and_repeats():
         {"text": "khái niệm A. Phần tiếp nối giải thích chi tiết.", "char_start": 16, "char_end": 62},
     ]
     merged_prov = manager._merge_chunk_texts(chunks_with_prov)
-    assert merged_prov == "Đoạn văn mở đầu khái niệm A. Phần tiếp nối giải thích chi tiết."
+    assert merged_prov == "Đoạn văn mở đầu khái niệm A. Phần tiếp nối giải thích chi tiết."  # nosec B101
 
     # 2. Without provenance: genuine repeats must NOT be stripped merely because edges match
     chunks_without_prov = [
@@ -1235,9 +1236,9 @@ def test_merge_chunk_texts_provenance_and_repeats():
         "Ví dụ 1: Tính toán giá trị entropy trong điều kiện B.",
     ]
     merged_repeats = manager._merge_chunk_texts(chunks_without_prov)
-    assert "điều kiện A" in merged_repeats
-    assert "điều kiện B" in merged_repeats
-    assert merged_repeats.count("Ví dụ 1:") == 2
+    assert "điều kiện A" in merged_repeats  # nosec B101
+    assert "điều kiện B" in merged_repeats  # nosec B101
+    assert merged_repeats.count("Ví dụ 1:") == 2  # nosec B101
 
 
 def test_difficulty_gate_hard_rejects_easy_cloze_and_fallback():
@@ -1317,12 +1318,12 @@ def test_difficulty_gate_partial_count_with_warning(monkeypatch):
 
     manager = StudyMaterialManager(MockModelClient())
     record = manager.generate_materials_from_pages(res, model="test-ollama", quiz_count=3, difficulty="hard")
-    assert record["requested_quiz_count"] == 3
-    assert record["actual_quiz_count"] == 1
-    assert record["complete"] is False
-    assert record["difficulty"] == "hard"
-    assert "1/3 câu" in record["warning"]
-    assert record["quiz"][0]["difficulty"] == "hard"
+    assert record["requested_quiz_count"] == 3  # nosec B101
+    assert record["actual_quiz_count"] == 1  # nosec B101
+    assert record["complete"] is False  # nosec B101
+    assert record["difficulty"] == "hard"  # nosec B101
+    assert "1/3 câu" in record["warning"]  # nosec B101
+    assert record["quiz"][0]["difficulty"] == "hard"  # nosec B101
 
 
 def test_generate_from_library_read_only_no_index_mutation(tmp_path, monkeypatch):
@@ -1339,15 +1340,15 @@ def test_generate_from_library_read_only_no_index_mutation(tmp_path, monkeypatch
         initial_chunks = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
     record = manager.generate_from_library_document(filename="sample_guide.txt", quiz_count=2, difficulty="easy")
-    assert record["filename"] == "sample_guide.txt"
+    assert record["filename"] == "sample_guide.txt"  # nosec B101
 
     with sqlite3.connect(cfg.DB_PATH) as db:
         final_docs = db.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
         final_chunks = db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
 
     # Database must remain untouched (safe read-only physical page extraction)
-    assert initial_docs == final_docs
-    assert initial_chunks == final_chunks
+    assert initial_docs == final_docs  # nosec B101
+    assert initial_chunks == final_chunks  # nosec B101
 
 
 def test_api_generate_from_library_carries_controls(client, monkeypatch):
@@ -1358,11 +1359,11 @@ def test_api_generate_from_library_carries_controls(client, monkeypatch):
     monkeypatch.setattr(study_material_manager,'generate_materials_from_pages',capture)
     response = client.post("/api/materials/generate-from-library", json={
         "filename":"synthetic.txt", "quiz_count":5, "flashcard_count":7, "difficulty":"medium"})
-    assert response.status_code == 200, response.text
-    assert len(seen) == 1
-    assert seen[0]['quiz_count'] == 5
-    assert seen[0]['flashcard_count'] == 7
-    assert seen[0]['difficulty'] == 'medium'
+    assert response.status_code == 200, response.text  # nosec B101
+    assert len(seen) == 1  # nosec B101
+    assert seen[0]['quiz_count'] == 5  # nosec B101
+    assert seen[0]['flashcard_count'] == 7  # nosec B101
+    assert seen[0]['difficulty'] == 'medium'  # nosec B101
 
 
 def test_large_103_page_deck_caps_prompt_prefill_and_prioritizes_substantive_pages():
@@ -1396,10 +1397,10 @@ def test_large_103_page_deck_caps_prompt_prefill_and_prioritizes_substantive_pag
 
     mgr = StudyMaterialManager(CaptureClient())
     mgr.generate_materials_from_pages(res, model="test-ollama", quiz_count=3, flashcard_count=5, difficulty="easy")
-    assert seen_prompts
+    assert seen_prompts  # nosec B101
     # Must not pack all 103 pages into a huge prompt prefill for a 3-question / 5-card set
     doc_blocks_count = seen_prompts[0].count("Trang ")
-    assert doc_blocks_count <= 24
+    assert doc_blocks_count <= 24  # nosec B101
 
 
 def test_topic_flashcards_and_modal_quiz_pdf_export_endpoints(client, tmp_path, monkeypatch):
@@ -1457,11 +1458,11 @@ def test_topic_flashcards_and_modal_quiz_pdf_export_endpoints(client, tmp_path, 
 
     monkeypatch.setattr(_srv, "study_material_manager", StudyMaterialManager(MockFlashClient()))
     res_fc = client.post("/api/learning/flashcards", json={"topic": "Ánh xạ tuyến tính", "count": 5})
-    assert res_fc.status_code == 200, res_fc.text
+    assert res_fc.status_code == 200, res_fc.text  # nosec B101
     fc_data = res_fc.json()
-    assert fc_data["topic"] == "Ánh xạ tuyến tính"
-    assert len(fc_data["flashcards"]) >= 1
-    assert fc_data["flashcards"][0]["back"]
+    assert fc_data["topic"] == "Ánh xạ tuyến tính"  # nosec B101
+    assert len(fc_data["flashcards"]) >= 1  # nosec B101
+    assert fc_data["flashcards"][0]["back"]  # nosec B101
 
     # Export server-stored modal quiz questions directly via material_id
     saved_mgr = _srv.study_material_manager
@@ -1493,13 +1494,13 @@ def test_topic_flashcards_and_modal_quiz_pdf_export_endpoints(client, tmp_path, 
             "material_id": "modal-mat-1",
         },
     )
-    assert res_pdf.status_code == 200, res_pdf.text
-    assert res_pdf.headers["content-type"].startswith("application/pdf")
+    assert res_pdf.status_code == 200, res_pdf.text  # nosec B101
+    assert res_pdf.headers["content-type"].startswith("application/pdf")  # nosec B101
     doc = fitz.open(stream=res_pdf.content, filetype="pdf")
     try:
         full_text = "\n".join(p.get_text("text") for p in doc)
-        assert "Ánh xạ tuyến tính bảo toàn phép toán nào?" in full_text
-        assert "Phép cộng và phép nhân vô hướng" in full_text
+        assert "Ánh xạ tuyến tính bảo toàn phép toán nào?" in full_text  # nosec B101
+        assert "Phép cộng và phép nhân vô hướng" in full_text  # nosec B101
     finally:
         doc.close()
 
@@ -1525,7 +1526,7 @@ def test_upload_study_set_generate_and_pdf_export_e2e(client, monkeypatch):
             "persist_to_src": False,
         },
     )
-    assert up_res.status_code == 200, up_res.text
+    assert up_res.status_code == 200, up_res.text  # nosec B101
     mat_id = up_res.json()["material"]["id"]
 
     class MockStudyClient:
@@ -1608,10 +1609,10 @@ def test_upload_study_set_generate_and_pdf_export_e2e(client, monkeypatch):
             "difficulty": "easy",
         },
     )
-    assert gen_res.status_code == 200, gen_res.text
+    assert gen_res.status_code == 200, gen_res.text  # nosec B101
     mat = gen_res.json()["material"]
-    assert len(mat["quiz"]) >= 1
-    assert len(mat["flashcards"]) >= 1
+    assert len(mat["quiz"]) >= 1  # nosec B101
+    assert len(mat["flashcards"]) >= 1  # nosec B101
     pdf_res = client.post(
         "/api/learning/export-pdf",
         json={
@@ -1620,8 +1621,8 @@ def test_upload_study_set_generate_and_pdf_export_e2e(client, monkeypatch):
             "material_id": mat["id"],
         },
     )
-    assert pdf_res.status_code == 200
-    assert pdf_res.content.startswith(b"%PDF-")
+    assert pdf_res.status_code == 200  # nosec B101
+    assert pdf_res.content.startswith(b"%PDF-")  # nosec B101
 
     # 2. Scanned (<40 char text) PDF upload for study set must return clear 422 instead of fake quiz
     import fitz as _fitz
@@ -1640,8 +1641,8 @@ def test_upload_study_set_generate_and_pdf_export_e2e(client, monkeypatch):
             "persist_to_src": False,
         },
     )
-    assert scan_res.status_code == 422
-    assert any(kw in scan_res.json()["detail"].lower() for kw in ("hình ảnh", "văn bản", "scan", "ocr", "đọc"))
+    assert scan_res.status_code == 422  # nosec B101
+    assert any(kw in scan_res.json()["detail"].lower() for kw in ("hình ảnh", "văn bản", "scan", "ocr", "đọc"))  # nosec B101
 
 
 def test_flashcards_tolerate_pdf_soft_linewrap_inside_evidence_quote(monkeypatch):
@@ -1683,10 +1684,10 @@ def test_flashcards_tolerate_pdf_soft_linewrap_inside_evidence_quote(monkeypatch
     extracted.total_chars = len(page_text)
     extracted.extracted_pages = [{"page_num": 1, "text": page_text}]
     record = manager.generate_materials_from_pages(extracted, quiz_count=0, flashcard_count=1, model="test-ollama")
-    assert record["generation"]["flashcards"] == "model"
-    assert len(record["flashcards"]) == 1
-    assert "[…]" in record["flashcards"][0]["front"]
-    assert record["flashcards"][0]["back"] == "đóng gói"
+    assert record["generation"]["flashcards"] == "model"  # nosec B101
+    assert len(record["flashcards"]) == 1  # nosec B101
+    assert "[…]" in record["flashcards"][0]["front"]  # nosec B101
+    assert record["flashcards"][0]["back"] == "đóng gói"  # nosec B101
 
 
 def test_account_private_generate_from_library_persists_across_restart_and_lists_material_id(tmp_path, monkeypatch):
@@ -1758,17 +1759,246 @@ def test_account_private_generate_from_library_persists_across_restart_and_lists
         rec2 = mgr1.generate_from_library_document(
             material_id=rec1["id"], quiz_count=1, flashcard_count=1, difficulty="easy", model="test-ollama"
         )
-        assert rec2["id"] != rec1["id"]
-        assert len(rec2["flashcards"]) == 1
+        assert rec2["id"] != rec1["id"]  # nosec B101
+        assert len(rec2["flashcards"]) == 1  # nosec B101
 
         # Simulate backend restart: brand-new PrivateMaterials manager must load persisted rec2 and expose material_id
         mgr2 = make_material_manager()
         loaded = mgr2.get_material(rec2["id"])
-        assert loaded is not None
-        assert len(loaded["flashcards"]) == 1
-        assert len(loaded["quiz"]) == 1
+        assert loaded is not None  # nosec B101
+        assert len(loaded["flashcards"]) == 1  # nosec B101
+        assert len(loaded["quiz"]) == 1  # nosec B101
         docs = mgr2.list_available_documents([])
         priv = next(d for d in docs if d["filename"] == "private_notes.txt")
-        assert priv["material_id"] in (rec1["id"], rec2["id"])
+        assert priv["material_id"] in (rec1["id"], rec2["id"])  # nosec B101
     finally:
         account_id.reset(tok)
+
+
+def test_flashcard_and_quiz_share_passage_prefix_and_focused_context():
+    from app.flashcard_generator import (
+        build_flashcards_prompt,
+        extract_focused_flashcard_context,
+        flashcard_response_schema,
+    )
+    from app.quiz_generator import build_quiz_prompt, quiz_response_schema
+
+    passages = [
+        {"page_num": 2, "text": "Câu mở đầu ngữ cảnh dài. " * 25 + "Bộ nhớ đệm KV giúp tái sử dụng tiền tố nhanh hơn. Câu kết bổ sung điều kiện."},
+    ]
+    quiz_prompt = build_quiz_prompt(passages, count=3, difficulty="medium")
+    flash_prompt = build_flashcards_prompt(passages, count=6)
+    marker = "\n<task>\n"
+    assert marker in quiz_prompt and marker in flash_prompt  # nosec B101
+    assert quiz_prompt.split(marker, 1)[0] == flash_prompt.split(marker, 1)[0]  # nosec B101
+    assert "flashcards" in flash_prompt.lower()  # nosec B101
+    assert flashcard_response_schema(["Q1"])["additionalProperties"] is False  # nosec B101
+    assert quiz_response_schema("hard", ["Q1"])["additionalProperties"] is False  # nosec B101
+
+    long_masked = ("A " * 150) + "Điều kiện X cần […], áp dụng khi n > 0. " + ("B " * 150)
+    focused = extract_focused_flashcard_context(long_masked, max_chars=240)
+    assert "[…]" in focused  # nosec B101
+    assert len(focused) <= 250  # nosec B101
+    code_masked = (
+        "[NỘI DUNG NGUỒN ĐÃ ĐỐI CHIẾU ẢNH; KÝ HIỆU CHUẨN HÓA]\n"
+        + ("Header context line. " * 25)
+        + "\nvecIntegers.push_back(50);\nvecIntegers.[…] ();\nreturn 0;"
+    )
+    code_focused = extract_focused_flashcard_context(code_masked, max_chars=240)
+    assert "NỘI DUNG NGUỒN" not in code_focused  # nosec B101
+    assert "vecIntegers.push_back(50);" in code_focused  # nosec B101
+    assert "vecIntegers.[…] ();" in code_focused  # nosec B101
+    assert StudyMaterialManager._mask_answer_in_quote("Mã chuẩn UTF–8 được dùng.", "UTF-8") == "Mã chuẩn […] được dùng."  # nosec B101
+
+
+def test_flashcard_mask_respects_hyphen_and_word_boundaries():
+    quote = "• non-mutating algorithms\n• mutating algorithms"
+    masked = StudyMaterialManager._mask_answer_in_quote(quote, "mutating algorithms")
+    assert masked == "• non-mutating algorithms\n• […]"  # nosec B101
+
+
+def test_easy_cloze_quiz_supports_negated_contrasts_bounded_spans_and_practice_system_prompt(monkeypatch, tmp_path):
+    import json
+    import app.model_resolver as model_resolver
+    import app.token_counter as tkc
+    from app.pdf_extractor import PDFExtractionResult
+    from app.practice_adapter import SYSTEM_PROMPT as PRACTICE_SYSTEM_PROMPT
+    from app.practice_proof import native_grounded_review_schema
+    import app.trained_client as tc
+
+    (tmp_path / "config.json").write_text('{"max_position_embeddings":8192}', encoding="utf-8")
+    monkeypatch.setattr(model_resolver.sys, "platform", "darwin")
+    monkeypatch.setattr(model_resolver, "MLX_9B_DIR", tmp_path)
+    monkeypatch.setattr(tkc, "get_exact_token_counter", lambda *args: lambda messages: 200)
+
+    pages = [
+        {"page_num": 21, "text": "To use STL algorithms include #include <algorithm>.\nThis is precisely why STL supplies these algorithms.\n• non-mutating algorithms\n• mutating algorithms"},
+        {"page_num": 22, "text": "Non-Mutating Algorithms\nAlgorithms that change neither order nor contents are called non-mutating algorithms."},
+        {"page_num": 23, "text": "Mutating Algorithms\nMutating algorithms change the contents or order of a sequence."},
+    ]
+    extracted = PDFExtractionResult(filename="stl.pdf", filepath=Path("stl.pdf"))
+    extracted.extracted_pages = pages
+    extracted.total_pages = 3
+    extracted.total_chars = sum(len(p["text"]) for p in pages)
+
+    recorded_reviews = []
+
+    class FakeMLXStudyClient:
+        last_done_reason = "stop"
+
+        def __init__(self, *a, **k):
+            pass
+
+        @classmethod
+        def available(cls, *a, **k):
+            return True
+
+        def chat_complete(self, messages, system_prompt="", **kwargs):
+            user_text = messages[0]["content"]
+            if "Kiểm định độc lập từng câu" in user_text:
+                recorded_reviews.append(system_prompt)
+                items_in = json.JSONDecoder().raw_decode(user_text.split("Dữ liệu cần kiểm định:\n", 1)[1])[0]
+                checks_out = []
+                for item in items_in:
+                    ans = next(k for k, v in item["choices"].items() if v.casefold() in item["source"].casefold() and "[…]" in item["question"] and k in {"A", "B", "C", "D"} and (
+                        ("non-mutating" in item["source"].casefold() and v == "non-mutating algorithms")
+                        or ("mutating algorithms change" in item["source"].casefold() and v == "mutating algorithms")
+                        or ("#include <algorithm>" in item["source"].casefold() and v == "algorithm")
+                    ))
+                    checks_out.append({
+                        "index": item["index"],
+                        "input_audit": "Passage states concept directly.",
+                        "source_basis": item["source"],
+                        "independent_solution": "Directly stated in source passage.",
+                        "supported": True,
+                        "qualifiers_preserved": True,
+                        "choice_comparison": f"{ans} matches source.",
+                        "matching_choices": ans,
+                        "unique_answer": True,
+                        "verified_answer": ans,
+                        "explanation_audit": "Matches source directly.",
+                        "explanation_supported": True,
+                        "difficulty_matches": False,
+                    })
+                return json.dumps({"checks": checks_out})
+            return json.dumps({
+                "questions": [
+                    {"format": "source_cloze", "answer": "non-mutating algorithms", "distractors": ["mutating algorithms", "STL Containers", "STL Iterators"], "evidence_id": "Q2"},
+                    {"format": "source_cloze", "answer": "mutating algorithms", "distractors": ["non-mutating algorithms", "STL Containers", "STL Algorithms"], "evidence_id": "Q3"},
+                    {"format": "source_cloze", "answer": "algorithm", "distractors": ["vector", "iterator", "container"], "evidence_id": "Q1"},
+                ]
+            })
+
+    monkeypatch.setattr(tc, "TrainedModelClient", FakeMLXStudyClient)
+    res = StudyMaterialManager().generate_materials_from_pages(
+        extracted, quiz_count=3, flashcard_count=0, difficulty="easy", model="qwen3.5-9b-4bit"
+    )
+    assert len(res["quiz"]) == 3  # nosec B101
+    assert recorded_reviews and all(sp_val == PRACTICE_SYSTEM_PROMPT for sp_val in recorded_reviews)  # nosec B101
+    props = list(native_grounded_review_schema(1, None)["properties"]["checks"]["items"]["properties"].keys())
+    assert props.index("independent_solution") < props.index("supported")  # nosec B101
+
+
+def test_source_cloze_quiz_strips_source_review_banner(monkeypatch, tmp_path):
+    import json
+    import app.model_resolver as model_resolver
+    import app.token_counter as tkc
+    from app.pdf_extractor import PDFExtractionResult
+    import app.trained_client as tc
+
+    (tmp_path / "config.json").write_text('{"max_position_embeddings":8192}', encoding="utf-8")
+    monkeypatch.setattr(model_resolver.sys, "platform", "darwin")
+    monkeypatch.setattr(model_resolver, "MLX_9B_DIR", tmp_path)
+    monkeypatch.setattr(tkc, "get_exact_token_counter", lambda *args: lambda messages: 200)
+
+    pages = [
+        {
+            "page_num": 1,
+            "text": "[NỘI DUNG NGUỒN ĐÃ ĐỐI CHIẾU ẢNH; KÝ HIỆU CHUẨN HÓA]\nKhái niệm vector trong không gian là đại lượng có hướng và độ lớn.",
+        }
+    ]
+    extracted = PDFExtractionResult(filename="doc.pdf", filepath=Path("doc.pdf"))
+    extracted.extracted_pages = pages
+    extracted.total_pages = 1
+    extracted.total_chars = sum(len(p["text"]) for p in pages)
+
+    class FakeQuizClient:
+        last_done_reason = "stop"
+
+        def __init__(self, *a, **kw):
+            pass
+
+        @classmethod
+        def available(cls, *a, **kw):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            user_text = messages[0]["content"]
+            if "Kiểm định độc lập từng câu" in user_text:
+                items_in = json.JSONDecoder().raw_decode(user_text.split("Dữ liệu cần kiểm định:\n", 1)[1])[0]
+                ans = next(k for k, v in items_in[0]["choices"].items() if v == "đại lượng có hướng và độ lớn")
+                return json.dumps(
+                    {
+                        "checks": [
+                            {
+                                "index": items_in[0]["index"],
+                                "input_audit": "Passage states vector definition directly.",
+                                "source_basis": items_in[0]["source"],
+                                "independent_solution": "Vector definition stated directly.",
+                                "supported": True,
+                                "qualifiers_preserved": True,
+                                "choice_comparison": f"{ans} matches source.",
+                                "matching_choices": ans,
+                                "unique_answer": True,
+                                "verified_answer": ans,
+                                "explanation_audit": "Matches source directly.",
+                                "explanation_supported": True,
+                                "difficulty_matches": True,
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            return json.dumps(
+                {
+                    "questions": [
+                        {
+                            "format": "source_cloze",
+                            "evidence_id": "Q1",
+                            "answer": "đại lượng có hướng và độ lớn",
+                            "distractors": ["vô hướng", "ma trận vuông", "hàm liên tục"],
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+
+    monkeypatch.setattr(tc, "TrainedModelClient", FakeQuizClient)
+    res = StudyMaterialManager().generate_materials_from_pages(
+        extracted, quiz_count=1, flashcard_count=0, difficulty="easy", model="qwen3.5-9b-4bit"
+    )
+    assert len(res["quiz"]) == 1  # nosec B101
+    q_text = res["quiz"][0]["question"]
+    assert "NỘI DUNG NGUỒN ĐÃ ĐỐI CHIẾU ẢNH" not in q_text  # nosec B101
+    assert "[…]" in q_text  # nosec B101
+
+
+def test_fallback_flashcards_strips_banner_and_fills_up_to_count():
+    from app.flashcard_generator import fallback_generate_flashcards
+
+    cards = fallback_generate_flashcards(
+        [
+            {
+                "page_num": 1,
+                "text": "[NỘI DUNG NGUỒN ĐÃ ĐỐI CHIẾU ẢNH; KÝ HIỆU CHUẨN HÓA]\nKhái niệm vector là đại lượng có hướng và độ lớn xác định. Tích vô hướng cho biết góc giữa hai vector trong không gian.",
+            },
+            {
+                "page_num": 2,
+                "text": "Chuẩn hóa vector đưa độ dài vector về bằng 1 để tiện tính toán. Vector đơn vị có độ lớn luôn bằng 1 trên mọi trục.",
+            },
+        ],
+        count=4,
+    )
+    assert len(cards) == 4  # nosec B101
+    assert len({c["back"] for c in cards}) == 4  # nosec B101
+    assert all("NỘI DUNG NGUỒN ĐÃ ĐỐI CHIẾU ẢNH" not in c["back"] for c in cards)  # nosec B101

@@ -238,7 +238,55 @@ class SrcWatcher:
         self._items: Dict[str, Dict[str, Any]] = {}
         self._last_state_stat: Optional[Tuple[int, int]] = None
         self._rescan_requested = False
+        self._verified_vector_cache: Dict[int, Tuple[tuple, str]] = {}
+        self._review_snapshot_cache: Optional[Tuple[tuple, Any, Any]] = None
+        self._last_persisted_items_sig: Optional[str] = None
+        self._last_state_saved_mono: float = 0.0
         self._load_state()
+
+    @staticmethod
+    def _stat_pair(path: Path) -> Tuple[int, int]:
+        try:
+            st = path.stat()
+            return (int(st.st_mtime_ns), int(st.st_size))
+        except OSError:
+            return (0, 0)
+
+    def _db_files_stat_sig(self) -> tuple:
+        return (
+            self._stat_pair(self.db_path),
+            self._stat_pair(Path(f"{self.db_path}-wal")),
+            str(self.embed_model or ""),
+        )
+
+    def _invalidate_idle_caches(self) -> None:
+        self._verified_vector_cache.clear()
+        self._review_snapshot_cache = None
+        self._last_persisted_items_sig = None
+
+    @staticmethod
+    def _vector_methods_unpatched(indexer: KnowledgeIndexer) -> bool:
+        return (
+            "_count_compatible_vectors" not in indexer.__dict__
+            and "_compatible_vectors_summary" not in indexer.__dict__
+            and type(indexer)._count_compatible_vectors is KnowledgeIndexer._count_compatible_vectors
+            and type(indexer)._compatible_vectors_summary is KnowledgeIndexer._compatible_vectors_summary
+        )
+
+    def _state_persistence_sig(self, items: Dict[str, Dict[str, Any]]) -> str:
+        norm_items = {
+            k: {ik: iv for ik, iv in v.items() if ik not in ("last_seen_at", "updated_at")}
+            for k, v in sorted(items.items())
+        }
+        payload = {
+            "items": norm_items,
+            "last_ocr_available": self._last_ocr_available,
+            "last_error": self._last_error,
+            "last_error_code": self._last_error_code,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        ).hexdigest()
 
     @property
     def auto_ocr(self) -> bool:
@@ -479,10 +527,61 @@ class SrcWatcher:
         finally:
             doc.close()
 
+    @staticmethod
+    def _json_dir_sig(directory: Path) -> Tuple[str, int, int, int]:
+        if not directory.is_dir():
+            return (str(directory), 0, 0, 0)
+        file_count = 0
+        total_bytes = 0
+        try:
+            max_mtime_ns = int(directory.stat().st_mtime_ns)
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if not entry.name.endswith(".json") or not entry.is_file(follow_symlinks=False):
+                        continue
+                    fst = entry.stat(follow_symlinks=False)
+                    file_count += 1
+                    total_bytes += int(fst.st_size)
+                    if fst.st_mtime_ns > max_mtime_ns:
+                        max_mtime_ns = int(fst.st_mtime_ns)
+        except OSError:
+            max_mtime_ns = 0
+        return (str(directory.resolve()), file_count, max_mtime_ns, total_bytes)
+
     def _collect_review_snapshot(
         self,
         indexer: KnowledgeIndexer,
     ) -> Tuple[Dict[Tuple[str, int], Dict[str, Any]], Dict[Tuple[str, str], Dict[str, Any]]]:
+        cache_dirs: List[Any] = []
+        seen: set[str] = set()
+        path_sigs: List[Tuple[str, int, int, int]] = []
+        can_cache = (
+            "_load_verified_page_reviews" not in indexer.__dict__
+            and type(indexer)._load_verified_page_reviews is KnowledgeIndexer._load_verified_page_reviews
+        )
+        for cand in [self._ocr_cache_dir(), *indexer._ocr_cache_dirs()]:
+            if isinstance(cand, Path):
+                path_sigs.append(self._json_dir_sig(cand))
+                if not cand.exists():
+                    continue
+                resolved = str(cand.resolve())
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                cache_dirs.append(cand)
+            elif hasattr(cand, "glob"):
+                can_cache = False
+                cache_dirs.append(cand)
+
+        snap_sig = None
+        if can_cache:
+            from app.source_page_reviews import review_dirs_signature
+            reviews_root = indexer.src_dir.parent if hasattr(indexer.src_dir, "parent") else Path.cwd()
+            snap_sig = (review_dirs_signature(reviews_root), tuple(path_sigs))
+            cached = self._review_snapshot_cache
+            if cached is not None and cached[0] == snap_sig:
+                return cached[1], cached[2]
+
         review_states = indexer._load_verified_page_reviews()
         per_doc: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
@@ -496,30 +595,16 @@ class SrcWatcher:
             )
             bucket["verified_pages"][p_num] = state
 
-        cache_dirs: List[Any] = []
-        seen: set[str] = set()
-        for cand in [self._ocr_cache_dir(), *indexer._ocr_cache_dirs()]:
-            if isinstance(cand, Path):
-                if not cand.exists():
-                    continue
-                resolved = str(cand.resolve())
-                if resolved in seen:
-                    continue
-                seen.add(resolved)
-                cache_dirs.append(cand)
-            elif hasattr(cand, "glob"):
-                cache_dirs.append(cand)
-
         latest_uncaptured_order: Dict[Tuple[str, str, int], Any] = {}
         for cdir in cache_dirs:
             try:
                 files = cdir.glob("*.json")
-            except Exception:
+            except Exception:  # nosec B112
                 continue
             for cp in files:
                 try:
                     entry = json.loads(cp.read_text(encoding="utf-8"))
-                except Exception:
+                except Exception:  # nosec B112
                     continue
                 if not isinstance(entry, dict):
                     continue
@@ -557,6 +642,9 @@ class SrcWatcher:
                 if ver_tuples
                 else ""
             )
+
+        if can_cache and snap_sig is not None:
+            self._review_snapshot_cache = (snap_sig, review_states, per_doc)
 
         return review_states, per_doc
 
@@ -610,14 +698,31 @@ class SrcWatcher:
         db_row: Dict[str, Any],
         now_wall: float,
         cancel_event: Optional[Any] = None,
+        *,
+        db_sig: Optional[tuple] = None,
+        precomputed_counts: Optional[Tuple[int, int]] = None,
     ) -> Tuple[bool, bool, bool]:
         doc_id = db_row.get("id")
         if doc_id is None:
             return False, False, False
-        with indexer.get_connection() as conn:
-            total_c, compat_c = indexer._count_compatible_vectors(
-                conn, doc_id=doc_id, require_1024=True
-            )
+        doc_hash = str(db_row.get("file_hash") or "")
+        unpatched = self._vector_methods_unpatched(indexer)
+        if (
+            unpatched
+            and db_sig is not None
+            and item.get("vectors_ready") is True
+            and item.get("embedding_status") == "vectorized"
+            and self._verified_vector_cache.get(int(doc_id)) == (db_sig, doc_hash)
+        ):
+            return True, False, False
+
+        if precomputed_counts is not None and unpatched:
+            total_c, compat_c = precomputed_counts
+        else:
+            with indexer.get_connection() as conn:
+                total_c, compat_c = indexer._count_compatible_vectors(
+                    conn, doc_id=doc_id, require_1024=True
+                )
         if total_c == 0:
             item["vectors_ready"] = False
             item["embedding_status"] = "none"
@@ -628,6 +733,8 @@ class SrcWatcher:
             item["embedding_status"] = "vectorized"
             item.pop("vector_error", None)
             item.pop("vector_next_retry_at", None)
+            if unpatched and db_sig is not None:
+                self._verified_vector_cache[int(doc_id)] = (db_sig, doc_hash)
             return True, False, False
 
         if not self.embed_model:
@@ -1160,6 +1267,8 @@ class SrcWatcher:
 
             bg_yield_event = threading.Event()
             bg_cancel = _CombinedCancelEvent(self._stop_event, bg_yield_event)
+            cur_db_sig = self._db_files_stat_sig()
+            batch_vector_counts: Optional[Tuple[Dict[int, int], Dict[int, int]]] = None
 
             # 2. Reconcile discovered disk files in deterministic order.
             for rel_path in sorted(disk_files.keys()):
@@ -1529,11 +1638,47 @@ class SrcWatcher:
                 item["extracted_pages_count"] = int(db_row.get("extracted_pages_count") or 0) if db_row else 0
 
                 if db_row and db_row.get("status") in ("indexed", "ocr_partial_reviewed"):
+                    if ran_index:
+                        self._invalidate_idle_caches()
+                        cur_db_sig = self._db_files_stat_sig()
+                        batch_vector_counts = None
                     with gpu_coordinator.background_scope(bg_yield_event):
                         try:
-                            v_ready, vec_busy, v_synced = self._sync_vectors_for_doc(
-                                indexer, item, db_row, now_wall, cancel_event=bg_cancel
+                            did_val = db_row.get("id")
+                            doc_hash = str(db_row.get("file_hash") or "")
+                            can_batch = (
+                                did_val is not None
+                                and self._vector_methods_unpatched(indexer)
                             )
+                            is_vec_hit = (
+                                can_batch
+                                and item.get("vectors_ready") is True
+                                and item.get("embedding_status") == "vectorized"
+                                and self._verified_vector_cache.get(int(did_val)) == (cur_db_sig, doc_hash)
+                            )
+                            pre_counts: Optional[Tuple[int, int]] = None
+                            if can_batch and not is_vec_hit:
+                                if batch_vector_counts is None:
+                                    with indexer.get_connection() as conn:
+                                        batch_vector_counts = indexer._compatible_vectors_summary(
+                                            conn, require_1024=True
+                                        )
+                                pre_counts = (
+                                    batch_vector_counts[0].get(int(did_val), 0),
+                                    batch_vector_counts[1].get(int(did_val), 0),
+                                )
+                            v_ready, vec_busy, v_synced = self._sync_vectors_for_doc(
+                                indexer,
+                                item,
+                                db_row,
+                                now_wall,
+                                cancel_event=bg_cancel,
+                                db_sig=cur_db_sig,
+                                precomputed_counts=pre_counts,
+                            )
+                            if v_synced and did_val is not None:
+                                self._verified_vector_cache.pop(int(did_val), None)
+                                batch_vector_counts = None
                             if not ran_index and v_synced:
                                 summary["vectors_synced"] += 1
                         except IndexingCancelledError:
@@ -1617,7 +1762,16 @@ class SrcWatcher:
                     self._last_ocr_available = False if not self.auto_ocr else None
                 self._last_error = None
                 self._last_error_code = None
-            self._save_state()
+            persisted_sig = self._state_persistence_sig(items)
+            now_mono = time.monotonic()
+            if (
+                not self.state_path.exists()
+                or persisted_sig != self._last_persisted_items_sig
+                or (now_mono - self._last_state_saved_mono) >= 30.0
+            ):
+                self._save_state()
+                self._last_persisted_items_sig = persisted_sig
+                self._last_state_saved_mono = time.monotonic()
             return summary
         except Exception as exc:
             logger.exception("Watcher scan failed")
@@ -1629,7 +1783,7 @@ class SrcWatcher:
                 self._last_error_code = code
             try:
                 self._save_state()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             return summary
         finally:
@@ -1707,11 +1861,13 @@ class SrcWatcher:
                                 items[rel_path].pop("vector_next_retry_at", None)
                 self._items = items
             self._save_state()
+        self._invalidate_idle_caches()
         from app.source_freshness import clear_freshness_cache
         clear_freshness_cache()
 
     def sync_after_review(self, filename: Optional[str] = None) -> Dict[str, Any]:
         """Clear freshness caches and trigger immediate reconciliation after an OCR/source review."""
+        self._invalidate_idle_caches()
         from app.source_freshness import clear_freshness_cache
         clear_freshness_cache()
         summary = self.scan_once()
@@ -1784,7 +1940,7 @@ class SrcWatcher:
         try:
             from app.native_vision import cancel_active_vision_workers
             cancel_active_vision_workers()
-        except Exception:
+        except Exception:  # nosec B110
             pass
         if thread is not None and thread.is_alive():
             thread.join(timeout=max(0.01, float(timeout)))

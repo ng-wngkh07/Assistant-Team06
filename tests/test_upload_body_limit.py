@@ -25,9 +25,9 @@ from app.trained_client import TrainedModelClient
 
 MIB = 1024 * 1024
 KIB = 1024
-UPLOAD_CAP_BYTES = 28 * MIB
+UPLOAD_CAP_BYTES = 140 * MIB
 CHAT_CAP_BYTES = 128 * KIB
-FILE_CAP_BYTES = 20 * MIB
+FILE_CAP_BYTES = 100 * MIB
 
 
 @pytest.fixture(autouse=True)
@@ -113,11 +113,11 @@ def _build_exact_size_upload_json(target_bytes: int, text: str = "Synthetic vali
         separators=(",", ":"),
     ).encode("utf-8")
     pad = target_bytes - len(payload)
-    assert pad >= 0, f"Base payload ({len(payload)}) already exceeds target ({target_bytes})"
+    assert pad >= 0, f"Base payload ({len(payload)}) already exceeds target ({target_bytes})"  # nosec B101
     return payload + (b" " * pad)
 
 
-def test_upload_declared_content_length_over_28mib_rejected_before_decode_and_receive(monkeypatch):
+def test_upload_declared_content_length_over_140mib_rejected_before_decode_and_receive(monkeypatch):
     decode_calls = []
     extract_calls = []
     monkeypatch.setattr(
@@ -132,7 +132,7 @@ def test_upload_declared_content_length_over_28mib_rejected_before_decode_and_re
     )
 
     async def run():
-        for declared_len in (UPLOAD_CAP_BYTES + 1, 29_360_201):
+        for declared_len in (UPLOAD_CAP_BYTES + 1, 146_800_641):
             receive_calls = 0
 
             async def fail_if_called():
@@ -147,13 +147,13 @@ def test_upload_declared_content_length_over_28mib_rejected_before_decode_and_re
             ]
             await server.app(_http_scope("/api/materials/upload", headers=headers), fail_if_called, send)
             start, body = parsed()
-            assert start is not None and start["status"] == 413
-            assert receive_calls == 0
-            assert "detail" in json.loads(body.decode("utf-8"))
+            assert start is not None and start["status"] == 413  # nosec B101
+            assert receive_calls == 0  # nosec B101
+            assert "detail" in json.loads(body.decode("utf-8"))  # nosec B101
 
     asyncio.run(run())
-    assert not decode_calls
-    assert not extract_calls
+    assert not decode_calls  # nosec B101
+    assert not extract_calls  # nosec B101
 
 
 def test_upload_chunked_without_content_length_rejects_and_stops_reading_at_cap(monkeypatch):
@@ -177,8 +177,8 @@ def test_upload_chunked_without_content_length_rejects_and_stops_reading_at_cap(
             nonlocal yielded
             yielded += 1
             yield b'{"filename":"probe.txt","generate_study_set":false,"file_base64":"'
-            # 28 MiB + 10 extra MiB sentinel chunks after cap
-            for _ in range(38):
+            # 140 MiB + 10 extra MiB sentinel chunks after cap
+            for _ in range(150):
                 yielded += 1
                 yield b"A" * MIB
             yielded += 1
@@ -191,14 +191,14 @@ def test_upload_chunked_without_content_length_rejects_and_stops_reading_at_cap(
                 content=chunks(),
                 headers={"Content-Type": "application/json"},
             )
-            assert resp.status_code == 413
-            assert "detail" in resp.json()
+            assert resp.status_code == 413  # nosec B101
+            assert "detail" in resp.json()  # nosec B101
 
     asyncio.run(exercise())
-    # Must stop buffering once total exceeds 28 MiB (chunk 1 header + 28 chunks = 28 MiB + 62B)
-    assert yielded <= 29
-    assert not decode_calls
-    assert not extract_calls
+    # Must stop buffering once total exceeds 140 MiB (chunk 1 header + 140 chunks = 140 MiB + 66B)
+    assert yielded <= 141  # nosec B101
+    assert not decode_calls  # nosec B101
+    assert not extract_calls  # nosec B101
 
 
 def test_upload_claimed_shorter_content_length_cannot_bypass_counted_bytes(monkeypatch):
@@ -216,7 +216,7 @@ def test_upload_claimed_shorter_content_length_cannot_bypass_counted_bytes(monke
     )
 
     async def exercise():
-        chunks = [b'{"filename":"probe.txt","generate_study_set":false,"file_base64":"'] + [b"A" * MIB] * 35 + [b'"}']
+        chunks = [b'{"filename":"probe.txt","generate_study_set":false,"file_base64":"'] + [b"A" * MIB] * 147 + [b'"}']
         idx = 0
 
         async def receive():
@@ -234,79 +234,87 @@ def test_upload_claimed_shorter_content_length_cannot_bypass_counted_bytes(monke
         ]
         await server.app(_http_scope("/api/materials/upload", headers=headers), receive, send)
         start, _ = parsed()
-        assert start is not None and start["status"] == 413
-        assert idx <= 29
+        assert start is not None and start["status"] == 413  # nosec B101
+        assert idx <= 141  # nosec B101
 
     asyncio.run(exercise())
-    assert not decode_calls
-    assert not extract_calls
+    assert not decode_calls  # nosec B101
+    assert not extract_calls  # nosec B101
 
 
-def test_upload_exact_28mib_boundary_and_off_by_one():
+def test_upload_exact_140mib_boundary_and_off_by_one():
     client = TestClient(server.app, raise_server_exceptions=False)
     at_limit = _build_exact_size_upload_json(UPLOAD_CAP_BYTES)
-    assert len(at_limit) == UPLOAD_CAP_BYTES
+    assert len(at_limit) == UPLOAD_CAP_BYTES  # nosec B101
     ok_resp = client.post(
         "/api/materials/upload",
         content=at_limit,
         headers={"Content-Type": "application/json"},
     )
-    assert ok_resp.status_code == 200, ok_resp.text
+    assert ok_resp.status_code == 200, ok_resp.text  # nosec B101
 
     over_by_one = _build_exact_size_upload_json(UPLOAD_CAP_BYTES + 1)
-    assert len(over_by_one) == UPLOAD_CAP_BYTES + 1
+    assert len(over_by_one) == UPLOAD_CAP_BYTES + 1  # nosec B101
     over_resp = client.post(
         "/api/materials/upload",
         content=over_by_one,
         headers={"Content-Type": "application/json"},
     )
-    assert over_resp.status_code == 413
+    assert over_resp.status_code == 413  # nosec B101
 
 
-def test_upload_20mib_file_with_data_uri_and_options_passes_and_20mib_plus_1_hits_422():
+def test_upload_100mib_file_with_data_uri_and_options_passes_and_100mib_plus_1_hits_422():
+    import fitz
+
     client = TestClient(server.app, raise_server_exceptions=False)
 
-    raw_20mib = b"A" * FILE_CAP_BYTES
-    b64_20mib = "data:text/plain;base64," + base64.b64encode(raw_20mib).decode("ascii")
-    payload_20mib = {
-        "filename": "synthetic_" + ("x" * 180) + ".txt",
-        "file_base64": b64_20mib,
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Synthetic valid study PDF for 100MB upload limit test.")
+    pdf_prefix = doc.tobytes()
+    doc.close()
+    raw_100mib = pdf_prefix + b"\n%" + (b"A" * (FILE_CAP_BYTES - len(pdf_prefix) - 2))
+    assert len(raw_100mib) == FILE_CAP_BYTES  # nosec B101
+    b64_100mib = "data:application/pdf;base64," + base64.b64encode(raw_100mib).decode("ascii")
+    payload_100mib = {
+        "filename": "synthetic_" + ("x" * 180) + ".pdf",
+        "file_base64": b64_100mib,
         "quiz_count": 3,
         "flashcard_count": 5,
         "difficulty": "medium",
         "generate_study_set": False,
         "persist_to_src": False,
     }
-    encoded_20mib = json.dumps(payload_20mib).encode("utf-8")
-    assert len(encoded_20mib) < UPLOAD_CAP_BYTES
+    encoded_100mib = json.dumps(payload_100mib).encode("utf-8")
+    assert len(encoded_100mib) < UPLOAD_CAP_BYTES  # nosec B101
 
     resp_ok = client.post(
         "/api/materials/upload",
-        content=encoded_20mib,
+        content=encoded_100mib,
         headers={"Content-Type": "application/json"},
     )
-    assert resp_ok.status_code == 200, resp_ok.text
+    assert resp_ok.status_code == 200, resp_ok.text  # nosec B101
     mat_id = resp_ok.json()["material_id"]
     dl = client.get(f"/api/materials/download?material_id={mat_id}")
-    assert dl.status_code == 200
-    assert dl.content == raw_20mib
+    assert dl.status_code == 200  # nosec B101
+    assert dl.content == raw_100mib  # nosec B101
 
     raw_over = b"A" * (FILE_CAP_BYTES + 1)
     payload_over = {
-        "filename": "synthetic_over_20mib.txt",
+        "filename": "synthetic_over_100mib.txt",
         "file_base64": "data:text/plain;base64," + base64.b64encode(raw_over).decode("ascii"),
         "generate_study_set": False,
         "persist_to_src": False,
     }
     encoded_over = json.dumps(payload_over).encode("utf-8")
-    assert len(encoded_over) < UPLOAD_CAP_BYTES
+    assert len(encoded_over) < UPLOAD_CAP_BYTES  # nosec B101
     resp_over = client.post(
         "/api/materials/upload",
         content=encoded_over,
         headers={"Content-Type": "application/json"},
     )
-    assert resp_over.status_code == 422
-    assert "20MB" in resp_over.json()["detail"]
+    assert resp_over.status_code == 422  # nosec B101
+    assert "100MB" in resp_over.json()["detail"]  # nosec B101
 
 
 def test_small_valid_text_upload_with_accounts_is_private_and_functional():
@@ -314,8 +322,8 @@ def test_small_valid_text_upload_with_accounts_is_private_and_functional():
         mp.setenv("STUDY_ACCOUNTS_REQUIRED", "1")
         user_a = TestClient(server.app, headers={"X-Study-Request": "1"})
         user_b = TestClient(server.app, headers={"X-Study-Request": "1"})
-        assert user_a.post("/api/account/register", json={"username": "upload_alpha", "password": "private-example-123"}).status_code == 200
-        assert user_b.post("/api/account/register", json={"username": "upload_bravo", "password": "private-example-123"}).status_code == 200
+        assert user_a.post("/api/account/register", json={"username": "upload_alpha", "password": "private-example-123"}).status_code == 200  # nosec B101, B105
+        assert user_b.post("/api/account/register", json={"username": "upload_bravo", "password": "private-example-123"}).status_code == 200  # nosec B101, B105
 
         raw_bytes = b"Synthetic private course note for isolated storage verification."
         res = user_a.post(
@@ -326,12 +334,12 @@ def test_small_valid_text_upload_with_accounts_is_private_and_functional():
                 "generate_study_set": False,
             },
         )
-        assert res.status_code == 200, res.text
+        assert res.status_code == 200, res.text  # nosec B101
         mat_id = res.json()["material_id"]
-        assert user_a.get(f"/api/materials/{mat_id}").status_code == 200
-        assert user_b.get(f"/api/materials/{mat_id}").status_code == 404
+        assert user_a.get(f"/api/materials/{mat_id}").status_code == 200  # nosec B101
+        assert user_b.get(f"/api/materials/{mat_id}").status_code == 404  # nosec B101
         dl = user_a.get(f"/api/materials/download?material_id={mat_id}")
-        assert dl.status_code == 200 and dl.content == raw_bytes
+        assert dl.status_code == 200 and dl.content == raw_bytes  # nosec B101
         user_a.close()
         user_b.close()
 
@@ -347,26 +355,26 @@ def test_chat_and_learning_128kib_boundaries_and_streaming_preserved(monkeypatch
     # /api/chat exact boundary (128 KiB) vs off-by-one (128 KiB + 1)
     base_chat = json.dumps({"query": "Tôi muốn tự tử", "save_history": False}, separators=(",", ":")).encode("utf-8")
     chat_exact = base_chat + b" " * (CHAT_CAP_BYTES - len(base_chat))
-    assert len(chat_exact) == CHAT_CAP_BYTES
-    assert client.post("/api/chat", content=chat_exact, headers={"Content-Type": "application/json"}).status_code == 200
+    assert len(chat_exact) == CHAT_CAP_BYTES  # nosec B101
+    assert client.post("/api/chat", content=chat_exact, headers={"Content-Type": "application/json"}).status_code == 200  # nosec B101
 
     chat_over = base_chat + b" " * (CHAT_CAP_BYTES + 1 - len(base_chat))
-    assert len(chat_over) == CHAT_CAP_BYTES + 1
-    assert client.post("/api/chat", content=chat_over, headers={"Content-Type": "application/json"}).status_code == 413
+    assert len(chat_over) == CHAT_CAP_BYTES + 1  # nosec B101
+    assert client.post("/api/chat", content=chat_over, headers={"Content-Type": "application/json"}).status_code == 413  # nosec B101
 
     # /api/chat/stream streaming response & 128 KiB guard
     stream_ok = client.post("/api/chat/stream", json={"query": "Tôi muốn tự tử", "save_history": False})
-    assert stream_ok.status_code == 200
-    assert "text/event-stream" in stream_ok.headers["content-type"]
-    assert "data:" in stream_ok.text
-    assert client.post("/api/chat/stream", content=chat_over, headers={"Content-Type": "application/json"}).status_code == 413
+    assert stream_ok.status_code == 200  # nosec B101
+    assert "text/event-stream" in stream_ok.headers["content-type"]  # nosec B101
+    assert "data:" in stream_ok.text  # nosec B101
+    assert client.post("/api/chat/stream", content=chat_over, headers={"Content-Type": "application/json"}).status_code == 413  # nosec B101
 
     # /api/learning/generate exact boundary vs off-by-one
     base_learn = json.dumps({"topic": "Trí nhớ"}, separators=(",", ":")).encode("utf-8")
     learn_exact = base_learn + b" " * (CHAT_CAP_BYTES - len(base_learn))
-    assert client.post("/api/learning/generate", content=learn_exact, headers={"Content-Type": "application/json"}).status_code == 200
+    assert client.post("/api/learning/generate", content=learn_exact, headers={"Content-Type": "application/json"}).status_code == 200  # nosec B101
     learn_over = base_learn + b" " * (CHAT_CAP_BYTES + 1 - len(base_learn))
-    assert client.post("/api/learning/generate", content=learn_over, headers={"Content-Type": "application/json"}).status_code == 413
+    assert client.post("/api/learning/generate", content=learn_over, headers={"Content-Type": "application/json"}).status_code == 413  # nosec B101
 
 
 def test_account_authentication_and_origin_behavior_preserved(monkeypatch):
@@ -379,17 +387,17 @@ def test_account_authentication_and_origin_behavior_preserved(monkeypatch):
         ).decode("ascii"),
         "generate_study_set": False,
     }
-    assert anon.post("/api/materials/upload", json=small_payload).status_code == 401
+    assert anon.post("/api/materials/upload", json=small_payload).status_code == 401  # nosec B101
 
-    assert anon.post("/api/account/register", json={"username": "origin_user", "password": "private-example-123"}).status_code == 200
+    assert anon.post("/api/account/register", json={"username": "origin_user", "password": "private-example-123"}).status_code == 200  # nosec B101, B105
     bad_origin = anon.post("/api/materials/upload", json=small_payload, headers={"Origin": "https://evil.invalid"})
-    assert bad_origin.status_code == 403
+    assert bad_origin.status_code == 403  # nosec B101
 
     no_confirm = TestClient(server.app)
     no_confirm.cookies.set(accounts.COOKIE, anon.cookies.get(accounts.COOKIE))
-    assert no_confirm.post("/api/materials/upload", json=small_payload).status_code == 403
+    assert no_confirm.post("/api/materials/upload", json=small_payload).status_code == 403  # nosec B101
 
-    assert anon.post("/api/materials/upload", json=small_payload).status_code == 200
+    assert anon.post("/api/materials/upload", json=small_payload).status_code == 200  # nosec B101
     anon.close()
     no_confirm.close()
 
@@ -417,11 +425,11 @@ def test_upload_body_replay_and_malformed_json(monkeypatch):
                 content=chunked(),
                 headers={"Content-Type": "application/json"},
             )
-            assert res.status_code == 200, res.text
+            assert res.status_code == 200, res.text  # nosec B101
             mat_id = res.json()["material_id"]
             dl = await client.get(f"/api/materials/download?material_id={mat_id}")
-            assert dl.status_code == 200
-            assert dl.content == raw_content
+            assert dl.status_code == 200  # nosec B101
+            assert dl.content == raw_content  # nosec B101
 
     asyncio.run(exercise_replay())
 
@@ -433,7 +441,7 @@ def test_upload_body_replay_and_malformed_json(monkeypatch):
         content=b'{"filename":"bad.txt","file_base64":',
         headers={"Content-Type": "application/json"},
     )
-    assert malformed_small.status_code == 422
+    assert malformed_small.status_code == 422  # nosec B101
 
     malformed_huge = b'{"filename":' + (b"x" * (UPLOAD_CAP_BYTES + 64))
     malformed_over = client.post(
@@ -441,8 +449,8 @@ def test_upload_body_replay_and_malformed_json(monkeypatch):
         content=malformed_huge,
         headers={"Content-Type": "application/json"},
     )
-    assert malformed_over.status_code == 413
-    assert not decode_calls
+    assert malformed_over.status_code == 413  # nosec B101
+    assert not decode_calls  # nosec B101
 
 
 def test_upload_disconnect_and_cancellation_cleanup(monkeypatch):
@@ -461,10 +469,10 @@ def test_upload_disconnect_and_cancellation_cleanup(monkeypatch):
 
         send, sent, _ = _collect_send()
         await server.app(_http_scope("/api/materials/upload"), receive, send)
-        assert sent == []
+        assert sent == []  # nosec B101
 
     asyncio.run(run_disconnect())
-    assert not decode_calls
+    assert not decode_calls  # nosec B101
 
     # 2. Task cancellation mid-upload must propagate CancelledError and release partial buffer
     unique_tag = os.urandom(24)
@@ -495,8 +503,8 @@ def test_upload_disconnect_and_cancellation_cleanup(monkeypatch):
     asyncio.run(run_cancel())
     gc.collect()
     retained = [obj for obj in gc.get_objects() if isinstance(obj, bytes) and unique_tag in obj and obj != unique_tag]
-    assert retained == []
-    assert not decode_calls
+    assert retained == []  # nosec B101
+    assert not decode_calls  # nosec B101
 
 
 def test_concurrent_requests_do_not_share_body_state():
@@ -514,17 +522,17 @@ def test_concurrent_requests_do_not_share_body_state():
                     "/api/materials/upload",
                     json={"filename": name, "file_base64": b64, "generate_study_set": False},
                 )
-                assert res.status_code == 200, res.text
+                assert res.status_code == 200, res.text  # nosec B101
                 mat = res.json()["material"]
-                assert mat["filename"] == name
-                assert mat["pages"][0]["text"] == raw.decode("utf-8")
+                assert mat["filename"] == name  # nosec B101
+                assert mat["pages"][0]["text"] == raw.decode("utf-8")  # nosec B101
                 dl = await client.get(f"/api/materials/download?material_id={mat['id']}")
-                assert dl.status_code == 200 and dl.content == raw
+                assert dl.status_code == 200 and dl.content == raw  # nosec B101
 
             async def send_oversize():
                 async def chunks():
                     yield b'{"filename":"big.txt","generate_study_set":false,"file_base64":"'
-                    for _ in range(29):
+                    for _ in range(141):
                         yield b"A" * MIB
                     yield b'"}'
 
@@ -533,14 +541,14 @@ def test_concurrent_requests_do_not_share_body_state():
                     content=chunks(),
                     headers={"Content-Type": "application/json"},
                 )
-                assert res.status_code == 413
+                assert res.status_code == 413  # nosec B101
 
             async def send_chat():
                 res = await client.post(
                     "/api/chat",
                     json={"query": "Tôi muốn tự tử", "save_history": False},
                 )
-                assert res.status_code == 200 and res.json()["is_crisis"] is True
+                assert res.status_code == 200 and res.json()["is_crisis"] is True  # nosec B101
 
             await asyncio.gather(
                 *[send_valid(n, r) for n, r in valid_items],

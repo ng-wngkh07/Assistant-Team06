@@ -15,9 +15,9 @@ from app.searcher import extract_document_scope_tokens
 
 
 def _normalize_loanword_terms_cf(text: str) -> str:
-    """Normalize common academic loanword orthography variants (e.g. vectơ/vecto <-> vector)."""
+    """Normalize common academic loanword orthography variants (e.g. vectơ/véctơ/véc tơ <-> vector)."""
     folded = text.casefold()
-    return re.sub(r"\bvec[\s-]*t[oơ]\b", "vector", folded)
+    return re.sub(r"\bv[eé]c[\s-]*t[oơ]\b", "vector", folded)
 
 
 def weak_keyword_evidence(query: str, chunks: list[dict]) -> bool:
@@ -216,7 +216,7 @@ _EN_TENS = {
 _WRITTEN_QUOTE_NUMBER_RE = re.compile(
     r"(?<!\w)("
     r"(?P<skip>một\s+(?:số|vài|ít|chút|đôi|nửa|phần|loạt|mặt|cách|khi|lúc|mình)|không\s+(?:chỉ|những|phải|ai|có|thể|được|bị|hề))"
-    r"|(?P<zero_phrase>(?:số|bằng|giá\s+trị|mức|điểm)\s+không)"
+    r"|(?P<zero_phrase>(?:(?:số|bằng|giá\s+trị|mức|điểm|vectơ|véc\s+tơ|vector|ma\s+trận|phần\s+tử|đa\s+thức|ánh\s+xạ|tiến\s+về|tiến\s+tới|dần\s+tới|hội\s+tụ\s+về|lớn\s+hơn|nhỏ\s+hơn|bé\s+hơn)\s+không|khác\s+không(?=$|[\s.,;:!?)])(?!\s+(?:chỉ|những|có|nêu|được|phải|thể|nói|đề|ghi|cho|làm|cung|hề|cần|chứa|bao|giải|trình|nhắc)\b)))"
     r"|(?P<vn_compound>(?:hai|ba|bốn|năm|sáu|bảy|tám|chín)\s+mươi(?:\s+(?:mốt|hai|ba|bốn|tư|lăm|sáu|bảy|tám|chín))?)"
     r"|(?P<vn_teen>mười(?:\s+(?:một|hai|ba|bốn|lăm|sáu|bảy|tám|chín))?)"
     r"|(?P<en_compound>(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s]+(?:one|two|three|four|five|six|seven|eight|nine))?)"
@@ -595,11 +595,26 @@ _ROMAN_OR_COMMON_ACRONYMS = {
 
 
 _QUERY_ABSTENTION_RE = re.compile(
-    r"(?:tài\s+liệu|nguồn|văn\s+bản|đoạn\s+trích|sách).*?"
-    r"(?:không|chưa)\s+(?:có|chứa|đề\s+cập|cung\s+cấp|nêu|ghi\s+nhận|nhắc\s+đến|nói)"
+    r"(?:tài\s+liệu|nguồn|văn\s+bản|đoạn(?:\s+(?:trích|nguồn|văn))?|sách).*?"
+    r"(?:không|chưa)\s+(?:có|chứa|đề\s+cập|cung\s+cấp|nêu|ghi\s+nhận|nhắc(?:\s+(?:đến|tới))?"
+    r"|nói|mô\s+tả|trình\s+bày|hướng\s+dẫn|giải\s+thích|chứng\s+minh|bàn(?:\s+về)?|đưa\s+ra)"
     r"|^\s*(?:hiện\s+)?(?:không|chưa)\s+có\s+(?:đủ\s+)?thông\s+tin\b",
     re.IGNORECASE,
 )
+
+
+def strip_query_abstention_identifiers(claim_text: str, query: str) -> str:
+    """Redact verbatim hyphenated ASCII query identifiers inside explicit abstention claims before numeric checks."""
+    if not claim_text or not query or not _QUERY_ABSTENTION_RE.search(claim_text):
+        return claim_text
+    query_idents = {
+        m.group(1)
+        for m in re.finditer(r"\b([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+)\b", query)
+    }
+    out = claim_text
+    for ident in sorted(query_idents, key=len, reverse=True):
+        out = re.sub(rf"\b{re.escape(ident)}\b", " ", out, flags=re.IGNORECASE)
+    return out
 
 
 def find_ungrounded_technical_terms(
@@ -723,16 +738,48 @@ def extract_quote_ocr_glued_numbers(text: str) -> set[Decimal]:
         for match in pattern.finditer(normalized):
             raw_num = match.group(1).replace(",", ".")
             try:
-                found.add(Decimal(raw_num))
-            except Exception:
-                continue
+                value = Decimal(raw_num)
+            except (InvalidOperation, ValueError):
+                value = None
+            if value is not None:
+                found.add(value)
+    return found
+
+
+_SUB_SUP_TRANS = str.maketrans("₀₁₂₃₄₅₆₇₈₉⁰¹²³⁴⁵⁶⁷⁸⁹", "01234567890123456789")
+_UNICODE_SUB_SUP_RE = re.compile(r"[₀-₉]+|[⁰¹²³⁴-⁹]+")
+_ASCII_SUB_SUP_RE = re.compile(r"(?<=[A-Za-zÀ-ỹℝℕℤℚℂ])(?:_\{?(\d+)\}?|\^\{?(\d+)\}?)")
+
+
+def extract_quote_sub_sup_numbers(text: str) -> set[Decimal]:
+    """Extract integer index/exponent digits from Unicode/TeX-style subscripts and superscripts in a cited quote."""
+    if not text:
+        return set()
+    found: set[Decimal] = set()
+    for match in _UNICODE_SUB_SUP_RE.finditer(text):
+        try:
+            found.add(Decimal(match.group(0).translate(_SUB_SUP_TRANS)))
+        except InvalidOperation:
+            pass
+    for match in _ASCII_SUB_SUP_RE.finditer(text):
+        digits = match.group(1) or match.group(2)
+        if digits:
+            try:
+                found.add(Decimal(digits))
+            except InvalidOperation:
+                pass
     return found
 
 
 def extract_quote_supported_numbers(text: str) -> tuple[set[Decimal], set[str]]:
     """Return numeric values and unparsed numeric tokens supported by a cited quote."""
     nums, unparsed = extract_numeric_content(text)
-    supported = nums | extract_quote_written_numbers(text) | extract_quote_ocr_glued_numbers(text)
+    supported = (
+        nums
+        | extract_quote_written_numbers(text)
+        | extract_quote_ocr_glued_numbers(text)
+        | extract_quote_sub_sup_numbers(text)
+    )
     return supported, unparsed
 
 

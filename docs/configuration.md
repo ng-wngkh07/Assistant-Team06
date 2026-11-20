@@ -58,6 +58,7 @@ The `scripts/dev.py` `.env` loader accepts its explicit `ENV_KEYS` allowlist (`S
 | `STUDY_DISABLE_STARTUP_WARMUP` | Disable background startup warmup of the resident MLX prefix KV cache on macOS (`1` disables; default `0`) |
 | `STUDY_PUBLIC_URL` | Optional public `http(s)` origin used to qualify relative document `URL:`/`ATTACH:` links in exported `.ics` calendars (falls back to `request.base_url`) |
 | `STUDY_APPLE_VISION_OCR_BIN` | Optional explicit path to the macOS native `apple_vision_ocr` helper binary for registered-table timetable extraction |
+| `STUDY_EXTRA_REVIEW_DIRS` | Optional `os.pathsep`-separated list of additional local page-review directories merged with `data/runtime/page_review_dirs.json` (relative entries resolve against workspace root) |
 
 For example, a loopback local session with account login and watched shared sources:
 
