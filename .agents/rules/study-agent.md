@@ -34,7 +34,7 @@ Changes affecting installation, configuration, use, APIs/user flows, storage/arc
 
 ## Production release contract
 
-Whole-application live acceptance must cover document QA, review-question generation, and timetable creation and study planning. Run the three flows and their cases sequentially. Wait for each test request and its background work to finish or be cleaned up, then record its end-to-end latency and review its visible result before starting the next case. Follow the [live application gate](../../docs/testing.md#live-application-gate).
+Every change to application behavior requires a change-specific regression check and whole-application live acceptance across document QA, review-question generation, and timetable creation and study planning. Run the three flows and their cases sequentially. Wait for each test request and its background work to finish or be cleaned up, then record its end-to-end latency and review its visible result before starting the next case. Use the [whole-application regression cases](../../docs/testing.md#whole-application-regression-cases) and record a result for every flow.
 
 Confirm each newly reported release defect in the actual application, real checkout/install and configured source/data paths before classifying it as a product defect. Isolated harness failures are diagnostic leads. After completing page review and repairs, freeze the candidate for one consolidated final functional acceptance run. Record failures honestly and recheck affected flows after any repair; preserve private data during all live checks.
 

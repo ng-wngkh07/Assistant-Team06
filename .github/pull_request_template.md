@@ -4,7 +4,7 @@ Describe the problem and resulting behavior. Link the issue if relevant.
 
 ## Validation
 
-List the checks run, environment and results. Include reproduction or UI steps where useful. Mark unrun checks and explain why. For model changes, link a public-safe summary of real-model and source-content review.
+List the checks run, environment and results. Include reproduction or UI steps where useful. Mark unrun checks and explain why. For application behavior changes, include the direct regression result and the separate sequential live results for document QA, review-question generation, and timetable creation and study planning. For model changes, link a public-safe summary of real-model and source-content review.
 
 ## Compatibility and limits
 

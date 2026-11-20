@@ -116,7 +116,7 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ### Changed
 
-- Require sequential live acceptance for document QA, review-question generation, and timetable creation and study planning, with latency and output review for each case.
+- Require each application behavior change to pass its direct regression and sequential live cases for document QA, review-question generation, and timetable creation and study planning. Record latency and review the output for each case.
 - Use configured shared `src/` and runtime `data/` paths without implicitly creating or selecting `data/user-library/`. Report missing or empty libraries honestly; reviewed knowledge-pack imports require explicit operator configuration, and existing personal data is preserved.
 
 - Reconcile the README, contribution rules and business guides with hosted account storage, opt-in shared-source ingestion and operator/developer backend setup. Workflow/usage changes must update both entry guides and affected documentation in the same change, with specific reasons for unaffected files.

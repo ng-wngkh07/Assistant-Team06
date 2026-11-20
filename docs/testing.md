@@ -100,6 +100,26 @@ Before declaring push or demo readiness, record the actual checkout/install path
 
 The health endpoint distinguishes installed artifacts from executable runtime capability. Its import probe does not load weights or certify content. Use **Kiểm tra mô hình** in the web UI for a real inference smoke check, then test an actual question with source review.
 
+### Whole-application regression cases
+
+Run this set after each change to application behavior, including a fix scoped to one flow or a change to prompts, retrieval or model configuration. Add a direct regression for the reported defect or new behavior. Add cases for any affected shared paths, such as account isolation, source access, persistence or model resource coordination. Keep the change scoped to the assigned outcome and its dependencies.
+
+Use the served web UI, a disposable test account or store, the configured local models, and the public inputs below or equivalent permitted inputs with independently reviewed expected results. Index the public document fixtures in the test library and prepare the remaining inputs before the run. Run cases in the listed order with one test request in flight. A case can include multiple actions. Wait for each action and its work to settle before continuing. If a prerequisite is unavailable, record the case as unrun with its reason.
+
+| Case | Steps | Expected result |
+| --- | --- | --- |
+| QA-01 · Grounded answer | Attach `extended_probability.md` from the public document fixtures. Submit the question in `probability-worked` from [extended_cases.json](../tests/fixtures/extended_cases.json), then open the citation in the answer. | The answer gives 0.4, preserves the condition that P(B) is positive, and opens the supporting worked answer in the selected original. |
+| QA-02 · Insufficient evidence | In a new chat with the same source attached, submit the question in `probability-missing`. | The response says the material lacks the exam schedule and instructor. It supplies neither invented values nor an unrelated source. |
+| REVIEW-01 · Generate and grade | In the library, choose [On_Tap_Hoa_Hoc_12.docx](../tests/fixtures/documents/On_Tap_Hoa_Hoc_12.docx). Request two easy quiz questions and one flashcard using **Tạo Quiz & Thẻ**. Open the quiz, submit answers, and inspect the feedback and the flashcard. | The counts match the request. Each quiz question has one correct choice and an explanation supported by the document. The app grades the submitted choices accordingly, and the flashcard answer is supported by the same source. |
+| REVIEW-02 · Unusable input | In the review tool, use **Tải tệp mới lên** to upload a new `insufficient.txt` containing only a period. | The app reports that it cannot read enough material, clears any loading state, and creates no new questions. |
+| TIME-01 · Recognize and export | Upload [demo.png](../tests/fixtures/timetables/demo.png). Compare the draft with [expected.json](../tests/fixtures/timetables/expected.json), confirm it, and export an iCalendar file for two full future Monday–Sunday weeks. | The draft has one row, DEMO MATH on Monday from 09:00 to 10:00 in A101. The confirmed view matches the draft. The calendar has one weekly event definition and two occurrences at those local times. |
+| TIME-02 · Reject an incomplete draft | With the confirmed schedule from TIME-01, open a new draft from the same image, clear the row's end time, and attempt confirmation. | The app flags the incomplete row and retains the last confirmed timetable. An export from the saved schedule still contains the original event. |
+| TIME-03 · Confirm a study plan | Discard the incomplete draft. Add a 30-minute assignment for DEMO MATH due two days from now. Set a 60-minute study window before the deadline, clear of classes, commitments and protected rest time. Generate a plan, review it, confirm it, and reload the app. | The plan allocates 30 minutes to the assignment within the eligible window before its deadline with no overlap with classes or commitments. The accepted sessions remain visible after reload. |
+
+For each case, record the final revision and settings, case ID, input, expected and observed result, and elapsed time per request. Record source review and whether the case passed, failed or was unrun. Save evidence privately. A flow passes only when all of its required cases pass. Whole-application acceptance requires passing results for all three flows and the change-specific cases. After a repair, verify the regression and rerun the set against the final candidate.
+
+### Retrieval and generation changes
+
 For changes to retrieval, prompts, evidence validation or generated study content:
 
 1. Freeze synthetic or permitted holdout sources and questions before the run. Include definitions, formulas, conditions, follow-ups, comparisons, missing evidence and document-injection cases.
