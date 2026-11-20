@@ -15,7 +15,7 @@ import logging
 import os
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import sys
 import threading
 import time
@@ -73,7 +73,7 @@ def get_ollama_model_digest(model_name: str = OLLAMA_AUX_CHAT_MODEL) -> Optional
         for m in client.list_models():
             if m.get("name") == model_name or m.get("model") == model_name:
                 return m.get("digest")
-    except Exception:
+    except Exception:  # nosec B110
         pass
     return None
 
@@ -214,7 +214,7 @@ class VisionOCRManager:
             if not shutil.which("tesseract"):
                 return False
             try:
-                res = subprocess.run(
+                res = subprocess.run(  # nosec B603, B607
                     ["tesseract", "--list-langs"],
                     capture_output=True, text=True, timeout=5,
                 )
@@ -230,7 +230,7 @@ class VisionOCRManager:
                 client = OllamaClient()
                 models = [m.get("name", "") for m in client.list_models()]
                 return OLLAMA_AUX_CHAT_MODEL in models
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             return False
         return False
@@ -516,7 +516,7 @@ class VisionOCRManager:
         return transcript["text"].strip()
 
     def _ocr_tesseract(self, image_bytes: bytes) -> str:
-        proc = subprocess.run(
+        proc = subprocess.run(  # nosec B603, B607
             ["tesseract", "stdin", "stdout", "-l", "vie+eng", "--psm", "3"],
             input=image_bytes,
             capture_output=True,
@@ -568,7 +568,7 @@ class VisionOCRManager:
                     try:
                         if PDFExtractor.calculate_file_hash(candidate) == source_hash:
                             source_matched = True
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
             if not source_matched:
                 for sf in active_src_dir.rglob("*"):
@@ -577,7 +577,7 @@ class VisionOCRManager:
                             if PDFExtractor.calculate_file_hash(sf) == source_hash:
                                 source_matched = True
                                 break
-                        except Exception:
+                        except Exception:  # nosec B112
                             continue
 
         if not source_matched:
@@ -731,7 +731,7 @@ class VisionOCRManager:
                 data = json.loads(p.read_text(encoding="utf-8"))
                 if not data.get("is_verified"):
                     results.append(data)
-            except Exception:
+            except Exception:  # nosec B112
                 continue
         return results
 

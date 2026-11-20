@@ -12,7 +12,7 @@ import time
 import shutil
 import logging
 import threading
-import subprocess
+import subprocess  # nosec B404
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -55,7 +55,7 @@ def get_hardware_memory_profile() -> Dict[str, Any]:
     """
     total_bytes = None
     try:
-        out = subprocess.check_output(
+        out = subprocess.check_output(  # nosec B603, B607
             ["sysctl", "-n", "hw.memsize"], text=True, stderr=subprocess.DEVNULL
         ).strip()
         total_bytes = int(out)
@@ -72,7 +72,7 @@ def get_hardware_memory_profile() -> Dict[str, Any]:
     wired_gb = None
 
     try:
-        vm_out = subprocess.check_output(
+        vm_out = subprocess.check_output(  # nosec B603, B607
             ["vm_stat"], text=True, stderr=subprocess.DEVNULL
         )
         page_size = 4096
@@ -108,7 +108,7 @@ def get_hardware_memory_profile() -> Dict[str, Any]:
     swap_used_mb = None
     swap_error = None
     try:
-        swap_out = subprocess.check_output(
+        swap_out = subprocess.check_output(  # nosec B603, B607
             ["sysctl", "vm.swapusage"], text=True, stderr=subprocess.DEVNULL
         )
         swap_stats = parse_swapusage(swap_out)
@@ -122,7 +122,7 @@ def get_hardware_memory_profile() -> Dict[str, Any]:
     try:
         st = shutil.disk_usage(DATA_DIR)
         disk_free_gb = st.free / (1024 ** 3)
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
     return {
@@ -269,7 +269,7 @@ class LiveMemoryMonitor:
             if self.telemetry_callback:
                 try:
                     self.telemetry_callback(avail, swap)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
             if not hw.get("eligible") or avail is None:

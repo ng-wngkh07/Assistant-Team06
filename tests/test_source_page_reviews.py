@@ -58,8 +58,8 @@ def test_new_printed_review_blocks_superseded_index(tmp_path):
     review['transcript'] = 'A corrected sign: x = -2.'
     (reviews/'001-new.json').write_text(json.dumps(review))
     report = audit_corpus(tmp_path)
-    assert not report['complete']
-    assert any(f['kind']=='superseded_page_review' for f in report['failures'])
+    assert not report['complete']  # nosec B101
+    assert any(f['kind']=='superseded_page_review' for f in report['failures'])  # nosec B101
 
 
 def test_review_for_another_page_cannot_authorize_training(tmp_path):
@@ -69,8 +69,8 @@ def test_review_for_another_page_cannot_authorize_training(tmp_path):
     with idx.get_connection() as db:
         db.execute('UPDATE corpus_source_pages SET review_sha256=?',(digest(old),))
     report = audit_corpus(tmp_path)
-    assert not report['complete']
-    assert any(f['kind']=='review_not_complete_or_bound' for f in report['failures'])
+    assert not report['complete']  # nosec B101
+    assert any(f['kind']=='review_not_complete_or_bound' for f in report['failures'])  # nosec B101
 
 
 def test_page_sync_publishes_printed_review_instead_of_native_text(tmp_path, monkeypatch):
@@ -84,9 +84,9 @@ def test_page_sync_publishes_printed_review_instead_of_native_text(tmp_path, mon
     with idx.get_connection() as db:
         texts = [r['text'] for r in db.execute('SELECT text FROM chunks ORDER BY chunk_index')]
         record = db.execute('SELECT * FROM corpus_source_pages').fetchone()
-    assert any(review['transcript'] in t for t in texts)
-    assert record['review_path']
-    assert record['state']=='text_verified'
+    assert any(review['transcript'] in t for t in texts)  # nosec B101
+    assert record['review_path']  # nosec B101
+    assert record['state']=='text_verified'  # nosec B101
     with idx.get_connection() as db:
         for row in db.execute('SELECT id,text FROM chunks').fetchall():
             blob = pack_vector([1.]+[0.]*1023)
@@ -95,10 +95,10 @@ def test_page_sync_publishes_printed_review_instead_of_native_text(tmp_path, mon
             existing = db.execute('SELECT * FROM corpus_vector_provenance WHERE chunk_id=?',(row['id'],)).fetchone()
             if existing:
                 # Sync preserves a vector already bound to unchanged reviewed text.
-                assert tuple(existing) == proof
+                assert tuple(existing) == proof  # nosec B101
             else:
                 db.execute('INSERT INTO corpus_vector_provenance VALUES(?,?,?,?,?,?,?)',proof)
-    assert audit_corpus(tmp_path)['complete']
+    assert audit_corpus(tmp_path)['complete']  # nosec B101
 
 
 @pytest.mark.parametrize('fault', ['raw_page','unresolved','image_not_reviewed'])
@@ -116,8 +116,8 @@ def test_invalid_visual_evidence_cannot_authorize_training(tmp_path, fault):
     with idx.get_connection() as db:
         db.execute('UPDATE corpus_source_pages SET review_sha256=?',(digest(old),))
     report = audit_corpus(tmp_path)
-    assert not report['complete']
-    assert any(f['kind']=='review_not_complete_or_bound' for f in report['failures'])
+    assert not report['complete']  # nosec B101
+    assert any(f['kind']=='review_not_complete_or_bound' for f in report['failures'])  # nosec B101
 
 
 def test_matching_hash_of_unpublished_text_is_insufficient(tmp_path):
@@ -132,8 +132,8 @@ def test_matching_hash_of_unpublished_text_is_insufficient(tmp_path):
         db.execute('UPDATE corpus_vector_provenance SET text_sha256=?',
                    (hashlib.sha256(texts[0].encode()).hexdigest(),))
     report = audit_corpus(tmp_path)
-    assert not report['complete']
-    assert any(f['kind']=='review_text_not_indexed' for f in report['failures'])
+    assert not report['complete']  # nosec B101
+    assert any(f['kind']=='review_text_not_indexed' for f in report['failures'])  # nosec B101
 
 
 def test_new_review_cannot_be_ignored_by_native_coverage(tmp_path):
@@ -141,8 +141,8 @@ def test_new_review_cannot_be_ignored_by_native_coverage(tmp_path):
     with idx.get_connection() as db:
         db.execute("UPDATE corpus_source_pages SET review_path='',review_sha256=''")
     report = audit_corpus(tmp_path)
-    assert not report['complete']
-    assert any(f['kind']=='review_not_indexed' for f in report['failures'])
+    assert not report['complete']  # nosec B101
+    assert any(f['kind']=='review_not_indexed' for f in report['failures'])  # nosec B101
 
 
 def test_visual_state_needs_bound_review_not_just_state_label(tmp_path):
@@ -150,8 +150,8 @@ def test_visual_state_needs_bound_review_not_just_state_label(tmp_path):
     with idx.get_connection() as db:
         db.execute("UPDATE corpus_source_pages SET state='visual_verified',review_path='',review_sha256=''")
     report = audit_corpus(tmp_path)
-    assert not report['complete']
-    assert any(f['kind']=='visual_page_without_review' for f in report['failures'])
+    assert not report['complete']  # nosec B101
+    assert any(f['kind']=='visual_page_without_review' for f in report['failures'])  # nosec B101
 
 
 def test_complete_visual_review_survives_sync_and_audit(tmp_path, monkeypatch):
@@ -166,15 +166,15 @@ def test_complete_visual_review_survives_sync_and_audit(tmp_path, monkeypatch):
     monkeypatch.setattr(module, 'KnowledgeIndexer', lambda: idx)
     module.page_coverage()
     with idx.get_connection() as db:
-        assert db.execute('SELECT state FROM corpus_source_pages').fetchone()[0] == 'visual_verified'
+        assert db.execute('SELECT state FROM corpus_source_pages').fetchone()[0] == 'visual_verified'  # nosec B101
         for row in db.execute('SELECT id,text FROM chunks').fetchall():
             blob = pack_vector([1.]+[0.]*1023)
             db.execute('UPDATE chunks SET embedding=? WHERE id=?', (blob, row['id']))
             db.execute('INSERT OR REPLACE INTO corpus_vector_provenance VALUES(?,?,?,?,?,?,?)',
                        (row['id'], hashlib.sha256(row['text'].encode()).hexdigest(), 'pinned', digest_blob(blob), 1024, 1, 'now'))
-    assert audit_corpus(tmp_path)['complete']
+    assert audit_corpus(tmp_path)['complete']  # nosec B101
     Path(review['image_path']).write_bytes(b'changed original image')
-    assert not audit_corpus(tmp_path)['complete']
+    assert not audit_corpus(tmp_path)['complete']  # nosec B101
 
 
 def digest_blob(blob):
@@ -197,7 +197,7 @@ def test_sync_runner_uses_portable_lock_without_direct_fcntl_import(monkeypatch)
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    assert module.fcntl is file_lock
+    assert module.fcntl is file_lock  # nosec B101
 
 
 
@@ -205,7 +205,7 @@ def test_changed_review_sync_discards_old_vector_and_proof(tmp_path, monkeypatch
     idx, review, _, reviews = reviewed_corpus(tmp_path)
     with idx.get_connection() as db:
         old_ids = {row['id'] for row in db.execute('SELECT id FROM chunks')}
-        assert db.execute('SELECT COUNT(*) FROM corpus_vector_provenance').fetchone()[0] > 0
+        assert db.execute('SELECT COUNT(*) FROM corpus_vector_provenance').fetchone()[0] > 0  # nosec B101
     review['reviewed_at'] = '2026-10-04T02:00:00Z'
     review['transcript'] = 'A corrected reviewed equation: x = -2.'
     (reviews/'001-corrected.json').write_text(json.dumps(review))
@@ -217,9 +217,58 @@ def test_changed_review_sync_discards_old_vector_and_proof(tmp_path, monkeypatch
     module.page_coverage()
     with idx.get_connection() as db:
         rows = db.execute('SELECT id,text,embedding FROM chunks').fetchall()
-        assert rows and all(row['embedding'] is None for row in rows)
-        assert all(row['id'] not in old_ids for row in rows)
-        assert any(review['transcript'] in row['text'] for row in rows)
-        assert db.execute('SELECT COUNT(*) FROM corpus_vector_provenance').fetchone()[0] == 0
-        assert db.execute('PRAGMA foreign_key_check').fetchall() == []
-    assert not audit_corpus(tmp_path)['complete']
+        assert rows and all(row['embedding'] is None for row in rows)  # nosec B101
+        assert all(row['id'] not in old_ids for row in rows)  # nosec B101
+        assert any(review['transcript'] in row['text'] for row in rows)  # nosec B101
+        assert db.execute('SELECT COUNT(*) FROM corpus_vector_provenance').fetchone()[0] == 0  # nosec B101
+        assert db.execute('PRAGMA foreign_key_check').fetchall() == []  # nosec B101
+    assert not audit_corpus(tmp_path)['complete']  # nosec B101
+
+
+def test_audit_corpus_handles_nfc_nfd_review_paths_and_configured_extra_dirs(tmp_path, monkeypatch):
+    """Unicode NFD/NFC paths and operator-configured review folders must audit cleanly while ignoring sidecar JSON."""
+    import unicodedata
+
+    project_root = tmp_path / unicodedata.normalize('NFC', 'dự án')
+    project_root.mkdir()
+    _, review, old, _ = reviewed_corpus(project_root)
+
+    # Configured local directory via ignored data/runtime/page_review_dirs.json
+    custom_rel = 'data/custom-reviews/doc_a'
+    custom_dir = project_root / custom_rel / 'sub'
+    custom_dir.mkdir(parents=True)
+    (custom_dir / '0001-source-links.json').write_text('[{"kind": 2}]', encoding='utf-8')
+    (custom_dir / '0001-raw-dup.json').write_text('{"source_relpath": "x.pdf"}', encoding='utf-8')
+    (project_root / 'data/runtime/page_review_dirs.json').write_text(
+        json.dumps({'review_dirs': [custom_rel]}), encoding='utf-8'
+    )
+
+    # Configured extra directory via STUDY_EXTRA_REVIEW_DIRS env var
+    env_dir = project_root / 'data/env-reviews'
+    (env_dir / 'doc_b').mkdir(parents=True)
+    monkeypatch.setenv('STUDY_EXTRA_REVIEW_DIRS', 'data/env-reviews')
+
+    from app.source_page_reviews import review_dirs_signature
+    sig_before = {entry[0]: entry for entry in review_dirs_signature(project_root)}
+    assert custom_rel in sig_before and 'data/env-reviews' in sig_before  # nosec B101
+    assert sig_before[custom_rel][1] == 1 and sig_before[custom_rel][2] == 0 and sig_before[custom_rel][4] == 0  # nosec B101
+
+    # Ignored sidecars must not increment counted review files/bytes; adding a real review updates signature
+    (custom_dir / '0002-raw.json').write_text('{"ignored": true}', encoding='utf-8')
+    sig_sidecar = {entry[0]: entry for entry in review_dirs_signature(project_root)}
+    assert sig_sidecar[custom_rel][2] == 0 and sig_sidecar[custom_rel][4] == 0  # nosec B101
+
+    nfd_old = unicodedata.normalize('NFD', str(old))
+    with KnowledgeIndexer(project_root / 'data/knowledge_base.db', project_root / 'src').get_connection() as db:
+        db.execute('UPDATE corpus_source_pages SET review_path=?', (nfd_old,))
+
+    report = audit_corpus(project_root)
+    assert report['complete'], report['failures']  # nosec B101
+
+    newer_review = dict(review, reviewed_at='2026-10-05T00:00:00Z')
+    (custom_dir / '0001.json').write_text(json.dumps(newer_review), encoding='utf-8')
+    sig_after = {entry[0]: entry for entry in review_dirs_signature(project_root)}
+    assert sig_after[custom_rel][2] == 1 and sig_after[custom_rel][4] > 0  # nosec B101
+    superseded = audit_corpus(project_root)
+    assert not superseded['complete']  # nosec B101
+    assert any(f['kind'] == 'superseded_page_review' for f in superseded['failures'])  # nosec B101

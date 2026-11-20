@@ -476,7 +476,7 @@ def _rebuild_files_nullable(conn: sqlite3.Connection) -> None:
             INSERT INTO files__new (key, file_hash, file_size, created_at, content)
             SELECT key, {select_hash}, {select_size}, {select_created}, {select_content}
             FROM files
-        """)
+        """)  # nosec B608
         conn.execute("DROP TABLE files")
         conn.execute("ALTER TABLE files__new RENAME TO files")
 

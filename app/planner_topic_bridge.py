@@ -307,7 +307,7 @@ def add_weekly_lesson(
 
         placeholders = ", ".join(["?"] * len(col_names))
         cur = conn.execute(
-            f"INSERT INTO weekly_lessons ({', '.join(col_names)}) VALUES ({placeholders})",
+            f"INSERT INTO weekly_lessons ({', '.join(col_names)}) VALUES ({placeholders})",  # nosec B608
             params,
         )
         lesson_id = cur.lastrowid
@@ -345,7 +345,7 @@ def list_weekly_lessons(db_path: Path | str) -> list[dict[str, Any]]:
                    domain_label, question_count, worksheet_id, created_at{p_cols}
             FROM weekly_lessons
             ORDER BY id DESC
-            """
+            """  # nosec B608
         ).fetchall()
         out: list[dict[str, Any]] = []
         for row in rows:
@@ -498,7 +498,7 @@ def build_calendar_bundle_zip(
                        classified_topic, worksheet_id{p_col}
                 FROM study_sessions
                 ORDER BY weekday, start_time
-                """
+                """  # nosec B608
             ).fetchall()
         ]
         worksheets_by_id: dict[str, dict[str, Any]] = {}

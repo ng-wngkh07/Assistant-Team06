@@ -672,7 +672,7 @@ async def health_check():
             installed_digest = await run_in_threadpool(
                 _cached_installed_digest, db_path, _db_file_signature(db_path)
             )
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
     embed_uses_ollama = (

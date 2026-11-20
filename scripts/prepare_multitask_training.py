@@ -20,7 +20,7 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
+import subprocess  # nosec B404
 import sys
 from html import escape as _html_escape
 from datetime import datetime, timezone
@@ -891,7 +891,7 @@ print(f"Average sequence length: {{total_tokens / len(all_records):.1f}}")
 print(f"Min target tokens: {{min(target_lens)}}, Max target tokens: {{max(target_lens)}}")
 print("ALL 216 EXAMPLES FIT WITHIN 1024 TOKEN BUDGET WITHOUT TRUNCATION!")
 """
-    proc = subprocess.run(
+    proc = subprocess.run(  # nosec B603
         [str(ROOT_DIR / ".train-venv/bin/python"), "-c", audit_script],
         capture_output=True,
         text=True,

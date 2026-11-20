@@ -78,6 +78,12 @@ STUDY_TEST_REAL_SIX_DIR=/path/to/six-pdfs pytest -c pytest.windows.ini -rs tests
 
 Treat a skipped portable check as unverified for the real corpus rather than full corpus acceptance.
 
+## Test-file hygiene and cleanup
+
+- **Consolidate into existing domain suites:** Add new regression tests to the existing domain test file under `tests/` (for example `tests/test_practice_adapter.py`, `tests/test_study_materials.py`, `tests/test_native_mlx_contract.py`, `tests/test_grounded_citations.py`, `tests/test_timetable_feature.py`, or `tests/test_audit_regressions.py`) instead of creating a new `test_<ticket>.py` module per change.
+- **No tracked one-off scripts:** Never save single-use probe, benchmark, or inspection scripts in `tests/`, `scripts/`, or the repository root. Execute disposable scripts inside an ephemeral system temp directory (`mktemp -d` or `tempfile.TemporaryDirectory()`) and delete them immediately after reading their output.
+- **Post-run workspace cleanup:** After completing verification, remove `.pytest_cache/`, stray `__pycache__/`, temporary databases, and superseded multi-gigabyte shadow/trial artifacts while preserving active serving databases, `src/`, `data/models/`, and every active source-page review asset. `python scripts/check_history.py --base origin/main` rejects newly introduced internal evaluation/training/ticket-sprawl file paths.
+
 Use separate disposable source/account/data paths. Check concurrent startup, foreign-port safety and recovery through any published launcher. Do not stop another process or replace a serving database to make a test pass. Distinguish code publication, UI/API behavior, actual native model quality, complete source/privacy review and deployed HTTPS acceptance.
 
 ## Real-model acceptance

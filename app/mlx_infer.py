@@ -4,6 +4,7 @@ from collections import OrderedDict
 import gc
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -202,7 +203,7 @@ def _prepare_stream_prefix_cache(
                         sys_tokens,
                         prefill_step_size=prefill_step_size,
                     )
-                    _store_lru_snapshot(prefix_cache_store, sys_key, sys_snap, max_entries=4)
+                    _store_lru_snapshot(prefix_cache_store, sys_key, sys_snap, max_entries=10)
             snap = _fill_prefix_snapshot(
                 model,
                 ctx_tokens,
@@ -234,7 +235,7 @@ def _prepare_stream_prefix_cache(
             sys_tokens,
             prefill_step_size=prefill_step_size,
         )
-        _store_lru_snapshot(prefix_cache_store, key, snap, max_entries=4)
+        _store_lru_snapshot(prefix_cache_store, key, snap, max_entries=10)
 
     diagnostics = {
         "reused_tokens": len(sys_tokens) if reused else 0,
@@ -286,10 +287,62 @@ def _validate_model_and_capacity(request: dict, state: dict | None) -> tuple[Pat
     return model_path, adapter_path, cfg, model_capacity
 
 
+def _warmup_matches_qa_prompts(request: dict) -> bool:
+    if request.get("op") != "warmup":
+        return False
+    raw_prompts = request.get("system_prompts")
+    if not isinstance(raw_prompts, list) or not raw_prompts:
+        return False
+    from app.qa_prompts import qa_system_prompt_matches
+
+    saw_prompt = False
+    for item in raw_prompts:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        saw_prompt = True
+        if not qa_system_prompt_matches(item):
+            return False
+    return saw_prompt
+
+
+def _warmup_matches_planner_prompts(request: dict) -> bool:
+    if request.get("op") != "warmup":
+        return False
+    raw_prompts = request.get("system_prompts")
+    if not isinstance(raw_prompts, list) or not raw_prompts:
+        return False
+    from app.planner_prompts import planner_system_prompt_matches
+
+    saw_prompt = False
+    for item in raw_prompts:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        saw_prompt = True
+        if not planner_system_prompt_matches(item):
+            return False
+    return saw_prompt
+
+
 def _validate_adapter_acceptance(model_path: Path, adapter_path: Path | None, request: dict) -> tuple[dict | None, float]:
     adapter_acceptance = None
     validation_started = time.perf_counter()
     if adapter_path is not None:
+        from app.qa_adapter import load_qa_adapter, request_matches_qa_adapter_scope
+        qa_acceptance = load_qa_adapter(model_path, require_active=False)
+        if qa_acceptance is not None and adapter_path.resolve() == Path(qa_acceptance["path"]).resolve():
+            if not (request_matches_qa_adapter_scope(request) or _warmup_matches_qa_prompts(request)):
+                raise ValueError("Adapter chưa được nghiệm thu cho loại yêu cầu này.")
+            request["seed"] = 42
+            return qa_acceptance, time.perf_counter() - validation_started
+
+        from app.planner_adapter import load_planner_adapter, request_matches_planner_adapter_scope
+        planner_acceptance = load_planner_adapter(model_path, require_active=False)
+        if planner_acceptance is not None and adapter_path.resolve() == Path(planner_acceptance["path"]).resolve():
+            if not (request_matches_planner_adapter_scope(request) or _warmup_matches_planner_prompts(request)):
+                raise ValueError("Adapter chưa được nghiệm thu cho loại yêu cầu này.")
+            request["seed"] = 42
+            return planner_acceptance, time.perf_counter() - validation_started
+
         from app.practice_adapter import (
             load_practice_adapter, request_matches_scope,
             request_matches_grounded_adapter_scope, GROUNDED_REVIEW_PROFILE,
@@ -323,7 +376,7 @@ def _get_offline_tokenizer(model_path: Path, state: dict | None):
         tok_key = str(model_path)
         tokenizer = state["tok"].get(tok_key) if state is not None else None
         if tokenizer is None:
-            tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True, trust_remote_code=False)
+            tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True, trust_remote_code=False)  # nosec B615
             if state is not None:
                 state["tok"][tok_key] = tokenizer
         return tokenizer
@@ -331,16 +384,152 @@ def _get_offline_tokenizer(model_path: Path, state: dict | None):
         raise ValueError("Không thể tải hoặc xác minh tokenizer của mô hình") from exc
 
 
-def _ensure_loaded_model(model_path: Path, adapter_path: Path | None, state: dict | None):
+def _collect_lora_slots(model) -> list[tuple[object, str, object, object]]:
+    named = getattr(model, "named_modules", None)
+    if not callable(named):
+        return []
+    slots: list[tuple[object, str, object, object]] = []
+    for name, mod in named():
+        if not name:
+            continue
+        base_linear = getattr(mod, "linear", None)
+        if base_linear is None or not (hasattr(mod, "lora_a") and hasattr(mod, "lora_b")):
+            continue
+        if "." in name:
+            parent_path, attr = name.rsplit(".", 1)
+            parent = model
+            for part in parent_path.split("."):
+                if isinstance(parent, list) or (isinstance(parent, dict) and part not in parent):
+                    parent = parent[int(part)] if part.isdigit() and isinstance(parent, list) else None
+                elif isinstance(parent, dict):
+                    parent = parent.get(part)
+                else:
+                    parent = getattr(parent, part, None)
+                if parent is None:
+                    break
+        else:
+            parent, attr = model, name
+        if parent is not None and hasattr(parent, attr):
+            slots.append((parent, attr, mod, base_linear))
+    return slots
+
+
+def _toggle_lora_slots(bindings: dict, *, enable: bool) -> None:
+    for parent, attr, lora_mod, base_linear in bindings["slots"]:
+        setattr(parent, attr, lora_mod if enable else base_linear)
+    bindings["active"] = enable
+
+
+def _restore_base_slots(state: dict) -> None:
+    """Restore any attached LoRA modules back to their underlying base linears in-memory."""
+    for parent, attr, base_linear in state.get("base_slots", {}).values():
+        setattr(parent, attr, base_linear)
+
+
+def _record_lora_bank(
+    state: dict,
+    *,
+    model_path: Path,
+    adapter_str: str,
+    adapter_sha256: str,
+    slots: list[tuple[object, str, object, object]],
+    max_banks: int = 4,
+) -> None:
+    """Cache LoRA slot bindings and base linears for O(1) multi-adapter hot-swapping."""
+    base_slots = state.setdefault("base_slots", {})
+    for parent, attr, _, base_linear in slots:
+        base_slots[(id(parent), attr)] = (parent, attr, base_linear)
+    banks = state.setdefault("lora_banks", OrderedDict())
+    bank_key = (str(model_path), adapter_str, adapter_sha256)
+    banks[bank_key] = [(parent, attr, lora_mod) for parent, attr, lora_mod, _ in slots]
+    banks.move_to_end(bank_key)
+    while len(banks) > max_banks:
+        banks.popitem(last=False)
+    state["lora_bindings"] = {
+        "model_path": str(model_path),
+        "adapter_path": adapter_str,
+        "adapter_sha256": adapter_sha256,
+        "slots": slots,
+        "active": True,
+    }
+
+
+def _ensure_loaded_model(
+    model_path: Path,
+    adapter_path: Path | None,
+    state: dict | None,
+    *,
+    adapter_sha256: str | None = None,
+):
     load_started = time.perf_counter()
-    model_load_key = (str(model_path), str(adapter_path) if adapter_path else "")
-    if state is not None and state.get("model_key") == model_load_key and state.get("model") is not None:
-        return state["model"], state["loaded_tok"], 0.0
+    adapter_str = str(adapter_path) if adapter_path else ""
+    model_load_key = (str(model_path), adapter_str)
+    bindings = state.get("lora_bindings") if state is not None else None
+    banks = state.get("lora_banks") if state is not None else None
+
     if state is not None and state.get("model") is not None:
+        loaded_base_path = state.get("model_key", (None, None))[0]
+        if state.get("model_key") == model_load_key:
+            if not (adapter_path and adapter_sha256 and bindings and bindings.get("adapter_sha256") != adapter_sha256):
+                if bindings and bindings.get("model_path") == str(model_path):
+                    _toggle_lora_slots(bindings, enable=bool(adapter_path))
+                return state["model"], state["loaded_tok"], 0.0
+
+        # Switch in-memory between unmodified base linears and multiple verified LoRA banks
+        # without reloading 5.5GB base weights from disk or discarding warmed prefix KV caches.
+        if loaded_base_path == str(model_path):
+            if adapter_path is None:
+                _restore_base_slots(state)
+                if bindings and bindings.get("slots"):
+                    _toggle_lora_slots(bindings, enable=False)
+                state["model_key"] = model_load_key
+                if "context_prefix_cache" in state:
+                    state["context_prefix_cache"].clear()
+                return state["model"], state["loaded_tok"], 0.0
+
+            if adapter_sha256 and banks is not None:
+                bank_key = (str(model_path), adapter_str, adapter_sha256)
+                cached_slots = banks.get(bank_key)
+                if cached_slots:
+                    _restore_base_slots(state)
+                    for parent, attr, lora_mod in cached_slots:
+                        setattr(parent, attr, lora_mod)
+                    banks.move_to_end(bank_key)
+                    state["model_key"] = model_load_key
+                    if "context_prefix_cache" in state:
+                        state["context_prefix_cache"].clear()
+                    return state["model"], state["loaded_tok"], 0.0
+
+                try:
+                    from mlx_lm.utils import load_adapters as _load_mlx_adapters
+                    _restore_base_slots(state)
+                    _load_mlx_adapters(state["model"], adapter_str)
+                    new_slots = _collect_lora_slots(state["model"])
+                    if new_slots:
+                        _record_lora_bank(
+                            state,
+                            model_path=model_path,
+                            adapter_str=adapter_str,
+                            adapter_sha256=adapter_sha256,
+                            slots=new_slots,
+                        )
+                        state["model_key"] = model_load_key
+                        if "context_prefix_cache" in state:
+                            state["context_prefix_cache"].clear()
+                        return state["model"], state["loaded_tok"], time.perf_counter() - load_started
+                except (AttributeError, ImportError, KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                    sys.stderr.write(f"[mlx_infer] LoRA hot-swap fallback: {exc}\n")
+
         state["model"] = None
         state["loaded_tok"] = None
         state["model_key"] = None
-        state["prefix_caches"].clear()
+        state["lora_bindings"] = None
+        if "base_slots" in state:
+            state["base_slots"].clear()
+        if "lora_banks" in state:
+            state["lora_banks"].clear()
+        if "prefix_caches" in state:
+            state["prefix_caches"].clear()
         if "context_prefix_cache" in state:
             state["context_prefix_cache"].clear()
         if "schema_processors" in state:
@@ -348,12 +537,27 @@ def _ensure_loaded_model(model_path: Path, adapter_path: Path | None, state: dic
         gc.collect()
         if hasattr(mx, "clear_cache"):
             mx.clear_cache()
-    model, loaded_tokenizer = load(str(model_path), adapter_path=str(adapter_path) if adapter_path else None)
+
+    model, loaded_tokenizer = load(str(model_path), adapter_path=adapter_str if adapter_path else None)
     load_seconds = time.perf_counter() - load_started
     if state is not None:
         state["model_key"] = model_load_key
         state["model"] = model
         state["loaded_tok"] = loaded_tokenizer
+        if adapter_path and adapter_sha256:
+            slots = _collect_lora_slots(model)
+            if slots:
+                _record_lora_bank(
+                    state,
+                    model_path=model_path,
+                    adapter_str=adapter_str,
+                    adapter_sha256=adapter_sha256,
+                    slots=slots,
+                )
+            else:
+                state["lora_bindings"] = None
+        else:
+            state["lora_bindings"] = None
     return model, loaded_tokenizer, load_seconds
 
 
@@ -387,31 +591,20 @@ def _get_or_compile_schema_processor(
     return compiled
 
 
-def _run_warmup(request: dict, state: dict | None = None) -> dict:
-    started = time.perf_counter()
-    model_path, adapter_path, cfg, model_capacity = _validate_model_and_capacity(request, state)
-    adapter_acceptance, _ = _validate_adapter_acceptance(model_path, adapter_path, request)
-    context_limit = _resolve_num_ctx(request, model_capacity)
-    tokenizer = _get_offline_tokenizer(model_path, state)
-
-    raw_prompts = request.get("system_prompts")
+def _encode_warmup_prompts(raw_prompts, tokenizer, context_limit: int) -> list[tuple[list[dict], str, list[int]]]:
     if raw_prompts is None:
-        raw_prompts = []
+        return []
     if not isinstance(raw_prompts, list):
         raise ValueError("system_prompts phải là danh sách chuỗi.")
-
     seen = set()
-    prepared_prompts = []
+    prepared = []
     for item in raw_prompts:
         if not isinstance(item, str):
             raise ValueError("Mỗi phần tử trong system_prompts phải là chuỗi.")
         if not item.strip() or item in seen:
             continue
         seen.add(item)
-        sample_messages = [
-            {"role": "system", "content": item},
-            {"role": "user", "content": "x"},
-        ]
+        sample_messages = [{"role": "system", "content": item}, {"role": "user", "content": "x"}]
         try:
             formatted = tokenizer.apply_chat_template(
                 sample_messages,
@@ -426,14 +619,22 @@ def _run_warmup(request: dict, state: dict | None = None) -> dict:
             raise ValueError(
                 f"System prompt warmup ({len(encoded)} tokens) vượt quá giới hạn ngữ cảnh {context_limit}."
             )
-        prepared_prompts.append((sample_messages, formatted, encoded))
+        prepared.append((sample_messages, formatted, encoded))
+    return prepared
 
-    model, loaded_tokenizer, load_seconds = _ensure_loaded_model(model_path, adapter_path, state)
-    active_tok = loaded_tokenizer or tokenizer
-    prefix_cache_store = state["prefix_caches"] if state is not None else OrderedDict()
-    prefill_step_size = _resolve_prefill_step_size(request)
 
-    cache_started = time.perf_counter()
+def _warm_prompts_and_schemas(
+    model,
+    tokenizer,
+    active_tok,
+    model_path: Path,
+    adapter_path: Path | None,
+    prepared_prompts: list[tuple[list[dict], str, list[int]]],
+    raw_schemas,
+    state: dict | None,
+    prefix_cache_store: OrderedDict,
+    prefill_step_size: int,
+) -> tuple[list[dict], int]:
     warmed_prefixes = []
     for sample_messages, formatted, encoded in prepared_prompts:
         active_tokens = encoded if active_tok is tokenizer else list(active_tok.encode(formatted))
@@ -454,7 +655,6 @@ def _run_warmup(request: dict, state: dict | None = None) -> dict:
         warmed_prefixes.append(diag)
 
     warmed_schemas = 0
-    raw_schemas = request.get("warmup_schemas")
     if raw_schemas is not None:
         if not isinstance(raw_schemas, list):
             raise ValueError("warmup_schemas phải là danh sách JSON schema object.")
@@ -463,6 +663,62 @@ def _run_warmup(request: dict, state: dict | None = None) -> dict:
                 raise ValueError("Mỗi phần tử trong warmup_schemas phải là JSON object.")
             _get_or_compile_schema_processor(tokenizer, schema, state)
             warmed_schemas += 1
+    return warmed_prefixes, warmed_schemas
+
+
+def _run_warmup(request: dict, state: dict | None = None) -> dict:
+    started = time.perf_counter()
+    model_path, adapter_path, cfg, model_capacity = _validate_model_and_capacity(request, state)
+    adapter_acceptance, _ = _validate_adapter_acceptance(model_path, adapter_path, request)
+    context_limit = _resolve_num_ctx(request, model_capacity)
+    tokenizer = _get_offline_tokenizer(model_path, state)
+    prepared_prompts = _encode_warmup_prompts(request.get("system_prompts"), tokenizer, context_limit)
+
+    adapter_sha = adapter_acceptance["sha256"] if adapter_acceptance else None
+    model, loaded_tokenizer, load_seconds = _ensure_loaded_model(
+        model_path,
+        adapter_path,
+        state,
+        adapter_sha256=adapter_sha,
+    )
+    prefix_cache_store = state["prefix_caches"] if state is not None else OrderedDict()
+    prefill_step_size = _resolve_prefill_step_size(request)
+
+    cache_started = time.perf_counter()
+    warmed_prefixes, warmed_schemas = _warm_prompts_and_schemas(
+        model,
+        tokenizer,
+        loaded_tokenizer or tokenizer,
+        model_path,
+        adapter_path,
+        prepared_prompts,
+        request.get("warmup_schemas"),
+        state,
+        prefix_cache_store,
+        prefill_step_size,
+    )
+
+    extra_base = request.get("extra_base_warmup")
+    if isinstance(extra_base, dict) and adapter_path is not None and state is not None:
+        extra_prompts = _encode_warmup_prompts(extra_base.get("system_prompts"), tokenizer, context_limit)
+        extra_schemas = extra_base.get("warmup_schemas")
+        if extra_prompts or extra_schemas:
+            base_model, base_tok, _ = _ensure_loaded_model(model_path, None, state)
+            bp_warm, bs_cnt = _warm_prompts_and_schemas(
+                base_model,
+                tokenizer,
+                base_tok or tokenizer,
+                model_path,
+                None,
+                extra_prompts,
+                extra_schemas,
+                state,
+                prefix_cache_store,
+                prefill_step_size,
+            )
+            warmed_prefixes.extend(bp_warm)
+            warmed_schemas += bs_cnt
+            _ensure_loaded_model(model_path, adapter_path, state, adapter_sha256=adapter_sha)
 
     cache_seconds = time.perf_counter() - cache_started
     base_identity = cfg.get("_name_or_path") or model_path.name
@@ -523,7 +779,12 @@ def _run_request(
             f"vượt quá giới hạn ngữ cảnh {context_limit}."
         )
 
-    model, loaded_tokenizer, load_seconds = _ensure_loaded_model(model_path, adapter_path, state)
+    model, loaded_tokenizer, load_seconds = _ensure_loaded_model(
+        model_path,
+        adapter_path,
+        state,
+        adapter_sha256=adapter_acceptance["sha256"] if adapter_acceptance else None,
+    )
     active_tok = loaded_tokenizer or tokenizer
 
     seed = request.get("seed")
@@ -594,6 +855,8 @@ def _run_request(
     first_token_seconds = None
     last_chunk = None
     parts = []
+    loop_guarded = False
+    chars_since_loop_check = 0
     for chunk in stream_generate(model, active_tok, prompt=generation_prompt, **gen_kwargs):
         if first_token_seconds is None:
             first_token_seconds = time.perf_counter() - generation_started
@@ -602,8 +865,14 @@ def _run_request(
         last_chunk = chunk
         if stream_tokens and text_piece:
             print(json.dumps({"token": text_piece}, ensure_ascii=False), flush=True)
+        chars_since_loop_check += len(text_piece)
+        if chars_since_loop_check >= 24:
+            chars_since_loop_check = 0
+            if _has_streaming_repetition_loop("".join(parts[-400:])):
+                loop_guarded = True
+                break
     answer = "".join(parts)
-    done_reason = getattr(last_chunk, "finish_reason", None)
+    done_reason = "length" if loop_guarded else getattr(last_chunk, "finish_reason", None)
     if done_reason not in {"stop", "length"}:
         done_reason = None
     output_tokens = getattr(last_chunk, "generation_tokens", len(active_tok.encode(answer)))
@@ -618,6 +887,7 @@ def _run_request(
     return {
         "answer": answer,
         "is_truncated": is_truncated,
+        "loop_guarded": loop_guarded,
         "done_reason": done_reason,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -645,6 +915,42 @@ def _run_request(
     }
 
 
+def _has_streaming_repetition_loop(
+    text: str,
+    *,
+    min_period: int = 40,
+    max_period: int = 260,
+    repeats: int = 4,
+) -> bool:
+    """Detect degenerate consecutive or paraphrased clause-level loops in streaming JSON/text output."""
+    if not text:
+        return False
+    if len(text) >= min_period * repeats:
+        window = text[-(max_period * repeats):]
+        limit = min(max_period, len(window) // repeats)
+        for period in range(min_period, limit + 1):
+            unit = window[-period:]
+            if window.endswith(unit * repeats) and len(re.findall(r"\w+", unit)) >= 3:
+                return True
+    if len(text) >= 360:
+        from collections import Counter
+
+        tail = text[-2400:]
+        counts: Counter[str] = Counter()
+        for raw_clause in re.split(r"[;\n]+|(?<!\d)[.!?]+(?!\d)", tail):
+            cleaned = re.sub(
+                r'^\s*[\{\[\"\':,]+(?:\s*(?:claims|text)\s*[\"\':,\{\[]*)*',
+                "",
+                raw_clause,
+            ).strip()
+            norm = re.sub(r"\s+", " ", cleaned).lower()
+            if len(norm) >= 30 and len(re.findall(r"\w+", norm)) >= 6:
+                counts[norm] += 1
+                if counts[norm] >= 3:
+                    return True
+    return False
+
+
 def serve_stream():
     state = {
         "cfg": {},
@@ -652,6 +958,9 @@ def serve_stream():
         "model_key": None,
         "model": None,
         "loaded_tok": None,
+        "lora_bindings": None,
+        "base_slots": {},
+        "lora_banks": OrderedDict(),
         "prefix_caches": OrderedDict(),
         "context_prefix_cache": OrderedDict(),
         "schema_processors": OrderedDict(),

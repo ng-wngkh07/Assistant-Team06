@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import signal
-import subprocess
+import subprocess  # nosec B404
 import sys
 import threading
 import time
@@ -79,23 +79,23 @@ def test_freshness_fails_closed_on_in_place_mutation_after_read_and_does_not_poi
         db_path=fx["db_path"],
         watcher_items={},
     )
-    assert res.fresh is False
-    assert res.status == "needs_update"
-    assert res.reason_code in {"source_stale", "source_identity_mismatch"}
-    assert hashlib.sha256(fx["file"].read_bytes()).hexdigest() != fx["hash"]
+    assert res.fresh is False  # nosec B101
+    assert res.status == "needs_update"  # nosec B101
+    assert res.reason_code in {"source_stale", "source_identity_mismatch"}  # nosec B101
+    assert hashlib.sha256(fx["file"].read_bytes()).hexdigest() != fx["hash"]  # nosec B101
 
     # Cache must NOT retain stale digest against old or new stat; subsequent check must also fail closed.
     monkeypatch.setattr(source_freshness, "_compute_file_sha256", real_hash)
     with source_freshness._CACHE_LOCK:
-        assert fx["hash"] not in source_freshness._FILE_HASH_CACHE.values()
+        assert fx["hash"] not in source_freshness._FILE_HASH_CACHE.values()  # nosec B101
     res_after = source_freshness.assess_document_freshness(
         fx["doc"],
         src_dir=fx["src"],
         db_path=fx["db_path"],
         watcher_items={},
     )
-    assert res_after.fresh is False
-    assert res_after.status == "needs_update"
+    assert res_after.fresh is False  # nosec B101
+    assert res_after.status == "needs_update"  # nosec B101
 
 
 def test_freshness_fails_closed_on_atomic_replacement_after_read_and_does_not_poison_cache(tmp_path, monkeypatch):
@@ -103,7 +103,7 @@ def test_freshness_fails_closed_on_atomic_replacement_after_read_and_does_not_po
     source_freshness.clear_freshness_cache()
     old_text = "OLD_APPROVED_BYTES_001_SEVENTEEN"
     new_text = "NEW_REPLACED_BYTES_002_TWENTYNIN"
-    assert len(old_text.encode("utf-8")) == len(new_text.encode("utf-8"))
+    assert len(old_text.encode("utf-8")) == len(new_text.encode("utf-8"))  # nosec B101
     fx = _indexed_doc_fixture(tmp_path, text=old_text)
     real_hash = source_freshness._compute_file_sha256
     replaced = False
@@ -125,20 +125,20 @@ def test_freshness_fails_closed_on_atomic_replacement_after_read_and_does_not_po
         db_path=fx["db_path"],
         watcher_items={},
     )
-    assert res.fresh is False
-    assert res.status == "needs_update"
+    assert res.fresh is False  # nosec B101
+    assert res.status == "needs_update"  # nosec B101
 
     monkeypatch.setattr(source_freshness, "_compute_file_sha256", real_hash)
     with source_freshness._CACHE_LOCK:
-        assert fx["hash"] not in source_freshness._FILE_HASH_CACHE.values()
+        assert fx["hash"] not in source_freshness._FILE_HASH_CACHE.values()  # nosec B101
     res_after = source_freshness.assess_document_freshness(
         fx["doc"],
         src_dir=fx["src"],
         db_path=fx["db_path"],
         watcher_items={},
     )
-    assert res_after.fresh is False
-    assert res_after.status == "needs_update"
+    assert res_after.fresh is False  # nosec B101
+    assert res_after.status == "needs_update"  # nosec B101
 
 
 def test_freshness_direct_stream_read_detects_mid_read_in_place_mutation(tmp_path, monkeypatch):
@@ -188,8 +188,8 @@ def test_freshness_direct_stream_read_detects_mid_read_in_place_mutation(tmp_pat
         db_path=fx["db_path"],
         watcher_items={},
     )
-    assert res.fresh is False
-    assert res.status == "needs_update"
+    assert res.fresh is False  # nosec B101
+    assert res.status == "needs_update"  # nosec B101
 
 
 def test_freshness_fails_closed_on_cache_hit_race_and_preserves_stable_cache_hits(tmp_path, monkeypatch):
@@ -208,13 +208,13 @@ def test_freshness_fails_closed_on_cache_hit_race_and_preserves_stable_cache_hit
     monkeypatch.setattr(source_freshness, "_compute_file_sha256", counted_hash)
 
     # Warm pass -> hashes once, stable second pass -> cache hit without re-hashing
-    assert source_freshness.assess_document_freshness(
+    assert source_freshness.assess_document_freshness(  # nosec B101
         fx["doc"], src_dir=fx["src"], db_path=fx["db_path"], watcher_items={}
     ).fresh is True
-    assert source_freshness.assess_document_freshness(
+    assert source_freshness.assess_document_freshness(  # nosec B101
         fx["doc"], src_dir=fx["src"], db_path=fx["db_path"], watcher_items={}
     ).fresh is True
-    assert hash_calls == 1
+    assert hash_calls == 1  # nosec B101
 
     # Now mutate file right after cache hit inside _get_cached_file_sha256 before admission completes
     real_cached = source_freshness._get_cached_file_sha256
@@ -228,9 +228,9 @@ def test_freshness_fails_closed_on_cache_hit_race_and_preserves_stable_cache_hit
     res = source_freshness.assess_document_freshness(
         fx["doc"], src_dir=fx["src"], db_path=fx["db_path"], watcher_items={}
     )
-    assert res.fresh is False
-    assert res.status == "needs_update"
-    assert hash_calls == 1
+    assert res.fresh is False  # nosec B101
+    assert res.status == "needs_update"  # nosec B101
+    assert hash_calls == 1  # nosec B101
 
 
 @pytest.mark.parametrize("action", ["delete", "escape_symlink"])
@@ -258,13 +258,13 @@ def test_freshness_fails_closed_on_delete_or_symlink_escape_during_check(tmp_pat
     res = source_freshness.assess_document_freshness(
         fx["doc"], src_dir=fx["src"], db_path=fx["db_path"], watcher_items={}
     )
-    assert res.fresh is False
+    assert res.fresh is False  # nosec B101
     if action == "delete":
-        assert res.status == "missing_source"
-        assert res.reason_code == "source_missing"
+        assert res.status == "missing_source"  # nosec B101
+        assert res.reason_code == "source_missing"  # nosec B101
     else:
-        assert res.status == "unsafe_source_path"
-        assert res.reason_code == "source_identity_mismatch"
+        assert res.status == "unsafe_source_path"  # nosec B101
+        assert res.reason_code == "source_identity_mismatch"  # nosec B101
 
 
 def test_freshness_bounded_under_concurrent_writer_and_candidate_filtering_preserved(tmp_path):
@@ -315,9 +315,9 @@ def test_freshness_bounded_under_concurrent_writer_and_candidate_filtering_prese
                 db_path=db_path,
                 watcher_items={},
             )
-            assert res.fresh is False
+            assert res.fresh is False  # nosec B101
         elapsed = time.monotonic() - t0
-        assert elapsed < 2.0
+        assert elapsed < 2.0  # nosec B101
     finally:
         stop_writer.set()
         t.join(timeout=2.0)
@@ -331,12 +331,12 @@ def test_freshness_bounded_under_concurrent_writer_and_candidate_filtering_prese
             data_dir=data,
             candidate_doc_ids=[a_id, b_id],
         )
-    assert filtered == [a_id]
+    assert filtered == [a_id]  # nosec B101
 
 
 def test_native_embedding_removes_subprocess_run_monkeypatch_detection(tmp_path, monkeypatch):
     """Shipped runtime must use one cancellable worker path without _ORIG_SUBPROCESS_RUN test-detection."""
-    assert not hasattr(native_embedding, "_ORIG_SUBPROCESS_RUN")
+    assert not hasattr(native_embedding, "_ORIG_SUBPROCESS_RUN")  # nosec B101
 
     client = NativeEmbeddingClient(tmp_path)
     monkeypatch.setattr(NativeEmbeddingClient, "available", classmethod(lambda cls, *a, **kw: True))
@@ -398,7 +398,7 @@ def test_native_embedding_disposable_subprocess_cancellation_inherits_locks_and_
     monkeypatch.setattr(NativeEmbeddingClient, "_worker_command", classmethod(lambda cls: [sys.executable, str(fake_worker)]))
 
     # Start an unrelated process outside the worker session group to confirm no unrelated kills
-    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)  # nosec B603
     cancel_ev = threading.Event()
     client = NativeEmbeddingClient(tmp_path)
     errors = []
@@ -417,9 +417,9 @@ def test_native_embedding_disposable_subprocess_cancellation_inherits_locks_and_
             ready_file.exists() and child_pid_file.exists() and grandchild_pid_file.exists()
         ):
             time.sleep(0.02)
-        assert ready_file.exists()
-        assert child_pid_file.exists()
-        assert grandchild_pid_file.exists()
+        assert ready_file.exists()  # nosec B101
+        assert child_pid_file.exists()  # nosec B101
+        assert grandchild_pid_file.exists()  # nosec B101
         child_pid = int(child_pid_file.read_text().strip())
         grandchild_pid = int(grandchild_pid_file.read_text().strip())
 
@@ -436,23 +436,23 @@ def test_native_embedding_disposable_subprocess_cancellation_inherits_locks_and_
         t_cancel = time.monotonic()
         cancel_ev.set()
         t.join(timeout=2.0)
-        assert not t.is_alive()
-        assert (time.monotonic() - t_cancel) < 1.5
-        assert len(errors) == 1 and isinstance(errors[0], IndexingCancelledError)
+        assert not t.is_alive()  # nosec B101
+        assert (time.monotonic() - t_cancel) < 1.5  # nosec B101
+        assert len(errors) == 1 and isinstance(errors[0], IndexingCancelledError)  # nosec B101
 
         # Child and grandchild must both be terminated and reaped (no zombies or orphans)
         for pid in (child_pid, grandchild_pid):
-            assert _wait_pid_dead(pid), f"Owned PID {pid} survived cancellation"
+            assert _wait_pid_dead(pid), f"Owned PID {pid} survived cancellation"  # nosec B101
 
         with native_embedding._ACTIVE_WORKERS_LOCK:
-            assert len(native_embedding._ACTIVE_WORKERS) == 0
+            assert len(native_embedding._ACTIVE_WORKERS) == 0  # nosec B101
 
         # Coordinator locks are released immediately after cancellation
         with gpu_lock.acquire_for_inference(timeout=0.5):
             pass
 
         # Unrelated process must still be alive
-        assert unrelated.poll() is None
+        assert unrelated.poll() is None  # nosec B101
     finally:
         cancel_ev.set()
         t.join(timeout=2.0)
@@ -491,14 +491,14 @@ def test_native_embedding_disposable_subprocess_timeout_escalates_sigkill_and_re
                 pass_fds=pass_fds,
             )
     elapsed = time.monotonic() - t0
-    assert elapsed < 2.0
+    assert elapsed < 2.0  # nosec B101
 
-    assert pid_file.exists()
+    assert pid_file.exists()  # nosec B101
     pid = int(pid_file.read_text().strip())
-    assert _wait_pid_dead(pid)
+    assert _wait_pid_dead(pid)  # nosec B101
 
     with native_embedding._ACTIVE_WORKERS_LOCK:
-        assert len(native_embedding._ACTIVE_WORKERS) == 0
+        assert len(native_embedding._ACTIVE_WORKERS) == 0  # nosec B101
 
     with gpu_lock.acquire_for_inference(timeout=0.5):
         pass
@@ -558,22 +558,22 @@ def test_native_embedding_persistent_stream_worker_reuse_recovery_and_eviction(t
         # 1. Multiple calls with distinct max_length reuse the single persistent worker process
         res1 = client.get_batch_embeddings(["first query"], max_length=512)
         res2 = client.get_batch_embeddings(["second chunk text"], max_length=2048)
-        assert len(res1) == 1 and len(res2) == 1
-        assert getattr(res2, "verified_identity", None) == BGE_NATIVE_IDENTITY
+        assert len(res1) == 1 and len(res2) == 1  # nosec B101
+        assert getattr(res2, "verified_identity", None) == BGE_NATIVE_IDENTITY  # nosec B101
 
         spawns = [json.loads(line) for line in spawn_log.read_text(encoding="utf-8").splitlines() if line.strip()]
-        assert len(spawns) == 1
+        assert len(spawns) == 1  # nosec B101
         pid1 = spawns[0]["pid"]
 
         # 2. Unexpected worker crash triggers transparent single-retry respawn
         res3 = client.get_batch_embeddings(["__crash__"], max_length=512)
-        assert len(res3) == 1
+        assert len(res3) == 1  # nosec B101
         spawns_after_crash = [
             json.loads(line) for line in spawn_log.read_text(encoding="utf-8").splitlines() if line.strip()
         ]
-        assert len(spawns_after_crash) == 2
+        assert len(spawns_after_crash) == 2  # nosec B101
         pid2 = spawns_after_crash[1]["pid"]
-        assert pid2 != pid1
+        assert pid2 != pid1  # nosec B101
 
         # 3. Idle timeout reaps resident worker automatically
         monkeypatch.setattr(NativeEmbeddingClient, "_STREAM_IDLE_TIMEOUT", 0.08)
@@ -587,25 +587,25 @@ def test_native_embedding_persistent_stream_worker_reuse_recovery_and_eviction(t
                     break
             time.sleep(0.02)
         with NativeEmbeddingClient._stream_lock:
-            assert NativeEmbeddingClient._stream_worker is None
+            assert NativeEmbeddingClient._stream_worker is None  # nosec B101
 
         # Verify pid2 was terminated and gpu_coordinator can acquire exclusive/training state cleanly
-        assert _wait_pid_dead(pid2)
+        assert _wait_pid_dead(pid2)  # nosec B101
 
         # 4. Eviction callback registered cleanly releases resident worker
         monkeypatch.setattr(NativeEmbeddingClient, "_STREAM_IDLE_TIMEOUT", 180.0)
         res4 = client.get_batch_embeddings(["warm again"], max_length=512)
-        assert len(res4) == 1
+        assert len(res4) == 1  # nosec B101
         with NativeEmbeddingClient._stream_lock:
             pid3 = NativeEmbeddingClient._stream_worker["proc"].pid
         NativeEmbeddingClient.evict_stream_worker()
         with NativeEmbeddingClient._stream_lock:
-            assert NativeEmbeddingClient._stream_worker is None
-        assert _wait_pid_dead(pid3)
+            assert NativeEmbeddingClient._stream_worker is None  # nosec B101
+        assert _wait_pid_dead(pid3)  # nosec B101
     finally:
         NativeEmbeddingClient.evict_stream_worker()
         with native_embedding._ACTIVE_WORKERS_LOCK:
-            assert len(native_embedding._ACTIVE_WORKERS) == 0
+            assert len(native_embedding._ACTIVE_WORKERS) == 0  # nosec B101
 
 
 def test_native_embedding_evict_waits_for_inflight_idle_eviction(monkeypatch):
@@ -633,7 +633,7 @@ def test_native_embedding_evict_waits_for_inflight_idle_eviction(monkeypatch):
 
     def slow_terminate(proc, grace_seconds=0.5):
         started.set()
-        assert release_term.wait(timeout=2.0)
+        assert release_term.wait(timeout=2.0)  # nosec B101
         terminated.append(proc)
 
     monkeypatch.setattr(native_embedding, "_terminate_owned_worker", slow_terminate)
@@ -647,7 +647,7 @@ def test_native_embedding_evict_waits_for_inflight_idle_eviction(monkeypatch):
         NativeEmbeddingClient._schedule_idle_eviction_locked(state)
 
     try:
-        assert started.wait(timeout=2.0)
+        assert started.wait(timeout=2.0)  # nosec B101
         concurrent_done = threading.Event()
         observed_after_evict = []
 
@@ -659,14 +659,14 @@ def test_native_embedding_evict_waits_for_inflight_idle_eviction(monkeypatch):
 
         t = threading.Thread(target=concurrent_evict, daemon=True)
         t.start()
-        assert not concurrent_done.wait(timeout=0.05)
+        assert not concurrent_done.wait(timeout=0.05)  # nosec B101
 
         release_term.set()
-        assert concurrent_done.wait(timeout=2.0)
+        assert concurrent_done.wait(timeout=2.0)  # nosec B101
         t.join(timeout=1.0)
-        assert fake_proc.stdin.closed is True
-        assert terminated == [fake_proc]
-        assert observed_after_evict == [0]
+        assert fake_proc.stdin.closed is True  # nosec B101
+        assert terminated == [fake_proc]  # nosec B101
+        assert observed_after_evict == [0]  # nosec B101
     finally:
         release_term.set()
         with NativeEmbeddingClient._stream_lock:

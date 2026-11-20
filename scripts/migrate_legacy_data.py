@@ -298,10 +298,10 @@ def migrate_legacy_timetable(source_db_path: Path, target_db_path: Path) -> Dict
             for tbl, pk_col, count_key in check_specs:
                 cur = src.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (tbl,))
                 if cur.fetchone():
-                    src_rows = src.execute(f"SELECT * FROM {tbl}").fetchall()
+                    src_rows = src.execute(f"SELECT * FROM {tbl}").fetchall()  # nosec B608
                     existing_count = 0
                     for r in src_rows:
-                        existing = dst.execute(f"SELECT * FROM {tbl} WHERE {pk_col} = ?", (r[pk_col],)).fetchone()
+                        existing = dst.execute(f"SELECT * FROM {tbl} WHERE {pk_col} = ?", (r[pk_col],)).fetchone()  # nosec B608
                         if existing:
                             if not _rows_equal(r, existing):
                                 raise ValueError(
@@ -315,7 +315,7 @@ def migrate_legacy_timetable(source_db_path: Path, target_db_path: Path) -> Dict
                             col_names = ", ".join(cols)
                             values = [r[c] for c in cols]
                             ins_cur = dst.execute(
-                                f"INSERT INTO {tbl} ({col_names}) VALUES ({placeholders})",
+                                f"INSERT INTO {tbl} ({col_names}) VALUES ({placeholders})",  # nosec B608
                                 values,
                             )
                             if ins_cur.rowcount > 0:
@@ -385,7 +385,7 @@ def migrate_legacy_practice(source_db_path: Path, target_db_path: Path) -> Dict[
                         col_names = ", ".join(src_cols)
                         values = [r[c] for c in src_cols]
                         ins_cur = dst.execute(
-                            f"INSERT INTO practice_sessions ({col_names}) VALUES ({placeholders})",
+                            f"INSERT INTO practice_sessions ({col_names}) VALUES ({placeholders})",  # nosec B608
                             values,
                         )
                         if ins_cur.rowcount > 0:

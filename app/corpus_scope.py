@@ -6,6 +6,7 @@ Blocks excluded pages from both training dataset producers and fine-tuning consu
 
 import hashlib
 import json
+import unicodedata
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -190,7 +191,11 @@ def validate_page_exclusion_manifest(
                     raise ValueError(f"Image path missing root directory name before data/evaluation: {img_path_str}")
 
                 project_name = segments[eval_idx - 1]
-                if project_name not in (root.name, root_resolved.name):
+                # APFS may preserve NFD in saved manifests while CLI/repo roots arrive in NFC.
+                if unicodedata.normalize("NFC", project_name) not in {
+                    unicodedata.normalize("NFC", root.name),
+                    unicodedata.normalize("NFC", root_resolved.name),
+                }:
                     raise ValueError(f"Foreign project name in legacy image path: {project_name}")
 
                 rel_suffix_segments = segments[eval_idx + 2:]

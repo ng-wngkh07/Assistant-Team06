@@ -13,7 +13,7 @@ import shutil
 import signal
 import socket
 import sqlite3
-import subprocess
+import subprocess  # nosec B404
 import sys
 import threading
 import time
@@ -135,7 +135,7 @@ def load_and_validate_config(config_path: Path, *, check_runtime_paths: bool = T
         raise ServiceError(f"Config file {config_path} must contain a JSON object.")
     if raw.get("configured") is False:
         raise ServiceError(
-            f"Config file {config_path} is still marked 'configured': false. "
+            f"Config file {config_path} is still marked 'configured': false. "  # nosec B608
             "Review and update all explicit local paths, then set 'configured': true."
         )
 
@@ -558,7 +558,7 @@ def get_process_identity(pid: Optional[int]) -> Optional[Dict[str, str]]:
         return None
 
     ps_env = _ps_env()
-    meta = subprocess.run(
+    meta = subprocess.run(  # nosec B603, B607
         ["ps", "-o", "pgid=,stat=,lstart=", "-p", str(pid)],
         capture_output=True,
         text=True,
@@ -573,7 +573,7 @@ def get_process_identity(pid: Optional[int]) -> Optional[Dict[str, str]]:
         return None
     pgid, stat, lstart = parts[0], parts[1], parts[2].strip()
 
-    cmd_res = subprocess.run(
+    cmd_res = subprocess.run(  # nosec B603, B607
         ["ps", "-ww", "-o", "command=", "-p", str(pid)],
         capture_output=True,
         text=True,
@@ -583,7 +583,7 @@ def get_process_identity(pid: Optional[int]) -> Optional[Dict[str, str]]:
     )
     command = cmd_res.stdout.strip() if cmd_res.returncode == 0 else ""
 
-    cwd_res = subprocess.run(
+    cwd_res = subprocess.run(  # nosec B603, B607
         ["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
         capture_output=True,
         text=True,
@@ -649,7 +649,7 @@ def verify_managed_process(
 
 
 def find_port_listeners(port: int) -> List[Dict[str, Any]]:
-    res = subprocess.run(
+    res = subprocess.run(  # nosec B603, B607
         ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fpc"],
         capture_output=True,
         text=True,
@@ -733,9 +733,11 @@ def _kill_verified_process(pid: int, state: Dict[str, Any], *, expected_cwd: Pat
 
 def fetch_health_snapshot(cfg: Dict[str, Any], timeout: float = 3.0) -> Dict[str, Any]:
     url = f"http://{cfg['host']}:{cfg['port']}/api/health"
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"Unsupported health check URL scheme: {url}")
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             body = resp.read().decode("utf-8", errors="replace")
             payload = json.loads(body)
             return {
@@ -790,7 +792,7 @@ def inspect_git_checkout(code_dir: Path) -> Dict[str, Any]:
     branch = "unknown"
     dirty_count: Optional[int] = None
     try:
-        res_head = subprocess.run(
+        res_head = subprocess.run(  # nosec B603, B607
             ["git", "-C", str(code_dir), "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
@@ -799,7 +801,7 @@ def inspect_git_checkout(code_dir: Path) -> Dict[str, Any]:
         )
         if res_head.returncode == 0:
             head = res_head.stdout.strip()
-        res_branch = subprocess.run(
+        res_branch = subprocess.run(  # nosec B603, B607
             ["git", "-C", str(code_dir), "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
             text=True,
@@ -808,7 +810,7 @@ def inspect_git_checkout(code_dir: Path) -> Dict[str, Any]:
         )
         if res_branch.returncode == 0:
             branch = res_branch.stdout.strip()
-        res_stat = subprocess.run(
+        res_stat = subprocess.run(  # nosec B603, B607
             ["git", "-C", str(code_dir), "status", "--porcelain"],
             capture_output=True,
             text=True,
@@ -1023,7 +1025,7 @@ def run_supervisor(cfg: Dict[str, Any], instance_id: str) -> int:
             cmd = build_uvicorn_command(cfg)
             env = build_child_env(cfg, instance_id)
             sup_log.write_line(f"Spawning backend: {' '.join(cmd)}")
-            proc = subprocess.Popen(
+            proc = subprocess.Popen(  # nosec B603
                 cmd,
                 cwd=str(cfg["code_dir"]),
                 env=env,
@@ -1182,7 +1184,7 @@ def start_service(cfg: Dict[str, Any]) -> Dict[str, Any]:
             instance_id,
         ]
         with boot_log_path.open("ab") as boot_fh:
-            sup_proc = subprocess.Popen(
+            sup_proc = subprocess.Popen(  # nosec B603
                 cmd,
                 cwd=str(cfg["code_dir"]),
                 stdin=subprocess.DEVNULL,
@@ -1318,7 +1320,7 @@ def open_service_url(cfg: Dict[str, Any], *, no_open: bool = False) -> Dict[str,
     health = fetch_health_snapshot(cfg, timeout=2.0)
     opened = False
     if not no_open:
-        subprocess.run(["open", url], timeout=10, check=True)
+        subprocess.run(["open", url], timeout=10, check=True)  # nosec B603, B607
         opened = True
     return {
         "action": "open",

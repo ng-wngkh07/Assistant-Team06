@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import re
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tempfile
 import threading
@@ -35,6 +35,62 @@ from app.text_cleaner import normalize_vietnamese_text, sanitize_for_prompt_cont
 
 logger = logging.getLogger(__name__)
 
+_NEGATION_PREFIX_TOKENS = frozenset({
+    "non", "un", "in", "im", "dis", "ir", "il", "anti",
+    "no", "not", "without", "never",
+    "không", "chưa", "phi", "vô", "bất", "ngoại",
+})
+_DASH_CLASS = "[-\u2013\u2014\u2212]"
+_DASH_CHARS = frozenset("-\u2013\u2014\u2212")
+
+
+def _find_bounded_span_matches(quote: str, span: str) -> List[re.Match]:
+    """Find span matches in quote respecting word/hyphen boundaries, ignoring standalone heading repeats when a single body match exists."""
+    clean = (span or "").strip()
+    if not clean or not quote:
+        return []
+    left_guard = r"(?<![\w\-])" if (clean[0].isalnum() or clean[0] == "_") else ""
+    right_guard = r"(?![\w\-])" if (clean[-1].isalnum() or clean[-1] == "_") else ""
+    tokens = clean.split()
+    pattern = r"\s+".join(
+        "".join(_DASH_CLASS if ch in _DASH_CHARS else re.escape(ch) for ch in tok)
+        for tok in tokens
+    )
+    regex = f"{left_guard}{pattern}{right_guard}" if (left_guard or right_guard) else re.escape(clean)
+    matches = list(re.finditer(regex, quote, flags=re.IGNORECASE))
+    if len(matches) <= 1:
+        return matches
+    body_matches = []
+    for m in matches:
+        line_start = quote.rfind("\n", 0, m.start()) + 1
+        line_end = quote.find("\n", m.end())
+        line_text = quote[line_start:(len(quote) if line_end == -1 else line_end)].strip()
+        if line_text != m.group(0).strip():
+            body_matches.append(m)
+    return body_matches if len(body_matches) == 1 else matches
+
+
+def _count_bounded_span_occurrences(quote: str, span: str) -> int:
+    """Count body occurrences of span respecting word/hyphen boundaries."""
+    return len(_find_bounded_span_matches(quote, span))
+
+
+def _is_negated_superstring(small: Tuple[str, ...], large: Tuple[str, ...]) -> bool:
+    """Return True when every occurrence of small inside large is directly preceded by a negation token."""
+    if not small or len(small) >= len(large):
+        return False
+    saw_match = False
+    for idx in range(len(large) - len(small) + 1):
+        if large[idx:idx + len(small)] != small:
+            continue
+        saw_match = True
+        prev = idx - 1
+        while prev >= 0 and large[prev] in {"-", "/", ":"}:
+            prev -= 1
+        if prev < 0 or large[prev] not in _NEGATION_PREFIX_TOKENS:
+            return False
+    return saw_match
+
 from app.material_storage import (
     IMAGE_EXTENSIONS,
     MAX_FILE_BYTES,
@@ -51,8 +107,14 @@ from app.question_validator import (
     evaluate_question_difficulty,
     parse_json_from_response,
 )
-from app.quiz_generator import build_quiz_prompt, fallback_generate_quiz
-from app.flashcard_generator import build_flashcards_prompt, fallback_generate_flashcards
+from app.quiz_generator import build_quiz_prompt, fallback_generate_quiz, quiz_response_schema
+from app.flashcard_generator import (
+    build_flashcards_prompt,
+    extract_focused_flashcard_context,
+    fallback_generate_flashcards,
+    flashcard_response_schema,
+    strip_source_review_banner,
+)
 
 
 class StudyMaterialManager:
@@ -147,7 +209,7 @@ class StudyMaterialManager:
                 "foreach ($line in $ocrResult.Lines) { Write-Output $line.Text }\n"
             )
             encoded = base64.b64encode(ps_code.encode("utf-16le")).decode("ascii")
-            proc = subprocess.run(
+            proc = subprocess.run(  # nosec B603, B607
                 ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
                 capture_output=True,
                 text=True,
@@ -196,7 +258,7 @@ class StudyMaterialManager:
         try:
             with Image.open(io.BytesIO(file_bytes)) as img:
                 width, height = img.size
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         has_detected_text = len(final_text) >= MIN_EXTRACT_CHARS
@@ -270,7 +332,7 @@ class StudyMaterialManager:
             if temp_file.exists():
                 try:
                     temp_file.unlink()
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
     def generate_materials_from_pages(
@@ -334,7 +396,7 @@ class StudyMaterialManager:
                     cost_q = token_counter_func(messages_q) if messages_q else 0
                     cost_f = token_counter_func(messages_f) if messages_f else 0
                     return max(cost_q, cost_f)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
             cost_q = (len(system_prompt.encode("utf-8")) + len(prompt_q.encode("utf-8")) + chat_overhead) if prompt_q else 0
             cost_f = (len(system_prompt.encode("utf-8")) + len(prompt_f.encode("utf-8")) + chat_overhead) if prompt_f else 0
@@ -450,28 +512,51 @@ class StudyMaterialManager:
             span = html.unescape(span).strip()
             if not 1 <= len(span) <= 80:
                 return None
-            if quote.casefold().count(span.casefold()) > 1:
+            if _count_bounded_span_occurrences(quote, span) > 1:
                 return "repeated_answer"
             distractors = item.get("distractors")
-            if (quote.count(span) == 1 and isinstance(distractors, list) and len(distractors) == 3
+            if (_count_bounded_span_occurrences(quote, span) == 1 and isinstance(distractors, list) and len(distractors) == 3
                     and all(isinstance(d, str) and d.strip() for d in distractors)):
                 options = [" ".join(html.unescape(d).split()).casefold() for d in [span, *distractors]]
                 if len(set(options)) != 4:
                     return "duplicate_options"
             return None
 
+        def _mlx_optional_kwargs(schema_obj: Dict[str, Any]) -> Dict[str, Any]:
+            extra: Dict[str, Any] = {}
+            if not is_mlx or active_client is None:
+                return extra
+            import inspect
+            try:
+                sig = inspect.signature(active_client.chat_complete)
+                has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                params = sig.parameters
+            except (TypeError, ValueError):
+                return extra
+            if has_varkw or "response_schema" in params:
+                extra["response_schema"] = schema_obj
+            if has_varkw or "context_prefix_marker" in params:
+                extra["context_prefix_marker"] = "\n<task>\n"
+            return extra
+
+        passage_evidence_ids = [f"Q{idx}" for idx in range(1, len(admitted_passages) + 1)]
+        quiz_schema = quiz_response_schema(difficulty, passage_evidence_ids)
+        flashcard_schema = flashcard_response_schema(passage_evidence_ids)
+
         if quiz_count > 0 and active_client is not None:
             try:
                 quiz_prompt = build_quiz_prompt(admitted_passages, count=min(3,quiz_count), difficulty=difficulty)
+                quiz_temp = 0.0 if (is_mlx and difficulty == "easy") else 0.2
                 for attempt in range(2):
                     with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
                         if is_mlx:
                             resp_content = active_client.chat_complete(
                                 messages=[{"role": "user", "content": quiz_prompt}],
                                 system_prompt=system_prompt,
-                                temperature=0.2,
+                                temperature=quiz_temp,
                                 max_tokens=1500,
                                 num_ctx=capacity,
+                                **_mlx_optional_kwargs(quiz_schema),
                             )
                         else:
                             resp_content = active_client.chat_complete(
@@ -504,7 +589,7 @@ class StudyMaterialManager:
                             "Không lặp lựa chọn dù khác chữ hoa hoặc khoảng trắng. "
                             "Vẫn chỉ dùng nguồn và cấu trúc JSON trên."
                         )
-                    if (attempt == 0 and repair_reasons and all(repair_reasons)
+                    if (attempt == 0 and any(repair_reasons)
                             and estimate_cost(admitted_passages) + len(repair_instruction.encode()) <= budget):
                         quiz_prompt += repair_instruction
                         continue
@@ -522,7 +607,8 @@ class StudyMaterialManager:
                     if not prompt_fits(next_prompt):
                         break
                     with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
-                        options = {'max_tokens':1500} if is_mlx else {'model':model_name,'num_predict':1500,'think':False}
+                        options = ({'max_tokens':1500, **_mlx_optional_kwargs(quiz_schema)}
+                                   if is_mlx else {'model':model_name,'num_predict':1500,'think':False})
                         raw = active_client.chat_complete(messages=[{'role':'user','content':next_prompt}],
                             system_prompt=system_prompt,temperature=0.2,num_ctx=capacity,**options)
                     if getattr(active_client,'last_done_reason',None) != 'stop':
@@ -544,25 +630,36 @@ class StudyMaterialManager:
         flashcard_raw_items = []
         if flashcard_count > 0 and active_client is not None:
             try:
-                for _ in range((flashcard_count + 4) // 5):
+                max_batches = 1 if flashcard_count <= 5 else (flashcard_count + 4) // 5
+                for _ in range(max_batches):
                     remaining = flashcard_count - len(flashcard_raw_items)
                     if remaining <= 0:
                         break
-                    flash_prompt = build_flashcards_prompt(admitted_passages,count=min(5,remaining))
+                    flash_prompt = build_flashcards_prompt(admitted_passages, count=min(8, remaining))
                     excluded = [str(item.get('answer') or item.get('back') or '')[:80]
-                                for item in flashcard_raw_items if isinstance(item,dict)]
+                                for item in flashcard_raw_items if isinstance(item, dict)]
                     if excluded:
-                        flash_prompt += '\nKhông lặp lại các cụm đã chọn: ' + json.dumps(excluded,ensure_ascii=False)
+                        flash_prompt += '\nKhông lặp lại các cụm đã chọn: ' + json.dumps(excluded, ensure_ascii=False)
                     if not prompt_fits(flash_prompt):
                         break
                     with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
-                        options = {'max_tokens':1500} if is_mlx else {'model':model_name,'num_predict':1500,'think':False}
-                        resp_flash = active_client.chat_complete(messages=[{'role':'user','content':flash_prompt}],
-                            system_prompt=system_prompt,temperature=0.2,num_ctx=capacity,**options)
-                    if getattr(active_client,'last_done_reason',None) != 'stop':
+                        options = (
+                            {'max_tokens': 1500, **_mlx_optional_kwargs(flashcard_schema)}
+                            if is_mlx else {'model': model_name, 'num_predict': 1500, 'think': False}
+                        )
+                        resp_flash = active_client.chat_complete(
+                            messages=[{'role': 'user', 'content': flash_prompt}],
+                            system_prompt=system_prompt,
+                            temperature=0.2,
+                            num_ctx=capacity,
+                            **options,
+                        )
+                    if getattr(active_client, 'last_done_reason', None) != 'stop':
                         break
                     flash_json = parse_json_from_response(resp_flash)
-                    if not flash_json or not isinstance(flash_json.get('flashcards'),list):
+                    if not flash_json or not isinstance(flash_json.get('flashcards'), list):
+                        break
+                    if not flash_json['flashcards']:
                         break
                     flashcard_raw_items.extend(flash_json['flashcards'])
             except (GPUBusyError, DialogueBusyError):
@@ -591,12 +688,10 @@ class StudyMaterialManager:
                     continue
                 span = html.unescape(span).strip()
                 if (not 2 <= len(span) <= 80 or len(span) >= len(quote) * 0.6
-                        or quote.count(span) != 1 or quote.casefold().count(span.casefold()) != 1):
+                        or _count_bounded_span_occurrences(quote, span) != 1):
                     continue
-                start = quote.index(span)
-                end = start + len(span)
-                if ((start and span[0].isalnum() and quote[start - 1].isalnum())
-                        or (end < len(quote) and span[-1].isalnum() and quote[end].isalnum())):
+                masked_quote = self._mask_answer_in_quote(quote, span)
+                if not masked_quote:
                     continue
                 if (not isinstance(distractors, list) or len(distractors) != 3
                         or any(not isinstance(d, str) or not d.strip() for d in distractors)):
@@ -607,8 +702,10 @@ class StudyMaterialManager:
                 options = [html.unescape(d).strip() for d in distractors]
                 answer_index = hashlib.sha256((quote + "\0" + span).encode()).digest()[0] % 4
                 options.insert(answer_index, span)
+                stripped_quote = strip_source_review_banner(masked_quote)
+                display_masked_quote = stripped_quote if "[…]" in stripped_quote else masked_quote
                 q = {**q, "question": "Chọn cụm điền vào trích đoạn:\n"
-                     + quote.replace(span, "[…]", 1) + "\nPhần […] là gì?",
+                     + display_masked_quote + "\nPhần […] là gì?",
                      "choices": dict(zip("ABCD", options)), "answer": "ABCD"[answer_index]}
             q_text = q.get("question")
             if not isinstance(q_text, str) or not q_text.strip():
@@ -678,6 +775,7 @@ class StudyMaterialManager:
             if any(
                 small and len(small) < len(large)
                 and any(large[i:i + len(small)] == small for i in range(len(large) - len(small) + 1))
+                and not _is_negated_superstring(small, large)
                 for small in option_words for large in option_words
             ):
                 continue
@@ -709,6 +807,9 @@ class StudyMaterialManager:
         # selected difficulty. Run the existing independent review contract.
         if active_client is not None and valid_quiz:
             from app.practice import PracticeService, PracticeGenerationError
+            from app.practice_adapter import SYSTEM_PROMPT as PRACTICE_SYSTEM_PROMPT
+            review_system_prompt = PRACTICE_SYSTEM_PROMPT if is_mlx else system_prompt
+
             def review_chat(prompt, model, max_tokens, timeout=None, response_schema=None):
                 if not prompt_fits(prompt, max_tokens):
                     raise PracticeGenerationError('Complete source and review do not fit the context')
@@ -719,32 +820,40 @@ class StudyMaterialManager:
                     if timeout is not None and timeout > 0:
                         options['timeout'] = timeout
                     raw = active_client.chat_complete(messages=[{'role':'user','content':prompt}],
-                        system_prompt=system_prompt,temperature=0.0,num_ctx=capacity,**options)
+                        system_prompt=review_system_prompt,temperature=0.0,num_ctx=capacity,**options)
                 if getattr(active_client,'last_done_reason',None) != 'stop':
                     raise PracticeGenerationError('Review was interrupted')
                 return raw
             reviewer = PracticeService(None,None)
             reviewer._chat_complete = review_chat
             reviewed = []
-            for start in range(len(valid_quiz)):
-                batch = valid_quiz[start:start+1]
+            batch_step = 3 if is_mlx else 1
+            start = 0
+            while start < len(valid_quiz):
+                batch = valid_quiz[start:start + batch_step]
                 passages_for_review = {}
                 proposals = []
-                for index, item in enumerate(batch,1):
+                for index, item in enumerate(batch, 1):
                     full_source = next(text for text in page_chunks[item['page_num']]
                                        if self._quote_matches_chunk(item['evidence_quote'], text))
                     passages_for_review[index] = {'safe_text': sanitize_for_prompt_context(full_source)}
-                    proposals.append({**item,'source':{'chunk_id':index,'snippet':item['evidence_quote']}})
+                    proposals.append({**item, 'source': {'chunk_id': index, 'snippet': item['evidence_quote']}})
                 try:
-                    accepted = reviewer._verify_questions(proposals,passages_for_review,model_name,difficulty=difficulty)
-                except (GPUBusyError,DialogueBusyError):
+                    accepted = reviewer._verify_questions(proposals, passages_for_review, model_name, difficulty=difficulty)
+                except PracticeGenerationError as exc:
+                    if len(batch) > 1 and "do not fit the context" in str(exc):
+                        batch_step = 1
+                        continue
                     raise
-                except (RuntimeError,TimeoutError,subprocess.TimeoutExpired) as exc:
+                except (GPUBusyError, DialogueBusyError):
+                    raise
+                except (RuntimeError, TimeoutError, subprocess.TimeoutExpired) as exc:
                     raise StudyMaterialError(f'Không hoàn thành được bước kiểm định câu hỏi: {exc}') from exc
                 for item in accepted:
                     if item.get('format') == 'source_cloze' and evaluate_question_difficulty(item) != difficulty:
                         continue
-                    reviewed.append({**{k:v for k,v in item.items() if k != 'source'},'difficulty':difficulty})
+                    reviewed.append({**{k: v for k, v in item.items() if k != 'source'}, 'difficulty': difficulty})
+                start += len(batch)
             valid_quiz = reviewed
 
         if quiz_count <= 0:
@@ -813,7 +922,8 @@ class StudyMaterialManager:
                 continue
             if any(item['back'].casefold() == answer_text.casefold() for item in valid_flashcards):
                 continue
-            source_question = f"Điền phần còn thiếu trong trích đoạn:\n{masked}\nPhần […] là gì?"
+            focused_masked = extract_focused_flashcard_context(masked)
+            source_question = f"Điền phần còn thiếu trong trích đoạn:\n{focused_masked}\nPhần […] là gì?"
             valid_flashcards.append({
                 "id": f.get("id") if isinstance(f.get("id"), int) else (len(valid_flashcards) + 1),
                 "front": source_question,
@@ -913,7 +1023,7 @@ class StudyMaterialManager:
             finally:
                 try:
                     fcntl.flock(lock_file, fcntl.LOCK_UN)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
     def _allocate_source_filename(
@@ -1185,7 +1295,7 @@ class StudyMaterialManager:
                 if newly_created and dest_path.exists():
                     try:
                         dest_path.unlink()
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
                 self.evict_raw_file(safe_name, filename, getattr(extracted_result, "filename", None))
                 raise
@@ -1193,7 +1303,7 @@ class StudyMaterialManager:
                 if newly_created and dest_path.exists():
                     try:
                         dest_path.unlink()
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
                 self.evict_raw_file(safe_name, filename, getattr(extracted_result, "filename", None))
                 raise
@@ -1201,7 +1311,7 @@ class StudyMaterialManager:
                 if newly_created and dest_path.exists():
                     try:
                         dest_path.unlink()
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
                 self.evict_raw_file(safe_name, filename, getattr(extracted_result, "filename", None))
                 logger.warning(f"Indexing uploaded file '{safe_name}' into knowledge_base.db failed: {e}")
@@ -1498,17 +1608,41 @@ class StudyMaterialManager:
 
     @staticmethod
     def _mask_answer_in_quote(ev_quote: str, answer_text: str) -> Optional[str]:
-        """Replace answer span inside ev_quote even when soft PDF linebreaks split words."""
+        """Replace answer span inside ev_quote even when soft PDF linebreaks or dashes vary."""
         if not ev_quote or not answer_text:
             return None
-        if answer_text in ev_quote:
+        raw_tokens = answer_text.split()
+        if not raw_tokens:
+            return None
+        dash_class = "[-\u2013\u2014\u2212]"
+        dash_chars = frozenset("-\u2013\u2014\u2212")
+        flexible_tokens = [
+            "".join(dash_class if ch in dash_chars else re.escape(ch) for ch in tok)
+            for tok in raw_tokens
+        ]
+        pattern = r"\s+".join(flexible_tokens)
+        left_guard = r"(?<![\w\-])" if (answer_text[0].isalnum() or answer_text[0] == "_") else ""
+        right_guard = r"(?![\w\-])" if (answer_text[-1].isalnum() or answer_text[-1] == "_") else ""
+        guarded_pattern = f"{left_guard}{pattern}{right_guard}"
+
+        body_matches = _find_bounded_span_matches(ev_quote, answer_text)
+        if len(body_matches) == 1:
+            m_only = body_matches[0]
+            if m_only.group(0).strip() != ev_quote.strip():
+                return ev_quote[:m_only.start()] + "[…]" + ev_quote[m_only.end():]
+        match = None
+        if left_guard or right_guard:
+            match = re.search(guarded_pattern, ev_quote)
+            if not match:
+                match = re.search(guarded_pattern, ev_quote, flags=re.IGNORECASE)
+        if not match and answer_text in ev_quote:
             if answer_text == ev_quote.strip():
                 return None
             return ev_quote.replace(answer_text, "[…]", 1)
-        tokens = [re.escape(tok) for tok in answer_text.split()]
-        if not tokens:
-            return None
-        match = re.search(r"\s+".join(tokens), ev_quote)
+        if not match:
+            match = re.search(pattern, ev_quote)
+        if not match:
+            match = re.search(pattern, ev_quote, flags=re.IGNORECASE)
         if not match or match.group(0).strip() == ev_quote.strip():
             return None
         return ev_quote[:match.start()] + "[…]" + ev_quote[match.end():]

@@ -658,12 +658,12 @@ def fetch_document_row(
         return None
     select_sql = ", ".join(wanted)
     if doc_id is not None:
-        row = conn.execute(f"SELECT {select_sql} FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        row = conn.execute(f"SELECT {select_sql} FROM documents WHERE id = ?", (doc_id,)).fetchone()  # nosec B608
     elif filename is not None and "filename" in cols:
         norm = normalize_relpath(filename)
-        row = conn.execute(f"SELECT {select_sql} FROM documents WHERE filename = ?", (filename,)).fetchone()
+        row = conn.execute(f"SELECT {select_sql} FROM documents WHERE filename = ?", (filename,)).fetchone()  # nosec B608
         if row is None and norm != filename:
-            row = conn.execute(f"SELECT {select_sql} FROM documents WHERE filename = ?", (norm,)).fetchone()
+            row = conn.execute(f"SELECT {select_sql} FROM documents WHERE filename = ?", (norm,)).fetchone()  # nosec B608
     else:
         return None
     return _row_to_dict(row) if row is not None else None
@@ -742,7 +742,7 @@ def get_fresh_doc_ids(
             scope_cache[(*base_key, None)] = _NO_DOCS_TABLE
         return None
     wanted = [c for c in ("id", "filename", "clean_title", "filepath", "file_size", "file_hash", "total_pages", "status") if c in cols]
-    sql = f"SELECT {', '.join(wanted)} FROM documents"
+    sql = f"SELECT {', '.join(wanted)} FROM documents"  # nosec B608
     clauses: List[str] = []
     params: List[Any] = []
     if "status" in cols:

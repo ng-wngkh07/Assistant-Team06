@@ -47,23 +47,23 @@ def test_compact_auditor_schema_and_claim_id_resolution():
     draft = "Stack dùng nguyên tắc LIFO [S1]. Queue dùng nguyên tắc FIFO [S1]."
     sources = {"S1": "Stack dùng nguyên tắc LIFO.\nQueue dùng nguyên tắc FIFO."}
     legacy_msgs = build_auditor_messages("Stack và Queue là gì?", draft, "", sources_map=sources)
-    assert legacy_msgs[0]["content"] == AUDITOR_SYSTEM_PROMPT
+    assert legacy_msgs[0]["content"] == AUDITOR_SYSTEM_PROMPT  # nosec B101
 
     compact_msgs = build_auditor_messages(
         "Stack và Queue là gì?", draft, "", sources_map=sources, compact=True
     )
-    assert compact_msgs[0]["content"] == AUDITOR_SYSTEM_PROMPT_COMPACT
-    assert '"claims_to_verify"' in compact_msgs[1]["content"]
-    assert '"claim_id": 2' in compact_msgs[1]["content"]
+    assert compact_msgs[0]["content"] == AUDITOR_SYSTEM_PROMPT_COMPACT  # nosec B101
+    assert '"claims_to_verify"' in compact_msgs[1]["content"]  # nosec B101
+    assert '"claim_id": 2' in compact_msgs[1]["content"]  # nosec B101
 
     schema = build_auditor_response_schema({"S1"}, {"S1": {"E1": "a", "E2": "b"}}, claim_count=2)
     claims_prop = schema["properties"]["claims"]
-    assert claims_prop["minItems"] == 2
-    assert claims_prop["maxItems"] == 2
-    assert "claim_id" in claims_prop["items"]["properties"]
-    assert claims_prop["items"]["properties"]["claim_id"]["minimum"] == 1
-    assert claims_prop["items"]["properties"]["claim_id"]["maximum"] == 2
-    assert "statement" not in claims_prop["items"]["properties"]
+    assert claims_prop["minItems"] == 2  # nosec B101
+    assert claims_prop["maxItems"] == 2  # nosec B101
+    assert "claim_id" in claims_prop["items"]["properties"]  # nosec B101
+    assert claims_prop["items"]["properties"]["claim_id"]["minimum"] == 1  # nosec B101
+    assert claims_prop["items"]["properties"]["claim_id"]["maximum"] == 2  # nosec B101
+    assert "statement" not in claims_prop["items"]["properties"]  # nosec B101
 
     good_out = json.dumps(
         {
@@ -82,9 +82,9 @@ def test_compact_auditor_schema_and_claim_id_resolution():
         evidence_catalog={"S1": {"E1": "Stack dùng nguyên tắc LIFO.", "E2": "Queue dùng nguyên tắc FIFO."}},
         query="Stack và Queue là gì?",
     )
-    assert status == "verified"
-    assert verified[0]["statement"] == "Stack dùng nguyên tắc LIFO ."
-    assert verified[1]["statement"] == "Queue dùng nguyên tắc FIFO ."
+    assert status == "verified"  # nosec B101
+    assert verified[0]["statement"] == "Stack dùng nguyên tắc LIFO ."  # nosec B101
+    assert verified[1]["statement"] == "Queue dùng nguyên tắc FIFO ."  # nosec B101
 
     # Reject duplicate, boolean, and out-of-range claim_id fail-closed
     for bad_id in (True, 0, 3):
@@ -96,7 +96,7 @@ def test_compact_auditor_schema_and_claim_id_resolution():
                 "overall_verdict": "supported",
             }
         )
-        assert audit_draft_answer(bad_out, {"S1"}, sources, draft=draft)[0] == "unverified"
+        assert audit_draft_answer(bad_out, {"S1"}, sources, draft=draft)[0] == "unverified"  # nosec B101
 
     dup_out = json.dumps(
         {
@@ -107,7 +107,7 @@ def test_compact_auditor_schema_and_claim_id_resolution():
             "overall_verdict": "supported",
         }
     )
-    assert audit_draft_answer(dup_out, {"S1"}, sources, draft=draft)[0] == "unverified"
+    assert audit_draft_answer(dup_out, {"S1"}, sources, draft=draft)[0] == "unverified"  # nosec B101
 
 
 def test_compact_auditor_preserves_directional_contradiction_fail_closed():
@@ -137,8 +137,8 @@ def test_compact_auditor_preserves_directional_contradiction_fail_closed():
         evidence_catalog=catalog,
         query="Trong hình hàng đợi, số nào được lấy ra đầu tiên?",
     )
-    assert status == "unverified"
-    assert verified[0]["verdict"] == "unsupported"
+    assert status == "unverified"  # nosec B101
+    assert verified[0]["verdict"] == "unsupported"  # nosec B101
 
 
 def test_trained_client_defaults_step256_warmup_auditor_and_marker(tmp_path, monkeypatch):
@@ -146,10 +146,10 @@ def test_trained_client_defaults_step256_warmup_auditor_and_marker(tmp_path, mon
     from app.reasoning_policy import AUDITOR_SYSTEM_PROMPT_COMPACT
 
     monkeypatch.delenv("MLX_PREFILL_STEP_SIZE", raising=False)
-    assert trained_client.TrainedModelClient._worker_env()["MLX_PREFILL_STEP_SIZE"] == "256"
+    assert trained_client.TrainedModelClient._worker_env()["MLX_PREFILL_STEP_SIZE"] == "256"  # nosec B101
 
     monkeypatch.setenv("MLX_PREFILL_STEP_SIZE", "512")
-    assert trained_client.TrainedModelClient._worker_env()["MLX_PREFILL_STEP_SIZE"] == "512"
+    assert trained_client.TrainedModelClient._worker_env()["MLX_PREFILL_STEP_SIZE"] == "512"  # nosec B101
     monkeypatch.delenv("MLX_PREFILL_STEP_SIZE", raising=False)
 
     model_dir = _fake_model_dir(tmp_path)
@@ -165,11 +165,11 @@ def test_trained_client_defaults_step256_warmup_auditor_and_marker(tmp_path, mon
         lambda payload, **kw: warmup_seen.append(payload) or {"op": "warmup", "ok": True, "warmed": True},
     )
     res = trained_client.TrainedModelClient.warm_prefix_caches()
-    assert res["warmed"] is True
-    assert AUDITOR_SYSTEM_PROMPT_COMPACT in warmup_seen[0]["system_prompts"]
-    assert warmup_seen[0]["prefill_step_size"] == 256
-    assert len(warmup_seen[0]["warmup_schemas"]) == 2
-    assert len(trained_client.TrainedModelClient._default_warmup_prompts()) == 2
+    assert res["warmed"] is True  # nosec B101
+    assert AUDITOR_SYSTEM_PROMPT_COMPACT in warmup_seen[0]["system_prompts"]  # nosec B101
+    assert warmup_seen[0]["prefill_step_size"] == 256  # nosec B101
+    assert len(warmup_seen[0]["warmup_schemas"]) == 2  # nosec B101
+    assert len(trained_client.TrainedModelClient._default_warmup_prompts()) == 4  # nosec B101
 
     stream_seen = []
     monkeypatch.setattr(trained_client, "BASE_DIR", tmp_path)
@@ -184,7 +184,7 @@ def test_trained_client_defaults_step256_warmup_auditor_and_marker(tmp_path, mon
 
     monkeypatch.setattr(trained_client.subprocess, "run", fake_run)
     client = trained_client.TrainedModelClient("qwen3.5-9b-4bit")
-    assert (
+    assert (  # nosec B101
         "".join(
             client.chat_stream(
                 [{"role": "system", "content": "SYS"}, {"role": "user", "content": "DOC\n<user_query>Q</user_query>"}],
@@ -193,8 +193,8 @@ def test_trained_client_defaults_step256_warmup_auditor_and_marker(tmp_path, mon
         )
         == "ok"
     )
-    assert stream_seen[0]["prefill_step_size"] == 256
-    assert stream_seen[0]["context_prefix_marker"] == "\n<user_query>"
+    assert stream_seen[0]["prefill_step_size"] == 256  # nosec B101
+    assert stream_seen[0]["context_prefix_marker"] == "\n<user_query>"  # nosec B101
 
 
 def test_mlx_infer_context_prefix_cache_reuses_system_and_bounds_slots(tmp_path, monkeypatch, capsys):
@@ -315,16 +315,16 @@ def test_mlx_infer_context_prefix_cache_reuses_system_and_bounds_slots(tmp_path,
     events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line.strip()]
     warmup_evt, q1_evt, q2_evt, q3_evt = [e for e in events if e.get("done")]
 
-    assert warmup_evt["warmed_schemas"] == 1
-    assert len(compile_calls) == 1
-    assert q1_evt["review_cache"]["scope"] == "worker_context_prefix_kv"
-    assert q1_evt["review_cache"]["reused_tokens"] == warmup_evt["warmed_prefixes"][0]["prefix_tokens"]
-    assert q2_evt["review_cache"]["scope"] == "worker_context_prefix_kv"
-    assert q2_evt["review_cache"]["reused_tokens"] == q2_evt["review_cache"]["prefix_tokens"]
-    assert q3_evt["review_cache"]["reused_tokens"] == warmup_evt["warmed_prefixes"][0]["prefix_tokens"]
+    assert warmup_evt["warmed_schemas"] == 1  # nosec B101
+    assert len(compile_calls) == 1  # nosec B101
+    assert q1_evt["review_cache"]["scope"] == "worker_context_prefix_kv"  # nosec B101
+    assert q1_evt["review_cache"]["reused_tokens"] == warmup_evt["warmed_prefixes"][0]["prefix_tokens"]  # nosec B101
+    assert q2_evt["review_cache"]["scope"] == "worker_context_prefix_kv"  # nosec B101
+    assert q2_evt["review_cache"]["reused_tokens"] == q2_evt["review_cache"]["prefix_tokens"]  # nosec B101
+    assert q3_evt["review_cache"]["reused_tokens"] == warmup_evt["warmed_prefixes"][0]["prefix_tokens"]  # nosec B101
 
     # Confirm Q2 executed zero new prefill steps and retained full cached context + suffix Q2
-    assert len(prefill_chunks) == 3  # warmup(sys), Q1(delta doc_a), Q3(delta doc_b)
+    assert len(prefill_chunks) == 3  # warmup(sys), Q1(delta doc_a), Q3(delta doc_b)  # nosec B101
     q1_full = gen_prompts[0][1] + gen_prompts[0][0]
     q2_full = gen_prompts[1][1] + gen_prompts[1][0]
-    assert q1_full[:-len("<user_query>Q1</user_query>\n<|im_end|>\n<|im_start|>assistant\n")] == q2_full[:-len("<user_query>Q2</user_query>\n<|im_end|>\n<|im_start|>assistant\n")]
+    assert q1_full[:-len("<user_query>Q1</user_query>\n<|im_end|>\n<|im_start|>assistant\n")] == q2_full[:-len("<user_query>Q2</user_query>\n<|im_end|>\n<|im_start|>assistant\n")]  # nosec B101

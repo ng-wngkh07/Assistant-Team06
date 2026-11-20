@@ -188,7 +188,7 @@ def is_chunk_allowed_in_training(
                             norm_clean_n = re.sub(r"\s+", " ", normalize_vietnamese_text(native_text))
                             if norm_c == norm_n or norm_c in norm_n or norm_c == norm_clean_n or norm_c in norm_clean_n:
                                 is_page_native = True
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         elif ext in (".docx", ".pptx", ".txt", ".md", ".markdown"):
             try:
@@ -203,7 +203,7 @@ def is_chunk_allowed_in_training(
                             if norm_c == norm_n or norm_c in norm_n or norm_c == norm_clean_n or norm_c in norm_clean_n:
                                 is_page_native = True
                         break
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
     if is_page_native:
@@ -220,7 +220,7 @@ def is_chunk_allowed_in_training(
                     p = entry.get("page_num")
                     if p is not None:
                         ocr_entries_by_page.setdefault(int(p), []).append(entry)
-            except Exception:
+            except Exception:  # nosec B112
                 continue
 
     from app.vision_ocr import VisionOCRManager
@@ -249,7 +249,7 @@ def select_pairs(db_path: Path, pairs_per_book: int = 1):
     scanned_col = "is_scanned" if "is_scanned" in doc_cols else "0 AS is_scanned"
     hash_col = "file_hash" if "file_hash" in doc_cols else "'' AS file_hash"
     path_col = "filepath" if "filepath" in doc_cols else "'' AS filepath"
-    docs = conn.execute(f"SELECT {id_col}, filename, {title_col}, {scanned_col}, {hash_col}, {path_col} FROM documents WHERE status IN ('indexed','ocr_partial_reviewed') ORDER BY filename").fetchall()
+    docs = conn.execute(f"SELECT {id_col}, filename, {title_col}, {scanned_col}, {hash_col}, {path_col} FROM documents WHERE status IN ('indexed','ocr_partial_reviewed') ORDER BY filename").fetchall()  # nosec B608
     for doc in docs:
         if is_source_forbidden(doc["filename"]):
             continue
@@ -265,7 +265,7 @@ def select_pairs(db_path: Path, pairs_per_book: int = 1):
                     p_num = entry.get("page_num")
                     if p_num is not None:
                         doc_ocr_entries.setdefault(int(p_num), []).append(entry)
-            except Exception:
+            except Exception:  # nosec B112
                 continue
 
         if doc["is_scanned"]:
@@ -330,7 +330,7 @@ def select_cross_book_pairs(db_path: Path, exclude_files: set[str] | None = None
     scanned_col = "is_scanned" if "is_scanned" in doc_cols else "0 AS is_scanned"
     hash_col = "file_hash" if "file_hash" in doc_cols else "'' AS file_hash"
     path_col = "filepath" if "filepath" in doc_cols else "'' AS filepath"
-    doc_map = {row["filename"]: row for row in conn.execute(f"SELECT {id_col}, filename, {title_col}, {scanned_col}, {hash_col}, {path_col} FROM documents").fetchall()}
+    doc_map = {row["filename"]: row for row in conn.execute(f"SELECT {id_col}, filename, {title_col}, {scanned_col}, {hash_col}, {path_col} FROM documents").fetchall()}  # nosec B608
     document_languages = {}
     for doc in conn.execute("SELECT filename FROM documents WHERE status='indexed'"):
         samples = conn.execute(

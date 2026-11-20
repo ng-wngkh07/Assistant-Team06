@@ -2,6 +2,7 @@
 import hashlib
 import json
 import sqlite3
+import unicodedata
 from collections import Counter
 from pathlib import Path
 import numpy as np
@@ -123,7 +124,13 @@ def audit_corpus(root: Path, dimensions: int = 1024) -> dict:
                         failures.append({'kind': 'review_not_indexed', 'file': name, 'page': page})
                     if review_path:
                         p = Path(review_path)
-                        if latest and latest[0].resolve() != p.resolve():
+                        if not p.is_file():
+                            for form in ('NFC', 'NFD'):
+                                cand = Path(unicodedata.normalize(form, str(review_path)))
+                                if cand.is_file():
+                                    p = cand
+                                    break
+                        if latest and unicodedata.normalize('NFC', str(latest[0].resolve())) != unicodedata.normalize('NFC', str(p.resolve())):
                             failures.append({'kind': 'superseded_page_review', 'file': name, 'page': page})
                         if not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest() != record['review_sha256']:
                             failures.append({'kind': 'page_review_changed', 'file': name, 'page': page})

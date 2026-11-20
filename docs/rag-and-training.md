@@ -2,7 +2,7 @@
 
 ## What the current model does
 
-The application combines the pretrained Qwen3.5 9B model with retrieval-augmented generation (RAG). The selected base has no accepted active fine-tuned adapter. Documents in the library supply answer evidence; adding a document does not itself train model weights.
+The application combines the pretrained Qwen3.5 9B model with retrieval-augmented generation (RAG). The selected base currently has no accepted active fine-tuned adapter across its sequential single-function registries (`qa-9b.json`, `practice-9b.json`, and `planner-9b.json` remain fail-closed `HOLD`). Documents in the library supply answer evidence; adding a document does not itself train model weights.
 
 Retrieval combines SQLite FTS5/BM25 keyword results and compatible dense embeddings through weighted reciprocal-rank fusion (RRF). Both legs have weight 0.5 and the RRF smoothing constant is 60. Ordinary retrieval defaults to six results after considering a larger candidate pool. Broad questions can use ten results, capped at twelve; bounded neighboring context and the final 8192-token prompt budget further affect what reaches the model. There is no learned cross-encoder reranker in this pipeline.
 
@@ -46,6 +46,6 @@ A stronger teacher can generate candidate questions and answer examples from per
 
 Split documents and versions before generation; retain a genuinely untouched evaluation set. Review source identity, exact evidence, conditions, one correct alternative, ambiguity, duplication and personal data before admitting examples. Mix accepted original examples with accepted synthetic examples. A student's self-generated answer or a teacher's approval is not sufficient source proof. Compare the unchanged base plus RAG against any proposed adapter plus RAG on the same held-out tasks, including unsupported questions and disclosure checks.
 
-A reviewed offline question/flashcard bank, authored templates and a few carefully selected examples are simpler alternatives before training. They can reduce repeated online generation while preserving source review. Fine-tuning does not add parameters or automatically improve decoded tokens per second; any reduction in prompt size or failed retries must be measured separately from model throughput.
+A reviewed offline question/flashcard bank, authored templates and a few carefully selected examples are simpler alternatives before training. They can reduce repeated online generation while preserving source review. Fine-tuning does not add parameters or automatically improve decoded tokens per second; any reduction in prompt size or failed retries must be measured separately from model throughput. Training separate single-function adapters sequentially (`qa`, `practice`, `planner`) prevents task interference across prompts and schemas while sharing one resident base via `lora_banks` (`app/mlx_infer.py`), yet every function still requires independent held-out quality, safety, and latency acceptance before activation.
 
 Current execution remains local. Approval to send implementation code and nonsecret diagnostics to an external coding assistant does not authorize uploading private documents for teacher generation, starting training or activating an adapter. Those actions need their own permitted-data scope and acceptance gates.

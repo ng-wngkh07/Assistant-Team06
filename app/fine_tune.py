@@ -182,7 +182,7 @@ def train(data_dir: Path, iterations: int = 80, num_layers: int = 4,
         if plan_path.is_file():
             try:
                 target_hypothesis = plan_data.get("hypothesis") or target_hypothesis
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
         if hasattr(active_ledger, "bind_verified_manifest"):

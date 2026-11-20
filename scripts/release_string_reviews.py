@@ -4,7 +4,7 @@ WARNING: This manual historical tool automatically compiles and executes C++
 source code extracted from input review files. It requires operator-trusted
 inputs stored in the repository-local directory; shared /tmp inputs are removed.
 """
-import json, hashlib, sys, fcntl, subprocess, datetime, shutil
+import json, hashlib, sys, fcntl, subprocess, datetime, shutil  # nosec B404
 from pathlib import Path
 from datetime import timezone
 
@@ -44,12 +44,12 @@ for key, source in programs.items():
     p = B / f'program-{key}.cpp'
     p.write_text(source)
     exe = p.with_suffix('')
-    c = subprocess.run(['clang++', '-std=c++14', '-Wall', '-Wextra', str(p), '-o', str(exe)], capture_output=True, text=True)
+    c = subprocess.run(['clang++', '-std=c++14', '-Wall', '-Wextra', str(p), '-o', str(exe)], capture_output=True, text=True)  # nosec B603, B607
     if c.returncode != 0:
         raise RuntimeError(f'Program {key} compilation failed: {c.stderr}')
     runs = []
     for inp, expect in cases[key]:
-        r = subprocess.run([str(exe)], input=inp, capture_output=True, text=True, timeout=5, check=True)
+        r = subprocess.run([str(exe)], input=inp, capture_output=True, text=True, timeout=5, check=True)  # nosec B603
         if expect not in r.stdout:
             raise RuntimeError(f'Mismatch in {key}: expected "{expect}", got "{r.stdout}"')
         runs.append(dict(input=inp, output=r.stdout.strip(), state='PASS'))

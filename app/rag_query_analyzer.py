@@ -44,7 +44,7 @@ def is_broad_query(query: str) -> bool:
         "các nguyên lý", "những nguyên lý",
         "các đặc điểm", "những đặc điểm",
         "các phương pháp", "những phương pháp",
-        "so sánh", "phân loại",
+        "so sánh", "phân biệt", "phân loại",
         "các yếu tố", "những yếu tố", "các kiểu", "những kiểu", "các giai đoạn",
         "ảnh hưởng như thế nào đến", "tác động qua lại",
         "mối liên hệ giữa", "mối quan hệ giữa", "tương quan giữa",
@@ -137,6 +137,12 @@ COMPARE_SCOPE_SPLIT_RE = (
 )
 
 
+def _strip_parenthetical_gloss(concept: str) -> str:
+    """Drop trailing/inline parenthetical glosses (4+ chars after space) while preserving short markers or f(x)."""
+    stripped = re.sub(r"\s+\([^()]{4,}\)", "", concept).strip()
+    return stripped if len(stripped) >= 2 else concept
+
+
 def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Optional[Tuple[str, str]]:
     """Extract two distinct concepts for compare mode, or None if not an explicit compare intent."""
     if not is_legacy_compare and not re.search(
@@ -148,8 +154,17 @@ def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Opt
 
     q = query.strip()
     q = re.split(COMPARE_SCOPE_SPLIT_RE, q, maxsplit=1, flags=re.I)[0].strip()
+    # Strip trailing pitfall/purpose clauses (e.g., "để tránh ngộ nhận...", "cùng bẫy...") before binary splitting
+    q = re.sub(
+        r"\s+(?:để\s+tránh|nhằm\s+tránh|tránh\s+ngộ\s+nhận|tránh\s+nhầm|tránh\s+đánh\s+đồng|(?:cùng|và|kèm)\s+bẫy)\b.*$",
+        "",
+        q,
+        flags=re.I,
+    ).strip()
     prefix_pattern = (
-        r"^(?:hãy\s+)?(?:(?:so\s+sánh|đối\s+chiếu|phân\s+biệt)"
+        r"^(?:hãy\s+|vui\s+lòng\s+)?"
+        r"(?:(?:trình\s+bày|giải\s+thích|nêu|mô\s+tả|định\s+nghĩa|cho\s+biết|phân\s+tích)\s+(?:và\s+)?)?"
+        r"(?:(?:so\s+sánh|đối\s+chiếu|phân\s+biệt)"
         r"(?:\s+(?:ngắn\s+gọn|nhanh|chi\s+tiết|cụ\s+thể|tóm\s+tắt))?"
         r"(?:\s+(?:(?:sự|những|các)\s+)?(?:điểm\s+)?(?:giống(?:\s+nhau)?(?:\s+và\s+khác(?:\s+nhau)?)?|khác\s+nhau|khác\s+biệt))?"
         r"|giải\s+thích\s+(?:sự|điểm)\s+khác\s+(?:nhau|biệt)"
@@ -158,8 +173,14 @@ def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Opt
     q_cleaned = re.sub(prefix_pattern, "", q, flags=re.I).strip()
     if q_cleaned.lower().startswith("giữa "):
         q_cleaned = q_cleaned[5:].strip()
+    q_cleaned = re.sub(r"^khái\s+niệm\s+", "", q_cleaned, flags=re.I).strip()
 
-    suffix_pattern = r"\s+(?:khác\s+nhau(?:\s+thế\s+nào|\s+như\s+thế\s+nào|\s+ra\s+sao)?|khác\s+gì(?:\s+nhau)?|có\s+gì\s+khác\s+nhau|như\s+thế\s+nào|ra\s+sao)\??$"
+    suffix_pattern = (
+        r"\s+(?:(?:giống(?:\s+nhau)?\s+và\s+)?khác\s+nhau"
+        r"(?:\s+(?:ở|về)\s+(?:điểm|chỗ|mặt)(?:\s+\w+){0,4})?"
+        r"(?:\s+(?:thế\s+nào|như\s+thế\s+nào|ra\s+sao|gì|nào))?"
+        r"|khác\s+gì(?:\s+nhau)?|có\s+gì\s+khác\s+nhau|như\s+thế\s+nào|ra\s+sao|là\s+gì)\??$"
+    )
     q_cleaned = re.sub(suffix_pattern, "", q_cleaned, flags=re.I).strip()
 
     split_patterns = [
@@ -173,10 +194,13 @@ def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Opt
     for pat in split_patterns:
         parts = re.split(pat, q_cleaned, maxsplit=1, flags=re.I)
         if len(parts) == 2:
-            c1 = parts[0].strip()
-            c2 = parts[1].strip()
-            c1 = re.sub(r"[?,.]+$", "", c1).strip()
-            c2 = re.sub(r"[?,.]+$", "", c2).strip()
+            c1 = re.sub(r"[?,.]+$", "", parts[0].strip()).strip()
+            c2 = re.sub(r"[?,.]+$", "", parts[1].strip()).strip()
+            c1 = _strip_parenthetical_gloss(c1)
+            c2 = _strip_parenthetical_gloss(c2)
+            # 3+ item comparisons containing commas ("A, B và C") are broad syntheses, not binary 2-concept splits
+            if "," in c1 or "," in c2:
+                return None
             if c1 and c2 and (c1.casefold() != c2.casefold() or c1 != c2):
                 return (c1, c2)
     return None

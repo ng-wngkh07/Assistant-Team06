@@ -22,7 +22,7 @@ An ambiguous question may require clarification. A narrow page scope or missing 
 
 ## Study materials
 
-Upload PDF, DOCX, PPTX, TXT, Markdown, PNG, JPEG or WebP, up to 20 MB. Images can be attached and viewed even when they contain no readable text. Generating source-based study material still requires readable extracted content; names, dimensions and image metadata are not document evidence.
+Upload PDF, DOCX, PPTX, TXT, Markdown, PNG, JPEG or WebP, up to 100 MB. Images can be attached and viewed even when they contain no readable text. Generating source-based study material still requires readable extracted content; names, dimensions and image metadata are not document evidence.
 
 Upload behavior depends on the active workspace:
 

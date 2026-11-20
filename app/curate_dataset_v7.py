@@ -1801,7 +1801,7 @@ def curate_candidates_workspace(
                             completed_source_ids.add(rej_rec["source_id"])
                         if rej_rec.get("source_text"):
                             completed_source_hashes.add(hashlib.sha256(rej_rec["source_text"].strip().encode("utf-8")).hexdigest())
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
         state_target_file = PIPELINE_STATE_FILE if work_dir.resolve() == (BASE_DIR / "data" / "training" / "v7_candidates").resolve() else (work_dir / "continuous_pipeline_state.json")

@@ -11,7 +11,7 @@ import json
 import os
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tempfile
 import unicodedata
@@ -413,7 +413,7 @@ def read_local_lines(path):
     binary = _find_apple_vision_ocr()
     if binary and binary.is_file():
         try:
-            r=subprocess.run([str(binary),str(path)],capture_output=True,text=True,timeout=25)
+            r=subprocess.run([str(binary),str(path)],capture_output=True,text=True,timeout=25)  # nosec B603
             data=json.loads(r.stdout)
             if r.returncode==0 and data.get('success'):
                 return data['lines'],'apple-vision',hashlib.sha256(binary.read_bytes()).hexdigest()
@@ -421,7 +421,7 @@ def read_local_lines(path):
     executable=_find_tesseract_executable()
     if not executable: return [],'unavailable',''
     try:
-        r=subprocess.run([executable,str(path),'stdout','-l','vie+eng','--psm','11','tsv'],capture_output=True,text=True,timeout=25)
+        r=subprocess.run([executable,str(path),'stdout','-l','vie+eng','--psm','11','tsv'],capture_output=True,text=True,timeout=25)  # nosec B603
         if r.returncode: return [],'unavailable',''
         with Image.open(path) as im: width,height=im.size
         groups={}

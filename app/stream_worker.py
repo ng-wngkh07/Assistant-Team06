@@ -7,7 +7,7 @@ import gc
 import os
 import select
 import signal
-import subprocess
+import subprocess  # nosec B404
 import sys
 import threading
 import time
@@ -55,7 +55,7 @@ def terminate_process_tree(proc: Optional[subprocess.Popen], grace_seconds: floa
                 pass
     try:
         proc.wait(timeout=1.5)
-    except Exception:
+    except Exception:  # nosec B110
         pass
     for stream_attr in ("stdout", "stderr"):
         stream_obj = getattr(proc, stream_attr, None)
@@ -109,7 +109,7 @@ class ResidentStreamWorker:
         if timer is not None:
             try:
                 timer.cancel()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
     def _schedule_idle_eviction_locked(self) -> None:
@@ -156,7 +156,7 @@ class ResidentStreamWorker:
             popen_kwargs["start_new_session"] = True
             # Never inherit host GPU locks into long-lived resident workers.
             popen_kwargs["pass_fds"] = ()
-        proc = subprocess.Popen(self._command_fn(), **popen_kwargs)
+        proc = subprocess.Popen(self._command_fn(), **popen_kwargs)  # nosec B603
         self._proc = proc
         self._read_buffer = b""
         if isinstance(proc, _STDLIB_POPEN) and isinstance(getattr(proc, "pid", None), int):

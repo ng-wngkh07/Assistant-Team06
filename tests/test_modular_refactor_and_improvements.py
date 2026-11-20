@@ -198,6 +198,7 @@ def test_security_alerts_remediation(tmp_path: Path):
     _check("certifi>=2026.10.18" in req_txt)
     _check("certifi>=2026.10.18" in req_mlx)
     _check("filelock>=4.2.1" in req_mlx)
+    _check("opentelemetry-api>=1.45.2" in req_txt)
 
 
 def test_prisoner_dilemma_routes_without_frankl_false_match():

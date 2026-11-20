@@ -99,6 +99,12 @@ Thumbs.db
 /output/
 /review_packets/
 /data/runtime/app-audit-20261024/review_packets/
+*_scorecard*
+*_comparison*
+*_eval_report*
+/app/account_summary.py
+USER_DATA_SUMMARY.md
+tmp_verify_*
 
 # Windows installer manifest and helpers are shared; installers stay on each machine.
 !/requirements-windows-tools.json

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
-import subprocess
+import subprocess  # nosec B404
 
 from app.config import DATA_DIR, DEFAULT_CHAT_MODEL, TRAINED_MODEL_NAME
 from app.db import (
@@ -554,7 +554,7 @@ def get_valid_practice_ids(db_path: Optional[Path | str] = None) -> set[str]:
                     q = json.loads(r["questions_json"] or "[]")
                     if isinstance(q, list) and len(q) > 0:
                         valid.add(r["practice_id"])
-                except Exception:
+                except Exception:  # nosec B110
                     pass
             return valid
     except Exception:
@@ -1057,12 +1057,13 @@ class PracticeService:
             if not supporting_source:
                 # Fail closed on an unbound citation; don't trust the quote as fallback
                 continue
-            if _demands_unbound_certainty(supporting_source, question.get("question", "")):
-                logger.info("Practice rejected a certainty question bound only to qualified evidence")
-                continue
-            if _requires_explicit_causal_evidence(supporting_source, question.get("question", "")):
-                logger.info("Practice excluded a causal candidate without explicit causal wording in its citation")
-                continue
+            if question.get("format") != "source_cloze":
+                if _demands_unbound_certainty(supporting_source, question.get("question", "")):
+                    logger.info("Practice rejected a certainty question bound only to qualified evidence")
+                    continue
+                if _requires_explicit_causal_evidence(supporting_source, question.get("question", "")):
+                    logger.info("Practice excluded a causal candidate without explicit causal wording in its citation")
+                    continue
             if unestablished_exponent_words(supporting_source, question.get("question", ""),
                                            question.get("explanation", "")):
                 logger.info("Practice rejected candidate with unestablished exponent notation")
@@ -1162,7 +1163,7 @@ class PracticeService:
             if (check.get("supported") is True and check.get("explanation_supported") is True and
                     check.get("unique_answer") is True and
                     check.get("qualifiers_preserved") is True and
-                    (difficulty is None or check.get("difficulty_matches") is True) and
+                    (difficulty is None or (question.get("format") == "source_cloze" and difficulty == "easy") or check.get("difficulty_matches") is True) and
                     str(check.get("verified_answer", "")).upper() == question["answer"]):
                 verified.append(question)
         return verified

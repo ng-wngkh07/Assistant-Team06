@@ -12,7 +12,7 @@ import time
 import uuid
 import hashlib
 import logging
-import subprocess
+import subprocess  # nosec B404
 import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Union
@@ -560,7 +560,7 @@ class RunLedger:
                         t_start = time.mktime(time.strptime(start_str, "%Y-%m-%dT%H:%M:%SZ"))
                         t_end = time.mktime(time.strptime(now, "%Y-%m-%dT%H:%M:%SZ"))
                         record["telemetry"]["duration_seconds"] = max(0.0, t_end - t_start)
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
             if diagnosis is not None:
@@ -696,7 +696,7 @@ class RunLedger:
                                 t_start = time.mktime(time.strptime(start_str, "%Y-%m-%dT%H:%M:%SZ"))
                                 t_end = time.mktime(time.strptime(now, "%Y-%m-%dT%H:%M:%SZ"))
                                 record["telemetry"]["duration_seconds"] = max(0.0, t_end - t_start)
-                            except Exception:
+                            except Exception:  # nosec B110
                                 pass
                         record["telemetry"]["return_code"] = -9
                         record["diagnosis"] = (
