@@ -1025,6 +1025,59 @@ class PracticeService:
             resolved.append({**question, 'source_chunk_id': source_id})
         return json.dumps({'questions': resolved}, ensure_ascii=False)
 
+    @classmethod
+    def _is_backend_cloze_explanation(
+        cls,
+        question: dict[str, Any],
+        supporting_source: str,
+        passage: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        """Allow compact cloze review only when explanation is absent or derived verbatim from that quote and page."""
+        raw_expl = question.get("explanation")
+        if raw_expl is None or raw_expl == "":
+            return True
+        if not isinstance(raw_expl, str):
+            return False
+        source_info = question.get("source") if isinstance(question.get("source"), dict) else {}
+        q_page = question.get("page_num")
+        src_page = source_info.get("page_num")
+        passage_page = passage.get("page_num") if isinstance(passage, dict) else None
+        page_num = q_page if q_page is not None else src_page
+        if type(page_num) is not int or page_num < 1:
+            return False
+        if q_page is not None and (type(q_page) is not int or q_page != page_num):
+            return False
+        if src_page is not None and (type(src_page) is not int or src_page != page_num):
+            return False
+        if passage_page is not None and (type(passage_page) is not int or passage_page != page_num):
+            return False
+        prefix = f"Căn cứ trực tiếp theo tài liệu trang {page_num}: "
+        if not raw_expl.startswith(prefix):
+            return False
+        expl_quote = raw_expl[len(prefix):]
+        if not expl_quote.strip():
+            return False
+        ev_quote = question.get("evidence_quote")
+        snippet = source_info.get("snippet")
+        if ev_quote is not None and snippet is not None:
+            if not (isinstance(ev_quote, str) and isinstance(snippet, str)):
+                return False
+            if cls._normalized(html.unescape(ev_quote)) != cls._normalized(html.unescape(snippet)):
+                return False
+        raw_quote = ev_quote or snippet or ""
+        if not isinstance(raw_quote, str) or not raw_quote.strip():
+            return False
+        norm_supp = cls._normalized(supporting_source)
+        norm_expl = cls._normalized(expl_quote)
+        norm_expl_unesc = cls._normalized(html.unescape(expl_quote))
+        if norm_expl != norm_supp and norm_expl_unesc != norm_supp:
+            return False
+        return (
+            expl_quote == raw_quote
+            or norm_expl == cls._normalized(raw_quote)
+            or norm_expl_unesc == cls._normalized(html.unescape(raw_quote))
+        )
+
     def _verify_questions(
         self,
         questions: list[dict],
@@ -1057,7 +1110,11 @@ class PracticeService:
             if not supporting_source:
                 # Fail closed on an unbound citation; don't trust the quote as fallback
                 continue
-            if question.get("format") != "source_cloze":
+            if question.get("format") == "source_cloze":
+                from app.practice_proof import verify_source_cloze_reconstruction
+                if not verify_source_cloze_reconstruction(question, supporting_source):
+                    continue
+            else:
                 if _demands_unbound_certainty(supporting_source, question.get("question", "")):
                     logger.info("Practice rejected a certainty question bound only to qualified evidence")
                     continue
@@ -1113,17 +1170,37 @@ class PracticeService:
                             break
                         raise
             return verified
-        review_tokens = min(2400, max(1000, 500 * len(review)))
-        if native_review and 1 <= len(review) <= 3:
-            from app.practice_proof import native_grounded_review_prompt, native_grounded_review_schema
-            prompt = native_grounded_review_prompt(review, difficulty=difficulty)
-            schema = native_grounded_review_schema(len(review), difficulty)
-        elif 1 <= len(review) <= 3:
-            prompt = build_grounded_review_prompt(review, difficulty=difficulty)
-            schema = practice_review_schema(len(review), difficulty)
+        compact_cloze = (
+            native_review
+            and difficulty == "easy"
+            and 1 <= len(bound_questions) <= 3
+            and all(
+                q.get("format") == "source_cloze"
+                and self._is_backend_cloze_explanation(
+                    q,
+                    review[idx - 1]["source"],
+                    passages.get((q.get("source") or {}).get("chunk_id")),
+                )
+                for idx, q in bound_questions.items()
+            )
+        )
+        if compact_cloze:
+            from app.practice_proof import compact_cloze_review_prompt, compact_cloze_review_schema
+            review_tokens = min(1200, max(400, 220 * len(review)))
+            prompt = compact_cloze_review_prompt(review)
+            schema = compact_cloze_review_schema(len(review))
         else:
-            prompt = build_practice_review_prompt(review, difficulty=difficulty)
-            schema = practice_review_schema(len(review), difficulty)
+            review_tokens = min(2400, max(1000, 500 * len(review)))
+            if native_review and 1 <= len(review) <= 3:
+                from app.practice_proof import native_grounded_review_prompt, native_grounded_review_schema
+                prompt = native_grounded_review_prompt(review, difficulty=difficulty)
+                schema = native_grounded_review_schema(len(review), difficulty)
+            elif 1 <= len(review) <= 3:
+                prompt = build_grounded_review_prompt(review, difficulty=difficulty)
+                schema = practice_review_schema(len(review), difficulty)
+            else:
+                prompt = build_practice_review_prompt(review, difficulty=difficulty)
+                schema = practice_review_schema(len(review), difficulty)
 
         try:
             raw_checks = self._chat_complete(
@@ -1147,6 +1224,25 @@ class PracticeService:
         verified = []
         for index, question in bound_questions.items():
             check = by_index.get(index, {})
+            if compact_cloze:
+                from app.practice_proof import native_review_witness_is_bound
+                if not native_review_witness_is_bound(check, review[index - 1]["source"]):
+                    continue
+                min_basis = min(12, len(review[index - 1]["source"].strip()))
+                if len(str(check.get("source_basis") or "").strip()) < min_basis:
+                    continue
+                comparison = check.get("choice_comparison")
+                if not (isinstance(comparison, str) and comparison.strip() and len(comparison) <= 1000):
+                    continue
+                if (
+                    check.get("supported") is True
+                    and check.get("qualifiers_preserved") is True
+                    and check.get("unique_answer") is True
+                    and check.get("explanation_supported") in (None, True)
+                    and str(check.get("verified_answer", "")).upper() == question["answer"]
+                ):
+                    verified.append(question)
+                continue
             if native_review and len(review) <= 3:
                 from app.practice_proof import native_review_witness_is_bound
                 if not native_review_witness_is_bound(check, review[index - 1]['source']):

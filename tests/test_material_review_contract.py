@@ -158,3 +158,543 @@ def test_short_evidence_quote_cannot_hide_source_exceptions_from_reviewer(monkey
         source(), quiz_count=1, flashcard_count=1, difficulty='hard', model='test-remote')
     assert client.reviewed
     assert result['actual_quiz_count'] == 1
+
+
+def _long_three_page_source():
+    pages = [
+        {
+            'page_num': 1,
+            'text': (
+                'Mục 1. Nguyên lý hoạt động tổng quát của hệ thống lưu trữ đệm.\n'
+                + 'Ngữ cảnh bổ trợ cho trang một nhằm đảm bảo độ dài thực tế trên 450 ký tự khi kiểm tra nén prompt. ' * 4
+                + 'Chính sách ghi chậm (Write-Back) chỉ cập nhật cache và bật bit Dirty trước khi trả về. '
+                + 'Dữ liệu trong cache chỉ được đẩy xuống RAM khi khối đệm bị thay thế.'
+            ),
+        },
+        {
+            'page_num': 2,
+            'text': (
+                'Mục 2. Giao thức đồng bộ và điều kiện khóa tuyến tính.\n'
+                + 'Ngữ cảnh bổ trợ cho trang hai nhằm giữ nguyên toàn văn đoạn nguồn trong source khi gửi kiểm định. ' * 4
+                + 'Độ trễ truy xuất bộ nhớ đệm giảm khi tỷ lệ trúng đệm (hit ratio) tăng cao. '
+                + 'Nếu tỷ lệ trượt đệm tăng, băng thông bộ nhớ chính trở thành nút thắt.'
+            ),
+        },
+        {
+            'page_num': 3,
+            'text': (
+                'Mục 3. Kiến trúc phân cấp và quy tắc nhất quán dữ liệu.\n'
+                + 'Ngữ cảnh bổ trợ cho trang ba với nhiều câu giải thích chi tiết điều kiện vận hành hệ thống. ' * 4
+                + 'Giao thức MESI sử dụng bốn trạng thái để duy trì tính nhất quán giữa các lõi xử lý.'
+            ),
+        },
+    ]
+    extracted = PDFExtractionResult(filename='long_notes.txt', filepath=Path('long_notes.txt'))
+    extracted.extracted_pages = pages
+    extracted.total_pages = len(pages)
+    extracted.total_chars = sum(len(p['text']) for p in pages)
+    return extracted
+
+
+def _setup_fake_mlx(monkeypatch, tmp_path, client_cls):
+    import app.model_resolver as model_resolver
+    import app.token_counter as tkc
+    import app.trained_client as tc
+
+    (tmp_path / 'config.json').write_text('{"max_position_embeddings":8192}', encoding='utf-8')
+    monkeypatch.setattr(model_resolver.sys, 'platform', 'darwin')
+    monkeypatch.setattr(model_resolver, 'MLX_9B_DIR', tmp_path)
+    monkeypatch.setattr(tkc, 'get_exact_token_counter', lambda *args: lambda messages: sum(len(m['content']) // 3 for m in messages))
+    monkeypatch.setattr(tc, 'TrainedModelClient', client_cls)
+
+
+def test_easy_cloze_uses_compact_review_combined_first_turn_and_skips_unnecessary_retry(monkeypatch, tmp_path):
+    from app.practice_adapter import SYSTEM_PROMPT as PRACTICE_SYSTEM_PROMPT
+
+    extracted = _long_three_page_source()
+    calls = []
+
+    class CombinedCompactClient:
+        last_done_reason = 'stop'
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        @classmethod
+        def available(cls, *args, **kwargs):
+            return True
+
+        def chat_complete(self, messages, system_prompt='', **kwargs):
+            user_text = messages[0]['content']
+            calls.append({'user': user_text, 'system': system_prompt, **kwargs})
+            if 'Kiểm định độc lập từng câu điền khuyết' in user_text:
+                items = json.JSONDecoder().raw_decode(user_text.split('Dữ liệu cần kiểm định:\n', 1)[1])[0]
+                checks = []
+                for item in items:
+                    assert 'explanation' not in item
+                    assert 'evidence_quote' not in item
+                    assert len(item['question']) <= 480
+                    assert len(item['source']) > 500  # Full page source preserved for condition checks.
+                    ans = next(
+                        k for k, v in item['choices'].items()
+                        if v in ('bit Dirty', 'hit ratio') and k in {'A', 'B', 'C', 'D'}
+                    )
+                    is_dirty = any(v == 'bit Dirty' for v in item['choices'].values())
+                    basis = (
+                        'Chính sách ghi chậm (Write-Back) chỉ cập nhật cache và bật bit Dirty trước khi trả về.'
+                        if is_dirty
+                        else 'Độ trễ truy xuất bộ nhớ đệm giảm khi tỷ lệ trúng đệm (hit ratio) tăng cao.'
+                    )
+                    checks.append({
+                        'index': item['index'],
+                        'source_basis': basis,
+                        'choice_comparison': f'{ans} matches source directly; remaining three distractors contradict source.',
+                        'matching_choices': ans,
+                        'supported': True,
+                        'qualifiers_preserved': True,
+                        'unique_answer': True,
+                        'verified_answer': ans,
+                    })
+                return json.dumps({'checks': checks}, ensure_ascii=False)
+
+            # Combined first turn: returns 2 clean items + 1 extra broken item -> must NOT trigger repair retry.
+            return json.dumps({
+                'questions': [
+                    {
+                        'format': 'source_cloze',
+                        'evidence_id': 'Q1',
+                        'answer': 'bit Dirty',
+                        'distractors': ['bit Valid', 'bit Parity', 'bit Lock'],
+                    },
+                    {
+                        'format': 'source_cloze',
+                        'evidence_id': 'Q2',
+                        'answer': 'hit ratio',
+                        'distractors': ['miss penalty', 'clock skew', 'bus latency'],
+                    },
+                    {
+                        'format': 'source_cloze',
+                        'evidence_id': 'Q1',
+                        'answer': 'cache',
+                        'distractors': ['RAM', 'ROM', 'ALU'],
+                    },
+                ],
+                'flashcards': [
+                    {'answer': 'Giao thức MESI', 'evidence_id': 'Q3'},
+                ],
+            }, ensure_ascii=False)
+
+    _setup_fake_mlx(monkeypatch, tmp_path, CombinedCompactClient)
+    record = StudyMaterialManager().generate_materials_from_pages(
+        extracted, quiz_count=2, flashcard_count=1, difficulty='easy', model='qwen3.5-9b-4bit'
+    )
+
+    assert len(calls) == 2  # Exactly 1 combined generation call + 1 compact cloze review call.
+    gen_call, rev_call = calls
+    assert gen_call['response_schema']['properties']['questions']['maxItems'] == 2
+    assert gen_call['response_schema']['properties']['flashcards']['maxItems'] == 1
+    assert gen_call['context_prefix_marker'] == '\n<task>\n'
+    assert rev_call['system'] == PRACTICE_SYSTEM_PROMPT
+    assert rev_call['context_prefix_marker'] == '\nDữ liệu cần kiểm định:\n'
+    assert rev_call['max_tokens'] == 440
+    assert rev_call['response_schema']['properties']['checks']['maxItems'] == 2
+    assert 'input_audit' not in rev_call['response_schema']['properties']['checks']['items']['properties']
+    assert record['actual_quiz_count'] == 2
+    assert record['actual_flashcard_count'] == 1
+    assert record['complete'] is True
+    assert record['generation'] == {'quiz': 'model', 'flashcards': 'model'}
+    assert all('Căn cứ trực tiếp theo tài liệu trang' in q['explanation'] for q in record['quiz'])
+
+
+@pytest.mark.parametrize('defect', [
+    'wrong_basis',
+    'short_basis',
+    'ambiguous_matching',
+    'wrong_answer',
+    'qualifiers_lost',
+    'unsupported',
+    'tampered_reconstruction',
+    'article_collision',
+])
+def test_compact_cloze_review_fails_closed_on_evidence_answer_ambiguity_and_reconstruction(monkeypatch, defect):
+    import app.model_resolver as resolver
+    from app.practice import PracticeService
+
+    monkeypatch.setattr(resolver, 'is_mlx_model', lambda _model=None: True)
+    source_text = 'The indicator is active only while the closed switch holds contact.'
+    question_dict = {
+        'format': 'source_cloze',
+        'question': 'Chọn cụm điền vào trích đoạn:\nThe indicator is active only while […] holds contact.\nPhần […] là gì?',
+        'choices': {
+            'A': 'the closed switch',
+            'B': 'the open switch',
+            'C': 'a broken wire',
+            'D': 'no power source',
+        },
+        'answer': 'A',
+        'evidence_quote': source_text,
+        'source': {'chunk_id': 1, 'snippet': source_text},
+    }
+    if defect == 'tampered_reconstruction':
+        question_dict['question'] = (
+            'Chọn cụm điền vào trích đoạn:\nThe indicator is ALWAYS active when […] holds contact.\nPhần […] là gì?'
+        )
+    elif defect == 'article_collision':
+        question_dict['choices']['B'] = 'closed switch'
+
+    called = []
+
+    def fake_review(prompt, model, max_tokens, timeout=None, response_schema=None):
+        called.append(prompt)
+        check = {
+            'index': 1,
+            'source_basis': source_text,
+            'choice_comparison': 'Only A matches source; B, C, D fail the closed switch condition.',
+            'matching_choices': 'A',
+            'supported': True,
+            'qualifiers_preserved': True,
+            'unique_answer': True,
+            'verified_answer': 'A',
+        }
+        if defect == 'wrong_basis':
+            check['source_basis'] = 'The indicator blinks every five seconds automatically.'
+        elif defect == 'short_basis':
+            check['source_basis'] = 'switch'
+        elif defect == 'ambiguous_matching':
+            check['matching_choices'] = 'AB'
+            check['unique_answer'] = False
+            check['verified_answer'] = ''
+        elif defect == 'wrong_answer':
+            check['matching_choices'] = 'B'
+            check['verified_answer'] = 'B'
+        elif defect == 'qualifiers_lost':
+            check['qualifiers_preserved'] = False
+        elif defect == 'unsupported':
+            check['supported'] = False
+            check['matching_choices'] = ''
+            check['unique_answer'] = False
+            check['verified_answer'] = ''
+        return json.dumps({'checks': [check]})
+
+    service = PracticeService(None, None)
+    service._chat_complete = fake_review
+    result = service._verify_questions(
+        [question_dict], {1: {'safe_text': source_text}}, 'qwen3.5-9b-4bit', difficulty='easy'
+    )
+    assert result == []
+    if defect in ('tampered_reconstruction', 'article_collision'):
+        assert called == []
+    else:
+        assert len(called) == 1
+
+
+@pytest.mark.parametrize('outcome', ['partial_on_second_batch', 'timeout_on_first_batch', 'runtime_error_after_partial'])
+def test_review_timeout_returns_explicit_partial_when_batch_accepted_and_503_when_none_passed(monkeypatch, tmp_path, outcome):
+    extracted = _long_three_page_source()
+    all_cloze = [
+        {'format': 'source_cloze', 'evidence_id': 'Q1', 'answer': 'bit Dirty', 'distractors': ['bit Valid', 'bit Clean', 'bit Zero']},
+        {'format': 'source_cloze', 'evidence_id': 'Q1', 'answer': 'Write-Back', 'distractors': ['Write-Through', 'Write-Around', 'No-Write']},
+        {'format': 'source_cloze', 'evidence_id': 'Q2', 'answer': 'hit ratio', 'distractors': ['miss rate', 'clock rate', 'bus width']},
+        {'format': 'source_cloze', 'evidence_id': 'Q2', 'answer': 'băng thông bộ nhớ chính', 'distractors': ['dung lượng đĩa cứng', 'tần số xung nhịp', 'địa chỉ ảo']},
+        {'format': 'source_cloze', 'evidence_id': 'Q3', 'answer': 'Giao thức MESI', 'distractors': ['Giao thức TCP', 'Giao thức HTTP', 'Giao thức USB']},
+    ]
+
+    class TimeoutOnBatchClient:
+        last_done_reason = 'stop'
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        @classmethod
+        def available(cls, *args, **kwargs):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            user_text = messages[0]['content']
+            if 'Kiểm định độc lập từng câu điền khuyết' in user_text:
+                items = json.JSONDecoder().raw_decode(user_text.split('Dữ liệu cần kiểm định:\n', 1)[1])[0]
+                if len(items) == 3:
+                    if outcome == 'timeout_on_first_batch':
+                        raise TimeoutError('Hết thời gian chờ phản hồi từ worker cục bộ.')
+                    checks = []
+                    for item in items:
+                        ans = next(
+                            k for k, v in item['choices'].items()
+                            if v in {'bit Dirty', 'Write-Back', 'hit ratio'}
+                        )
+                        checks.append({
+                            'index': item['index'],
+                            'source_basis': item['source'][:180],
+                            'choice_comparison': f'{ans} matches source; remaining three distractors are incorrect.',
+                            'matching_choices': ans,
+                            'supported': True,
+                            'qualifiers_preserved': True,
+                            'unique_answer': True,
+                            'verified_answer': ans,
+                        })
+                    return json.dumps({'checks': checks}, ensure_ascii=False)
+                if outcome == 'runtime_error_after_partial':
+                    raise RuntimeError('Worker cục bộ đã thoát bất ngờ.')
+                raise TimeoutError('Hết thời gian chờ phản hồi từ worker cục bộ.')
+            if 'flashcards' in user_text.lower():
+                return json.dumps({'flashcards': [{'answer': 'lõi xử lý', 'evidence_id': 'Q3'}]}, ensure_ascii=False)
+            if 'Không lặp lại' in user_text:
+                return json.dumps({'questions': all_cloze[3:]}, ensure_ascii=False)
+            return json.dumps({'questions': all_cloze[:3]}, ensure_ascii=False)
+
+    _setup_fake_mlx(monkeypatch, tmp_path, TimeoutOnBatchClient)
+    mgr = StudyMaterialManager()
+    if outcome == 'partial_on_second_batch':
+        record = mgr.generate_materials_from_pages(
+            extracted, quiz_count=5, flashcard_count=1, difficulty='easy', model='qwen3.5-9b-4bit'
+        )
+        assert record['actual_quiz_count'] == 3
+        assert record['requested_quiz_count'] == 5
+        assert record['complete'] is False
+        assert record['generation']['quiz'] == 'model'
+        assert '3/5' in record['warning']
+        assert 'quá thời gian' in record['warning']
+    else:
+        with pytest.raises(StudyMaterialError, match='Không hoàn thành được bước kiểm định câu hỏi'):
+            mgr.generate_materials_from_pages(
+                extracted, quiz_count=5, flashcard_count=1, difficulty='easy', model='qwen3.5-9b-4bit'
+            )
+
+
+@pytest.mark.parametrize('difficulty,use_cloze', [
+    ('medium', False),
+    ('hard', False),
+    ('easy', False),
+    ('medium', True),
+])
+def test_medium_hard_and_general_easy_preserve_full_semantic_review(monkeypatch, tmp_path, difficulty, use_cloze):
+    extracted = _long_three_page_source()
+    review_prompts = []
+
+    class SemanticClient:
+        last_done_reason = 'stop'
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        @classmethod
+        def available(cls, *args, **kwargs):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            user_text = messages[0]['content']
+            if 'Kiểm định độc lập từng câu' in user_text:
+                review_prompts.append((user_text, kwargs['response_schema']))
+                assert 'Kiểm định độc lập từng câu từ source và question' in user_text
+                assert 'điền khuyết từ source' not in user_text
+                required_fields = set(kwargs['response_schema']['properties']['checks']['items']['required'])
+                assert {'input_audit', 'independent_solution', 'explanation_audit', 'explanation_supported', 'difficulty_matches'} <= required_fields
+                return json.dumps({
+                    'checks': [{
+                        'index': 1,
+                        'input_audit': 'Nguồn nêu rõ cơ chế và điều kiện của Write-Back.',
+                        'source_basis': 'Chính sách ghi chậm (Write-Back) chỉ cập nhật cache và bật bit Dirty trước khi trả về.',
+                        'independent_solution': 'Write-Back chỉ cập nhật cache và bật bit Dirty khi ghi.',
+                        'supported': True,
+                        'qualifiers_preserved': True,
+                        'choice_comparison': 'Chỉ lựa chọn A khớp hoàn toàn với nguồn; B, C, D sai.',
+                        'matching_choices': 'A',
+                        'unique_answer': True,
+                        'verified_answer': 'A',
+                        'explanation_audit': 'Giải thích đúng theo đoạn nguồn.',
+                        'explanation_supported': True,
+                        'difficulty_matches': True,
+                    }]
+                }, ensure_ascii=False)
+            if use_cloze:
+                return json.dumps({
+                    'questions': [{
+                        'format': 'source_cloze',
+                        'evidence_id': 'Q1',
+                        'answer': 'bit Dirty',
+                        'distractors': ['bit Valid', 'bit Parity', 'bit Lock'],
+                    }]
+                }, ensure_ascii=False)
+            return json.dumps({
+                'questions': [{
+                    'question': 'Trong trường hợp ghi dữ liệu theo chính sách Write-Back, hệ thống xử lý như thế nào?' if difficulty != 'easy' else 'Write-Back là gì?',
+                    'choices': {
+                        'A': 'Chỉ cập nhật cache và bật bit Dirty',
+                        'B': 'Ghi thẳng xuống RAM ngay lập tức',
+                        'C': 'Xóa toàn bộ bộ nhớ đệm',
+                        'D': 'Ngắt bộ xử lý',
+                    },
+                    'answer': 'A',
+                    'explanation': 'Theo nguồn, Write-Back chỉ cập nhật cache và bật bit Dirty.',
+                    'evidence_id': 'Q1',
+                    'difficulty': difficulty,
+                }]
+            }, ensure_ascii=False)
+
+    _setup_fake_mlx(monkeypatch, tmp_path, SemanticClient)
+    mgr = StudyMaterialManager()
+    if use_cloze and difficulty == 'medium':
+        with pytest.raises(StudyMaterialError, match='trung bình'):
+            mgr.generate_materials_from_pages(
+                extracted, quiz_count=1, flashcard_count=0, difficulty=difficulty, model='qwen3.5-9b-4bit'
+            )
+    else:
+        record = mgr.generate_materials_from_pages(
+            extracted, quiz_count=1, flashcard_count=0, difficulty=difficulty, model='qwen3.5-9b-4bit'
+        )
+        assert record['actual_quiz_count'] == 1
+        assert len(review_prompts) == 1
+
+
+@pytest.mark.parametrize('case', [
+    'remote_contradicted_without_audit',
+    'remote_compact_witness_missing_explanation_supported',
+    'mlx_contradicted_explanation_uses_full_gate',
+    'mlx_mismatched_page_explanation_uses_full_gate',
+    'mlx_mismatched_quote_explanation_uses_full_gate',
+    'mlx_legacy_proposal_normalizes_to_source_derived',
+])
+def test_cloze_explanation_provenance_and_full_audit_gates(monkeypatch, tmp_path, case):
+    import app.model_resolver as resolver
+    from app.practice import PracticeService
+
+    original = 'Mẫu dung dịch chỉ được ghi là axit axetic nếu nhiệt độ dưới 20 °C.'
+    wrong_explanation = 'Tài liệu says the sample is always hydrochloric acid at every temperature.'
+    masked = original.replace('axit axetic', '[…]')
+
+    if case == 'mlx_legacy_proposal_normalizes_to_source_derived':
+        extracted = PDFExtractionResult(filename='acid.txt', filepath=Path('acid.txt'))
+        extracted.extracted_pages = [{'page_num': 1, 'text': original}]
+        extracted.total_pages = 1
+        extracted.total_chars = len(original)
+        compact_review_called = []
+
+        class LegacyProposalClient:
+            last_done_reason = 'stop'
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            @classmethod
+            def available(cls, *args, **kwargs):
+                return True
+
+            def chat_complete(self, messages, **kwargs):
+                user_text = messages[0]['content']
+                if 'Kiểm định độc lập từng câu điền khuyết' in user_text:
+                    compact_review_called.append(user_text)
+                    items = json.JSONDecoder().raw_decode(user_text.split('Dữ liệu cần kiểm định:\n', 1)[1])[0]
+                    ans = next(k for k, v in items[0]['choices'].items() if v == 'axit axetic')
+                    return json.dumps({
+                        'checks': [{
+                            'index': 1,
+                            'source_basis': original,
+                            'choice_comparison': f'{ans} matches source under the < 20 °C condition; others fail.',
+                            'matching_choices': ans,
+                            'supported': True,
+                            'qualifiers_preserved': True,
+                            'unique_answer': True,
+                            'verified_answer': ans,
+                        }]
+                    }, ensure_ascii=False)
+                if 'flashcards' in user_text.lower():
+                    return json.dumps({'flashcards': []})
+                return json.dumps({
+                    'questions': [{
+                        'format': 'source_cloze',
+                        'evidence_id': 'Q1',
+                        'answer': 'axit axetic',
+                        'distractors': ['axit clohidric', 'axit sunfuric', 'axit nitric'],
+                        'explanation': wrong_explanation,
+                    }]
+                }, ensure_ascii=False)
+
+        _setup_fake_mlx(monkeypatch, tmp_path, LegacyProposalClient)
+        record = StudyMaterialManager().generate_materials_from_pages(
+            extracted, quiz_count=1, flashcard_count=0, difficulty='easy', model='qwen3.5-9b-4bit'
+        )
+        assert len(compact_review_called) == 1
+        assert record['actual_quiz_count'] == 1
+        assert record['quiz'][0]['explanation'] == f'Căn cứ trực tiếp theo tài liệu trang 1: {original}'
+        assert wrong_explanation not in record['quiz'][0]['explanation']
+        return
+
+    is_mlx = case.startswith('mlx_')
+    monkeypatch.setattr(resolver, 'is_mlx_model', lambda _model=None: is_mlx)
+    if case == 'remote_compact_witness_missing_explanation_supported':
+        expl = f'Căn cứ trực tiếp theo tài liệu trang 1: {original}'
+    elif case == 'mlx_mismatched_page_explanation_uses_full_gate':
+        expl = f'Căn cứ trực tiếp theo tài liệu trang 2: {original}'
+    elif case == 'mlx_mismatched_quote_explanation_uses_full_gate':
+        expl = f'Căn cứ trực tiếp theo tài liệu trang 1: {original} Bổ sung khẳng định ngoài nguồn.'
+    else:
+        expl = wrong_explanation
+
+    question_dict = {
+        'format': 'source_cloze',
+        'question': f'Chọn cụm điền vào trích đoạn:\n{masked}\nPhần […] là gì?',
+        'choices': dict(zip('ABCD', ['axit axetic', 'axit clohidric', 'axit sunfuric', 'axit nitric'])),
+        'answer': 'A',
+        'explanation': expl,
+        'evidence_quote': original,
+        'page_num': 1,
+        'source': {'chunk_id': 1, 'snippet': original},
+    }
+
+    seen_prompts = []
+
+    def fake_review(prompt, model, max_tokens, timeout=None, response_schema=None):
+        seen_prompts.append((prompt, response_schema))
+        if case == 'remote_contradicted_without_audit':
+            check = {
+                'index': 1,
+                'supported': True,
+                'qualifiers_preserved': True,
+                'choice_comparison': 'A matches; B, C, D do not.',
+                'unique_answer': True,
+                'verified_answer': 'A',
+            }
+        elif case == 'remote_compact_witness_missing_explanation_supported':
+            check = {
+                'index': 1,
+                'source_basis': original,
+                'choice_comparison': 'A matches; B, C, D do not.',
+                'matching_choices': 'A',
+                'supported': True,
+                'qualifiers_preserved': True,
+                'unique_answer': True,
+                'verified_answer': 'A',
+            }
+        else:
+            check = {
+                'index': 1,
+                'input_audit': 'Source establishes the < 20 °C condition.',
+                'source_basis': original,
+                'independent_solution': 'axit axetic completes the blank under the stated condition.',
+                'supported': True,
+                'qualifiers_preserved': True,
+                'choice_comparison': 'Only A matches; B, C, D name wrong acids.',
+                'matching_choices': 'A',
+                'unique_answer': True,
+                'verified_answer': 'A',
+                'explanation_audit': 'Proposed explanation contradicts or misattributes the source.',
+                'explanation_supported': False,
+                'difficulty_matches': True,
+            }
+        return json.dumps({'checks': [check]}, ensure_ascii=False)
+
+    service = PracticeService(None, None)
+    service._chat_complete = fake_review
+    result = service._verify_questions(
+        [question_dict],
+        {1: {'safe_text': original, 'page_num': 1}},
+        'qwen3.5-9b-4bit' if is_mlx else 'test-remote',
+        difficulty='easy',
+    )
+    assert result == []
+    assert len(seen_prompts) == 1
+    prompt_text, schema = seen_prompts[0]
+    assert 'Kiểm định độc lập từng câu điền khuyết' not in prompt_text
+    assert 'Kiểm định độc lập từng câu từ source và question' in prompt_text
+    required_fields = set(schema['properties']['checks']['items']['required'])
+    assert {'explanation_audit', 'explanation_supported'} <= required_fields

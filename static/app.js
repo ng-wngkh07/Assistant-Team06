@@ -264,6 +264,18 @@ document.addEventListener("DOMContentLoaded", () => {
     let viewRevision = 0;
     let isLoadingSession = true;
     let statusPollAuthBlocked = false;
+    let statusAccountEpoch = 0;
+    let statusRequestSeq = 0;
+    let latestAppliedSidebarSeq = 0;
+    let latestAppliedFullSeq = 0;
+    let summaryStatusInFlight = null;
+    let summaryStatusInFlightEpoch = -1;
+    let summaryStatusAbortController = null;
+    let summaryNextFlightPromise = null;
+    let summaryNextFlightEpoch = -1;
+    let pendingExplicitSummaryEpoch = -1;
+    let fullKbStatusInFlight = null;
+    let fullKbStatusAbortController = null;
     btnSend.disabled = true;
 
     function canUseProtectedApis() {
@@ -275,16 +287,104 @@ document.addEventListener("DOMContentLoaded", () => {
         );
     }
 
-    async function refreshKnowledgeBaseStatus() {
+    function isDocumentVisible() {
+        if (typeof document === "undefined" || !document) return true;
+        if (document.visibilityState === "hidden") return false;
+        if (document.hidden === true) return false;
+        return true;
+    }
+
+    async function refreshKnowledgeBaseStatus(options = {}) {
+        const opts = (options && typeof options === "object") ? options : {};
+        const explicit = Boolean(opts.explicit);
         if (statusPollAuthBlocked || !canUseProtectedApis()) {
             return "auth_required";
         }
-        const statusResult = await fetchKnowledgeBaseStatus();
-        if (statusResult === "auth_required") {
-            statusPollAuthBlocked = true;
+        if (!explicit && !isDocumentVisible()) {
+            return "hidden";
         }
-        return statusResult;
+        const callerEpoch = statusAccountEpoch;
+        if (summaryStatusInFlight && summaryStatusInFlightEpoch === callerEpoch) {
+            if (explicit) {
+                pendingExplicitSummaryEpoch = callerEpoch;
+            }
+            return summaryStatusInFlight;
+        }
+        if (summaryStatusInFlight && summaryStatusInFlightEpoch !== callerEpoch) {
+            if (summaryNextFlightPromise && summaryNextFlightEpoch === callerEpoch) {
+                if (explicit) {
+                    pendingExplicitSummaryEpoch = callerEpoch;
+                }
+                return summaryNextFlightPromise;
+            }
+            const waitPrev = summaryStatusInFlight;
+            const queuedPromise = (async () => {
+                try {
+                    await waitPrev;
+                } catch (_) {
+                    // Ignore failures from superseded account flights before starting the next epoch.
+                }
+                if (summaryNextFlightPromise === queuedPromise) {
+                    summaryNextFlightPromise = null;
+                    summaryNextFlightEpoch = -1;
+                }
+                if (callerEpoch !== statusAccountEpoch || statusPollAuthBlocked || !canUseProtectedApis()) {
+                    return callerEpoch !== statusAccountEpoch ? "stale" : "auth_required";
+                }
+                return refreshKnowledgeBaseStatus({
+                    explicit: explicit || pendingExplicitSummaryEpoch === callerEpoch,
+                });
+            })();
+            summaryNextFlightPromise = queuedPromise;
+            summaryNextFlightEpoch = callerEpoch;
+            return queuedPromise;
+        }
+        const runPromise = (async () => {
+            let statusResult = "ok";
+            try {
+                do {
+                    if (pendingExplicitSummaryEpoch === callerEpoch) {
+                        pendingExplicitSummaryEpoch = -1;
+                    }
+                    if (statusPollAuthBlocked || !canUseProtectedApis() || callerEpoch !== statusAccountEpoch) {
+                        return callerEpoch !== statusAccountEpoch ? "stale" : "auth_required";
+                    }
+                    const controller = (typeof AbortController === "function") ? new AbortController() : null;
+                    summaryStatusAbortController = controller;
+                    statusResult = await fetchKnowledgeBaseStatus({
+                        full: false,
+                        signal: controller ? controller.signal : undefined,
+                    });
+                    if (summaryStatusAbortController === controller) {
+                        summaryStatusAbortController = null;
+                    }
+                    if (statusResult === "auth_required" && callerEpoch === statusAccountEpoch) {
+                        statusPollAuthBlocked = true;
+                        if (pendingExplicitSummaryEpoch === callerEpoch) {
+                            pendingExplicitSummaryEpoch = -1;
+                        }
+                        break;
+                    }
+                } while (
+                    pendingExplicitSummaryEpoch === callerEpoch
+                    && !statusPollAuthBlocked
+                    && canUseProtectedApis()
+                    && callerEpoch === statusAccountEpoch
+                );
+            } finally {
+                if (summaryStatusInFlight === runPromise) {
+                    summaryStatusInFlight = null;
+                    summaryStatusInFlightEpoch = -1;
+                    summaryStatusAbortController = null;
+                }
+            }
+            return statusResult;
+        })();
+        summaryStatusInFlight = runPromise;
+        summaryStatusInFlightEpoch = callerEpoch;
+        return runPromise;
     }
+    const fetchStatus = () => refreshKnowledgeBaseStatus({ explicit: true });
 
     function startAuthenticatedBootstrap() {
         refreshKnowledgeBaseStatus();
@@ -322,6 +422,13 @@ document.addEventListener("DOMContentLoaded", () => {
         startAuthenticatedBootstrap();
     }
     setInterval(refreshKnowledgeBaseStatus, 5000);
+    if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+        document.addEventListener("visibilitychange", () => {
+            if (isDocumentVisible() && !statusPollAuthBlocked && canUseProtectedApis()) {
+                refreshKnowledgeBaseStatus();
+            }
+        });
+    }
 
     // Event Listeners
     userInput.addEventListener("input", () => {
@@ -472,10 +579,68 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // Modal open/close
-    btnOpenKb.addEventListener("click", () => {
+    async function loadKnowledgeBaseModalDetails() {
+        if (!kbModal) return "error";
         kbModal.classList.add("active");
-        renderKbTable();
-    });
+        if (!canUseProtectedApis()) {
+            if (kbTableBody) {
+                kbTableBody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Vui lòng đăng nhập để xem chi tiết thư viện.</td></tr>';
+            }
+            window.StudyAccount?.openAuthModal?.();
+            return "auth_required";
+        }
+        if (kbTableBody) {
+            kbTableBody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Đang tải danh sách tài liệu...</td></tr>';
+        }
+        if (fullKbStatusInFlight) {
+            return fullKbStatusInFlight;
+        }
+        const activeEpoch = statusAccountEpoch;
+        const controller = (typeof AbortController === "function") ? new AbortController() : null;
+        fullKbStatusAbortController = controller;
+        const reqPromise = (async () => {
+            try {
+                const statusResult = await fetchKnowledgeBaseStatus({
+                    full: true,
+                    signal: controller ? controller.signal : undefined,
+                });
+                if (activeEpoch !== statusAccountEpoch) {
+                    return "stale";
+                }
+                if (statusResult === "auth_required") {
+                    statusPollAuthBlocked = true;
+                    if (kbTableBody) {
+                        kbTableBody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Vui lòng đăng nhập để xem chi tiết thư viện.</td></tr>';
+                    }
+                    return statusResult;
+                }
+                if (statusResult !== "ok") {
+                    if (kbTableBody) {
+                        kbTableBody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#f87171;">Không thể tải danh sách tài liệu. Vui lòng thử lại. <button type="button" class="btn btn-sm btn-outline btn-kb-retry" style="margin-left:8px;">Thử lại</button></td></tr>';
+                        kbTableBody.querySelector?.(".btn-kb-retry")?.addEventListener("click", () => {
+                            loadKnowledgeBaseModalDetails();
+                        });
+                    }
+                    return statusResult;
+                }
+                renderKbTable();
+                return "ok";
+            } finally {
+                if (fullKbStatusAbortController === controller) {
+                    fullKbStatusAbortController = null;
+                }
+                if (fullKbStatusInFlight === reqPromise) {
+                    fullKbStatusInFlight = null;
+                }
+            }
+        })();
+        fullKbStatusInFlight = reqPromise;
+        return reqPromise;
+    }
+
+    if (btnOpenKb && kbModal) {
+        btnOpenKb.addEventListener("click", loadKnowledgeBaseModalDetails);
+    }
 
     btnCloseKb.addEventListener("click", () => {
         kbModal.classList.remove("active");
@@ -523,7 +688,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 reindexMsg.textContent = `✅ Thành công! Đã xử lý ${data.report.total_files} tài liệu, tạo ${data.report.total_chunks_created} đoạn chỉ mục.`;
                 setTimeout(() => {
                     reindexModal.classList.remove("active");
-                    fetchKnowledgeBaseStatus();
+                    refreshKnowledgeBaseStatus({ explicit: true });
                 }, 2000);
             } else {
                 reindexMsg.textContent = `❌ Lỗi: ${data.detail || 'Không xác định'}`;
@@ -1686,7 +1851,9 @@ document.addEventListener("DOMContentLoaded", () => {
             const response = await fetch("/api/model/check", {method: "POST"});
             const data = await response.json();
             status.textContent = response.ok ? data.message : (data.detail || "Không kiểm tra được mô hình.");
-            await fetchKnowledgeBaseStatus();
+            await (typeof refreshKnowledgeBaseStatus === "function"
+                ? refreshKnowledgeBaseStatus({ explicit: true })
+                : fetchKnowledgeBaseStatus());
         } catch (_) {
             status.textContent = "Không kết nối được tới máy chủ dịch vụ. Vui lòng thử lại sau hoặc liên hệ người vận hành hệ thống.";
         } finally {
@@ -1694,16 +1861,172 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    async function fetchKnowledgeBaseStatus() {
+    function applySidebarStatusPayload(data, kb) {
+        const trainingBanner = document.getElementById("training-banner");
+        const trainingBannerText = document.getElementById("training-banner-text");
+        if (data.gpu && data.gpu.busy) {
+            if (trainingBanner) {
+                trainingBanner.style.display = "flex";
+                if (data.gpu.message && trainingBannerText) {
+                    trainingBannerText.textContent = data.gpu.message;
+                }
+            }
+            if (ollamaStatus) {
+                ollamaStatus.textContent = "🟡 Đang huấn luyện MLX LoRA (GPU bận - Web hoạt động, suy luận tạm hoãn)";
+                ollamaStatus.className = "status-indicator";
+            }
+        } else {
+            if (trainingBanner) {
+                trainingBanner.style.display = "none";
+            }
+            if (ollamaStatus) {
+                if (data.inference_ready) {
+                    ollamaStatus.textContent = "🟢 Môi trường mô hình sẵn sàng · Bấm Kiểm tra mô hình để chạy thử";
+                    ollamaStatus.className = "status-indicator connected";
+                } else {
+                    ollamaStatus.textContent = `🔴 ${data.service_message || "Mô hình hỏi đáp chưa sẵn sàng"}`;
+                    ollamaStatus.className = "status-indicator disconnected";
+                }
+            }
+        }
+
+        const searchableDocs = (typeof kb.searchable_documents === "number")
+            ? kb.searchable_documents
+            : (kb.total_documents || 0);
+        const registeredDocs = (typeof kb.registered_documents === "number")
+            ? kb.registered_documents
+            : (kb.total_documents || 0);
+        const discoveredFiles = (typeof kb.discovered_files === "number")
+            ? kb.discovered_files
+            : registeredDocs;
+        if (statDocs) {
+            statDocs.textContent = searchableDocs;
+            if (discoveredFiles > searchableDocs) {
+                statDocs.title = `${searchableDocs} tài liệu có thể tìm kiếm / ${discoveredFiles} tệp phát hiện trong thư mục nguồn`;
+            } else {
+                statDocs.title = "";
+            }
+        }
+        if (btnOpenKb) {
+            btnOpenKb.textContent = discoveredFiles > searchableDocs
+                ? `Xem chi tiết ${searchableDocs}/${discoveredFiles} tài liệu`
+                : `Xem chi tiết ${searchableDocs} tài liệu`;
+        }
+        if (statPages) statPages.textContent = kb.total_indexed_pages || 0;
+        if (statChunks) statChunks.textContent = kb.total_chunks || 0;
+        if (statScanned) statScanned.textContent = kb.scanned_documents || 0;
+        embeddingCoverage = kb.total_chunks ? (kb.embedded_chunks || 0) / kb.total_chunks : 0;
+
+        if (data.storage) {
+            const storagePathEl = document.getElementById("storage-sources-path");
+            const storagePathRow = document.getElementById("storage-sources-path-row");
+            const copyStorageBtn = document.getElementById("btn-copy-storage-path");
+            if (data.storage.sources_dir) {
+                if (storagePathEl) {
+                    storagePathEl.textContent = data.storage.sources_dir;
+                    storagePathEl.title = data.storage.sources_dir;
+                }
+                if (storagePathRow) storagePathRow.style.display = "";
+                if (copyStorageBtn) copyStorageBtn.style.display = "";
+            } else {
+                if (storagePathRow) storagePathRow.style.display = "none";
+                if (copyStorageBtn) copyStorageBtn.style.display = "none";
+            }
+
+            const watchStatusEl = document.getElementById("storage-watch-status");
+            const w = data.storage.watcher || data.watcher;
+            if (watchStatusEl && w) {
+                if (!w.enabled) {
+                    watchStatusEl.textContent = "Tự động quét nguồn chung: Đang tắt (bật qua cấu hình máy chủ)";
+                } else {
+                    const parts = [w.running ? "Đang bật" : "Đã dừng"];
+                    if (w.auto_ocr === false) {
+                        parts.push("OCR tự động: Tắt");
+                    } else if (w.ocr_runtime_available === false) {
+                        parts.push("OCR cục bộ: Chưa sẵn sàng");
+                    } else if (w.auto_ocr) {
+                        parts.push("OCR tự động: Bật");
+                    }
+                    if (w.pending_count) parts.push(`Chờ: ${w.pending_count}`);
+                    if (w.indexed_count) parts.push(`Đã đồng bộ: ${w.indexed_count}`);
+                    if (w.ocr_running_count) parts.push(`Đang chạy OCR: ${w.ocr_running_count}`);
+                    if (w.captured_pending_review_count) parts.push(`Đã chụp chờ duyệt: ${w.captured_pending_review_count}`);
+                    if (w.hold_count) parts.push(`HOLD: ${w.hold_count}`);
+                    if (w.needs_ocr_count) parts.push(`Cần OCR: ${w.needs_ocr_count}`);
+                    if (w.vector_pending_count) parts.push(`Chờ vector: ${w.vector_pending_count}`);
+                    if (w.needs_update_count) parts.push(`Cần cập nhật: ${w.needs_update_count}`);
+                    if (w.missing_source_count) parts.push(`Thiếu tệp: ${w.missing_source_count}`);
+                    if (w.waiting_gpu_count) parts.push(`Chờ GPU: ${w.waiting_gpu_count}`);
+                    if (w.error_count) parts.push(`Lỗi: ${w.error_count}`);
+                    watchStatusEl.textContent = `Tự động quét nguồn chung: ${parts.join(" · ")}`;
+                }
+            }
+        }
+    }
+
+    function applyModalStatusPayload(data, kb) {
+        if (typeof window === "undefined") return;
+        if (Array.isArray(kb.documents)) {
+            window.kbData = kb.documents;
+        }
+        const nextWatcherItems = (data.watcher && Array.isArray(data.watcher.items))
+            ? data.watcher.items
+            : ((data.storage && data.storage.watcher && Array.isArray(data.storage.watcher.items))
+                ? data.storage.watcher.items
+                : null);
+        if (nextWatcherItems !== null) {
+            window.watcherItems = nextWatcherItems;
+        }
+    }
+
+    async function fetchKnowledgeBaseStatus(options = {}) {
+        const opts = (options && typeof options === "object") ? options : {};
+        const full = Boolean(opts.full);
+        const signal = opts.signal;
+        const requestUrl = full ? "/api/status" : "/api/status?summary=1";
+        const requestEpoch = typeof statusAccountEpoch === "number" ? statusAccountEpoch : 0;
+        const requestSeq = typeof statusRequestSeq === "number" ? ++statusRequestSeq : 0;
+        const isStaleEpoch = () => (
+            (typeof statusAccountEpoch === "number" && requestEpoch !== statusAccountEpoch)
+            || Boolean(signal && signal.aborted)
+        );
+        const isStaleSidebar = () => (
+            typeof latestAppliedSidebarSeq === "number" && requestSeq < latestAppliedSidebarSeq
+        );
+        const isStaleFull = () => (
+            typeof latestAppliedFullSeq === "number" && requestSeq < latestAppliedFullSeq
+        );
         try {
-            const res = await fetch("/api/status");
+            if (isStaleEpoch()) return "stale";
+            const res = signal ? await fetch(requestUrl, { signal }) : await fetch(requestUrl);
+            if (isStaleEpoch()) {
+                return "stale";
+            }
+            if (typeof canUseProtectedApis === "function" && !canUseProtectedApis()) {
+                return "auth_required";
+            }
             if (!res.ok) {
                 if (res.status === 401) {
+                    if (isStaleSidebar()) {
+                        return "stale";
+                    }
+                    if (typeof latestAppliedSidebarSeq === "number" && requestSeq > latestAppliedSidebarSeq) {
+                        latestAppliedSidebarSeq = requestSeq;
+                    }
                     if (ollamaStatus) {
                         ollamaStatus.textContent = "🔒 Đăng nhập để xem trạng thái mô hình và thư viện";
                         ollamaStatus.className = "status-indicator";
                     }
                     return "auth_required";
+                }
+                if (full) {
+                    return "error";
+                }
+                if (isStaleSidebar()) {
+                    return "stale";
+                }
+                if (typeof latestAppliedSidebarSeq === "number" && requestSeq > latestAppliedSidebarSeq) {
+                    latestAppliedSidebarSeq = requestSeq;
                 }
                 if (ollamaStatus) {
                     ollamaStatus.textContent = `🔴 Máy chủ web phản hồi lỗi HTTP ${res.status}`;
@@ -1712,120 +2035,45 @@ document.addEventListener("DOMContentLoaded", () => {
                 return "error";
             }
             const data = await res.json();
+            if (isStaleEpoch()) {
+                return "stale";
+            }
+            if (typeof canUseProtectedApis === "function" && !canUseProtectedApis()) {
+                return "auth_required";
+            }
+            const staleSidebar = isStaleSidebar();
+            if (!full && staleSidebar) {
+                return "stale";
+            }
             const kb = data.knowledge_base || {};
-
-            // Update GPU / Training banner
-            const trainingBanner = document.getElementById("training-banner");
-            const trainingBannerText = document.getElementById("training-banner-text");
-            if (data.gpu && data.gpu.busy) {
-                if (trainingBanner) {
-                    trainingBanner.style.display = "flex";
-                    if (data.gpu.message && trainingBannerText) {
-                        trainingBannerText.textContent = data.gpu.message;
-                    }
+            if (!staleSidebar) {
+                if (typeof latestAppliedSidebarSeq === "number" && requestSeq > latestAppliedSidebarSeq) {
+                    latestAppliedSidebarSeq = requestSeq;
                 }
-                if (ollamaStatus) {
-                    ollamaStatus.textContent = "🟡 Đang huấn luyện MLX LoRA (GPU bận - Web hoạt động, suy luận tạm hoãn)";
-                    ollamaStatus.className = "status-indicator";
-                }
-            } else {
-                if (trainingBanner) {
-                    trainingBanner.style.display = "none";
-                }
-                if (ollamaStatus) {
-                    if (data.inference_ready) {
-                        ollamaStatus.textContent = "🟢 Môi trường mô hình sẵn sàng · Bấm Kiểm tra mô hình để chạy thử";
-                        ollamaStatus.className = "status-indicator connected";
-                    } else {
-                        ollamaStatus.textContent = `🔴 ${data.service_message || "Mô hình hỏi đáp chưa sẵn sàng"}`;
-                        ollamaStatus.className = "status-indicator disconnected";
-                    }
-                }
+                applySidebarStatusPayload(data, kb);
             }
-
-            const searchableDocs = (typeof kb.searchable_documents === "number")
-                ? kb.searchable_documents
-                : (kb.total_documents || 0);
-            const registeredDocs = (typeof kb.registered_documents === "number")
-                ? kb.registered_documents
-                : (kb.total_documents || 0);
-            const discoveredFiles = (typeof kb.discovered_files === "number")
-                ? kb.discovered_files
-                : registeredDocs;
-            if (statDocs) {
-                statDocs.textContent = searchableDocs;
-                if (discoveredFiles > searchableDocs) {
-                    statDocs.title = `${searchableDocs} tài liệu có thể tìm kiếm / ${discoveredFiles} tệp phát hiện trong thư mục nguồn`;
-                } else {
-                    statDocs.title = "";
+            if (full && !isStaleFull()) {
+                if (typeof latestAppliedFullSeq === "number" && requestSeq > latestAppliedFullSeq) {
+                    latestAppliedFullSeq = requestSeq;
                 }
+                applyModalStatusPayload(data, kb);
             }
-            if (btnOpenKb) {
-                btnOpenKb.textContent = discoveredFiles > searchableDocs
-                    ? `Xem chi tiết ${searchableDocs}/${discoveredFiles} tài liệu`
-                    : `Xem chi tiết ${searchableDocs} tài liệu`;
-            }
-            if (statPages) statPages.textContent = kb.total_indexed_pages || 0;
-            if (statChunks) statChunks.textContent = kb.total_chunks || 0;
-            if (statScanned) statScanned.textContent = kb.scanned_documents || 0;
-            embeddingCoverage = kb.total_chunks ? (kb.embedded_chunks || 0) / kb.total_chunks : 0;
-
-            window.kbData = kb.documents || [];
-            window.watcherItems = (data.watcher && data.watcher.items)
-                || (data.storage && data.storage.watcher && data.storage.watcher.items)
-                || [];
-
-            if (data.storage) {
-                const storagePathEl = document.getElementById("storage-sources-path");
-                const storagePathRow = document.getElementById("storage-sources-path-row");
-                const copyStorageBtn = document.getElementById("btn-copy-storage-path");
-                if (data.storage.sources_dir) {
-                    if (storagePathEl) {
-                        storagePathEl.textContent = data.storage.sources_dir;
-                        storagePathEl.title = data.storage.sources_dir;
-                    }
-                    if (storagePathRow) storagePathRow.style.display = "";
-                    if (copyStorageBtn) copyStorageBtn.style.display = "";
-                } else {
-                    if (storagePathRow) storagePathRow.style.display = "none";
-                    if (copyStorageBtn) copyStorageBtn.style.display = "none";
-                }
-
-                const watchStatusEl = document.getElementById("storage-watch-status");
-                const w = data.storage.watcher || data.watcher;
-                if (watchStatusEl && w) {
-                    if (!w.enabled) {
-                        watchStatusEl.textContent = "Tự động quét nguồn chung: Đang tắt (bật qua cấu hình máy chủ)";
-                    } else {
-                        const parts = [w.running ? "Đang bật" : "Đã dừng"];
-                        if (w.auto_ocr === false) {
-                            parts.push("OCR tự động: Tắt");
-                        } else if (w.ocr_runtime_available === false) {
-                            parts.push("OCR cục bộ: Chưa sẵn sàng");
-                        } else if (w.auto_ocr) {
-                            parts.push("OCR tự động: Bật");
-                        }
-                        if (w.pending_count) parts.push(`Chờ: ${w.pending_count}`);
-                        if (w.indexed_count) parts.push(`Đã đồng bộ: ${w.indexed_count}`);
-                        if (w.ocr_running_count) parts.push(`Đang chạy OCR: ${w.ocr_running_count}`);
-                        if (w.captured_pending_review_count) parts.push(`Đã chụp chờ duyệt: ${w.captured_pending_review_count}`);
-                        if (w.hold_count) parts.push(`HOLD: ${w.hold_count}`);
-                        if (w.needs_ocr_count) parts.push(`Cần OCR: ${w.needs_ocr_count}`);
-                        if (w.vector_pending_count) parts.push(`Chờ vector: ${w.vector_pending_count}`);
-                        if (w.needs_update_count) parts.push(`Cần cập nhật: ${w.needs_update_count}`);
-                        if (w.missing_source_count) parts.push(`Thiếu tệp: ${w.missing_source_count}`);
-                        if (w.waiting_gpu_count) parts.push(`Chờ GPU: ${w.waiting_gpu_count}`);
-                        if (w.error_count) parts.push(`Lỗi: ${w.error_count}`);
-                        watchStatusEl.textContent = `Tự động quét nguồn chung: ${parts.join(" · ")}`;
-                    }
-                }
-            }
+            return "ok";
         } catch (e) {
-            console.error("Status fetch error:", e);
-            if (ollamaStatus) {
-                ollamaStatus.textContent = "🔴 Máy chủ dịch vụ hiện không phản hồi. Vui lòng thử lại sau hoặc liên hệ người vận hành.";
-                ollamaStatus.className = "status-indicator disconnected";
+            if (isStaleEpoch()) {
+                return "stale";
             }
+            console.error("Status fetch error:", e);
+            if (!full && !isStaleSidebar()) {
+                if (typeof latestAppliedSidebarSeq === "number" && requestSeq > latestAppliedSidebarSeq) {
+                    latestAppliedSidebarSeq = requestSeq;
+                }
+                if (ollamaStatus) {
+                    ollamaStatus.textContent = "🔴 Máy chủ dịch vụ hiện không phản hồi. Vui lòng thử lại sau hoặc liên hệ người vận hành.";
+                    ollamaStatus.className = "status-indicator disconnected";
+                }
+            }
+            return (!full && isStaleSidebar()) ? "stale" : "error";
         }
     }
 
@@ -3336,7 +3584,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 loading: false
             });
 
-            fetchKnowledgeBaseStatus();
+            refreshKnowledgeBaseStatus({ explicit: true });
             syncGenerateButtonState();
 
             const pagesCount = (data.material && data.material.total_pages) || 1;
@@ -3529,7 +3777,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 material: attachedMaterial,
                 loading: false
             });
-            fetchKnowledgeBaseStatus();
+            refreshKnowledgeBaseStatus({ explicit: true });
             syncGenerateButtonState();
             if (chatStatus) {
                 chatStatus.textContent = `✅ Đã chọn "${filename}" từ thư viện cho cuộc trò chuyện. Nhấn vào thẻ tệp để xem nội dung hoặc tạo Trắc nghiệm & Flashcard để ôn luyện.`;
@@ -4342,12 +4590,32 @@ document.addEventListener("DOMContentLoaded", () => {
         window.addEventListener("study:account-changed", (ev) => {
             const authCfg = window.StudyAccount?.getConfig?.();
             const hasAccount = Boolean(ev?.detail?.account);
+            statusAccountEpoch += 1;
+            if (summaryStatusAbortController) {
+                try { summaryStatusAbortController.abort(); } catch (_) {}
+                summaryStatusAbortController = null;
+            }
+            if (fullKbStatusAbortController) {
+                try { fullKbStatusAbortController.abort(); } catch (_) {}
+                fullKbStatusAbortController = null;
+            }
+            summaryNextFlightPromise = null;
+            summaryNextFlightEpoch = -1;
+            pendingExplicitSummaryEpoch = -1;
+            fullKbStatusInFlight = null;
+            window.kbData = [];
+            window.watcherItems = [];
+            if (kbTableBody) kbTableBody.innerHTML = "";
             if (authCfg?.required && !hasAccount) {
                 statusPollAuthBlocked = true;
+                if (ollamaStatus) {
+                    ollamaStatus.textContent = "🔒 Đăng nhập để xem trạng thái mô hình và thư viện";
+                    ollamaStatus.className = "status-indicator";
+                }
                 return;
             }
             statusPollAuthBlocked = false;
-            refreshKnowledgeBaseStatus();
+            refreshKnowledgeBaseStatus({ explicit: true });
             fetchOllamaModels();
             loadSessions().catch(() => {});
         });
