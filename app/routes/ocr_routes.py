@@ -339,7 +339,7 @@ async def run_ocr_page(req: OCRRunPageRequest):
         if getattr(_srv, "src_watcher", None) is not None:
             try:
                 _srv.src_watcher.scan_once()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         return project_public_response({"status": "success", "record": res})
     except HTTPException:

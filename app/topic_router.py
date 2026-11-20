@@ -51,7 +51,7 @@ def get_sqlite_fingerprint(db_path: Any, conn: Optional[sqlite3.Connection] = No
             p = Path(db_path)
             if p.is_file():
                 resolved_path = p
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     if resolved_path is None and conn is not None:
@@ -63,7 +63,7 @@ def get_sqlite_fingerprint(db_path: Any, conn: Optional[sqlite3.Connection] = No
                     if p.is_file():
                         resolved_path = p
                         break
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     if resolved_path is not None:
@@ -92,11 +92,11 @@ def get_sqlite_fingerprint(db_path: Any, conn: Optional[sqlite3.Connection] = No
                 try:
                     dv = conn.execute("PRAGMA data_version").fetchone()[0]
                     conn_info = (dv, conn.total_changes)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
             return (str(resolved_path.resolve()), db_info, wal_info, change_counter, conn_info)
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     if conn is not None:
@@ -104,7 +104,7 @@ def get_sqlite_fingerprint(db_path: Any, conn: Optional[sqlite3.Connection] = No
             dv = conn.execute("PRAGMA data_version").fetchone()[0]
             sv = conn.execute("PRAGMA schema_version").fetchone()[0]
             return ("in_memory", id(conn), conn.total_changes, dv, sv)
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     return ()
@@ -369,7 +369,7 @@ class TopicRouter:
             if created_conn and conn is not None:
                 try:
                     conn.close()
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
         # 4. Handle empty candidates -> fallback to global

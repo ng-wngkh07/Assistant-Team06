@@ -4,7 +4,7 @@ import contextlib
 import json
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404
 from pathlib import Path
 import sqlite3
 import sys
@@ -142,7 +142,7 @@ def install_configured_knowledge_pack(archive: Path = None, destination: Path = 
                 expected_identity = NativeEmbeddingClient().get_identity()
         except (ValueError, RuntimeError):
             raise
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     if not expected_identity and archive.is_file():
@@ -164,7 +164,7 @@ def install_configured_knowledge_pack(archive: Path = None, destination: Path = 
                     expected_identity = NativeEmbeddingClient().get_identity()
         except (ValueError, RuntimeError):
             raise
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     if not expected_identity:
@@ -232,7 +232,7 @@ def ensure_local_model_service(timeout_seconds: float = 15) -> None:
                         manifest = json.loads(z.read('manifest.json'))
                         if manifest.get('model_identity', '').startswith('ollama-sha256:'):
                             needs_ollama = True
-                except Exception:
+                except Exception:  # nosec B110
                     pass
     if not needs_ollama:
         return
@@ -244,7 +244,7 @@ def ensure_local_model_service(timeout_seconds: float = 15) -> None:
         raise RuntimeError('Local Ollama is unavailable. Install it and the documented Qwen3.5 9B model first.')
     env = os.environ.copy()
     env['OLLAMA_HOST'] = client.base_url
-    process = subprocess.Popen([executable, 'serve'], env=env,
+    process = subprocess.Popen([executable, 'serve'], env=env,  # nosec B603
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:

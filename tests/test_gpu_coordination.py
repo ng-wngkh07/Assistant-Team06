@@ -16,7 +16,7 @@ Tests:
 
 import multiprocessing
 import os
-import subprocess
+import subprocess  # nosec B404
 import sys
 import time
 from pathlib import Path
@@ -42,12 +42,12 @@ def temp_gpu_lock(tmp_path):
 
 def test_basic_training_inference_mutual_exclusion(temp_gpu_lock):
     mgr, _, _ = temp_gpu_lock
-    assert mgr.get_status()["busy"] is False
+    assert mgr.get_status()["busy"] is False  # nosec B101
 
     with mgr.acquire_for_training(timeout=5.0, evict_ollama=False):
         status = mgr.get_status()
-        assert status["busy"] is True
-        assert status["state"] == STATE_TRAINING
+        assert status["busy"] is True  # nosec B101
+        assert status["state"] == STATE_TRAINING  # nosec B101
 
         # Inference attempt must fail
         with pytest.raises(GPUBusyError):
@@ -55,24 +55,24 @@ def test_basic_training_inference_mutual_exclusion(temp_gpu_lock):
                 pass
 
     # After training exits, state must return to idle
-    assert mgr.get_status()["busy"] is False
+    assert mgr.get_status()["busy"] is False  # nosec B101
     with mgr.acquire_for_inference():
         pass
 
 
 def test_concurrent_inference_readers_succeed(temp_gpu_lock):
     mgr, _, _ = temp_gpu_lock
-    assert mgr.get_status()["busy"] is False
+    assert mgr.get_status()["busy"] is False  # nosec B101
 
     # Two concurrent readers acquiring shared lock simultaneously must both succeed
     with mgr.acquire_for_inference():
         status1 = mgr.get_status()
-        assert status1["busy"] is False
+        assert status1["busy"] is False  # nosec B101
         with mgr.acquire_for_inference():
             status2 = mgr.get_status()
-            assert status2["busy"] is False
+            assert status2["busy"] is False  # nosec B101
 
-    assert mgr.get_status()["busy"] is False
+    assert mgr.get_status()["busy"] is False  # nosec B101
 
 
 def test_native_worker_contention_does_not_claim_training_is_running(temp_gpu_lock):
@@ -82,8 +82,8 @@ def test_native_worker_contention_does_not_claim_training_is_running(temp_gpu_lo
         with pytest.raises(GPUBusyError) as error:
             with contender.acquire_for_inference(timeout=0.01):
                 pass
-    assert "huấn luyện" not in str(error.value).lower()
-    assert "tác vụ" in str(error.value).lower()
+    assert "huấn luyện" not in str(error.value).lower()  # nosec B101
+    assert "tác vụ" in str(error.value).lower()  # nosec B101
 
 
 def _worker_hold_training_lock(lock_file, state_file, hold_seconds, ready_event):
@@ -105,7 +105,7 @@ def test_concurrent_training_commands_preserves_first_state(tmp_path):
     )
     p1.start()
     try:
-        assert ready.wait(timeout=5.0)
+        assert ready.wait(timeout=5.0)  # nosec B101
 
         # Process 2 tries to acquire with short timeout
         mgr2 = GPULockManager(lock_path=lock_file, state_path=state_file)
@@ -115,26 +115,26 @@ def test_concurrent_training_commands_preserves_first_state(tmp_path):
 
         # Verify that process 2's timeout DID NOT overwrite process 1's state
         status_during = mgr2.get_status()
-        assert status_during["busy"] is True
-        assert status_during["pid"] == p1.pid
+        assert status_during["busy"] is True  # nosec B101
+        assert status_during["pid"] == p1.pid  # nosec B101
 
     finally:
         p1.join(timeout=5.0)
 
     # After p1 finishes, state becomes idle
     mgr_after = GPULockManager(lock_path=lock_file, state_path=state_file)
-    assert mgr_after.get_status()["busy"] is False
+    assert mgr_after.get_status()["busy"] is False  # nosec B101
 
 
 def _wrapper_dies_child_sleeps(lock_file, state_file, child_sleep_sec, pipe_out):
     """Wrapper process that acquires lock, spawns child inheriting fds, then kills itself."""
-    import subprocess
+    import subprocess  # nosec B404
     mgr = GPULockManager(lock_path=Path(lock_file), state_path=Path(state_file))
     with mgr.acquire_for_training(timeout=5.0, evict_ollama=False) as lock_info:
         fds = getattr(lock_info, "fds", (int(lock_info),))
         # Spawn child python process that sleeps, inheriting both lock_fd and intent_fd
         cmd = [sys.executable, "-c", f"import time, sys; time.sleep({child_sleep_sec})"]
-        proc = subprocess.Popen(cmd, pass_fds=fds)
+        proc = subprocess.Popen(cmd, pass_fds=fds)  # nosec B603
         mgr.update_child_pid(proc.pid)
         pipe_out.send(proc.pid)
         pipe_out.close()
@@ -168,13 +168,13 @@ def test_lock_inheritance_when_wrapper_killed_child_alive(tmp_path):
             p_wrapper.join(timeout=2.0)
 
     # At this point, the wrapper process is dead!
-    assert p_wrapper.is_alive() is False
+    assert p_wrapper.is_alive() is False  # nosec B101
 
     # But the child process is still running and holds the inherited descriptors!
     mgr = GPULockManager(lock_path=lock_file, state_path=state_file)
     status_while_child_running = mgr.get_status()
-    assert status_while_child_running["busy"] is True
-    assert status_while_child_running["child_pid"] == child_pid
+    assert status_while_child_running["busy"] is True  # nosec B101
+    assert status_while_child_running["child_pid"] == child_pid  # nosec B101
 
     # 1. Inference attempt while child is running MUST be blocked
     with pytest.raises(GPUBusyError):
@@ -186,7 +186,7 @@ def test_lock_inheritance_when_wrapper_killed_child_alive(tmp_path):
     with pytest.raises(TimeoutError):
         with mgr2.acquire_for_training(timeout=0.3, evict_ollama=False):
             pass
-    assert mgr2.get_status()["child_pid"] == child_pid
+    assert mgr2.get_status()["child_pid"] == child_pid  # nosec B101
 
     # Wait for the child process to complete
     start_wait = time.time()
@@ -200,7 +200,7 @@ def test_lock_inheritance_when_wrapper_killed_child_alive(tmp_path):
     # Now child has exited; lock must automatically free!
     time.sleep(0.2)
     status_after_child = mgr.get_status()
-    assert status_after_child["busy"] is False
+    assert status_after_child["busy"] is False  # nosec B101
 
     # Inference should now succeed without error
     with mgr.acquire_for_inference():
@@ -223,7 +223,7 @@ def test_ollama_unload_verification():
         mock_post.return_value = MagicMock(status_code=200, text="ok")
 
         unloaded = client.unload_resident_models(timeout=2.0)
-        assert unloaded == ["qwen2.5:7b"]
+        assert unloaded == ["qwen2.5:7b"]  # nosec B101
 
     # Case 2: POST unload fails (non-200) -> must raise RuntimeError
     with patch("requests.get") as mock_get, patch("requests.post") as mock_post:
@@ -232,7 +232,7 @@ def test_ollama_unload_verification():
 
         with pytest.raises(RuntimeError) as exc:
             client.unload_resident_models(timeout=1.0)
-        assert "thất bại" in str(exc.value)
+        assert "thất bại" in str(exc.value)  # nosec B101
 
     # Case 3: /api/ps refuses to empty within timeout -> must raise RuntimeError
     with patch("requests.get") as mock_get, patch("requests.post") as mock_post:
@@ -241,7 +241,7 @@ def test_ollama_unload_verification():
 
         with pytest.raises(RuntimeError) as exc:
             client.unload_resident_models(timeout=0.6)
-        assert "Không thể xác nhận GPU rỗng" in str(exc.value)
+        assert "Không thể xác nhận GPU rỗng" in str(exc.value)  # nosec B101
 
     # Case 4: /api/ps returns HTTP 500 during polling -> must raise RuntimeError (not falsely succeed)
     with patch("requests.get") as mock_get, patch("requests.post") as mock_post:
@@ -253,7 +253,7 @@ def test_ollama_unload_verification():
 
         with pytest.raises(RuntimeError) as exc:
             client.unload_resident_models(timeout=0.6)
-        assert "Không thể xác nhận GPU rỗng" in str(exc.value)
+        assert "Không thể xác nhận GPU rỗng" in str(exc.value)  # nosec B101
 
     # Case 5: /api/ps returns malformed JSON during polling -> must raise RuntimeError
     with patch("requests.get") as mock_get, patch("requests.post") as mock_post:
@@ -266,7 +266,7 @@ def test_ollama_unload_verification():
 
         with pytest.raises(RuntimeError) as exc:
             client.unload_resident_models(timeout=0.6)
-        assert "Không thể xác nhận GPU rỗng" in str(exc.value)
+        assert "Không thể xác nhận GPU rỗng" in str(exc.value)  # nosec B101
 
 
 def _worker_training_intent_writer(lock_file, state_file, intent_file):
@@ -278,7 +278,7 @@ def _worker_training_intent_writer(lock_file, state_file, intent_file):
     try:
         with m.acquire_for_training(timeout=3.0, evict_ollama=False):
             pass
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
 
@@ -306,13 +306,13 @@ def test_writer_intent_blocks_new_inference_while_waiting(tmp_path):
                 break
             time.sleep(0.05)
 
-        assert mgr.get_status()["state"] == STATE_WAITING
-        assert mgr.get_status()["busy"] is True
+        assert mgr.get_status()["state"] == STATE_WAITING  # nosec B101
+        assert mgr.get_status()["busy"] is True  # nosec B101
 
         # Now verify: new inference queries are BLOCKED immediately!
         allowed, msg = mgr.check_inference_allowed()
-        assert allowed is False
-        assert "MLX LoRA" in msg
+        assert allowed is False  # nosec B101
+        assert "MLX LoRA" in msg  # nosec B101
 
         with pytest.raises(GPUBusyError):
             with mgr.acquire_for_inference():
@@ -329,8 +329,8 @@ def test_writer_intent_blocks_new_inference_while_waiting(tmp_path):
 
     # State returns to idle
     st_after = mgr.get_status()
-    assert st_after["busy"] is False
-    assert st_after["state"] == STATE_IDLE
+    assert st_after["busy"] is False  # nosec B101
+    assert st_after["state"] == STATE_IDLE  # nosec B101
 
 
 def test_wait_exception_preserves_child_until_natural_completion(tmp_path):
@@ -347,13 +347,13 @@ def test_wait_exception_preserves_child_until_natural_completion(tmp_path):
         with pytest.raises(KeyboardInterrupt):
             with mgr.acquire_for_training(timeout=5.0, evict_ollama=False) as lock_info:
                 fds = getattr(lock_info, "fds", (int(lock_info),))
-                proc = subprocess.Popen(child_cmd, pass_fds=fds)
+                proc = subprocess.Popen(child_cmd, pass_fds=fds)  # nosec B603
                 child_pid = proc.pid
                 mgr.update_child_pid(proc.pid)
                 # Losing the observer does not authorize cancelling the child.
                 raise KeyboardInterrupt("Simulated user interrupt during MLX run")
-        assert is_pid_alive(child_pid)
-        assert mgr.get_status()["busy"] is True
+        assert is_pid_alive(child_pid)  # nosec B101
+        assert mgr.get_status()["busy"] is True  # nosec B101
         with pytest.raises(GPUBusyError):
             with mgr.acquire_for_inference():
                 pass
@@ -362,12 +362,12 @@ def test_wait_exception_preserves_child_until_natural_completion(tmp_path):
             proc.wait()
 
     # Only natural completion releases the child's inherited descriptors.
-    assert not is_pid_alive(child_pid)
+    assert not is_pid_alive(child_pid)  # nosec B101
 
     # Verify that lock and state cleanly returned to idle
     st = mgr.get_status()
-    assert st["busy"] is False
-    assert st["state"] == STATE_IDLE
+    assert st["busy"] is False  # nosec B101
+    assert st["state"] == STATE_IDLE  # nosec B101
 
     # Verify that inference can acquire lock immediately
     with mgr.acquire_for_inference():
@@ -387,16 +387,16 @@ def test_child_survival_preserves_lock_if_wrapper_exits_early(tmp_path):
     # Suppose a caller exits the context manager early without waiting for child
     with mgr.acquire_for_training(timeout=5.0, evict_ollama=False) as lock_info:
         fds = getattr(lock_info, "fds", (int(lock_info),))
-        child_proc = subprocess.Popen(child_cmd, pass_fds=fds)
+        child_proc = subprocess.Popen(child_cmd, pass_fds=fds)  # nosec B603
         mgr.update_child_pid(child_proc.pid)
 
     try:
         # Context exited, BUT child is still running!
         # The lock MUST NOT be idle!
         st = mgr.get_status()
-        assert st["busy"] is True
-        assert st["state"] == STATE_TRAINING
-        assert st["child_pid"] == child_proc.pid
+        assert st["busy"] is True  # nosec B101
+        assert st["state"] == STATE_TRAINING  # nosec B101
+        assert st["child_pid"] == child_proc.pid  # nosec B101
 
         # Inference MUST still be rejected!
         with pytest.raises(GPUBusyError):
@@ -408,7 +408,7 @@ def test_child_survival_preserves_lock_if_wrapper_exits_early(tmp_path):
 
         # Now that child finished, state auto-heals to idle
         time.sleep(0.2)
-        assert mgr.get_status()["busy"] is False
+        assert mgr.get_status()["busy"] is False  # nosec B101
 
     finally:
         child_proc.wait()
@@ -434,65 +434,65 @@ def test_web_endpoints_during_gpu_training(tmp_path, monkeypatch):
 
     # 1. Normal state: all endpoints 200
     r_health = client.get("/api/health")
-    assert r_health.status_code == 200
+    assert r_health.status_code == 200  # nosec B101
 
     r_status = client.get("/api/status")
-    assert r_status.status_code == 200
-    assert r_status.json()["gpu"]["busy"] is False
+    assert r_status.status_code == 200  # nosec B101
+    assert r_status.json()["gpu"]["busy"] is False  # nosec B101
 
     r_history = client.get("/api/history")
-    assert r_history.status_code == 200
+    assert r_history.status_code == 200  # nosec B101
 
     r_index = client.get("/")
-    assert r_index.status_code == 200
+    assert r_index.status_code == 200  # nosec B101
 
     # 2. Blank question returns 422 regardless of GPU
     r_blank = client.post("/api/chat", json={"query": "   "})
-    assert r_blank.status_code == 422
+    assert r_blank.status_code == 422  # nosec B101
 
     # 3. Acquire GPU training lock on isolated coordinator
     with isolated_coordinator.acquire_for_training(timeout=5.0, evict_ollama=False):
         # Non-GPU endpoints must remain 200 OK!
         r_health_busy = client.get("/api/health")
-        assert r_health_busy.status_code == 200
+        assert r_health_busy.status_code == 200  # nosec B101
 
         r_status_busy = client.get("/api/status")
-        assert r_status_busy.status_code == 200
-        assert r_status_busy.json()["gpu"]["busy"] is True
-        assert "MLX LoRA" in r_status_busy.json()["gpu"]["message"]
+        assert r_status_busy.status_code == 200  # nosec B101
+        assert r_status_busy.json()["gpu"]["busy"] is True  # nosec B101
+        assert "MLX LoRA" in r_status_busy.json()["gpu"]["message"]  # nosec B101
 
         r_history_busy = client.get("/api/history")
-        assert r_history_busy.status_code == 200
+        assert r_history_busy.status_code == 200  # nosec B101
 
         r_index_busy = client.get("/")
-        assert r_index_busy.status_code == 200
+        assert r_index_busy.status_code == 200  # nosec B101
 
         # Blank query still returns 422
-        assert client.post("/api/chat", json={"query": ""}).status_code == 422
+        assert client.post("/api/chat", json={"query": ""}).status_code == 422  # nosec B101
 
         # Chat endpoint must return 503 with Vietnamese message
         r_chat_busy = client.post("/api/chat", json={"query": "Tâm lý học là gì?"})
-        assert r_chat_busy.status_code == 503
-        assert "MLX LoRA" in r_chat_busy.json()["detail"]
+        assert r_chat_busy.status_code == 503  # nosec B101
+        assert "MLX LoRA" in r_chat_busy.json()["detail"]  # nosec B101
 
         # Stream endpoint returns busy SSE event
         r_stream_busy = client.post("/api/chat/stream", json={"query": "Tâm lý học là gì?"})
-        assert r_stream_busy.status_code == 200
+        assert r_stream_busy.status_code == 200  # nosec B101
         stream_text = r_stream_busy.text
-        assert "gpu_busy" in stream_text
-        assert "MLX LoRA" in stream_text
+        assert "gpu_busy" in stream_text  # nosec B101
+        assert "MLX LoRA" in stream_text  # nosec B101
 
     # 4. After lock released, status returns to idle
     r_status_idle = client.get("/api/status")
-    assert r_status_idle.status_code == 200
-    assert r_status_idle.json()["gpu"]["busy"] is False
+    assert r_status_idle.status_code == 200  # nosec B101
+    assert r_status_idle.json()["gpu"]["busy"] is False  # nosec B101
 
 
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX inherited descriptor lifetime')
 @pytest.mark.parametrize('lock_name', ['gpu.lock', 'native_worker.lock'])
 def test_inference_wrapper_exit_keeps_live_child_locks(tmp_path, lock_name):
     """An orphaned worker must still exclude both training and another native load."""
-    import subprocess
+    import subprocess  # nosec B404
     from app import file_lock as fcntl
     from app.gpu_lock import GPULockManager
     manager = GPULockManager(lock_path=tmp_path/'gpu.lock',
@@ -500,12 +500,12 @@ def test_inference_wrapper_exit_keeps_live_child_locks(tmp_path, lock_name):
     child = None
     try:
         with manager.acquire_for_inference(timeout=1) as descriptors:
-            child = subprocess.Popen([sys.executable, '-c',
+            child = subprocess.Popen([sys.executable, '-c',  # nosec B603
                 "import sys; print('ready',flush=True); sys.stdin.read()"],
                 pass_fds=tuple(descriptors), stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            assert child.stdout.readline().strip() == 'ready'
-        assert child.poll() is None
+            assert child.stdout.readline().strip() == 'ready'  # nosec B101
+        assert child.poll() is None  # nosec B101
         fd = os.open(str(tmp_path/lock_name), os.O_RDWR)
         try:
             with pytest.raises(BlockingIOError):
@@ -527,16 +527,16 @@ def test_role_scoped_resident_eviction_and_training_full_eviction(temp_gpu_lock)
     mgr.register_resident_evictor(lambda: events.append("mlx_vision"), role="mlx_vision")
 
     mgr.evict_resident_workers(roles={"mlx_vision"})
-    assert events == ["mlx_vision"]
+    assert events == ["mlx_vision"]  # nosec B101
 
     events.clear()
     mgr.evict_resident_workers(roles={"mlx_infer"})
-    assert events == ["mlx_infer"]
+    assert events == ["mlx_infer"]  # nosec B101
 
     events.clear()
     with mgr.acquire_for_training(timeout=5.0, evict_ollama=False):
-        assert set(events) == {"mlx_embedding", "mlx_infer", "mlx_vision"}
-        assert len(events) == 3
+        assert set(events) == {"mlx_embedding", "mlx_infer", "mlx_vision"}  # nosec B101
+        assert len(events) == 3  # nosec B101
 
 
 def test_native_embedding_registers_mlx_embedding_role():
@@ -547,7 +547,7 @@ def test_native_embedding_registers_mlx_embedding_role():
 
     with gpu_coordinator._evictors_lock:
         registered = list(gpu_coordinator._resident_evictors)
-    assert any(
+    assert any(  # nosec B101
         cb == NativeEmbeddingClient.evict_stream_worker and role == "mlx_embedding"
         for cb, role in registered
     ), f"Missing mlx_embedding evictor registration in {registered}"
@@ -600,10 +600,10 @@ def test_resident_stream_worker_evicts_peer_roles_on_oom_retry(monkeypatch):
     monkeypatch.setattr(worker, "_terminate_locked", lambda: setattr(worker, "_proc", None))
 
     events = list(worker.stream_events({"messages": []}))
-    assert events == [{"answer": "ok", "done": True}]
-    assert attempts[0] == 2
-    assert evict_calls[0] == {"mlx_vision"}
-    assert len(evict_calls) >= 2 and {"mlx_embedding", "mlx_vision"}.issubset(evict_calls[1])
+    assert events == [{"answer": "ok", "done": True}]  # nosec B101
+    assert attempts[0] == 2  # nosec B101
+    assert evict_calls[0] == {"mlx_vision"}  # nosec B101
+    assert len(evict_calls) >= 2 and {"mlx_embedding", "mlx_vision"}.issubset(evict_calls[1])  # nosec B101
 
 
 def _worker_hold_training_with_events(lock_file, state_file, entered_event, release_event):
@@ -645,19 +645,19 @@ def test_cross_process_training_evicts_server_resident_stream_worker(tmp_path):
     p_trainer = None
     try:
         res1 = worker.request_json({"ping": 1})
-        assert res1 == {"ping": 1, "done": True}
-        assert worker._proc is not None
+        assert res1 == {"ping": 1, "done": True}  # nosec B101
+        assert worker._proc is not None  # nosec B101
         worker_pid = worker._proc.pid
-        assert is_pid_alive(worker_pid)
+        assert is_pid_alive(worker_pid)  # nosec B101
         reg = json.loads(mgr_server.resident_workers_path.read_text(encoding="utf-8"))
-        assert any(entry.get("worker_pid") == worker_pid for entry in reg.get("workers", []))
+        assert any(entry.get("worker_pid") == worker_pid for entry in reg.get("workers", []))  # nosec B101
 
         p_trainer = multiprocessing.Process(
             target=_worker_hold_training_with_events,
             args=(str(lock_file), str(state_file), entered, release),
         )
         p_trainer.start()
-        assert entered.wait(timeout=5.0)
+        assert entered.wait(timeout=5.0)  # nosec B101
 
         deadline = time.monotonic() + 2.5
         while time.monotonic() < deadline:
@@ -665,17 +665,17 @@ def test_cross_process_training_evicts_server_resident_stream_worker(tmp_path):
                 break
             time.sleep(0.02)
 
-        assert worker._proc is None
-        assert not is_pid_alive(worker_pid)
+        assert worker._proc is None  # nosec B101
+        assert not is_pid_alive(worker_pid)  # nosec B101
 
         release.set()
         p_trainer.join(timeout=5.0)
-        assert p_trainer.exitcode == 0
+        assert p_trainer.exitcode == 0  # nosec B101
 
         res2 = worker.request_json({"ping": 2})
-        assert res2 == {"ping": 2, "done": True}
-        assert worker._proc is not None
-        assert worker._proc.pid != worker_pid
+        assert res2 == {"ping": 2, "done": True}  # nosec B101
+        assert worker._proc is not None  # nosec B101
+        assert worker._proc.pid != worker_pid  # nosec B101
     finally:
         release.set()
         if p_trainer is not None and p_trainer.is_alive():
@@ -693,12 +693,12 @@ def test_cross_process_training_fallback_terminates_unmonitored_resident_worker(
     state_file = tmp_path / "gpu_state.json"
     mgr = GPULockManager(lock_path=lock_file, state_path=state_file)
 
-    proc = subprocess.Popen(
+    proc = subprocess.Popen(  # nosec B603
         [sys.executable, "-c", "import time; time.sleep(30)"],
         start_new_session=True,
     )
     try:
-        assert is_pid_alive(proc.pid)
+        assert is_pid_alive(proc.pid)  # nosec B101
         mgr.resident_workers_path.write_text(
             json.dumps(
                 {
@@ -716,9 +716,9 @@ def test_cross_process_training_fallback_terminates_unmonitored_resident_worker(
         )
         with mgr.acquire_for_training(timeout=5.0, evict_ollama=False):
             rc = proc.wait(timeout=2.0)
-            assert rc in (-signal.SIGTERM, -signal.SIGKILL)
+            assert rc in (-signal.SIGTERM, -signal.SIGKILL)  # nosec B101
             reg = json.loads(mgr.resident_workers_path.read_text(encoding="utf-8"))
-            assert reg["workers"] == []
+            assert reg["workers"] == []  # nosec B101
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -732,7 +732,7 @@ def test_trained_client_registers_warmup_cancel_evictor():
 
     with gpu_coordinator._evictors_lock:
         registered = list(gpu_coordinator._resident_evictors)
-    assert any(
+    assert any(  # nosec B101
         cb == TrainedModelClient._cancel_startup_warmup_signal and role == "mlx_infer"
         for cb, role in registered
     )

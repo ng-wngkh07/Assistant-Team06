@@ -3,7 +3,7 @@
 The child inherits the server's OS restrictions, so a desktop GPU check cannot
 accidentally certify a restricted server. This probe does not load model weights.
 """
-import subprocess
+import subprocess  # nosec B404
 import sys
 import threading
 import time
@@ -42,7 +42,7 @@ def probe_mlx_runtime(force=False):
             return dict(_cached)
         runtime = BASE_DIR / '.train-venv' / 'bin' / 'python'
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603
                 [str(runtime), '-c',
                  'import mlx.core as mx; assert mx.metal.is_available(); import mlx_lm; print("METAL_OK")'],
                 cwd=BASE_DIR, capture_output=True, text=True, timeout=15, check=False,

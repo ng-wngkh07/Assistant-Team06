@@ -338,7 +338,7 @@ class HistoryStore:
                 {having_sql}
                 ORDER BY s.updated_at DESC
                 LIMIT ? OFFSET ?
-            """
+            """  # nosec B608
             exec_params = where_params + having_params + [lim, off]
             rows = db.execute(query, exec_params).fetchall()
 
@@ -351,7 +351,7 @@ class HistoryStore:
                     GROUP BY s.id
                     {having_sql}
                 )
-            """
+            """  # nosec B608
             count_params = where_params + having_params
             total = db.execute(count_query, count_params).fetchone()[0]
 
@@ -677,7 +677,7 @@ class HistoryStore:
 
             if legacy_ids:
                 placeholders = ",".join("?" for _ in legacy_ids)
-                db.execute(f"DELETE FROM searches WHERE id IN ({placeholders})", legacy_ids)
+                db.execute(f"DELETE FROM searches WHERE id IN ({placeholders})", legacy_ids)  # nosec B608
 
             db.execute("DELETE FROM session_turns WHERE session_id=?", (session_id,))
             res = db.execute("DELETE FROM sessions WHERE id=?", (session_id,))

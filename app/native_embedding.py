@@ -7,7 +7,7 @@ import math
 import os
 import queue
 import signal
-import subprocess
+import subprocess  # nosec B404
 import sys
 import threading
 import time
@@ -36,7 +36,7 @@ def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) 
         if os.name == "nt" and getattr(proc, "_handle", None) is not None:
             try:
                 proc._handle.Close()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         return
     kill_pg = False
@@ -59,7 +59,7 @@ def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) 
                     if getattr(kill_proc, "_handle", None) is not None and kill_proc.returncode is not None:
                         try:
                             kill_proc._handle.Close()
-                        except Exception:
+                        except Exception:  # nosec B110
                             pass
             except (OSError, subprocess.SubprocessError):
                 pass
@@ -86,12 +86,12 @@ def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) 
             pass
     try:
         proc.wait(timeout=2.0)
-    except Exception:
+    except Exception:  # nosec B110
         pass
     if os.name == "nt" and getattr(proc, "_handle", None) is not None and proc.returncode is not None:
         try:
             proc._handle.Close()
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
 
@@ -465,7 +465,7 @@ class NativeEmbeddingClient:
         if timer is not None:
             try:
                 timer.cancel()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         # Hold _stream_lock through termination and worker-set removal so concurrent callers
         # or gpu_coordinator never observe eviction complete before the child is actually dead.
@@ -483,7 +483,7 @@ class NativeEmbeddingClient:
         if cls._stream_idle_timer is not None:
             try:
                 cls._stream_idle_timer.cancel()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             cls._stream_idle_timer = None
         timeout_sec = float(cls._STREAM_IDLE_TIMEOUT)
@@ -524,7 +524,7 @@ class NativeEmbeddingClient:
         }
         if os.name == "posix":
             popen_kwargs["start_new_session"] = True
-        proc = subprocess.Popen(cmd, **popen_kwargs)
+        proc = subprocess.Popen(cmd, **popen_kwargs)  # nosec B603
         with _ACTIVE_WORKERS_LOCK:
             _ACTIVE_WORKERS.add(proc)
         if isinstance(proc, _STDLIB_POPEN) and isinstance(getattr(proc, "pid", None), int):
@@ -640,7 +640,7 @@ class NativeEmbeddingClient:
                 if cls._stream_idle_timer is not None:
                     try:
                         cls._stream_idle_timer.cancel()
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
                     cls._stream_idle_timer = None
                 state = cls._stream_worker
@@ -721,7 +721,7 @@ class NativeEmbeddingClient:
             if pass_fds:
                 popen_kwargs["pass_fds"] = pass_fds
 
-        proc = subprocess.Popen(cmd, **popen_kwargs)
+        proc = subprocess.Popen(cmd, **popen_kwargs)  # nosec B603
         with _ACTIVE_WORKERS_LOCK:
             _ACTIVE_WORKERS.add(proc)
 

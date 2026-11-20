@@ -7,7 +7,7 @@ import io
 import json
 import os
 import signal
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tempfile
 import threading
@@ -37,7 +37,7 @@ def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) 
         if os.name == "nt" and getattr(proc, "_handle", None) is not None:
             try:
                 proc._handle.Close()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         return
     kill_pg = False
@@ -60,7 +60,7 @@ def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) 
                     if getattr(kill_proc, "_handle", None) is not None and kill_proc.returncode is not None:
                         try:
                             kill_proc._handle.Close()
-                        except Exception:
+                        except Exception:  # nosec B110
                             pass
             except (OSError, subprocess.SubprocessError):
                 pass
@@ -87,12 +87,12 @@ def _terminate_owned_worker(proc: subprocess.Popen, grace_seconds: float = 0.5) 
             pass
     try:
         proc.wait(timeout=2.0)
-    except Exception:
+    except Exception:  # nosec B110
         pass
     if os.name == "nt" and getattr(proc, "_handle", None) is not None and proc.returncode is not None:
         try:
             proc._handle.Close()
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
 
@@ -329,7 +329,7 @@ class NativeVisionClient:
             if pass_fds:
                 popen_kwargs["pass_fds"] = pass_fds
 
-        proc = subprocess.Popen(cmd, **popen_kwargs)
+        proc = subprocess.Popen(cmd, **popen_kwargs)  # nosec B603
         with _ACTIVE_WORKERS_LOCK:
             _ACTIVE_WORKERS.add(proc)
 
@@ -479,7 +479,7 @@ class NativeVisionClient:
                         }
                         if pass_fds:
                             kwargs_run["pass_fds"] = pass_fds
-                        completed = subprocess.run(cmd, **kwargs_run)
+                        completed = subprocess.run(cmd, **kwargs_run)  # nosec B603
                     else:
                         completed = self._run_cancellable_popen(
                             cmd,

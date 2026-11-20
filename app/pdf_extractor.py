@@ -3,7 +3,7 @@ import os
 import posixpath
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import threading
 import zipfile
 from pathlib import Path

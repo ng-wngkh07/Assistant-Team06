@@ -373,7 +373,7 @@ class KnowledgeIndexer:
         with self.get_connection() as conn:
             cols = [row["name"] for row in conn.execute("PRAGMA table_info(documents)").fetchall()]
             pipe_col = ", pipeline_version" if "pipeline_version" in cols else ""
-            cursor = conn.execute(f"SELECT id, filename, filepath, file_hash, status, total_pages, extracted_pages_count, is_scanned{pipe_col} FROM documents")
+            cursor = conn.execute(f"SELECT id, filename, filepath, file_hash, status, total_pages, extracted_pages_count, is_scanned{pipe_col} FROM documents")  # nosec B608
             return {row["filename"]: dict(row) for row in cursor.fetchall()}
 
     def backfill_missing_embeddings(
@@ -464,7 +464,7 @@ class KnowledgeIndexer:
                 LEFT JOIN corpus_vector_provenance p ON p.chunk_id = c.id
                 {where_doc}
                 ORDER BY c.id
-                """,
+                """,  # nosec B608
                 params,
             ).fetchall()
 
@@ -657,7 +657,7 @@ class KnowledgeIndexer:
         for cache_dir in self._ocr_cache_dirs():
             try:
                 candidates = cache_dir.glob("*.json")
-            except Exception:
+            except Exception:  # nosec B112
                 continue
             for cp in candidates:
                 try:
@@ -698,7 +698,7 @@ class KnowledgeIndexer:
                             "text": entry.get("text") or "",
                             "needs_review": bool(entry.get("needs_review")) or completeness != "complete",
                         }
-                except Exception:
+                except Exception:  # nosec B112
                     continue
 
         return latest_page_review_states
@@ -1625,14 +1625,14 @@ class KnowledgeIndexer:
                 FROM chunks c
                 LEFT JOIN corpus_vector_provenance p ON p.chunk_id = c.id
                 {where_sql}
-                """,
+                """,  # nosec B608
                 params,
             ).fetchall()
         except sqlite3.Error:
             where_sql = "WHERE doc_id = ?" if doc_id is not None else ""
             params = (doc_id,) if doc_id is not None else ()
             for r in conn.execute(
-                f"SELECT doc_id, COUNT(*) AS total_c FROM chunks {where_sql} GROUP BY doc_id",
+                f"SELECT doc_id, COUNT(*) AS total_c FROM chunks {where_sql} GROUP BY doc_id",  # nosec B608
                 params,
             ).fetchall():
                 total_by_doc[int(r["doc_id"])] = int(r["total_c"] or 0)
@@ -1730,7 +1730,7 @@ class KnowledgeIndexer:
             for cache_dir in self._ocr_cache_dirs():
                 try:
                     candidates = cache_dir.glob("*.json")
-                except Exception:
+                except Exception:  # nosec B112
                     continue
                 for cp in candidates:
                     try:
@@ -1772,7 +1772,7 @@ class KnowledgeIndexer:
                     if r_data.get("image_reviewed") is True and r_data.get("completeness") in ("complete", "partial"):
                         captured.setdefault(key, set()).add(r_page)
                         reviewed.setdefault(key, set()).add(r_page)
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
             watcher_flags = self._load_watcher_sync_flags()

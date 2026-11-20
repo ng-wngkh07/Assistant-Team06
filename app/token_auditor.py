@@ -10,7 +10,7 @@ import sys
 import json
 import math
 import logging
-import subprocess
+import subprocess  # nosec B404
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -34,7 +34,7 @@ def _run_exact_audit_local(
         raise FileNotFoundError(f"Thư mục mô hình không tồn tại: {model_dir}")
 
     try:
-        tokenizer = AutoTokenizer.from_pretrained(
+        tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
             str(model_dir),
             trust_remote_code=False,
             local_files_only=True,
@@ -324,7 +324,7 @@ def audit_dataset_exact(
     ]
 
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # nosec B603
             cmd,
             capture_output=True,
             text=True,

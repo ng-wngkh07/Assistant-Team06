@@ -14,7 +14,7 @@ Deleting a branch after merge is optional. Delete a merged feature branch when i
 
 ## Public records
 
-Keep PR titles and changelog entries focused on behavior, compatibility and validation. Do not include internal staffing, personal work allocation or operational chat logs. Use Git authorship for attribution. Keep private artifacts and sensitive incident details in controlled storage.
+Keep commits, tracked files, `docs/`, PR titles/descriptions, and changelog entries focused strictly on technical product behavior, architecture, compatibility, and validation. Never commit or publish internal business documents, model-training runs or protocols, model-experimentation metrics, evaluation scorecards, paired answer comparisons, private corpus counts/excerpts, or personal work allocation and chat logs. Use Git authorship for attribution and keep private evaluation, training, and audit artifacts strictly inside local ignored storage (`data/runtime/`, `data/evaluation/`, `data/training/`). Run `python scripts/check_history.py --base origin/main` before committing or pushing to enforce both changelog and public-content guards.
 
 ## GitHub references
 

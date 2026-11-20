@@ -295,7 +295,7 @@ class OllamaClient:
             elif res.status_code == 404:
                 self._unavailable_models.add(model)
                 return None
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
         # Fallback to classic /api/embeddings

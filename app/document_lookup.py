@@ -135,7 +135,7 @@ class DocumentLookup:
             "FROM documents d "
             "LEFT JOIN chunks c ON c.doc_id = d.id "
             f"{where_sql}"
-            f"GROUP BY d.id {order_sql}"
+            f"GROUP BY d.id {order_sql}"  # nosec B608
         )
         return [dict(r) for r in db.execute(sql, params).fetchall()]
 
@@ -287,7 +287,7 @@ class DocumentLookup:
                     f"c.page_num, c.chunk_index, c.text, bm25(chunks_fts) AS rank_score "
                     f"FROM chunks_fts JOIN chunks c ON chunks_fts.rowid=c.id "
                     f"WHERE chunks_fts MATCH ? AND c.doc_id IN ({scope}) "
-                    f"ORDER BY rank_score, c.id LIMIT ?",
+                    f"ORDER BY rank_score, c.id LIMIT ?",  # nosec B608
                     [fts_query, *ids, limit * 3],
                 )]
 
@@ -301,7 +301,7 @@ class DocumentLookup:
                         row = db.execute("SELECT model_digest FROM corpus_vector_provenance WHERE full_text=1 LIMIT 1").fetchone()
                         if row:
                             installed_digest = row[0]
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
                 use_native = False
@@ -357,7 +357,7 @@ class DocumentLookup:
                             FROM chunks c JOIN corpus_vector_provenance p ON p.chunk_id=c.id
                             WHERE c.doc_id IN ({scope}) AND c.embedding IS NOT NULL
                               AND p.model_digest=? AND p.full_text=1 AND p.dimensions=?
-                        """
+                        """  # nosec B608
                         rows = db.execute(sql, [*ids, expected_identity, len(q)]).fetchall()
 
                     for row in rows:

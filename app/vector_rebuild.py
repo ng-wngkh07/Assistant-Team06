@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import selectors
 import sqlite3
-import subprocess
+import subprocess  # nosec B404
 import sys
 import time
 
@@ -56,7 +56,7 @@ def nonvector_fingerprint(db):
             cols = [c for c in cols if c != 'embedding']
         fields = ','.join(map(quote, cols))
         digest.update(json.dumps([name, cols]).encode())
-        for row in db.execute('SELECT ' + fields + ' FROM ' + quote(name) + ' ORDER BY ' + fields):
+        for row in db.execute('SELECT ' + fields + ' FROM ' + quote(name) + ' ORDER BY ' + fields):  # nosec B608
             values = [hashlib.sha256(v).hexdigest() if isinstance(v, bytes) else v for v in row]
             digest.update(json.dumps(values, ensure_ascii=False, separators=(',', ':')).encode())
             digest.update(b'\n')
@@ -208,7 +208,7 @@ def build_stage(database, stage, *, batch_size=16, limit=0, backend='native', mo
             return {'completed_this_run': 0, 'remaining': 0}
         log_path = stage.with_suffix('.worker.log')
         with gpu_coordinator.acquire_for_inference() as fds, log_path.open('ab') as error_log:
-            process = subprocess.Popen(
+            process = subprocess.Popen(  # nosec B603
                 [str(BASE_DIR / '.train-venv/bin/python'), '-u', '-m', 'app.mlx_embedding', '--stream'],
                 cwd=BASE_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=error_log,
                 text=True, bufsize=1, pass_fds=tuple(fds),

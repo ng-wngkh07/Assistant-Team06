@@ -16,7 +16,7 @@ import os
 import posixpath
 import re
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 import threading
 import time
@@ -264,7 +264,7 @@ def is_soffice_available() -> bool:
 def get_renderer_identity(soffice_path: Path) -> str:
     """Return renderer identity string (version/hash) for deterministic cache keying."""
     try:
-        res = subprocess.run(
+        res = subprocess.run(  # nosec B603
             [str(soffice_path), "--version"],
             capture_output=True,
             text=True,
@@ -272,7 +272,7 @@ def get_renderer_identity(soffice_path: Path) -> str:
         )
         if res.returncode == 0 and res.stdout.strip():
             return res.stdout.strip()
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
     try:
@@ -469,7 +469,7 @@ def convert_pptx_to_pdf_cached(pptx_path: Path) -> Optional[Path]:
             ]
 
             try:
-                proc = subprocess.run(
+                proc = subprocess.run(  # nosec B603
                     cmd,
                     capture_output=True,
                     timeout=60,

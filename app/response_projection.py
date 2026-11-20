@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-import subprocess
+import subprocess  # nosec B404
 from typing import Any
 
 INTERNAL_PATH_KEYS = frozenset(

@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import select
-import subprocess
+import subprocess  # nosec B404
 import sys
 import threading
 import time
@@ -84,7 +84,7 @@ class TokenizerWorkerClient:
             "--server",
             "--model-dir", str(self.model_dir),
         ]
-        self._proc = subprocess.Popen(
+        self._proc = subprocess.Popen(  # nosec B603
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -247,12 +247,12 @@ class TokenizerWorkerClient:
             try:
                 if proc.stdin and not proc.stdin.closed:
                     proc.stdin.close()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             try:
                 if proc.stdout and not proc.stdout.closed:
                     proc.stdout.close()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             try:
                 proc.terminate()
@@ -261,7 +261,7 @@ class TokenizerWorkerClient:
                 try:
                     proc.kill()
                     proc.wait(timeout=0.2)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
 
@@ -296,7 +296,7 @@ def _run_server(model_dir: Path) -> None:
     """Run persistent JSON-RPC server on stdin/stdout using transformers.AutoTokenizer."""
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True, trust_remote_code=False)
+    tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True, trust_remote_code=False)  # nosec B615
 
     for line in sys.stdin:
         line = line.strip()

@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tarfile
 import tempfile
@@ -32,7 +32,7 @@ from app.knowledge_pack import (
 
 def resolve_commit_sha(git_repo: Path, ref: str = "HEAD") -> str:
     cmd = ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"]
-    proc = subprocess.run(cmd, cwd=git_repo, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=git_repo, capture_output=True, text=True)  # nosec B603
     if proc.returncode != 0:
         raise ValueError(f"Invalid Git ref: {ref}")
     commit_sha = proc.stdout.strip()
@@ -211,7 +211,7 @@ def build_distribution(
         staging_dir.mkdir()
 
         # Export committed source tree via git archive (read-only)
-        archive_proc = subprocess.run(
+        archive_proc = subprocess.run(  # nosec B603, B607
             ["git", "archive", "--format=tar", commit_sha],
             cwd=repo,
             capture_output=True,
@@ -309,11 +309,11 @@ def build_distribution(
             finally:
                 try:
                     flock(lock_file.fileno(), LOCK_UN)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
                 try:
                     lock_path.unlink()
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
     return {

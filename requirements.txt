@@ -10,3 +10,4 @@ pillow>=13.0.0,<14
 certifi>=2026.10.18,<2027
 defusedxml>=0.7.1,<1
 tzdata>=2026.5,<2027
+opentelemetry-api>=1.45.2,<2

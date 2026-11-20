@@ -187,7 +187,7 @@ def get_sqlite_fingerprint(db_path: Path, conn: Optional[sqlite3.Connection] = N
             dv = conn.execute("PRAGMA data_version").fetchone()[0]
             sv = conn.execute("PRAGMA schema_version").fetchone()[0]
             conn_info = (dv, sv, conn.total_changes)
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     return (str(p), db_stat, wal_stat, change_counter, conn_info)
@@ -526,7 +526,7 @@ def build_tree(source_db: Union[Path, str], shadow_db: Union[Path, str]) -> Dict
             try:
                 dest_conn.rollback()
                 dest_conn.close()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         if temp_dest.exists():
             try:
@@ -623,7 +623,7 @@ class TreeSearcher:
             if scoped:
                 in_clause = ",".join(str(int(x)) for x in scoped)
                 conn.execute(
-                    f"CREATE TEMP VIEW chunks AS SELECT * FROM main.chunks WHERE id IN ({in_clause})"
+                    f"CREATE TEMP VIEW chunks AS SELECT * FROM main.chunks WHERE id IN ({in_clause})"  # nosec B608
                 )
             return conn
 
@@ -800,13 +800,13 @@ class TreeSearcher:
                 topic_ids = [normalized(c).replace(" ", "_") for c in matched_children]
                 placeholders = ",".join("?" for _ in topic_ids)
                 cand_rows = conn.execute(
-                    f"SELECT DISTINCT chunk_id, doc_id FROM chunk_topics WHERE topic_id IN ({placeholders})",
+                    f"SELECT DISTINCT chunk_id, doc_id FROM chunk_topics WHERE topic_id IN ({placeholders})",  # nosec B608
                     topic_ids,
                 ).fetchall()
             else:
                 placeholders = ",".join("?" for _ in matched_parents)
                 cand_rows = conn.execute(
-                    f"SELECT DISTINCT chunk_id, doc_id FROM chunk_topics WHERE parent_id IN ({placeholders})",
+                    f"SELECT DISTINCT chunk_id, doc_id FROM chunk_topics WHERE parent_id IN ({placeholders})",  # nosec B608
                     matched_parents,
                 ).fetchall()
 

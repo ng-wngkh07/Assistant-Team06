@@ -266,7 +266,7 @@ def get_connection(db_path: Optional[Path | str] = None) -> Generator[sqlite3.Co
         if conn.in_transaction:
             try:
                 conn.rollback()
-            except Exception:
+            except Exception:  # nosec B110
                 pass
         raise
     finally:

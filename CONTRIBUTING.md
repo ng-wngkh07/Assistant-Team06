@@ -26,11 +26,11 @@ Keep hosted and local instructions consistent with actual code and validated com
 ## Make and verify a change
 
 1. Read the relevant implementation, tests and recent changelog entries.
-2. Reproduce the defect or define the intended behavior. Before editing application behavior, identify shared dependencies, define the expected result, and plan both the direct regression and the whole-application cases. For a defect, verify that the direct regression fails on the baseline for the reported reason when feasible.
+2. Reproduce the defect or define the intended behavior. Before editing application behavior, identify shared dependencies, define the expected result, and plan both the direct regression and the whole-application cases. For a defect, verify that the direct regression fails on the baseline for the reported reason when feasible. Add new permanent tests to the matching existing domain module under `tests/` rather than spawning a new file per change; run one-off verification scripts only in an ephemeral system temp directory and delete them right after use.
 3. Update the implementation and affected documentation. Do not alter expected results to conceal a failure.
-4. Run the checks in [Testing](docs/testing.md) and verify the direct regression. For any application behavior change, run the [whole-application regression cases](docs/testing.md#whole-application-regression-cases) sequentially, including flows outside the fix. Report the environment, commands, results for all three flows, and reasons for any unrun checks.
+4. Run the checks in [Testing](docs/testing.md), including `python scripts/check_history.py --base origin/main`, and verify the direct regression. For any application behavior change, run the [whole-application regression cases](docs/testing.md#whole-application-regression-cases) sequentially, including flows outside the fix. Report the environment, commands, results for all three flows, and reasons for any unrun checks. Clean `.pytest_cache/`, `__pycache__/`, and disposable test artifacts after finishing.
 5. Add a concise entry under **Unreleased** in [CHANGELOG.md](CHANGELOG.md). Describe the user-visible result and any compatibility or data migration impact.
-6. Review the complete diff, including new files, for private content and unrelated edits.
+6. Review the complete diff, including new files, for private content, internal business/training/experiment/evaluation/answer-comparison data, and unrelated edits.
 
 Documentation-only changes need a link, command and factual review; tests that do not apply may be marked N/A with a reason. Model behavior changes also need real-model evaluation and a separate content review.
 
@@ -44,12 +44,12 @@ The repository owner merges after review and required checks. Approval and merge
 
 ## Source and data safety
 
-- Commit application code, synthetic fixtures, tests and public documentation only.
-- Keep `.env`, credentials, personal uploads, conversation history, SQLite databases, embeddings, datasets, model weights and private operational reports out of Git. Never force-add ignored assets.
+- Commit technical application code, synthetic fixtures, reusable tests, and technical public documentation only.
+- Keep `.env`, credentials, personal uploads, conversation history, SQLite databases, embeddings, datasets, model weights, and all internal business, model-training, experimentation, evaluation scorecard, and answer-comparison files or metrics out of Git. Never force-add ignored assets or hardcode local audit/run directories in tracked source files.
 - Preserve per-account isolation, early ASGI body/rate-limit/security-header admission guards (`app/request_admission.py`), bounded FIFO GPU queue fairness (`app/dialogue.py`), upload storage quotas, and infrastructure readiness checks (`/api/health`, `/api/status`, `scripts/backend_service.py`) when modifying backend routes or environment configuration.
 - Preserve original source files. Keep uncertain extraction or OCR explicitly unresolved.
 - Use one writer for each canonical index or model operation, and coordinate inference through the existing resource locks.
-- Do not change the serving model, activate an adapter or start training as a side effect of a software fix; verify offline readiness gates read-only with `python scripts/audit_adapter_readiness.py --root . --strict`.
+- Do not change the serving model, activate an adapter (`qa-9b.json`, `practice-9b.json`, `planner-9b.json`), or start training as a side effect of a software fix; keep unaccepted candidates in `HOLD` and verify offline readiness gates read-only with `python scripts/audit_adapter_readiness.py --root . --strict`.
 
 Report suspected credential exposure privately to the repository owner and revoke the affected credential promptly. See [Security](SECURITY.md).
 

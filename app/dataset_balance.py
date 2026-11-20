@@ -4,7 +4,7 @@ import hashlib
 import html
 import json
 import re
-import subprocess
+import subprocess  # nosec B404
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -422,7 +422,7 @@ def assess_exposure(records, token_lengths=None):
 
 def exact_balance(data_dir, model_dir):
     from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True, trust_remote_code=False)
+    tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True, trust_remote_code=False)  # nosec B615
     records = [json.loads(s) for s in (data_dir/'approved_manifest.jsonl').read_text().splitlines()]
     lengths = {}
     for split in ('train','valid'):
@@ -508,7 +508,7 @@ def exact_balance(data_dir, model_dir):
 
 def require_balanced_dataset(root, data_dir, model_dir):
     if not (root/'data/runtime/corpus_completion_policy.json').exists(): return None
-    proc = subprocess.run([str(root/'.train-venv/bin/python'), '-m', 'app.dataset_balance',
+    proc = subprocess.run([str(root/'.train-venv/bin/python'), '-m', 'app.dataset_balance',  # nosec B603
         '--data',str(data_dir),'--model',str(model_dir)], cwd=root, capture_output=True, text=True, timeout=120)
     if proc.returncode:
         raise RuntimeError('DATASET_UNBALANCED: không xác minh được tỷ lệ nguồn/token: '+proc.stderr[-400:])

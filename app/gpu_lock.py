@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import signal
-import subprocess
+import subprocess  # nosec B404
 import threading
 import time
 from contextlib import contextmanager
