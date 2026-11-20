@@ -8,6 +8,7 @@ A change is ready for review when:
 - Model-facing changes have real-model evidence and a separate source/content review.
 - Changed user flows work in the actual served web application on the target machine, with the serving process/revision and visible results recorded. Mocked tests and direct API calls alone do not satisfy this gate; unavailable target platforms remain explicitly pending.
 - Before push or demo readiness, evidence identifies the real checkout/install path and browser URL, matches the final serving files, and covers fresh-clone startup when required. Later relevant edits require renewed runtime verification.
+- Every application behavior change passes its direct regression and the [whole-application regression cases](docs/testing.md#whole-application-regression-cases). Record a separate result for document QA, review-question generation, and timetable creation and study planning. Acceptance stays pending when any required flow is unrun.
 - The UI handles loading, failure, retry and completion consistently for the changed workflow.
 - README.md, CONTRIBUTING.md, affected docs/platform guides and the changelog describe the resulting behavior and limits in the same change. An unaffected entry file has a specific PR explanation; missing required documentation leaves the change incomplete.
 - The diff contains no credentials, private documents, databases, model artifacts or internal work logs.
