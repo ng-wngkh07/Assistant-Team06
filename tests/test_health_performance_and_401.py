@@ -431,6 +431,7 @@ def test_status_summary_authenticated_equivalent_counts_and_detailed_contract(tm
 
 
 def test_status_summary_coalescing_wal_db_replace_and_watcher_drift(tmp_path, monkeypatch):
+    from contextlib import closing
     import os
     from fastapi.testclient import TestClient
     from app import server
@@ -556,7 +557,7 @@ def test_status_summary_coalescing_wal_db_replace_and_watcher_drift(tmp_path, mo
         # 5. Atomic DB replacement invalidates snapshot immediately.
         new_db_path = tmp_path / "replacement.db"
         KnowledgeIndexer(db_path=new_db_path, src_dir=src_dir, ocr_cache_dir=tmp_path / "ocr2")
-        with sqlite3.connect(new_db_path) as conn:
+        with closing(sqlite3.connect(new_db_path)) as conn, conn:
             conn.execute(
                 "INSERT INTO documents (id, filename, clean_title, filepath, file_size, file_hash, total_pages, extracted_pages_count, is_scanned, status) "
                 "VALUES (1, 'new_only.txt', 'New Only', ?, 50, 'h_new', 1, 1, 0, 'indexed')",
