@@ -11,27 +11,31 @@ from typing import Any, Dict, List, Optional
 from app.text_cleaner import sanitize_for_prompt_context
 
 
-def flashcard_response_schema(evidence_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+def flashcard_response_schema(
+    evidence_ids: Optional[List[str]] = None,
+    max_items: Optional[int] = None,
+) -> Dict[str, Any]:
     """Strict JSON schema for source-grounded cloze flashcard extraction."""
     ev_prop: Dict[str, Any] = {"type": "string", "minLength": 2, "maxLength": 12}
     if evidence_ids:
         ev_prop["enum"] = list(evidence_ids)
+    cards_prop: Dict[str, Any] = {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "answer": {"type": "string", "minLength": 1, "maxLength": 180},
+                "evidence_id": ev_prop,
+            },
+            "required": ["answer", "evidence_id"],
+            "additionalProperties": False,
+        },
+    }
+    if max_items is not None and int(max_items) > 0:
+        cards_prop["maxItems"] = int(max_items)
     return {
         "type": "object",
-        "properties": {
-            "flashcards": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "answer": {"type": "string", "minLength": 1, "maxLength": 180},
-                        "evidence_id": ev_prop,
-                    },
-                    "required": ["answer", "evidence_id"],
-                    "additionalProperties": False,
-                },
-            }
-        },
+        "properties": {"flashcards": cards_prop},
         "required": ["flashcards"],
         "additionalProperties": False,
     }

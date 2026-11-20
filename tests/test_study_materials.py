@@ -2002,3 +2002,223 @@ def test_fallback_flashcards_strips_banner_and_fills_up_to_count():
     assert len(cards) == 4  # nosec B101
     assert len({c["back"] for c in cards}) == 4  # nosec B101
     assert all("NỘI DUNG NGUỒN ĐÃ ĐỐI CHIẾU ẢNH" not in c["back"] for c in cards)  # nosec B101
+
+
+@pytest.mark.parametrize("mode", ["timeout_503", "partial_200", "unavailable_hard_422", "unsupported_422"])
+def test_api_material_review_timeout_503_partial_200_and_422_controls(client, monkeypatch, mode):
+    import json as _json
+    from app import server as _srv
+    import app.token_counter as tkc
+
+    if mode == "unsupported_422":
+        bad_b64 = base64.b64encode(b".").decode("ascii")
+        res = client.post("/api/materials/upload", json={
+            "filename": "insufficient.txt",
+            "file_base64": bad_b64,
+            "quiz_count": 2,
+            "flashcard_count": 1,
+            "difficulty": "easy",
+        })
+        assert res.status_code == 422  # nosec B101
+        return
+
+    monkeypatch.setattr(
+        tkc,
+        "get_exact_token_counter",
+        lambda *args: lambda messages: sum(len(m["content"]) // 3 for m in messages),
+    )
+
+    doc_text = (
+        "Write-Back chỉ cập nhật cache và bật bit Dirty trước khi trả về. "
+        "Write-Through ghi đồng thời vào cả cache và bộ nhớ chính RAM. "
+        "Hit ratio là tỷ lệ truy cập tìm thấy dữ liệu trong bộ nhớ đệm. "
+        "Miss penalty là thời gian xử lý bổ sung khi không tìm thấy dữ liệu trong cache. "
+        "Giao thức MESI giữ tính nhất quán dữ liệu giữa các bộ nhớ đệm riêng."
+    )
+    b64 = base64.b64encode(doc_text.encode("utf-8")).decode("ascii")
+
+    class RouteClient:
+        last_done_reason = "stop"
+
+        def check_health(self):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            prompt = messages[0]["content"]
+            if "Kiểm định độc lập từng câu" in prompt:
+                assert "Kiểm định độc lập từng câu từ source và question" in prompt  # nosec B101
+                assert "điền khuyết từ source" not in prompt  # nosec B101
+                items = _json.JSONDecoder().raw_decode(prompt.split("Dữ liệu cần kiểm định:\n", 1)[1])[0]
+                if mode == "timeout_503":
+                    raise TimeoutError("Hết thời gian chờ phản hồi từ worker cục bộ.")
+                if mode == "partial_200":
+                    if "Write-Through" in items[0]["choices"].values():
+                        raise TimeoutError("Hết thời gian chờ phản hồi từ worker cục bộ.")
+                    ans = next(k for k, v in items[0]["choices"].items() if v == "bit Dirty")
+                    return _json.dumps({
+                        "checks": [{
+                            "index": 1,
+                            "input_audit": "Đề bài hỏi khái niệm trực tiếp trong đoạn nguồn.",
+                            "independent_solution": "Write-Back chỉ cập nhật cache và bật bit Dirty.",
+                            "choice_comparison": f"{ans} khớp chính xác; các lựa chọn khác sai.",
+                            "explanation_audit": "Giải thích trích nguyên văn trang 1 từ đoạn nguồn.",
+                            "supported": True,
+                            "explanation_supported": True,
+                            "qualifiers_preserved": True,
+                            "unique_answer": True,
+                            "difficulty_matches": True,
+                            "verified_answer": ans,
+                        }]
+                    }, ensure_ascii=False)
+                return _json.dumps({
+                    "checks": [{
+                        "index": 1,
+                        "input_audit": "Đề bài chỉ hỏi lại khái niệm đơn lẻ.",
+                        "independent_solution": "Định nghĩa trực tiếp.",
+                        "choice_comparison": "Khớp A.",
+                        "explanation_audit": "Không đủ hai bước suy luận.",
+                        "supported": True,
+                        "explanation_supported": True,
+                        "unique_answer": True,
+                        "qualifiers_preserved": True,
+                        "difficulty_matches": False,
+                        "verified_answer": "A",
+                    }]
+                }, ensure_ascii=False)
+            if "flashcards" in prompt.lower():
+                return _json.dumps({"flashcards": [{"answer": "Giao thức MESI", "evidence_id": "Q1"}]}, ensure_ascii=False)
+            if mode == "unavailable_hard_422":
+                return _json.dumps({
+                    "questions": [{
+                        "question": "Write-Back làm gì khi ghi dữ liệu?",
+                        "choices": {"A": "Chỉ cập nhật cache và bật bit Dirty", "B": "Ghi ngay RAM", "C": "Xóa cache", "D": "Khóa bus"},
+                        "answer": "A",
+                        "explanation": "Theo đoạn nguồn trang 1.",
+                        "evidence_id": "Q1",
+                        "difficulty": "hard",
+                    }]
+                }, ensure_ascii=False)
+            return _json.dumps({
+                "questions": [
+                    {"format": "source_cloze", "evidence_id": "Q1", "answer": "bit Dirty", "distractors": ["bit Valid", "bit Lock", "bit Parity"]},
+                    {"format": "source_cloze", "evidence_id": "Q1", "answer": "Write-Through", "distractors": ["Write-Around", "Write-Once", "Write-None"]},
+                ]
+            }, ensure_ascii=False)
+
+    monkeypatch.setattr(_srv, "DEFAULT_CHAT_MODEL", "test-ollama")
+    monkeypatch.setattr(_srv.study_material_manager, "ollama", RouteClient())
+    monkeypatch.setattr(study_material_manager, "ollama", RouteClient())
+
+    res = client.post("/api/materials/upload", json={
+        "filename": "cache_notes.txt",
+        "file_base64": b64,
+        "quiz_count": 2,
+        "flashcard_count": 1,
+        "difficulty": "hard" if mode == "unavailable_hard_422" else "easy",
+    })
+    if mode == "timeout_503":
+        assert res.status_code == 503  # nosec B101
+        assert "kiểm định câu hỏi" in res.json()["detail"]  # nosec B101
+    elif mode == "partial_200":
+        assert res.status_code == 200, res.text  # nosec B101
+        mat = res.json()["material"]
+        assert mat["actual_quiz_count"] == 1  # nosec B101
+        assert mat["requested_quiz_count"] == 2  # nosec B101
+        assert mat["complete"] is False  # nosec B101
+        assert "quá thời gian" in (mat.get("warning") or "")  # nosec B101
+    else:
+        assert res.status_code == 422  # nosec B101
+        assert "khó" in res.json()["detail"]  # nosec B101
+
+
+def test_private_upload_easy_cloze_parity_with_compact_review_and_timeout_503(tmp_path, monkeypatch):
+    import json as _json
+    import app.model_resolver as model_resolver
+    import app.token_counter as tkc
+    import app.trained_client as tc
+    from app.accounts import account_id
+    from app.account_services import make_material_manager
+
+    mlx_dir = tmp_path / "mlx"
+    mlx_dir.mkdir()
+    (mlx_dir / "config.json").write_text('{"max_position_embeddings":8192}', encoding="utf-8")
+    monkeypatch.setattr(model_resolver.sys, "platform", "darwin")
+    monkeypatch.setattr(model_resolver, "MLX_9B_DIR", mlx_dir)
+    monkeypatch.setattr(
+        tkc,
+        "get_exact_token_counter",
+        lambda *args: lambda messages: sum(len(m["content"]) // 3 for m in messages),
+    )
+
+    monkeypatch.setenv("STUDY_ACCOUNTS_DIR", str(tmp_path / "accounts"))
+    tok = account_id.set("dd" * 16)
+    try:
+        mgr = make_material_manager()
+        raw_text = (
+            "Write-Back chỉ cập nhật cache và bật bit Dirty trước khi trả về. "
+            "Giao thức MESI duy trì nhất quán giữa các bộ nhớ đệm."
+        )
+        raw_bytes = raw_text.encode("utf-8")
+        ext = mgr.extract_document("private_cloze.txt", raw_bytes)
+        ext._raw_bytes = raw_bytes
+        rec = mgr.store_extracted_document(ext)
+
+        def _make_mlx_client(timeout_review: bool):
+            class PrivateClozeClient:
+                last_done_reason = "stop"
+
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                @classmethod
+                def available(cls, *args, **kwargs):
+                    return True
+
+                def chat_complete(self, messages, **kwargs):
+                    prompt = messages[0]["content"]
+                    if "Kiểm định độc lập từng câu điền khuyết" in prompt:
+                        if timeout_review:
+                            raise TimeoutError("Hết thời gian chờ phản hồi từ worker cục bộ.")
+                        items = _json.JSONDecoder().raw_decode(prompt.split("Dữ liệu cần kiểm định:\n", 1)[1])[0]
+                        ans = next(k for k, v in items[0]["choices"].items() if v == "bit Dirty")
+                        return _json.dumps({
+                            "checks": [{
+                                "index": 1,
+                                "source_basis": "Write-Back chỉ cập nhật cache và bật bit Dirty trước khi trả về.",
+                                "choice_comparison": f"{ans} khớp chính xác; các lựa chọn khác sai.",
+                                "matching_choices": ans,
+                                "supported": True,
+                                "qualifiers_preserved": True,
+                                "unique_answer": True,
+                                "verified_answer": ans,
+                            }]
+                        }, ensure_ascii=False)
+                    return _json.dumps({
+                        "questions": [{
+                            "format": "source_cloze",
+                            "evidence_id": "Q1",
+                            "answer": "bit Dirty",
+                            "distractors": ["bit Valid", "bit Lock", "bit Parity"],
+                        }],
+                        "flashcards": [{"answer": "Giao thức MESI", "evidence_id": "Q1"}],
+                    }, ensure_ascii=False)
+
+            return PrivateClozeClient
+
+        monkeypatch.setattr(tc, "TrainedModelClient", _make_mlx_client(timeout_review=False))
+        out = mgr.generate_from_library_document(
+            material_id=rec["id"], quiz_count=1, flashcard_count=1, difficulty="easy", model="qwen3.5-9b-4bit"
+        )
+        assert out["actual_quiz_count"] == 1  # nosec B101
+        assert out["actual_flashcard_count"] == 1  # nosec B101
+        assert out["quiz"][0]["explanation"] == f"Căn cứ trực tiếp theo tài liệu trang 1: {raw_text}"  # nosec B101
+        reloaded = make_material_manager().get_material(out["id"])
+        assert reloaded is not None and reloaded["actual_quiz_count"] == 1  # nosec B101
+
+        monkeypatch.setattr(tc, "TrainedModelClient", _make_mlx_client(timeout_review=True))
+        with pytest.raises(StudyMaterialError, match="Không hoàn thành được bước kiểm định câu hỏi"):
+            mgr.generate_from_library_document(
+                material_id=rec["id"], quiz_count=1, flashcard_count=1, difficulty="easy", model="qwen3.5-9b-4bit"
+            )
+    finally:
+        account_id.reset(tok)

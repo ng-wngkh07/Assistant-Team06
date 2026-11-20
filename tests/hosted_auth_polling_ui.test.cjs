@@ -94,6 +94,7 @@ test("app.js pauses 5s /api/status polling after 401 and avoids scary HTTP 401 r
   const winListeners = {};
   const intervalFns = [];
   let statusCalls = 0;
+  const statusUrls = [];
 
   const store = { getItem() { return null; }, setItem() {}, removeItem() {} };
   const windowObj = {
@@ -109,8 +110,9 @@ test("app.js pauses 5s /api/status polling after 401 and avoids scary HTTP 401 r
     window: windowObj,
     confirm: () => true,
     fetch: async (url) => {
-      if (url === "/api/status") {
+      if (url === "/api/status?summary=1" || url === "/api/status") {
         statusCalls += 1;
+        statusUrls.push(String(url));
         return { ok: false, status: 401, json: async () => ({ detail: "Vui lòng đăng nhập" }) };
       }
       if (url === "/api/models") {
@@ -146,6 +148,7 @@ test("app.js pauses 5s /api/status polling after 401 and avoids scary HTTP 401 r
   await new Promise((r) => setTimeout(r, 10));
 
   assert.equal(statusCalls, 1, "Initial /api/status should execute once");
+  assert.deepEqual(statusUrls, ["/api/status?summary=1"]);
   assert.doesNotMatch(elements.get("ollama-status").textContent, /HTTP 401|lỗi/i);
   assert.match(elements.get("ollama-status").textContent, /Đăng nhập/i);
 
@@ -456,4 +459,382 @@ test("app.js guards /api/model/check and /api/chat/stream when unauthenticated w
   assert.ok(!calledUrls.includes("/api/chat/stream"), `Unauthenticated submit must not POST: ${calledUrls}`);
   assert.equal(elements.get("user-input").value, "Câu hỏi chưa đăng nhập");
   assert.ok(modalOpened >= 2);
+});
+
+test("app.js skips hidden polls, refreshes on visibility reveal, caps in-flight polls to one, and preserves explicit refresh", { timeout: 5000 }, async () => {
+  const { elements, docEvents, document } = makeFakeDom();
+  document.visibilityState = "hidden";
+  document.hidden = true;
+  const intervalFns = [];
+  const statusResolvers = [];
+  let summaryCalls = 0;
+  let inFlightNow = 0;
+  let maxConcurrent = 0;
+
+  const store = { getItem() { return null; }, setItem() {}, removeItem() {} };
+  const context = {
+    document,
+    window: {
+      addEventListener() {},
+      dispatchEvent() {},
+      StudyAccount: {
+        canAccessProtectedApis: () => true,
+        whenReady: async () => ({ account: { id: "u1", username: "student" }, required: true, registration_allowed: false }),
+      },
+    },
+    confirm: () => true,
+    fetch: (url) => {
+      if (url === "/api/status?summary=1") {
+        summaryCalls += 1;
+        inFlightNow += 1;
+        maxConcurrent = Math.max(maxConcurrent, inFlightNow);
+        return new Promise((resolve) => {
+          statusResolvers.push((docsCount) => {
+            inFlightNow -= 1;
+            resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                inference_ready: true,
+                knowledge_base: {
+                  searchable_documents: docsCount,
+                  registered_documents: docsCount,
+                  total_documents: docsCount,
+                  discovered_files: docsCount,
+                  total_chunks: 10,
+                  embedded_chunks: 10,
+                },
+                storage: { watcher: { enabled: false } },
+              }),
+            });
+          });
+        });
+      }
+      if (url === "/api/model/check") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ ready: true, message: "OK" }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ items: [], models: [], default_model: "local", default_model_available: true }),
+      });
+    },
+    localStorage: store,
+    sessionStorage: store,
+    setInterval(fn) {
+      intervalFns.push(fn);
+      return intervalFns.length;
+    },
+    clearInterval() {},
+    setTimeout() {},
+    clearTimeout() {},
+    Event: class { constructor(t) { this.type = t; } preventDefault() {} },
+    CustomEvent: class { constructor(t, init) { this.type = t; this.detail = init?.detail; } },
+    URLSearchParams,
+    TextDecoder,
+    TextEncoder,
+    console: { log() {}, warn() {}, error() {} },
+  };
+
+  vm.runInNewContext(fs.readFileSync(APP_JS_PATH, "utf8"), context);
+  for (const fn of docEvents.DOMContentLoaded || []) await fn();
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setTimeout(r, 10));
+
+  // Initial hidden tab must not poll; interval ticks while hidden must also skip.
+  assert.equal(summaryCalls, 0);
+  await intervalFns[0]();
+  await intervalFns[0]();
+  assert.equal(summaryCalls, 0, "Hidden tab must not poll /api/status?summary=1");
+
+  // Reveal tab -> triggers one immediate summary poll.
+  document.visibilityState = "visible";
+  document.hidden = false;
+  for (const fn of docEvents.visibilitychange || []) fn({ type: "visibilitychange" });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(summaryCalls, 1, "Becoming visible must trigger a status refresh");
+
+  // While poll #1 is in flight, interval ticks and visibilitychange must not open a second concurrent poll.
+  const p2 = intervalFns[0]();
+  const p3 = intervalFns[0]();
+  for (const fn of docEvents.visibilitychange || []) fn({ type: "visibilitychange" });
+  assert.equal(summaryCalls, 1, "At most one summary poll may be in flight at a time");
+  assert.equal(maxConcurrent, 1);
+
+  // Explicit model check while poll #1 is in flight queues one follow-up refresh without concurrent overlap.
+  const modelCheckBtn = elements.get("btn-model-check");
+  const modelCheckPromise = modelCheckBtn.listeners.click[0]({ preventDefault() {} });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(summaryCalls, 1, "Explicit refresh must wait for in-flight poll instead of launching a concurrent poll");
+
+  statusResolvers[0](2);
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(summaryCalls, 2, "Queued explicit refresh runs sequentially after in-flight poll completes");
+  assert.equal(maxConcurrent, 1);
+  assert.equal(elements.get("stat-docs").textContent, 2);
+  statusResolvers[1](5);
+  await Promise.all([p2, p3, modelCheckPromise]);
+  assert.equal(elements.get("stat-docs").textContent, 5);
+});
+
+test("app.js ignores stale in-flight status responses across account transitions", { timeout: 5000 }, async () => {
+  const { elements, docEvents, document } = makeFakeDom();
+  const winListeners = {};
+  const deferredResponses = [];
+  let signedInAccount = { id: "user_a", username: "alice" };
+  let activeSummaryCount = 0;
+  let peakSummaryCount = 0;
+  let abortedSummaryCount = 0;
+
+  const store = { getItem() { return null; }, setItem() {}, removeItem() {} };
+  const windowObj = {
+    addEventListener(evt, fn) {
+      winListeners[evt] = winListeners[evt] || [];
+      winListeners[evt].push(fn);
+    },
+    dispatchEvent(evt) {
+      for (const fn of winListeners[evt.type] || []) fn(evt);
+    },
+    StudyAccount: {
+      canAccessProtectedApis: () => Boolean(signedInAccount),
+      getConfig: () => ({ required: true, registration_allowed: false }),
+      getAccount: () => signedInAccount,
+      whenReady: async () => ({ account: signedInAccount, required: true, registration_allowed: false }),
+    },
+  };
+
+  vm.runInNewContext(fs.readFileSync(APP_JS_PATH, "utf8"), {
+    document,
+    window: windowObj,
+    confirm: () => true,
+    AbortController,
+    fetch: (url, opts) => {
+      if (url === "/api/status?summary=1") {
+        if (opts?.signal?.aborted) {
+          return Promise.reject(opts.signal.reason || new Error("Aborted"));
+        }
+        activeSummaryCount += 1;
+        peakSummaryCount = Math.max(peakSummaryCount, activeSummaryCount);
+        return new Promise((resolve, reject) => {
+          let settled = false;
+          const settle = (cb, value) => {
+            if (settled) return;
+            settled = true;
+            activeSummaryCount -= 1;
+            cb(value);
+          };
+          deferredResponses.push((payload) => settle(resolve, payload));
+          opts?.signal?.addEventListener("abort", () => {
+            abortedSummaryCount += 1;
+            settle(reject, opts.signal.reason || new Error("Aborted"));
+          }, { once: true });
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ items: [], models: [], default_model: "local", default_model_available: true }),
+      });
+    },
+    localStorage: store,
+    sessionStorage: store,
+    setInterval() { return 1; },
+    clearInterval() {},
+    setTimeout() {},
+    clearTimeout() {},
+    Event: class { constructor(t) { this.type = t; } preventDefault() {} },
+    CustomEvent: class { constructor(t, init) { this.type = t; this.detail = init?.detail; } },
+    URLSearchParams,
+    TextDecoder,
+    TextEncoder,
+    console: { log() {}, warn() {}, error() {} },
+  });
+
+  for (const fn of docEvents.DOMContentLoaded || []) await fn();
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(deferredResponses.length, 1, "Initial Account A poll started");
+  assert.equal(activeSummaryCount, 1);
+
+  // Switch to Account B before Account A's slow poll returns: Account A is aborted before Account B polls.
+  signedInAccount = { id: "user_b", username: "bob" };
+  windowObj.dispatchEvent({
+    type: "study:account-changed",
+    detail: { account: signedInAccount, scope: "user_b", required: true, authorized: true },
+  });
+  assert.equal(peakSummaryCount, 1, "Account transition must never exceed one active summary HTTP request");
+  assert.equal(abortedSummaryCount, 1, "Previous account summary request must be aborted");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(deferredResponses.length, 2, "Account B immediately initiates its own summary poll");
+  assert.equal(peakSummaryCount, 1);
+
+  // Resolve Account B with 7 docs, and ensure any late Account A call cannot overwrite Account B UI.
+  deferredResponses[1]({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      inference_ready: true,
+      knowledge_base: { searchable_documents: 7, registered_documents: 7, total_documents: 7, total_chunks: 14, embedded_chunks: 14 },
+      storage: { watcher: { enabled: false } },
+    }),
+  });
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(elements.get("stat-docs").textContent, 7);
+
+  deferredResponses[0]({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      inference_ready: false,
+      service_message: "Stale account A error",
+      knowledge_base: { searchable_documents: 99, registered_documents: 99, total_documents: 99, total_chunks: 100, embedded_chunks: 0 },
+      storage: { watcher: { enabled: false } },
+    }),
+  });
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(elements.get("stat-docs").textContent, 7, "Stale Account A response must not overwrite Account B UI");
+});
+
+test("app.js serializes non-aborting account transitions, discards stale responses, and preserves new account explicit refresh", { timeout: 5000 }, async () => {
+  const { elements, docEvents, document } = makeFakeDom();
+  const winListeners = {};
+  const deferredSummary = [];
+  let signedInAccount = { id: "user_a", username: "alice" };
+  let activeSummaryCount = 0;
+  let peakSummaryCount = 0;
+
+  const store = { getItem() { return null; }, setItem() {}, removeItem() {} };
+  const windowObj = {
+    addEventListener(evt, fn) {
+      winListeners[evt] = winListeners[evt] || [];
+      winListeners[evt].push(fn);
+    },
+    dispatchEvent(evt) {
+      for (const fn of winListeners[evt.type] || []) fn(evt);
+    },
+    StudyAccount: {
+      canAccessProtectedApis: () => Boolean(signedInAccount),
+      getConfig: () => ({ required: true, registration_allowed: false }),
+      getAccount: () => signedInAccount,
+      whenReady: async () => ({ account: signedInAccount, required: true, registration_allowed: false }),
+    },
+  };
+
+  // Run without AbortController so the old HTTP flight finishes normally after account transition.
+  vm.runInNewContext(fs.readFileSync(APP_JS_PATH, "utf8"), {
+    document,
+    window: windowObj,
+    confirm: () => true,
+    fetch: (url) => {
+      if (url === "/api/status?summary=1") {
+        activeSummaryCount += 1;
+        peakSummaryCount = Math.max(peakSummaryCount, activeSummaryCount);
+        return new Promise((resolve) => {
+          deferredSummary.push((payload) => {
+            activeSummaryCount -= 1;
+            resolve(payload);
+          });
+        });
+      }
+      if (url === "/api/model/check") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ ready: true, message: "OK" }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ items: [], models: [], default_model: "local", default_model_available: true }),
+      });
+    },
+    localStorage: store,
+    sessionStorage: store,
+    setInterval() { return 1; },
+    clearInterval() {},
+    setTimeout() {},
+    clearTimeout() {},
+    Event: class { constructor(t) { this.type = t; } preventDefault() {} },
+    CustomEvent: class { constructor(t, init) { this.type = t; this.detail = init?.detail; } },
+    URLSearchParams,
+    TextDecoder,
+    TextEncoder,
+    console: { log() {}, warn() {}, error() {} },
+  });
+
+  for (const fn of docEvents.DOMContentLoaded || []) await fn();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(deferredSummary.length, 1);
+
+  // Switch to Account B while Account A is still active: must NOT open a concurrent 2nd HTTP request.
+  signedInAccount = { id: "user_b", username: "bob" };
+  windowObj.dispatchEvent({
+    type: "study:account-changed",
+    detail: { account: signedInAccount, scope: "user_b", required: true, authorized: true },
+  });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(peakSummaryCount, 1, "Must keep at most one active summary HTTP request across account switch");
+  assert.equal(deferredSummary.length, 1, "Account B waits for Account A completion when transport cannot abort");
+
+  // Trigger an explicit refresh (model check) for Account B BEFORE Account A finishes.
+  const modelCheckPromise = elements.get("btn-model-check").listeners.click[0]({ preventDefault() {} });
+  await new Promise((r) => setImmediate(r));
+
+  // Complete Account A with stale 99 docs: must be discarded and its finally must NOT clear Account B's queued refresh.
+  deferredSummary[0]({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      inference_ready: false,
+      service_message: "Stale account A error",
+      knowledge_base: { searchable_documents: 99, registered_documents: 99, total_documents: 99, total_chunks: 100, embedded_chunks: 0 },
+      storage: { watcher: { enabled: false } },
+    }),
+  });
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.notEqual(elements.get("stat-docs").textContent, 99, "Stale Account A payload must be ignored");
+  assert.doesNotMatch(elements.get("ollama-status").textContent, /Stale account A error/);
+  assert.equal(deferredSummary.length, 2, "Account B queued explicit refresh must run after Account A completes");
+  assert.equal(peakSummaryCount, 1);
+
+  // While Account B's first poll is in flight, queue another explicit refresh and verify it also completes cleanly.
+  const secondModelCheckPromise = elements.get("btn-model-check").listeners.click[0]({ preventDefault() {} });
+  await new Promise((r) => setImmediate(r));
+
+  deferredSummary[1]({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      inference_ready: true,
+      knowledge_base: { searchable_documents: 7, registered_documents: 7, total_documents: 7, total_chunks: 14, embedded_chunks: 14 },
+      storage: { watcher: { enabled: false } },
+    }),
+  });
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(elements.get("stat-docs").textContent, 7);
+  assert.equal(deferredSummary.length, 3, "Queued explicit refresh during Account B poll must still execute");
+
+  deferredSummary[2]({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      inference_ready: true,
+      knowledge_base: { searchable_documents: 8, registered_documents: 8, total_documents: 8, total_chunks: 16, embedded_chunks: 16 },
+      storage: { watcher: { enabled: false } },
+    }),
+  });
+  await Promise.all([modelCheckPromise, secondModelCheckPromise]);
+  assert.equal(elements.get("stat-docs").textContent, 8);
 });

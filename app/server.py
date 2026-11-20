@@ -1,13 +1,16 @@
 import asyncio
 import base64
+from collections import OrderedDict
 import contextvars
 from contextlib import asynccontextmanager
+import hashlib
 import json
 import logging
 import re
 import sqlite3
 import sys
 import threading
+import time
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Literal
@@ -520,6 +523,13 @@ _INDEX_COVERAGE_CACHE: Dict[Any, Dict[str, Any]] = {}
 _INDEX_COVERAGE_INFLIGHT: Dict[Any, threading.Event] = {}
 _INSTALLED_DIGEST_CACHE: Dict[Any, Optional[str]] = {}
 
+_STATUS_SUMMARY_LOCK = threading.Lock()
+_STATUS_SUMMARY_CACHE: "OrderedDict[Any, tuple[float, Dict[str, Any]]]" = OrderedDict()
+_STATUS_SUMMARY_INFLIGHT: Dict[Any, threading.Event] = {}
+_STATUS_SUMMARY_TTL_SECONDS = 5.0
+_STATUS_SUMMARY_MAX_ENTRIES = 8
+_MAX_WATCHER_STATE_HASH_BYTES = 16 * 1024 * 1024
+
 
 def _stat_signature(path: Path):
     try:
@@ -552,9 +562,109 @@ def _db_file_signature(db_path: Path):
     main_head, _ = _read_edge_bytes(resolved)
     wal_path = Path(f"{resolved}-wal")
     wal_stat = _stat_signature(wal_path)
+    # SQLite can leave a 0-byte -wal file when opening a WAL DB for read-only queries.
+    if wal_stat is not None and wal_stat[2] == 0:
+        wal_stat = None
     wal_head, wal_tail = _read_edge_bytes(wal_path) if wal_stat is not None else (b"", b"")
     journal_stat = _stat_signature(Path(f"{resolved}-journal"))
+    if journal_stat is not None and journal_stat[2] == 0:
+        journal_stat = None
     return (str(resolved), main_stat, main_head, wal_stat, wal_head[:32], wal_tail, journal_stat)
+
+
+def _watcher_state_signature(state_path: Path):
+    try:
+        resolved = state_path.resolve()
+    except OSError:
+        resolved = state_path
+    st = _stat_signature(resolved)
+    if st is None:
+        return (str(resolved), None, None)
+    digest: Optional[str] = None
+    if st[2] <= _MAX_WATCHER_STATE_HASH_BYTES:
+        try:
+            digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        except OSError:
+            return (str(resolved), None, None)
+    return (str(resolved), st, digest)
+
+
+def _method_cache_identity(obj: Any, attr_name: str):
+    inst_dict = getattr(obj, "__dict__", None)
+    if isinstance(inst_dict, dict) and attr_name in inst_dict:
+        return ("inst", id(inst_dict[attr_name]))
+    return ("cls", id(getattr(type(obj), attr_name, None)))
+
+
+def _cached_library_status_summary() -> Dict[str, Any]:
+    """Return shared library status summary, coalesced and keyed on DB + watcher drift state."""
+    target = indexer
+
+    def _compute_summary() -> Dict[str, Any]:
+        summary_fn = getattr(target, "get_status_summary", None)
+        if callable(summary_fn):
+            res = summary_fn()
+        else:
+            full_status = target.get_status()
+            res = {k: v for k, v in full_status.items() if k != "documents"} if isinstance(full_status, dict) else full_status
+        return dict(res) if isinstance(res, dict) else {}
+
+    inst_dict = getattr(target, "__dict__", {})
+    has_unkeyed_override = isinstance(inst_dict, dict) and (
+        "get_connection" in inst_dict or "_load_watcher_sync_flags" in inst_dict
+    )
+    raw_db_path = getattr(target, "db_path", None)
+    db_sig = _db_file_signature(Path(raw_db_path)) if raw_db_path is not None else None
+    if db_sig is None or has_unkeyed_override:
+        return _compute_summary()
+
+    state_path = Path(raw_db_path).resolve().parent / "runtime" / "src_watcher_state.json"
+    watcher_sig = _watcher_state_signature(state_path)
+    cache_key = (
+        id(target),
+        type(target),
+        _method_cache_identity(target, "get_status_summary"),
+        _method_cache_identity(target, "_load_watcher_sync_flags"),
+        db_sig,
+        watcher_sig,
+    )
+
+    now = time.monotonic()
+    with _STATUS_SUMMARY_LOCK:
+        cached = _STATUS_SUMMARY_CACHE.get(cache_key)
+        if cached is not None and (now - cached[0]) < _STATUS_SUMMARY_TTL_SECONDS:
+            _STATUS_SUMMARY_CACHE.move_to_end(cache_key)
+            return dict(cached[1])
+        event = _STATUS_SUMMARY_INFLIGHT.get(cache_key)
+        if event is None:
+            event = threading.Event()
+            _STATUS_SUMMARY_INFLIGHT[cache_key] = event
+            leader = True
+        else:
+            leader = False
+
+    if not leader:
+        event.wait()
+        now_after = time.monotonic()
+        with _STATUS_SUMMARY_LOCK:
+            cached = _STATUS_SUMMARY_CACHE.get(cache_key)
+            if cached is not None and (now_after - cached[0]) < _STATUS_SUMMARY_TTL_SECONDS:
+                _STATUS_SUMMARY_CACHE.move_to_end(cache_key)
+                return dict(cached[1])
+        return _compute_summary()
+
+    try:
+        result = _compute_summary()
+        with _STATUS_SUMMARY_LOCK:
+            _STATUS_SUMMARY_CACHE[cache_key] = (time.monotonic(), dict(result))
+            _STATUS_SUMMARY_CACHE.move_to_end(cache_key)
+            while len(_STATUS_SUMMARY_CACHE) > _STATUS_SUMMARY_MAX_ENTRIES:
+                _STATUS_SUMMARY_CACHE.popitem(last=False)
+        return dict(result)
+    finally:
+        with _STATUS_SUMMARY_LOCK:
+            _STATUS_SUMMARY_INFLIGHT.pop(cache_key, None)
+            event.set()
 
 
 def _cached_installed_digest(db_path: Path, db_sig) -> Optional[str]:
@@ -861,7 +971,7 @@ async def get_models():
         "practice_review_profile": "grounded_review_v2" if is_mlx else None,
     }
 
-def _build_storage_payload(request: Optional[Request] = None) -> Dict[str, Any]:
+def _build_storage_payload(request: Optional[Request] = None, *, include_items: bool = True) -> Dict[str, Any]:
     """Return storage and src/ watcher policy while hiding host filesystem paths from account/remote callers."""
     watcher_status = src_watcher.get_status() if src_watcher is not None else {
         "enabled": is_src_auto_watch_enabled(),
@@ -895,6 +1005,8 @@ def _build_storage_payload(request: Optional[Request] = None) -> Dict[str, Any]:
         "last_error_code": None,
         "items": [],
     }
+    if not include_items and isinstance(watcher_status, dict) and "items" in watcher_status:
+        watcher_status = {k: v for k, v in watcher_status.items() if k != "items"}
     has_account = getattr(getattr(request, "state", None), "account", None) is not None if request is not None else False
     is_remote = (request is not None and not loopback(request))
     expose_host_paths = not (has_account or is_remote)
@@ -918,68 +1030,83 @@ def _build_storage_payload(request: Optional[Request] = None) -> Dict[str, Any]:
 
 @app.get("/api/storage")
 async def get_storage_info(request: Request):
-    return _build_storage_payload(request)
+    return await run_in_threadpool(_build_storage_payload, request)
 
 
-@app.get("/api/status")
-async def get_index_status(request: Request):
-    status = indexer.get_status()
+def _collect_status_payload(request: Request, *, summary: bool) -> Dict[str, Any]:
+    status = _cached_library_status_summary() if summary else indexer.get_status()
     requires_mlx = _requires_mlx_model()
     ollama_ok = False if requires_mlx else ollama.check_health()
     models = [] if (requires_mlx or not ollama_ok) else ollama.list_models()
     gpu_status = gpu_coordinator.get_status()
     gpu_busy = bool(gpu_status.get("busy", False))
     mlx_available = TrainedModelClient.available()
-    runtime = await run_in_threadpool(probe_mlx_runtime) if requires_mlx and sys.platform == "darwin" else None
+    runtime = probe_mlx_runtime() if requires_mlx and sys.platform == "darwin" else None
     model_ready = _inference_model_available(mlx_available, models) and (runtime is None or runtime["ready"])
 
     if gpu_busy:
         service_state = "degraded"
         service_message = f"GPU đang bận huấn luyện (PID {gpu_status.get('pid')}) - Suy luận tạm thời bị chặn, web hoạt động bình thường"
         inference_ready = False
-    elif not _requires_mlx_model() and not ollama_ok:
+    elif not requires_mlx and not ollama_ok:
         service_state = "degraded"
         service_message = "Ollama mất kết nối"
         inference_ready = False
     elif not model_ready:
         service_state = "degraded"
-        service_message = (runtime["message"] if runtime and not runtime["ready"] else f"Mô hình MLX {DEFAULT_CHAT_MODEL} chưa khả dụng" if _requires_mlx_model()
-                           else f"Mô hình Ollama {DEFAULT_CHAT_MODEL} chưa khả dụng")
+        service_message = (
+            runtime["message"]
+            if runtime and not runtime["ready"]
+            else f"Mô hình MLX {DEFAULT_CHAT_MODEL} chưa khả dụng"
+            if requires_mlx
+            else f"Mô hình Ollama {DEFAULT_CHAT_MODEL} chưa khả dụng"
+        )
         inference_ready = False
     else:
         service_state = "healthy"
         service_message = "Môi trường mô hình sẵn sàng. Dùng Kiểm tra mô hình để chạy thử suy luận."
         inference_ready = True
 
-    storage_info = _build_storage_payload(request)
+    storage_info = _build_storage_payload(request, include_items=not summary)
     if isinstance(status, dict):
         status = dict(status)
+        if summary:
+            status.pop("documents", None)
         status["discovered_files"] = max(
             int(status.get("registered_documents", status.get("total_documents", 0)) or 0),
             int((storage_info.get("watcher") or {}).get("discovered_count") or 0),
         )
 
-    from app.runtime_health import inspect_infrastructure_health
-
-    infra_health = project_public_response(await run_in_threadpool(inspect_infrastructure_health))
-    return {
+    payload: Dict[str, Any] = {
         "service_state": service_state,
         "service_message": service_message,
         "inference_ready": inference_ready,
         "runtime": runtime,
         "knowledge_base": project_public_response(status),
-        "trained_model": {"name": DEFAULT_CHAT_MODEL if _requires_mlx_model() else TRAINED_MODEL_NAME, "available": mlx_available},
+        "trained_model": {
+            "name": DEFAULT_CHAT_MODEL if requires_mlx else TRAINED_MODEL_NAME,
+            "available": mlx_available,
+        },
         "ollama": {
             "connected": ollama_ok,
             "url": ollama.base_url,
-            "models": [m.get("name") for m in models]
+            "models": [m.get("name") for m in models],
         },
         "gpu": gpu_status,
         "storage": storage_info,
         "watcher": storage_info["watcher"],
-        "infrastructure": infra_health,
-        "admission": dialogue_gate.get_status(),
     }
+    if not summary:
+        from app.runtime_health import inspect_infrastructure_health
+
+        payload["infrastructure"] = project_public_response(inspect_infrastructure_health())
+        payload["admission"] = dialogue_gate.get_status()
+    return payload
+
+
+@app.get("/api/status")
+async def get_index_status(request: Request, summary: bool = Query(False)):
+    return await run_in_threadpool(_collect_status_payload, request, summary=summary)
 
 
 @app.post("/api/index")

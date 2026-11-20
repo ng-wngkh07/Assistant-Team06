@@ -1700,6 +1700,109 @@ class KnowledgeIndexer:
                 }
         return flags
 
+    @staticmethod
+    def _classify_doc_sync_state(
+        *,
+        filename: str,
+        file_hash: Any,
+        doc_status: Any,
+        doc_chunks: int,
+        watcher_flags: Dict[str, Dict[str, Any]],
+    ) -> Tuple[str, bool, bool, bool]:
+        """Classify sync_status, passages_current, is_stale, and is_searchable consistently."""
+        flag = watcher_flags.get(filename)
+        if flag and flag.get("indexed_hash") in (None, file_hash):
+            sync_status = flag["status"]
+            passages_current = False
+            is_stale = True
+        elif doc_status in ("indexed", "ocr_partial_reviewed"):
+            sync_status = "current"
+            passages_current = True
+            is_stale = False
+        else:
+            sync_status = str(doc_status or "")
+            passages_current = False
+            is_stale = False
+
+        is_searchable = bool(
+            doc_chunks > 0
+            and doc_status in ("indexed", "ocr_partial_reviewed")
+            and passages_current
+        )
+        return sync_status, passages_current, is_stale, is_searchable
+
+    def _read_status_summary_rows(self) -> Tuple[List[sqlite3.Row], List[sqlite3.Row]]:
+        """Query chunk aggregate stats and document rows without mutating WAL state."""
+        chunk_sql = "SELECT doc_id, COUNT(*) AS total_c, COUNT(embedding) AS emb_c FROM chunks GROUP BY doc_id"
+        doc_sql = "SELECT id, filename, file_hash, extracted_pages_count, is_scanned, status FROM documents"
+        use_ro = (
+            "get_connection" not in getattr(self, "__dict__", {})
+            and type(self).get_connection is KnowledgeIndexer.get_connection
+        )
+        if use_ro:
+            try:
+                db_file = Path(self.db_path)
+                if db_file.is_file():
+                    ro_uri = db_file.resolve().as_uri() + "?mode=ro"
+                    with sqlite3.connect(ro_uri, uri=True, factory=self._ClosingConnection) as conn:
+                        conn.row_factory = sqlite3.Row
+                        return conn.execute(chunk_sql).fetchall(), conn.execute(doc_sql).fetchall()
+            except sqlite3.OperationalError:
+                pass
+        with self.get_connection() as conn:
+            return conn.execute(chunk_sql).fetchall(), conn.execute(doc_sql).fetchall()
+
+    def get_status_summary(self) -> Dict[str, Any]:
+        """Get lightweight library summary counts without strict vector checks or page-review parsing."""
+        chunk_rows, docs = self._read_status_summary_rows()
+        chunk_stats_by_doc: Dict[int, Tuple[int, int]] = {}
+        chunk_count = 0
+        embedded_chunk_count = 0
+        for c_row in chunk_rows:
+            total_c = int(c_row["total_c"] or 0)
+            emb_c = int(c_row["emb_c"] or 0)
+            chunk_stats_by_doc[c_row["doc_id"]] = (total_c, emb_c)
+            chunk_count += total_c
+            embedded_chunk_count += emb_c
+
+        watcher_flags = self._load_watcher_sync_flags()
+        doc_count = len(docs)
+        scanned_count = 0
+        total_pages = 0
+        stale_documents = 0
+        searchable_documents = 0
+        searchable_passages = 0
+
+        for row in docs:
+            if int(row["is_scanned"] or 0) == 1:
+                scanned_count += 1
+            total_pages += int(row["extracted_pages_count"] or 0)
+            doc_chunks, _ = chunk_stats_by_doc.get(row["id"], (0, 0))
+            _, _, is_stale, is_searchable = self._classify_doc_sync_state(
+                filename=row["filename"],
+                file_hash=row["file_hash"],
+                doc_status=row["status"],
+                doc_chunks=doc_chunks,
+                watcher_flags=watcher_flags,
+            )
+            if is_stale:
+                stale_documents += 1
+            if is_searchable:
+                searchable_documents += 1
+                searchable_passages += doc_chunks
+
+        return {
+            "total_documents": doc_count,
+            "registered_documents": doc_count,
+            "searchable_documents": searchable_documents,
+            "searchable_passages": searchable_passages,
+            "scanned_documents": scanned_count,
+            "total_indexed_pages": total_pages,
+            "total_chunks": chunk_count,
+            "embedded_chunks": embedded_chunk_count,
+            "stale_documents": stale_documents,
+        }
+
     def get_status(self) -> Dict[str, Any]:
         """Get summary statistics of the current knowledge base."""
         with self.get_connection() as conn:
@@ -1805,23 +1908,17 @@ class KnowledgeIndexer:
                     vectors_ready=vectors_ready,
                     embedding_status=embedding_status,
                 )
-                flag = watcher_flags.get(d["filename"])
-                if flag and flag.get("indexed_hash") in (None, d.get("file_hash")):
-                    d["sync_status"] = flag["status"]
-                    d["passages_current"] = False
-                    stale_documents += 1
-                elif d["status"] in ("indexed", "ocr_partial_reviewed"):
-                    d["sync_status"] = "current"
-                    d["passages_current"] = True
-                else:
-                    d["sync_status"] = d["status"]
-                    d["passages_current"] = False
-
-                is_searchable = bool(
-                    doc_chunks > 0
-                    and d["status"] in ("indexed", "ocr_partial_reviewed")
-                    and d["passages_current"]
+                sync_status, passages_current, is_stale, is_searchable = self._classify_doc_sync_state(
+                    filename=d["filename"],
+                    file_hash=d.get("file_hash"),
+                    doc_status=d["status"],
+                    doc_chunks=doc_chunks,
+                    watcher_flags=watcher_flags,
                 )
+                d["sync_status"] = sync_status
+                d["passages_current"] = passages_current
+                if is_stale:
+                    stale_documents += 1
                 d["searchable"] = is_searchable
                 if is_searchable:
                     searchable_documents += 1
