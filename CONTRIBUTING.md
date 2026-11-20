@@ -26,9 +26,9 @@ Keep hosted and local instructions consistent with actual code and validated com
 ## Make and verify a change
 
 1. Read the relevant implementation, tests and recent changelog entries.
-2. Reproduce the defect or define the intended behavior. For behavior changes, add a test that fails for the actual defect before fixing it.
+2. Reproduce the defect or define the intended behavior. Before editing application behavior, identify shared dependencies, define the expected result, and plan both the direct regression and the whole-application cases. For a defect, verify that the direct regression fails on the baseline for the reported reason when feasible.
 3. Update the implementation and affected documentation. Do not alter expected results to conceal a failure.
-4. Run the checks in [Testing](docs/testing.md). Report the environment, commands, results and checks that were not run.
+4. Run the checks in [Testing](docs/testing.md) and verify the direct regression. For any application behavior change, run the [whole-application regression cases](docs/testing.md#whole-application-regression-cases) sequentially, including flows outside the fix. Report the environment, commands, results for all three flows, and reasons for any unrun checks.
 5. Add a concise entry under **Unreleased** in [CHANGELOG.md](CHANGELOG.md). Describe the user-visible result and any compatibility or data migration impact.
 6. Review the complete diff, including new files, for private content and unrelated edits.
 
