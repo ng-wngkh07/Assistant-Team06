@@ -99,8 +99,6 @@ def compute_code_fingerprint() -> Dict[str, str]:
         "app/token_auditor.py",
         "app/run_ledger.py",
         "app/paired_evaluation.py",
-        "app/training_telemetry.py",
-        "app/study_acceptance.py",
         "app/active_registry.py",
     ]
     fingerprints = {}

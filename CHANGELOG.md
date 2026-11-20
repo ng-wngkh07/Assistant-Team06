@@ -4,6 +4,10 @@ Changes are grouped by their effect on the product. Unreleased work has not been
 
 ## Unreleased
 
+### Changed
+
+- Remove archived historical training/evaluation scripts (`scripts/archive/`), one-off offline curation/evaluation/pending-workspace scripts, unreferenced offline trial/ledger/teacher modules, and unregistered one-off Codex/training test files so the public repository retains active technical product code and test suites (`app/run_ledger.py`, `CHANGELOG.md`).
+
 ### Security
 
 - Harden HTTP/HTTPS API admission and infrastructure posture in `app/request_admission.py`, `app/account_services.py`, and `app/routes/material_routes.py`: add security response headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`, and `Strict-Transport-Security` when `STUDY_SECURE_COOKIES=1` or trusted HTTPS proxy scheme is active), expand early byte-cap enforcement to 256 KiB across all non-upload `/api/` mutation endpoints (`POST`, `PUT`, `PATCH`) and 28 MiB on `/api/timetable/extract`, add a bounded 4096-bucket sliding-window rate limiter returning HTTP `429` + `Retry-After` (keyed by verified-shape session cookie hash + NAT IP ceiling or client IP, defaulting to 300/min API and 30/min heavy inference/upload), and enforce per-account upload storage quotas (`STUDY_ACCOUNT_MAX_FILES=50`, `STUDY_ACCOUNT_MAX_STORAGE_MB=250`) on non-deduplicated uploads.
