@@ -28,7 +28,7 @@ Keep hosted and local instructions consistent with actual code and validated com
 1. Read the relevant implementation, tests and recent changelog entries.
 2. Reproduce the defect or define the intended behavior. For behavior changes, add a test that fails for the actual defect before fixing it.
 3. Update the implementation and affected documentation. Do not alter expected results to conceal a failure.
-4. Run the checks in [Testing](docs/testing.md). Report the environment, commands, results and checks that were not run.
+4. Run the checks in [Testing](docs/testing.md). For whole-application acceptance, follow the [sequential live test procedure](docs/testing.md#live-application-gate). Report the environment, commands, results and checks that were not run.
 5. Add a concise entry under **Unreleased** in [CHANGELOG.md](CHANGELOG.md). Describe the user-visible result and any compatibility or data migration impact.
 6. Review the complete diff, including new files, for private content and unrelated edits.
 
