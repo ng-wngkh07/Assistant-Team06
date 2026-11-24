@@ -2424,8 +2424,11 @@ def test_cloze_heading_ignore_overlap_dedup_missing_repair_and_prompt_trims(monk
     assert "evidence_quote" not in payload[0]  # nosec B101
 
     # 4. Overlapping cloze spans on same page deduped + missing-only repair on MLX
+    import app.model_resolver as resolver
     import app.trained_client as tc
     import app.token_counter as token_counter
+    monkeypatch.setattr(resolver, "is_mlx_model", lambda _m=None: True)
+    monkeypatch.setattr(sm, "is_mlx_model", lambda _m=None: True)
     monkeypatch.setattr(token_counter, "get_exact_token_counter",
                         lambda: lambda msgs: sum(len(m["content"]) for m in msgs))
 
@@ -2889,8 +2892,12 @@ def test_schedule_background_full_ocr_upgrades_cache_and_material(monkeypatch):
 def test_study_material_easy_cloze_repairs_span_mismatch_and_refills_after_review_drop(monkeypatch):
     import json as _json
     from types import SimpleNamespace
+    import app.model_resolver as resolver
     import app.study_materials as sm
     import app.trained_client as tc
+
+    monkeypatch.setattr(resolver, "is_mlx_model", lambda _m=None: True)
+    monkeypatch.setattr(sm, "is_mlx_model", lambda _m=None: True)
 
     page_text = (
         "Este no đơn chức mạch hở có công thức chung là CₙH₂ₙO₂ với n ≥ 2. "
@@ -3008,7 +3015,8 @@ def test_study_material_medium_balances_choices_and_hard_refills_uncovered_pages
     import app.model_resolver as resolver
     import app.trained_client as tc
 
-    monkeypatch.setattr(resolver, "is_mlx_model", lambda _m: True)
+    monkeypatch.setattr(resolver, "is_mlx_model", lambda _m=None: True)
+    monkeypatch.setattr(sm, "is_mlx_model", lambda _m=None: True)
     page1 = (
         "Phản ứng xà phòng hóa chất béo:\n"
         "(RCOO)₃C₃H₅ + 3NaOH → 3RCOONa + C₃H₅(OH)₃.\n"

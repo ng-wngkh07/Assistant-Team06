@@ -461,7 +461,7 @@ _GENERIC_REACTION_SPECIES = frozenset({
 })
 _NUMERIC_BOUND_RANGE_RE = re.compile(
     r'^(?:(?P<header>[^:\n]{3,70}?)\s*:\s*)?'
-    r'(?P<subject>[A-ZÀ-Ỹa-zà-ỹ][^:\n.!?]{1,45}?)\s+'
+    r'(?P<subject>[^\W\d_][^:\n.!?]{1,45}?)\s+'
     r'(?P<modality>phải\s+có|cần\s+có|bắt\s+buộc\s+có|yêu\s+cầu\s+có|có)\s+'
     r'từ\s+(?P<n>\d+)\s+(?P<unit>[^().!?\n:]{3,65}?)\s+trở\s+lên'
     r'(?:\s*\([^()\n]{1,60}\))?(?P<tail>[^.!?\n]{0,120})\.?$',
@@ -469,7 +469,7 @@ _NUMERIC_BOUND_RANGE_RE = re.compile(
 )
 _NUMERIC_BOUND_MIN_RE = re.compile(
     r'^(?:(?P<header>[^:\n]{3,70}?)\s*:\s*)?'
-    r'(?P<subject>[A-ZÀ-Ỹa-zà-ỹ][^:\n.!?]{1,45}?)\s+'
+    r'(?P<subject>[^\W\d_][^:\n.!?]{1,45}?)\s+'
     r'(?P<modality>phải\s+có|cần\s+có|bắt\s+buộc\s+có|yêu\s+cầu\s+có|có)\s+'
     r'(?:ít\s+nhất|tối\s+thiểu)\s+(?P<n>\d+)\s+(?P<unit>[^().!?\n:,;]{3,65}?)'
     r'(?:\s*\([^()\n]{1,60}\))?'
@@ -478,11 +478,10 @@ _NUMERIC_BOUND_MIN_RE = re.compile(
 )
 _FORMULA_TERM_RE = re.compile(r"^(?P<coeff>\d+)?\s*(?P<formula>\(?[A-Z][A-Za-z0-9₀-₉⁺⁻()']*)$")
 _PARAMETRIC_FORMULA_RE = re.compile(
-    r'^(?P<header>Công\s+thức\s+[^:\n]{3,70}?)\s*:\s*'
+    r'^(?P<header>(?i:Công\s+thức)\s+[^:\n]{3,70}?)\s*:\s*'
     r'C[ₙn]H(?P<h_mult>[2-9₂-₉])[ₙn](?P<h_off>\s*[+\-₊₋]\s*[1-9₀-₉]+)?'
-    r'(?P<tail_atoms>(?:[A-Z][a-z]?[₀-₉0-9]*)+)?\s*'
-    r'\(\s*n\s*(?:≥|>=)\s*(?P<min_n>\d+)\s*\)\.?$',
-    re.IGNORECASE,
+    r'(?P<tail_atoms>(?:[A-Z][a-z]?[₀-₉0-9]*){1,6})?\s*'
+    r'\(\s*[nN]\s*(?:≥|>=)\s*(?P<min_n>\d+)\s*\)\.?$',
 )
 _CHAIN_TRAILING_CLAUSE_RE = re.compile(
     r'\b(?:khi|nếu|trong|với|tại|ở|theo|vì|do|nhờ|bằng|'
