@@ -172,3 +172,32 @@ def test_compare_extraction_glosses_three_item_lists_and_bilingual_translation()
     assert res["response_kind"] == "answer"  # nosec B101
     assert len(model.calls) == 1  # nosec B101
     assert len(res["citations"]) == 2  # nosec B101
+
+
+def test_compare_extraction_handles_distinguish_from_pitfalls_and_bilingual_cs():
+    from app.rag_query_analyzer import extract_compare_concepts
+    from app.rag_evidence_validator import concept_has_evidence
+    from test_study_agent_c_f_g import make_chunk
+
+    assert extract_compare_concepts(  # nosec B101
+        "Distinguish Broca's aphasia from Wernicke's aphasia and avoid confusing cortical aphasia with dysarthria from peripheral vocal deficits?"
+    ) == ("Broca's aphasia", "Wernicke's aphasia")
+    assert extract_compare_concepts(  # nosec B101
+        "Sequential Containers (vector) và Associative Containers (set, map) trong STL khác nhau thế nào về insertion và searching/find?"
+    ) == ("Sequential Containers", "Associative Containers")
+    assert extract_compare_concepts(  # nosec B101
+        "Phân biệt truyền tham trị và truyền tham chiếu khi truyền biến hoặc struct vào function trong C++?"
+    ) == ("truyền tham trị", "truyền tham chiếu")
+    assert extract_compare_concepts(  # nosec B101
+        "So sánh ưu nhược điểm khi truy cập ngẫu nhiên và chèn/xóa đầu giữa singly linked list và mảng liên tiếp?"
+    ) == ("singly linked list", "mảng liên tiếp")
+    assert extract_compare_concepts(  # nosec B101
+        "So sánh lực ma sát nghỉ với lực ma sát trượt động và phân biệt lực hấp dẫn với quán tính trong các định luật Newton?"
+    ) is None
+    assert extract_compare_concepts(  # nosec B101
+        "Phân biệt thao tác cập nhật liên kết khi xóa node đầu của singly linked list với bẫy làm mất head?"
+    ) is None
+
+    cpp_chunks = [make_chunk("C++ functions use pass by value for copies and pass by reference to modify caller arguments.")]
+    assert concept_has_evidence("truyền tham trị", cpp_chunks) is True  # nosec B101
+    assert concept_has_evidence("truyền tham chiếu", cpp_chunks) is True  # nosec B101

@@ -164,17 +164,25 @@ def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Opt
 
     q = query.strip()
     q = re.split(COMPARE_SCOPE_SPLIT_RE, q, maxsplit=1, flags=re.I)[0].strip()
-    # Strip trailing pitfall/purpose clauses (e.g., "để tránh ngộ nhận...", "cùng bẫy...") before binary splitting
+    # Strip trailing pitfall/purpose/condition clauses before binary splitting
     q = re.sub(
-        r"\s+(?:để\s+tránh|nhằm\s+tránh|tránh\s+ngộ\s+nhận|tránh\s+nhầm|tránh\s+đánh\s+đồng|(?:cùng|và|kèm)\s+bẫy)\b.*$",
+        r"\s+(?:(?:để|nhằm)\s+tránh|tránh\s+ngộ\s+nhận|tránh\s+nhầm|tránh\s+đánh\s+đồng|(?:cùng|và|kèm)\s+bẫy|"
+        r"(?:and\s+)?(?:avoid\s+(?:confusing|conflating|mixing\s+up)|to\s+avoid\s+(?:confusing|confusion)))\b.*$",
         "",
         q,
         flags=re.I,
     ).strip()
+    # Strip trailing parenthetical caveat at sentence end before suffix stripping
+    q = re.sub(r"\s*\([^()]{8,}\)\s*([?!.]*)$", r"\1", q).strip()
+    if ";" in q:
+        return None
+    if re.search(r"\s+(?:với|vs\.?)\s+bẫy\b", q, flags=re.I):
+        return None
+    has_distinguish_verb = bool(re.search(r"\b(?:distinguish|differentiate|phân\s+biệt)\b", q, flags=re.I))
     prefix_pattern = (
         r"^(?:hãy\s+|vui\s+lòng\s+|please\s+)?"
         r"(?:(?:trình\s+bày|giải\s+thích|nêu|mô\s+tả|định\s+nghĩa|cho\s+biết|phân\s+tích|explain|what\s+(?:is|are)(?:\s+the)?)\s+(?:(?:và|and)\s+)?)?"
-        r"(?:(?:so\s+sánh|đối\s+chiếu|phân\s+biệt|compare|contrast|distinguish|(?:the\s+)?differences?)"
+        r"(?:(?:so\s+sánh|đối\s+chiếu|phân\s+biệt|compare|contrast|distinguish|differentiate|(?:the\s+)?differences?)"
         r"(?:\s+(?:ngắn\s+gọn|nhanh|chi\s+tiết|cụ\s+thể|tóm\s+tắt))?"
         r"(?:\s+(?:(?:sự|những|các)\s+)?(?:điểm\s+)?(?:giống(?:\s+nhau)?(?:\s+và\s+khác(?:\s+nhau)?)?|khác\s+nhau|khác\s+biệt))?"
         r"|giải\s+thích\s+(?:sự|điểm)\s+khác\s+(?:nhau|biệt)"
@@ -185,16 +193,28 @@ def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Opt
         q_cleaned = q_cleaned[5:].strip()
     elif q_cleaned.lower().startswith("between "):
         q_cleaned = q_cleaned[8:].strip()
+    else:
+        # Handle "So sánh <aspect> giữa <C1> và <C2>" or "Compare <aspect> between <C1> and <C2>"
+        between_match = re.search(r"\s+(?:giữa|between)\s+(.+)$", q_cleaned, flags=re.I)
+        if between_match and re.search(r"\s+(?:và|với|and|vs\.?|versus)\s+", between_match.group(1), flags=re.I):
+            q_cleaned = between_match.group(1).strip()
     q_cleaned = re.sub(r"^(?:khái\s+niệm|the\s+concepts?\s+of)\s+", "", q_cleaned, flags=re.I).strip()
 
     suffix_pattern = (
+        r"(?:\s+trong\s+[^?.,;]{1,35})?(?:\s+có\s+(?:vai\s+trò|chức\s+năng|tác\s+dụng))?"
         r"\s+(?:(?:giống(?:\s+nhau)?\s+và\s+)?khác\s+nhau"
-        r"(?:\s+(?:ở|về)\s+(?:điểm|chỗ|mặt)(?:\s+\w+){0,4})?"
         r"(?:\s+(?:thế\s+nào|như\s+thế\s+nào|ra\s+sao|gì|nào))?"
+        r"(?:\s+(?:ở|về)(?:\s+(?:điểm|chỗ|mặt|cách))?(?:\s+\S+){0,8})?"
         r"|khác\s+gì(?:\s+nhau)?|có\s+gì\s+khác\s+nhau|như\s+thế\s+nào|ra\s+sao|là\s+gì"
         r"|differ|different)\??$"
     )
     q_cleaned = re.sub(suffix_pattern, "", q_cleaned, flags=re.I).strip()
+    q_cleaned = re.sub(
+        r"\s+(?:khi\s+(?:truyền|áp\s+dụng|sử\s+dụng|dùng)|when\s+(?:passing|using|applying))\b.*$",
+        "",
+        q_cleaned,
+        flags=re.I,
+    ).strip()
 
     split_patterns = [
         r"\s+và\s+",
@@ -205,7 +225,12 @@ def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Opt
         r"\s+khác\s+nhau\s+với\s+",
         r"\s+and\s+",
         r"\s+with\s+",
+        *([r"\s+from\s+"] if has_distinguish_verb else []),
     ]
+    _nested_compare_re = re.compile(
+        r"(?:\s+(?:với|vs\.?|versus)\s+|\b(?:so\s+sánh|phân\s+biệt|compare|contrast|distinguish)\b)",
+        flags=re.I,
+    )
     for pat in split_patterns:
         parts = re.split(pat, q_cleaned, maxsplit=1, flags=re.I)
         if len(parts) == 2:
@@ -213,8 +238,8 @@ def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Opt
             c2 = re.sub(r"[?,.]+$", "", parts[1].strip()).strip()
             c1 = _strip_parenthetical_gloss(c1)
             c2 = _strip_parenthetical_gloss(c2)
-            # 3+ item comparisons containing commas ("A, B và C") are broad syntheses, not binary 2-concept splits
-            if "," in c1 or "," in c2:
+            # 3+ item comparisons or compound sub-comparisons are broad syntheses, not binary 2-concept splits
+            if "," in c1 or "," in c2 or _nested_compare_re.search(c1) or _nested_compare_re.search(c2):
                 return None
             if c1 and c2 and (c1.casefold() != c2.casefold() or c1 != c2):
                 return (c1, c2)
