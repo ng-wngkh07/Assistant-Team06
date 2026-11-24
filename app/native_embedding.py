@@ -299,8 +299,8 @@ class NativeEmbeddingClient:
     def get_status_identity(self) -> str:
         """Return verified status identity without rehashing unchanged verified artifacts."""
         if (
-            type(self).get_identity is not NativeEmbeddingClient.get_identity
-            or type(self).verify_identity.__func__ is not NativeEmbeddingClient.verify_identity.__func__
+            type(self).get_identity is not _ORIG_NATIVE_GET_IDENTITY
+            or type(self).verify_identity.__func__ is not _ORIG_NATIVE_VERIFY_IDENTITY
             or "get_identity" in self.__dict__
         ):
             return self.get_identity()
@@ -897,4 +897,6 @@ class NativeEmbeddingClient:
         return _VerifiedBatchResult(vectors, verified_identity=expected_identity)
 
 
+_ORIG_NATIVE_GET_IDENTITY = NativeEmbeddingClient.get_identity
+_ORIG_NATIVE_VERIFY_IDENTITY = NativeEmbeddingClient.verify_identity.__func__
 gpu_coordinator.register_resident_evictor(NativeEmbeddingClient.evict_stream_worker, role="mlx_embedding")

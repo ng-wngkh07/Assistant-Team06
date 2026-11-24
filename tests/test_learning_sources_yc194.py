@@ -307,3 +307,47 @@ def test_flashcards_attribute_exact_source_when_two_books_share_page_num(service
     res = learning.flashcards(topic='Trí nhớ', count=1, model='test-model', material_manager=_StubMgr())
     assert res['flashcards'][0]['doc_id'] == 2
     assert res['flashcards'][0]['source_title'] == 'Cơ học B'
+    assert res['flashcards'][0]['source']['doc_id'] == 2
+    assert res['flashcards'][0]['source']['title'] == 'Cơ học B'
+    assert res['flashcards'][0]['source']['page_num'] == 12
+
+
+def test_exercises_prioritizes_dedicated_doc_over_focus_token_in_unrelated_doc(tmp_path):
+    """Dedicated-topic documents must outrank unrelated books matching a secondary focus token."""
+    module = importlib.import_module('app.learning')
+    src = tmp_path / 'src'
+    src.mkdir()
+    db = tmp_path / 'kb.db'
+    KnowledgeIndexer(db, src)
+    for name in ('baeco_micro.pdf', 'calculus.pdf'):
+        (src / name).write_bytes(b'%PDF fixture')
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            'INSERT INTO documents(id,filename,clean_title,filepath,file_size,file_hash,total_pages,extracted_pages_count,status) VALUES(?,?,?,?,?,?,?,?,?)',
+            (1, 'baeco_micro.pdf', 'Kinh te vi mo', str(src / 'baeco_micro.pdf'), 1, 'h1', 2, 2, 'indexed'),
+        )
+        conn.execute(
+            'INSERT INTO documents(id,filename,clean_title,filepath,file_size,file_hash,total_pages,extracted_pages_count,status) VALUES(?,?,?,?,?,?,?,?,?)',
+            (2, 'calculus.pdf', 'Calculus Derivatives', str(src / 'calculus.pdf'), 1, 'h2', 2, 2, 'indexed'),
+        )
+        rows = [
+            (1, 1, 1, 'Kinh te vi mo', 'baeco_micro.pdf', 'LÝ THUYẾT\nChi phí biến và ứng dụng đạo hàm trong sản xuất.'),
+            (2, 1, 2, 'Kinh te vi mo', 'baeco_micro.pdf', 'BÀI TẬP\nBài 1. Phân tích chi phí biến và giới hạn hàm chi phí.'),
+            (3, 2, 1, 'Calculus Derivatives', 'calculus.pdf', 'LÝ THUYẾT\nĐạo hàm và tích phân cơ bản trên đoạn [a, b].'),
+            (4, 2, 2, 'Calculus Derivatives', 'calculus.pdf', "BÀI TẬP\nBài 1. Tính đạo hàm f'(x) khi f(x) = x^3 + 2x."),
+        ]
+        for cid, did, page, title, fn, text in rows:
+            conn.execute(
+                'INSERT INTO chunks(id,doc_id,book_title,filename,page_num,chunk_index,text) VALUES(?,?,?,?,?,?,?)',
+                (cid, did, title, fn, page, 0, text),
+            )
+    lookup = DocumentLookup(db, src)
+    searcher = HybridSearcher(db)
+    practice = PracticeService(searcher, lookup)
+    practice._chat_complete = lambda *a, **kw: (_ for _ in ()).throw(AssertionError('no model expected'))
+    learning = module.LearningService(document_lookup=lookup, practice_service=practice, searcher=searcher)
+
+    res = learning.exercises(topic='Giải tích một biến', limit=1, solve_missing=False, model='test-model')
+    assert len(res['items']) == 1
+    assert res['items'][0]['source']['doc_id'] == 2
+    assert res['items'][0]['source']['filename'] == 'calculus.pdf'

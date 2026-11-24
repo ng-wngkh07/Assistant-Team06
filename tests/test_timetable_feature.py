@@ -1705,3 +1705,62 @@ def test_planner_prefers_lighter_class_day_and_coalesces_min_remainder(isolated_
     sessions = gen.json()["draft"]["sessions"]
     assert len(sessions) == 1  # nosec B101
     assert sessions[0]["weekday"] == 4 and sessions[0]["start_time"] == "19:00" and sessions[0]["end_time"] == "20:30"  # nosec B101
+
+
+def test_only_available_window_minute_cap_dated_ics_valarm_and_empty_extract_warning(isolated_client, monkeypatch):
+    from zoneinfo import ZoneInfo
+    from app import study_planner
+
+    _freeze_planner_now(monkeypatch, datetime(2026, 11, 29, 8, 0, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh")))
+    isolated_client.put("/api/timetable/planner/preferences", json={
+        "preferred_session_minutes": 60,
+        "min_session_minutes": 30,
+        "max_daily_study_minutes": 180,
+        "ai_notes": "Không xếp học sau 21:00, chỉ rảnh sáng thứ 7, tối đa 90 phút mỗi ngày.",
+        "week_start_date": "2026-11-30",
+    })
+    note_parsed = study_planner.parse_ai_preference_notes(
+        "Không xếp học sau 21:00, chỉ rảnh sáng thứ 7, tối đa 90 phút mỗi ngày.",
+        {"earliest_study_time": "07:00", "latest_study_time": "22:30", "max_daily_study_minutes": 180, "preferred_session_minutes": 60},
+    )
+    assert note_parsed["max_daily_min"] == 90  # nosec B101
+    assert study_planner._is_covered_by_deterministic_parser(
+        "Không xếp học sau 21:00, chỉ rảnh sáng thứ 7, tối đa 90 phút mỗi ngày.", note_parsed, []
+    ) is True  # nosec B101
+    merged = study_planner._merge_llm_planner_strategy(
+        note_parsed,
+        {"blocked_day_windows": [{"weekday": 6, "start_time": "08:00", "end_time": "12:00", "reason": "Rảnh sáng T7 (tránh)"}]},
+        [],
+    )
+    assert not any(bw["weekday"] == 6 and bw["start_min"] <= 540 and bw["end_min"] >= 600 for bw in merged["blocked_day_windows"])  # nosec B101
+
+    isolated_client.post("/api/timetable/manual", json={"course": "Giải tích", "weekday": 1, "start_time": "08:00", "end_time": "09:30"})
+    isolated_client.post("/api/timetable/planner/tasks", json={
+        "title": "Ôn tập giới hạn", "course": "Giải tích", "deadline": "2026-12-06T23:59", "estimated_minutes": 120,
+    })
+    gen = isolated_client.post("/api/timetable/planner/generate", json={})
+    assert gen.status_code == 200  # nosec B101
+    draft = gen.json()["draft"]
+    assert len(draft["sessions"]) >= 1  # nosec B101
+    assert all(s["weekday"] == 6 and s["end_time"] <= "12:00" for s in draft["sessions"])  # nosec B101
+    assert sum(s["duration_minutes"] for s in draft["sessions"]) == 90  # nosec B101
+    conf = isolated_client.post("/api/timetable/planner/confirm", json={"plan_id": draft["plan_id"], "sessions": draft["sessions"]})
+    assert conf.status_code == 200  # nosec B101
+    saved = conf.json()["sessions"]
+    assert saved[0]["session_date"] == "2026-12-05"  # nosec B101
+
+    # Updating week_start_date later must NOT shift confirmed session dates in ICS export
+    isolated_client.put("/api/timetable/planner/preferences", json={"week_start_date": "2026-12-07"})
+    ics_with_alarm = isolated_client.get("/api/timetable/export.ics?start_date=2026-11-30&end_date=2026-12-20&include_planner=true&reminder_minutes=60")
+    assert ics_with_alarm.status_code == 200  # nosec B101
+    ics_text = ics_with_alarm.text.replace("\r\n ", "")
+    assert "DTSTART;TZID=Asia/Ho_Chi_Minh:20261205T" in ics_text  # nosec B101
+    assert "DTSTART;TZID=Asia/Ho_Chi_Minh:20261212T" not in ics_text  # nosec B101
+    assert "BEGIN:VALARM" in ics_text and "TRIGGER:-PT60M" in ics_text  # nosec B101
+
+    ics_no_alarm = isolated_client.get("/api/timetable/export.ics?start_date=2026-11-30&end_date=2026-12-20&include_planner=true&reminder_minutes=0")
+    assert ics_no_alarm.status_code == 200  # nosec B101
+    assert "BEGIN:VALARM" not in ics_no_alarm.text  # nosec B101
+
+    _, empty_warnings = timetable_vision._build_extract_diagnostics([], [], [])
+    assert any(w["code"] == "no_entries_found" for w in empty_warnings)  # nosec B101

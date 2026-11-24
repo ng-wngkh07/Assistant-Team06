@@ -164,9 +164,11 @@ def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Opt
 
     q = query.strip()
     q = re.split(COMPARE_SCOPE_SPLIT_RE, q, maxsplit=1, flags=re.I)[0].strip()
-    # Strip trailing pitfall/purpose/condition clauses before binary splitting
+    # Strip trailing pitfall/purpose/condition/criteria clauses before binary splitting
     q = re.sub(
         r"\s+(?:(?:để|nhằm)\s+tránh|tránh\s+ngộ\s+nhận|tránh\s+nhầm|tránh\s+đánh\s+đồng|(?:cùng|và|kèm)\s+bẫy|"
+        r"(?:bằng|dựa\s+trên|theo)\s+(?:định\s+nghĩa|tiêu\s+chí|phương\s+pháp|cách|nguyên\s+lý)|"
+        r"by\s+definition(?:\s+of)?|"
         r"(?:and\s+)?(?:avoid\s+(?:confusing|conflating|mixing\s+up)|to\s+avoid\s+(?:confusing|confusion)))\b.*$",
         "",
         q,

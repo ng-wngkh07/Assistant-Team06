@@ -3371,3 +3371,102 @@ def test_strip_non_learning_markdown_sections_filters_boilerplate_and_keeps_exer
     assert len(res_multi["quiz"]) == 1  # nosec B101
     assert "Bài tập 2.1" in captured_prompts[0]  # nosec B101
     assert "Từ điển Anh–Việt" not in captured_prompts[0] and "Tài liệu tham khảo" not in captured_prompts[0]  # nosec B101
+
+
+def test_cloze_explanation_strips_heading_and_flashcards_dedup_thin_sources(monkeypatch):
+    import json as _json
+    import app.study_materials as sm
+    from app.pdf_extractor import PDFExtractionResult
+
+    page_text = (
+        "# Hiệu ứng Mẫu\n"
+        "Hiệu ứng Mẫu làm chậm phản ứng khi từ và màu mực xung đột trực tiếp với nhau. "
+        "Hiện tượng này cho thấy đọc tự động gây nhiễu lên nhiệm vụ gọi tên màu."
+    )
+    ext = PDFExtractionResult(filename="thin_stroop.md", filepath=Path("thin_stroop.md"))
+    ext.clean_title = "Thin Stroop"
+    ext.total_pages = 1
+    ext.total_chars = len(page_text)
+    ext.extracted_pages = [{"page_num": 1, "text": page_text}]
+
+    class ThinFlashClient:
+        last_done_reason = "stop"
+
+        def check_health(self):
+            return True
+
+        def chat_complete(self, **kwargs):
+            import re as _re
+            self.last_done_reason = "stop"
+            prompt = kwargs["messages"][-1]["content"]
+            if "Kiểm định độc lập" in prompt or "Dữ liệu cần kiểm định" in prompt:
+                m_ans = _re.search(
+                    r'"([A-D])"\s*:\s*"màu mực"|"label"\s*:\s*"([A-D])"\s*,\s*"text"\s*:\s*"màu mực"',
+                    prompt,
+                )
+                ver_ans = (m_ans.group(1) or m_ans.group(2)) if m_ans else "A"
+                return _json.dumps({
+                    "checks": [{
+                        "index": 1,
+                        "input_audit": "Kiểm tra cụm từ bị che trong câu đầu.",
+                        "source_basis": "Hiệu ứng Mẫu làm chậm phản ứng khi từ và màu mực xung đột trực tiếp với nhau.",
+                        "independent_solution": "Cụm từ đúng trong trích đoạn là 'màu mực'.",
+                        "choice_comparison": f"Chỉ {ver_ans} khớp với trích đoạn nguồn.",
+                        "explanation_audit": "Giải thích nêu trích đoạn nguồn hợp lệ.",
+                        "supported": True,
+                        "qualifiers_preserved": True,
+                        "unique_answer": True,
+                        "verified_answer": ver_ans,
+                        "explanation_supported": True,
+                        "difficulty_matches": True,
+                    }]
+                }, ensure_ascii=False)
+            if "flashcards" in prompt.lower():
+                return _json.dumps({
+                    "flashcards": [
+                        {"back": "Hiệu ứng Mẫu", "evidence_quote": "# Hiệu ứng Mẫu", "page_num": 1},
+                        {"back": "màu mực", "evidence_quote": page_text, "page_num": 1},
+                        {"back": "màu mực xung đột trực tiếp", "evidence_quote": page_text, "page_num": 1},
+                        {"back": "nhiệm vụ gọi tên màu", "evidence_quote": page_text, "page_num": 1},
+                    ]
+                }, ensure_ascii=False)
+            return _json.dumps({
+                "questions": [{
+                    "format": "source_cloze",
+                    "evidence_id": "Q1",
+                    "answer": "màu mực",
+                    "distractors": ["âm thanh", "nhịp thở", "độ sáng"],
+                }]
+            }, ensure_ascii=False)
+
+    import app.token_counter as tc_mod
+    monkeypatch.setattr(
+        tc_mod,
+        "get_exact_token_counter",
+        lambda *a, **kw: (lambda msgs: sum(len(str(m.get("content", "")).split()) for m in msgs)),
+    )
+    mgr = sm.StudyMaterialManager(ThinFlashClient())
+    monkeypatch.setattr(mgr, "ollama", ThinFlashClient())
+    res = mgr.generate_materials_from_pages(
+        ext, model="test-ollama", difficulty="easy", quiz_count=1, flashcard_count=5
+    )
+    assert len(res["quiz"]) == 1  # nosec B101
+    assert "# Hiệu ứng Mẫu" not in res["quiz"][0]["explanation"]  # nosec B101
+    # Heading card rejected + two masks on sentence 1 deduplicated -> 2 distinct cards (1 per sentence)
+    assert len(res["flashcards"]) == 2  # nosec B101
+    assert all(not fc["evidence_quote"].strip().startswith("# Hiệu ứng Mẫu\n") or "[…]" in fc["front"] for fc in res["flashcards"])  # nosec B101
+    assert all(fc["back"] != "Hiệu ứng Mẫu" for fc in res["flashcards"])  # nosec B101
+    assert res["warning"] and "2/5 thẻ" in res["warning"]  # nosec B101
+
+    # Blurry/repeated OCR image failing medium mode emits explicit OCR clarity error
+    blurry = PDFExtractionResult(filename="blur.png", filepath=Path("blur.png"))
+    blurry.doc_type = "image"
+    blurry.clean_title = "blur"
+    blurry.total_pages = 1
+    blurry.quality_warnings = ["image_ocr_requires_review"]
+    blurry.extracted_pages = [{"page_num": 1, "text": "Dòng lặp mờ\nDòng lặp mờ\nDòng lặp mờ", "quality_warnings": ["image_ocr_requires_review"]}]
+    blurry.total_chars = 35
+    with pytest.raises(sm.StudyMaterialError, match="OCR"):
+        mgr.generate_materials_from_pages(
+            blurry, model="test-ollama", difficulty="medium", quiz_count=1, flashcard_count=0
+        )

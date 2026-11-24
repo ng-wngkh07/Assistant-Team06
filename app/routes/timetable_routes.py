@@ -348,7 +348,7 @@ async def export_timetable_ics(
             for s in sessions:
                 entries.append({
                     "uid": f"study:{s['id']}",
-                    "event_date": (week_start + timedelta(days=s["weekday"]-1)).isoformat(),
+                    "event_date": s.get("session_date") or (week_start + timedelta(days=s["weekday"]-1)).isoformat(),
                     "course": f"[Tự học - {s['course']}] {s['title']}",
                     "weekday": s["weekday"],
                     "start_time": s["start_time"],
@@ -1094,7 +1094,7 @@ async def export_timetable_bundle_zip(
         for s in sessions:
             entries.append({
                 "uid": f"study:{s['id']}",
-                "event_date": (week_start + timedelta(days=s["weekday"] - 1)).isoformat(),
+                "event_date": s.get("session_date") or (week_start + timedelta(days=s["weekday"] - 1)).isoformat(),
                 "course": f"[Tự học - {s['course']}] {s['title']}",
                 "weekday": s["weekday"],
                 "start_time": s["start_time"],

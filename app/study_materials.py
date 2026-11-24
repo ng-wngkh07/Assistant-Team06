@@ -736,6 +736,8 @@ class StudyMaterialManager:
             if not isinstance(q, dict):
                 return None, None
             is_cloze = q.get("format") == "source_cloze"
+            span = ""
+            masked_quote: Optional[str] = None
             if is_cloze:
                 if q.get("evidence_id") not in evidence_by_id:
                     return None, None
@@ -853,11 +855,22 @@ class StudyMaterialManager:
             if ans_str not in {"A", "B", "C", "D"}:
                 return None, None
 
+            if is_cloze:
+                stripped_ev = strip_source_review_banner(ev_quote).strip()
+                raw_lines = [ln.strip() for ln in stripped_ev.splitlines() if ln.strip()]
+                while len(raw_lines) >= 2 and (
+                    re.match(r"^#{1,6}\s+", raw_lines[0])
+                    or re.fullmatch(r"[A-ZÀ-Ỹ0-9\s:.,–—-]{8,}", raw_lines[0])
+                ):
+                    raw_lines.pop(0)
+                restored_ev = "\n".join(raw_lines) if raw_lines else stripped_ev
+            else:
+                restored_ev = strip_source_review_banner(ev_quote)
             evaluated_diff = evaluate_question_difficulty(q)
             explanation = (
-                f"Căn cứ trực tiếp theo tài liệu trang {p_num}: {ev_quote}"
+                f"Căn cứ trực tiếp theo tài liệu trang {p_num}: {restored_ev}"
                 if is_cloze
-                else str(q.get("explanation") or f"Căn cứ trực tiếp theo tài liệu trang {p_num}: {ev_quote}")
+                else str(q.get("explanation") or f"Căn cứ trực tiếp theo tài liệu trang {p_num}: {restored_ev}")
             )
             return {
                 "id": q.get("id") if isinstance(q.get("id"), int) else next_id,
@@ -956,6 +969,8 @@ class StudyMaterialManager:
 
         def _collect_valid_flashcards(raw_items: List[Any]) -> List[Dict[str, Any]]:
             collected: List[Dict[str, Any]] = []
+            seen_backs: List[Tuple[int, str]] = []
+            accepted_spans_by_quote: Dict[Tuple[int, str], List[Tuple[int, int]]] = {}
             for f in raw_items:
                 f = resolve_evidence(f)
                 if not isinstance(f, dict):
@@ -980,12 +995,50 @@ class StudyMaterialManager:
                 if not any(self._quote_matches_chunk(ev_quote, chunk_text) for chunk_text in page_chunks[p_num]):
                     continue
                 answer_text = html.unescape(back).strip()
+                if len(answer_text) > 90 or len(answer_text.split()) > 14:
+                    continue
+                clean_ev_lines = [
+                    ln.strip()
+                    for ln in strip_source_review_banner(ev_quote).splitlines()
+                    if ln.strip()
+                ]
+                if not clean_ev_lines or all(re.match(r"^#{1,6}\s+", ln) for ln in clean_ev_lines):
+                    continue
                 masked = self._mask_answer_in_quote(ev_quote, answer_text)
                 if masked is None:
                     continue
+                ans_cf = " ".join(answer_text.split()).casefold()
                 if any(item["back"].casefold() == answer_text.casefold() for item in collected):
                     continue
+                if len(ans_cf) >= 4 and any(
+                    prev_page == p_num and len(prev_cf) >= 4 and (prev_cf in ans_cf or ans_cf in prev_cf)
+                    for prev_page, prev_cf in seen_backs
+                ):
+                    continue
                 focused_masked = extract_focused_flashcard_context(masked)
+                if "[…]" not in focused_masked:
+                    continue
+                blank_line = next(
+                    (ln for ln in focused_masked.splitlines() if "[…]" in ln),
+                    focused_masked,
+                )
+                if re.match(r"^\s*#{1,6}\s+", blank_line):
+                    continue
+                if len(re.sub(r"[#\s.,:;!?()\"'…\[\]-]+", "", blank_line)) < 6:
+                    continue
+                blank_pos = masked.find("[…]")
+                quote_norm_key = (p_num, " ".join(ev_quote.split()).casefold())
+                span_range: Optional[Tuple[int, int]] = None
+                if blank_pos >= 0:
+                    span_range = (blank_pos, blank_pos + len(answer_text))
+                    if any(
+                        max(span_range[0], prev_s) < min(span_range[1], prev_e)
+                        for prev_s, prev_e in accepted_spans_by_quote.get(quote_norm_key, ())
+                    ):
+                        continue
+                seen_backs.append((p_num, ans_cf))
+                if span_range is not None:
+                    accepted_spans_by_quote.setdefault(quote_norm_key, []).append(span_range)
                 source_question = f"Điền phần còn thiếu trong trích đoạn:\n{focused_masked}\nPhần […] là gì?"
                 collected.append({
                     "id": f.get("id") if isinstance(f.get("id"), int) else (len(collected) + 1),
@@ -1532,12 +1585,45 @@ class StudyMaterialManager:
         for idx, item in enumerate(combined_quiz, 1):
             valid_quiz.append({**item, "id": idx})
 
+        def _noisy_ocr_image_reason() -> Optional[str]:
+            is_img = (
+                getattr(extracted_result, "doc_type", None) == "image"
+                or Path(str(getattr(extracted_result, "filename", "") or "")).suffix.lower() in IMAGE_EXTENSIONS
+            )
+            if not is_img:
+                return None
+            pages = getattr(extracted_result, "extracted_pages", None) or []
+            lines = [
+                ln.strip()
+                for p in pages
+                for ln in str(p.get("text") or "").splitlines()
+                if ln.strip()
+            ]
+            combined = "\n".join(lines).strip()
+            warns = set(getattr(extracted_result, "quality_warnings", None) or [])
+            for p in pages:
+                warns.update(p.get("quality_warnings") or [])
+            has_ocr_warn = bool({"image_ocr_requires_review", "image_low_or_no_text"} & warns)
+            repeated_lines = len(lines) >= 2 and len(set(lines)) == 1
+            noisy_markers = bool(re.search(r"(\?{3,}|\uFFFD|\[không rõ\]|\[mờ\])", combined, re.I))
+            real_words = re.findall(r"[^\W\d_]{2,}", combined)
+            if repeated_lines or noisy_markers or (has_ocr_warn and (len(combined) < 220 or len(real_words) < 25)):
+                return (
+                    f"Không thể tạo câu hỏi từ hình ảnh '{extracted_result.filename}': "
+                    "văn bản OCR trích xuất bị mờ, nhiễu, lặp dòng hoặc thiếu dữ kiện đọc được "
+                    "(như số liệu hay biểu thức rõ ràng). Vui lòng tải lên hình ảnh sắc nét hơn."
+                )
+            return None
+
         if quiz_count <= 0:
             norm_quiz = []
             quiz_mode = "skipped"
         elif difficulty == "hard":
             matching_quiz = [q for q in valid_quiz if q.get("difficulty") == "hard"]
             if not matching_quiz:
+                noisy_msg = _noisy_ocr_image_reason()
+                if noisy_msg:
+                    raise StudyMaterialError(noisy_msg)
                 raise StudyMaterialError(
                     "Không có câu hỏi đạt kiểm định nguồn và độ khó 'khó' (hard) trong tài liệu. "
                     "Hệ thống không hạ độ khó hay thay bằng câu trích đoạn đơn giản. "
@@ -1551,6 +1637,9 @@ class StudyMaterialManager:
                 norm_quiz = matching_quiz[:quiz_count]
                 quiz_mode = "model"
             else:
+                noisy_msg = _noisy_ocr_image_reason()
+                if noisy_msg:
+                    raise StudyMaterialError(noisy_msg)
                 raise StudyMaterialError(
                     "Không có câu hỏi đạt độ khó trung bình (medium) đã chọn. "
                     "Hệ thống không tự hạ xuống câu nhận biết hoặc điền khuyết."

@@ -491,8 +491,9 @@ _QUERY_HINT_PATTERNS: Dict[str, re.Pattern[str]] = {
 _QUERY_FOCUS_SYNONYMS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("giai tich", ("calculus", "differential", "integral", "derivative", "mean value", "lagrange", "rolle")),
     ("vi phan", ("calculus", "differential", "derivative")),
-    ("lagrange", ("lagrange", "mean value", "calculus")),
-    ("rolle", ("rolle", "mean value", "calculus")),
+    ("lagrange", ("lagrange", "mean value theorem", "mean value")),
+    ("gia tri trung binh", ("mean value theorem", "mean value", "lagrange")),
+    ("rolle", ("rolle", "rolle's theorem", "mean value theorem", "mean value")),
     ("da luong", ("concurrency", "multithreading", "thread", "mutex", "deadlock")),
     ("c++", ("c++", "cplusplus", "cpp")),
     ("than kinh", ("neuroanatomy", "neuroscience", "neurobiology", "neural", "neuron", "action potential", "synapse")),

@@ -547,6 +547,7 @@ def parse_ai_preference_notes(ai_notes: str, base_prefs: Dict[str, Any]) -> Dict
     preferred_periods: List[str] = []  # "morning", "afternoon", "evening"
     avoided_weekdays: List[int] = []
     blocked_day_windows: List[Dict[str, Any]] = []
+    allowed_day_windows: List[Dict[str, Any]] = []
     prefer_before_class = bool(
         re.search(r"trước\s+(?:buổi\s+học|tiết\s+học|ngày\s+học|lớp)|ôn\s+trước\s+hôm\s+học", lower)
     )
@@ -633,7 +634,7 @@ def parse_ai_preference_notes(ai_notes: str, base_prefs: Dict[str, Any]) -> Dict
                 latest_min = candidate_latest
                 insights.append(f"Giới hạn giờ kết thúc học trong ngày không quá {minutes_to_time(latest_min)} theo yêu cầu.")
 
-    # Detect "tối đa X giờ/tiếng mỗi ngày"
+    # Detect "tối đa X giờ/tiếng mỗi ngày" or "tối đa X phút mỗi ngày"
     m_max_h = re.search(r"tối đa\s*(\d+(?:[.,]\d+)?)\s*(?:giờ|tiếng|h)\s*(?:/|mỗi|1)?\s*ngày", lower)
     if not m_max_h:
         m_max_h = re.search(r"tối đa\s*(\d+(?:[.,]\d+)?)\s*(?:giờ|tiếng|h)\b", lower)
@@ -642,6 +643,13 @@ def parse_ai_preference_notes(ai_notes: str, base_prefs: Dict[str, Any]) -> Dict
         if 0.5 <= hours_val <= 14:
             max_daily_min = int(round(hours_val * 60))
             insights.append(f"Áp dụng trần thời lượng tự học tối đa {hours_val:g} giờ/ngày ({max_daily_min} phút).")
+    else:
+        m_max_m = re.search(r"tối đa\s*(\d{2,4})\s*(?:phút|p|min)(?:\s*(?:/|mỗi|1)?\s*ngày)?\b", lower)
+        if m_max_m:
+            mins_val = int(m_max_m.group(1))
+            if 20 <= mins_val <= 840:
+                max_daily_min = mins_val
+                insights.append(f"Áp dụng trần thời lượng tự học tối đa {max_daily_min} phút/ngày.")
 
     # Detect "mỗi phiên X phút"
     m_sess = re.search(r"(?:mỗi phiên|phiên học|chia thành)\s*(\d{2,3})\s*phút", lower)
@@ -675,6 +683,48 @@ def parse_ai_preference_notes(ai_notes: str, base_prefs: Dict[str, Any]) -> Dict
                     avoided_weekdays.append(w_num)
                     insights.append(f"Hạn chế xếp lịch tự học vào {w_label} theo mong muốn cá nhân.")
 
+    # Detect strict availability windows ("chỉ rảnh sáng thứ 7", "chỉ rảnh chiều thứ 5 và thứ 7")
+    for m_only in re.finditer(r"chỉ\s+rảnh(?:\s+vào)?\s+([^.;\n,]+)", lower):
+        avail_clause = re.split(r"\b(?:tối\s+đa|không\s+(?:xếp\s+)?học|ưu\s+tiên|mỗi\s+phiên)\b", m_only.group(1), maxsplit=1)[0]
+        scoped_days: set[int] = set()
+        for p_name, (p_start, p_end, p_label) in _PERIOD_BOUNDS.items():
+            for w_pat, w_num, w_label in _WEEKDAY_CLAUSE_PATTERNS:
+                if re.search(rf"\b{p_name}\s*{w_pat}\b", avail_clause):
+                    scoped_days.add(w_num)
+                    allowed_day_windows.append({"weekday": w_num, "start_min": p_start, "end_min": p_end})
+                    insights.append(
+                        f"Chỉ xếp tự học vào {p_label} {w_label} ({minutes_to_time(p_start)}-{minutes_to_time(p_end)}) theo ghi chú chỉ rảnh."
+                    )
+        for w_pat, w_num, w_label in _WEEKDAY_CLAUSE_PATTERNS:
+            if w_num not in scoped_days and re.search(rf"\b{w_pat}\b", avail_clause):
+                allowed_day_windows.append({"weekday": w_num, "start_min": 0, "end_min": 1440})
+                insights.append(f"Chỉ xếp tự học vào {w_label} theo ghi chú chỉ rảnh.")
+
+    if allowed_day_windows:
+        allowed_by_day: Dict[int, List[Tuple[int, int]]] = {}
+        for aw in allowed_day_windows:
+            allowed_by_day.setdefault(aw["weekday"], []).append((aw["start_min"], aw["end_min"]))
+        for w_num in range(1, 8):
+            day_allowed = merge_intervals(allowed_by_day.get(w_num, []))
+            if not day_allowed:
+                if w_num not in avoided_weekdays:
+                    avoided_weekdays.append(w_num)
+                blocked_day_windows.append({
+                    "weekday": w_num,
+                    "start_min": 0,
+                    "end_min": 1440,
+                    "reason": "Ngoài khung giờ chỉ rảnh theo ghi chú cá nhân",
+                })
+            else:
+                for gs, ge in subtract_intervals([(0, 1440)], day_allowed):
+                    if ge > gs:
+                        blocked_day_windows.append({
+                            "weekday": w_num,
+                            "start_min": gs,
+                            "end_min": ge,
+                            "reason": "Ngoài khung giờ chỉ rảnh theo ghi chú cá nhân",
+                        })
+
     return {
         "earliest_min": earliest_min,
         "latest_min": latest_min,
@@ -683,6 +733,7 @@ def parse_ai_preference_notes(ai_notes: str, base_prefs: Dict[str, Any]) -> Dict
         "preferred_periods": preferred_periods,
         "avoided_weekdays": avoided_weekdays,
         "blocked_day_windows": blocked_day_windows,
+        "allowed_day_windows": allowed_day_windows,
         "course_priorities": {},
         "prefer_before_class": prefer_before_class,
         "max_subjects_per_day": max_subjects_per_day,
@@ -698,10 +749,13 @@ def _merge_llm_planner_strategy(
     known_courses: List[str],
 ) -> Dict[str, Any]:
     """Safely merge and clamp LLM-extracted scheduling constraints with deterministic regex baseline."""
+    allowed_windows = list(parsed_ai.get("allowed_day_windows") or [])
+    allowed_weekdays = {int(aw["weekday"]) for aw in allowed_windows if isinstance(aw, dict) and aw.get("weekday") is not None}
     merged = {
         **parsed_ai,
         "avoided_weekdays": list(parsed_ai["avoided_weekdays"]),
         "blocked_day_windows": list(parsed_ai.get("blocked_day_windows") or []),
+        "allowed_day_windows": allowed_windows,
         "preferred_periods": list(parsed_ai["preferred_periods"]),
         "course_priorities": dict(parsed_ai.get("course_priorities") or {}),
         "insights": list(parsed_ai["insights"]),
@@ -716,13 +770,16 @@ def _merge_llm_planner_strategy(
     parsed_avoided = set(parsed_ai.get("avoided_weekdays") or [])
     for raw_w in strategy.get("avoided_weekdays") or []:
         if isinstance(raw_w, int) and 1 <= raw_w <= 7 and raw_w not in merged["avoided_weekdays"]:
-            if raw_w in blocked_weekdays and raw_w not in parsed_avoided:
+            if raw_w in allowed_weekdays or (raw_w in blocked_weekdays and raw_w not in parsed_avoided):
                 continue
             merged["avoided_weekdays"].append(raw_w)
 
     llm_windows: List[Dict[str, Any]] = []
     for win in strategy.get("blocked_day_windows") or []:
         if not isinstance(win, dict):
+            continue
+        reason_txt = str(win.get("reason") or "Khoảng bận từ ghi chú cá nhân")[:120]
+        if re.search(r"\brảnh\b", reason_txt, re.I):
             continue
         w = win.get("weekday")
         if not isinstance(w, int) or not (1 <= w <= 7):
@@ -733,12 +790,20 @@ def _merge_llm_planner_strategy(
         except ValueError:
             continue
         if e_min > s_min:
-            llm_windows.append({
-                "weekday": w,
-                "start_min": s_min,
-                "end_min": e_min,
-                "reason": str(win.get("reason") or "Khoảng bận từ ghi chú cá nhân")[:120],
-            })
+            day_allowed = [
+                (int(aw["start_min"]), int(aw["end_min"]))
+                for aw in allowed_windows
+                if isinstance(aw, dict) and int(aw.get("weekday") or 0) == w
+            ]
+            kept_intervals = subtract_intervals([(s_min, e_min)], merge_intervals(day_allowed)) if day_allowed else [(s_min, e_min)]
+            for ks, ke in kept_intervals:
+                if ke > ks:
+                    llm_windows.append({
+                        "weekday": w,
+                        "start_min": ks,
+                        "end_min": ke,
+                        "reason": reason_txt,
+                    })
     if llm_windows:
         merged["blocked_day_windows"] = [
             base_w for base_w in merged["blocked_day_windows"]
@@ -808,6 +873,7 @@ _COVERED_PHRASE_PATTERNS = (
     r"(?:chỉ\s+học\s+từ|bắt\s+đầu(?:\s+học)?\s+từ|không\s+(?:xếp\s+)?học\s+trước|học\s+từ)\s*\d{1,2}(?:[:h]\d{2})?\s*(?:h|giờ|sáng)?",
     r"(?:không\s+(?:xếp\s+)?học\s+sau|không\s+học\s+quá|nghỉ(?:\s+học)?\s+sau|dừng(?:\s+học)?\s+trước|kết\s+thúc\s+trước|học\s+trước)\s*\d{1,2}(?:[:h]\d{2})?\s*(?:h|giờ)?",
     r"tối\s+đa\s*\d+(?:[.,]\d+)?\s*(?:giờ|tiếng|h)(?:\s*(?:/|mỗi|1)?\s*ngày)?",
+    r"tối\s+đa\s*\d{2,4}\s*(?:phút|p|min)(?:\s*(?:/|mỗi|1)?\s*ngày)?",
     r"(?:tối\s+đa|mỗi\s+ngày(?:\s+chỉ)?)\s*\d+\s*môn(?:\s*(?:mỗi\s+ngày|trong\s+ngày|khác\s+nhau))?",
     r"(?:mỗi\s+phiên|phiên\s+học|chia\s+thành)\s*\d{2,3}\s*phút",
     r"trước\s+(?:buổi\s+học|tiết\s+học|ngày\s+học|lớp)|ôn\s+trước\s+hôm\s+học",
@@ -1259,7 +1325,7 @@ def _enrich_session(row_dict: Dict[str, Any]) -> Dict[str, Any]:
 def get_study_sessions(db_path: Optional[Path | str] = None) -> List[Dict[str, Any]]:
     with timetable_store.get_connection(db_path=db_path) as conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
-        extra_fields = [c for c in ("classified_topic", "worksheet_id", "practice_id", "exercise_status", "weekly_lesson_id") if c in cols]
+        extra_fields = [c for c in ("session_date", "classified_topic", "worksheet_id", "practice_id", "exercise_status", "weekly_lesson_id") if c in cols]
         extra_cols = (", " + ", ".join(extra_fields)) if extra_fields else ""
         rows = conn.execute(f"""
             SELECT id, plan_id, task_id, title, course, weekday, start_time, end_time,
@@ -1291,7 +1357,7 @@ def get_study_sessions(db_path: Optional[Path | str] = None) -> List[Dict[str, A
 def get_session(session_id: int, db_path: Optional[Path | str] = None) -> Optional[Dict[str, Any]]:
     with timetable_store.get_connection(db_path=db_path) as conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
-        extra_fields = [c for c in ("classified_topic", "worksheet_id", "practice_id", "exercise_status", "weekly_lesson_id") if c in cols]
+        extra_fields = [c for c in ("session_date", "classified_topic", "worksheet_id", "practice_id", "exercise_status", "weekly_lesson_id") if c in cols]
         extra_cols = (", " + ", ".join(extra_fields)) if extra_fields else ""
         row = conn.execute(
             f"""
@@ -2374,6 +2440,8 @@ def generate_study_plan(
         p["_is_preserved"] = True
     for p in proposed_sessions:
         p["_is_preserved"] = False
+        if week_monday is not None and not p.get("session_date"):
+            p["session_date"] = (week_monday + timedelta(days=int(p["weekday"]) - 1)).isoformat()
 
     proposed_sessions.sort(key=lambda x: (int(x["weekday"]), x["start_time"]))
 
@@ -2825,6 +2893,7 @@ def confirm_study_plan(
             or ""
         ).strip()
         resolved_ws_id = str(s.get("worksheet_id") or (draft_match or {}).get("worksheet_id") or "").strip()
+        resolved_session_date = str(s.get("session_date") or (draft_match or {}).get("session_date") or "").strip() or None
         resolved_ex_status = str(
             s.get("exercise_status")
             or (draft_match or {}).get("exercise_status")
@@ -2839,6 +2908,7 @@ def confirm_study_plan(
             "title": title,
             "course": course,
             "weekday": w,
+            "session_date": resolved_session_date,
             "start_time": st,
             "end_time": et,
             "duration_minutes": e_min - s_min,
@@ -2878,6 +2948,9 @@ def confirm_study_plan(
         pref_row = conn.execute("SELECT * FROM study_preferences WHERE id = 1").fetchone()
         curr_prefs = dict(pref_row) if pref_row else {}
         curr_week_monday = _infer_week_monday(curr_prefs, curr_tasks)
+        for item in normalized_new:
+            if not item.get("session_date") and curr_week_monday is not None:
+                item["session_date"] = (curr_week_monday + timedelta(days=int(item["weekday"]) - 1)).isoformat()
         has_study_windows = any(
             (r.get("flexibility") == "study_window" or r.get("activity_type") == "study_window")
             and time_to_minutes(r["end_time"]) > time_to_minutes(r["start_time"])
@@ -2936,6 +3009,9 @@ def confirm_study_plan(
         if "weekly_lesson_id" in cols:
             col_names.append("weekly_lesson_id")
             val_placeholders.append("?")
+        if "session_date" in cols:
+            col_names.append("session_date")
+            val_placeholders.append("?")
 
         insert_sql = f"INSERT INTO study_sessions ({', '.join(col_names)}) VALUES ({', '.join(val_placeholders)})"  # nosec B608
         for item in normalized_new:
@@ -2967,6 +3043,8 @@ def confirm_study_plan(
                 params.append(item.get("exercise_status") or "")
             if "weekly_lesson_id" in cols:
                 params.append(item.get("weekly_lesson_id"))
+            if "session_date" in cols:
+                params.append(item.get("session_date"))
             conn.execute(insert_sql, params)
 
         conn.execute(
@@ -3075,30 +3153,62 @@ def add_manual_study_session(data: Dict[str, Any], db_path: Optional[Path | str]
         raise ValueError(" | ".join(violations))
 
     now_iso = datetime.now(timezone.utc).isoformat()
+    manual_session_date = str(data.get("session_date") or "").strip() or None
+    if manual_session_date is None:
+        wm = _infer_week_monday(get_preferences(db_path=db_path), list(tasks_by_id.values()))
+        if wm is not None:
+            manual_session_date = (wm + timedelta(days=w - 1)).isoformat()
     with timetable_store.get_connection(db_path=db_path) as conn:
-        cursor = conn.execute(
-            """
-            INSERT INTO study_sessions
-            (plan_id, task_id, title, course, weekday, start_time, end_time,
-             duration_minutes, priority, source, completed, locked,
-             session_index, total_sessions, notes, created_at)
-            VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'user_manual', ?, ?, 1, 1, ?, ?)
-            """,
-            (
-                candidate["task_id"],
-                candidate["title"],
-                candidate["course"],
-                candidate["weekday"],
-                candidate["start_time"],
-                candidate["end_time"],
-                candidate["duration_minutes"],
-                candidate["priority"],
-                candidate["completed"],
-                candidate["locked"],
-                candidate["notes"],
-                now_iso,
-            ),
-        )
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
+        if "session_date" in cols:
+            cursor = conn.execute(
+                """
+                INSERT INTO study_sessions
+                (plan_id, task_id, title, course, weekday, session_date, start_time, end_time,
+                 duration_minutes, priority, source, completed, locked,
+                 session_index, total_sessions, notes, created_at)
+                VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user_manual', ?, ?, 1, 1, ?, ?)
+                """,
+                (
+                    candidate["task_id"],
+                    candidate["title"],
+                    candidate["course"],
+                    candidate["weekday"],
+                    manual_session_date,
+                    candidate["start_time"],
+                    candidate["end_time"],
+                    candidate["duration_minutes"],
+                    candidate["priority"],
+                    candidate["completed"],
+                    candidate["locked"],
+                    candidate["notes"],
+                    now_iso,
+                ),
+            )
+        else:
+            cursor = conn.execute(
+                """
+                INSERT INTO study_sessions
+                (plan_id, task_id, title, course, weekday, start_time, end_time,
+                 duration_minutes, priority, source, completed, locked,
+                 session_index, total_sessions, notes, created_at)
+                VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, 'user_manual', ?, ?, 1, 1, ?, ?)
+                """,
+                (
+                    candidate["task_id"],
+                    candidate["title"],
+                    candidate["course"],
+                    candidate["weekday"],
+                    candidate["start_time"],
+                    candidate["end_time"],
+                    candidate["duration_minutes"],
+                    candidate["priority"],
+                    candidate["completed"],
+                    candidate["locked"],
+                    candidate["notes"],
+                    now_iso,
+                ),
+            )
         sid = cursor.lastrowid or 0
 
     sessions = get_study_sessions(db_path=db_path)

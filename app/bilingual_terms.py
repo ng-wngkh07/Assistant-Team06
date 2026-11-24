@@ -111,6 +111,13 @@ ACADEMIC_BILINGUAL_EQUIVALENTS: tuple[tuple[str, str], ...] = (
     ("conservation of mechanical energy", "bảo toàn cơ năng"),
     ("neuroanatomy", "giải phẫu thần kinh"),
     ("action potential", "điện thế hoạt động"),
+    ("aphasia", "mất ngôn ngữ"),
+    ("corneal reflex", "phản xạ giác mạc"),
+    ("corneal", "giác mạc"),
+    ("trauma", "sang chấn"),
+    ("ptsd", "rối loạn căng thẳng sau sang chấn"),
+    ("dissociation", "phân ly"),
+    ("stress response", "phản ứng stress"),
     # Psychology / Economics
     ("working memory", "trí nhớ làm việc"),
     ("short-term memory", "trí nhớ ngắn hạn"),

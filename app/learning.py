@@ -228,11 +228,14 @@ def _is_theory_chunk(raw_text: Any, heading_context: Optional[Any] = None) -> bo
     ):
         return False
 
-    # Reject cover / title pages / internal circulation notices
+    # Reject cover / title pages / copyright disclaimers / TOC / internal circulation notices
     if re.search(
         r"(?i)\b(?:giáo\s+trình\s+ôn\s+thi|bản\s+hoàn\s+chỉnh\s+cho\s+người\s+học|tài\s+liệu\s+lưu\s+hành\s+nội\s+bộ|nhà\s+xuất\s+bản|bản\s+quyền|copyright)\b",
         text[:300],
-    ):
+    ) or re.search(
+        r"(?i)\b(?:cengage\s+learning|pearson\s+education|mcgraw[\s-]+hill|o'reilly\s+media|cambridge\s+university\s+press|mit\s+press|reserves?\s+the\s+right\s+to\s+remove|suppressed\s+content|electronic\s+rights|all\s+rights\s+reserved|may\s+not\s+be\s+copied|library\s+of\s+congress|isbn(?:-\d+)?|printed\s+in\s+the\s+united\s+states|editorial\s+review\s+has\s+deemed|hybrid\s+version|copyright\s*(?:©|\(c\)|\d{4}))\b",
+        text[:2500],
+    ) or len(re.findall(r"(?m)^[^\n]{2,120}(?:\.\s*){4,}\d+\s*$", text[:2500])) >= 3:
         return False
 
     # Reject course syllabi and CDIO/learning-outcome administrative matrices (not subject theory)
@@ -1613,10 +1616,25 @@ class LearningService:
         cards = []
         for c in (record.get("flashcards") or []):
             matched_src = _resolve_card_source(c)
+            existing_src = c.get("source") if isinstance(c.get("source"), dict) else {}
+            src_doc_id = matched_src.get("doc_id") if matched_src.get("doc_id") is not None else existing_src.get("doc_id")
+            src_title = matched_src.get("title") or existing_src.get("title") or topic
+            src_filename = matched_src.get("filename") or existing_src.get("filename")
+            src_page = c.get("page_num") if c.get("page_num") is not None else existing_src.get("page_num")
+            source_payload = {
+                **existing_src,
+                "doc_id": src_doc_id,
+                "title": src_title,
+            }
+            if src_filename:
+                source_payload["filename"] = src_filename
+            if src_page is not None:
+                source_payload["page_num"] = src_page
             cards.append({
                 **c,
-                "source_title": matched_src.get("title") or topic,
-                "doc_id": matched_src.get("doc_id"),
+                "source_title": src_title,
+                "doc_id": src_doc_id,
+                "source": source_payload,
             })
         return {
             **record,
@@ -2259,8 +2277,10 @@ class LearningService:
             r"(?im)(?:^|\n)[ \t]*(?:#+\s*)?(?:(?:phần|section|part)\s+[ivx\d]+\s*[.:]\s*)?(?:bài\s+tập|exercises|practice\s+problems?|checkpoints?)\b"
         )
         all_items: list[dict[str, Any]] = []
-        prioritized_items: list[dict[str, Any]] = []
-        fallback_items: list[dict[str, Any]] = []
+        dedicated_prioritized_items: list[dict[str, Any]] = []
+        dedicated_fallback_items: list[dict[str, Any]] = []
+        other_prioritized_items: list[dict[str, Any]] = []
+        other_fallback_items: list[dict[str, Any]] = []
         doc_chunk_loaders: dict[int, Callable[[], list[dict]]] = {}
         db_path_obj = getattr(self.document_lookup, "db_path", None)
         db_path_str = str(db_path_obj or "")
@@ -2274,6 +2294,26 @@ class LearningService:
             if not can_use_extract_cache:
                 return
             _lru_cache_put(self._exercise_cache_lock, self._exercise_extract_cache, c_key, payload)
+
+        def _is_doc_dedicated(doc: dict[str, Any]) -> bool:
+            did = doc["id"]
+            d_title = _normalize_text(doc.get("clean_title") or "")
+            d_filename = _normalize_text(doc.get("filename") or "")
+            ext_topic = _normalize_text(doc_topics_map.get(did, ""))
+            d_fields = (
+                d_title,
+                d_filename,
+                ext_topic,
+                re.sub(r"[-_]+", " ", d_title),
+                re.sub(r"[-_]+", " ", d_filename),
+                re.sub(r"[-_]+", " ", ext_topic),
+            )
+            if authored:
+                return any(matches(field, authored[1]) for field in d_fields if field)
+            return any(topic_norm in field for field in d_fields if field)
+
+        doc_is_dedicated = {doc["id"]: _is_doc_dedicated(doc) for doc in matching_docs}
+        matching_docs = sorted(matching_docs, key=lambda d: not doc_is_dedicated.get(d["id"], False))
 
         cached_extracts_by_doc: dict[int, tuple[list, dict, dict]] = {}
         uncached_doc_ids: list[int] = []
@@ -2352,23 +2392,9 @@ class LearningService:
 
         for doc in matching_docs:
             doc_id = doc["id"]
-            doc_title = _normalize_text(doc.get("clean_title") or "")
-            doc_filename = _normalize_text(doc.get("filename") or "")
-            extracted_topic = _normalize_text(doc_topics_map.get(doc_id, ""))
-            doc_fields = (
-                doc_title,
-                doc_filename,
-                extracted_topic,
-                re.sub(r"[-_]+", " ", doc_title),
-                re.sub(r"[-_]+", " ", doc_filename),
-                re.sub(r"[-_]+", " ", extracted_topic),
-            )
-
-            # Check if the document itself is dedicated to the topic
-            if authored:
-                is_dedicated = any(matches(field, authored[1]) for field in doc_fields if field)
-            else:
-                is_dedicated = any(topic_norm in field for field in doc_fields if field)
+            is_dedicated = doc_is_dedicated.get(doc_id, False)
+            if not is_dedicated and (len(dedicated_prioritized_items) + len(dedicated_fallback_items)) >= limit:
+                break
 
             ex_cache_key = (db_path_str, doc_id, str(doc.get("file_hash") or ""), db_fp)
             chunks_list: Optional[list[dict]] = None
@@ -2490,37 +2516,62 @@ class LearningService:
 
                 ex_id = ex["id"]
                 is_ambiguous = (ex_counts[ex_id] > 1) or (ans_counts.get(ex_id, 0) > 1)
+                raw_source_ctx = ex.get("source_context")
+                clean_source_ctx = (
+                    strip_source_review_banner(str(raw_source_ctx)).strip() or None
+                    if raw_source_ctx is not None
+                    else None
+                )
+                clean_source = dict(ex["source"]) if isinstance(ex.get("source"), dict) else ex["source"]
+                if isinstance(clean_source, dict) and isinstance(clean_source.get("snippet"), str):
+                    clean_source["snippet"] = strip_source_review_banner(clean_source["snippet"]).strip()
 
                 if ex_id in doc_answers and not is_ambiguous:
                     ans_info = doc_answers[ex_id]
+                    clean_ans_source = dict(ans_info["source"]) if isinstance(ans_info.get("source"), dict) else ans_info["source"]
+                    if isinstance(clean_ans_source, dict) and isinstance(clean_ans_source.get("snippet"), str):
+                        clean_ans_source["snippet"] = strip_source_review_banner(clean_ans_source["snippet"]).strip()
                     item = {
                         "question": ex["question"],
-                        "source_context": ex.get("source_context"),
-                        "source": ex["source"],
+                        "source_context": clean_source_ctx,
+                        "source": clean_source,
                         "answer": ans_info["answer"],
                         "answer_status": "source_document",
-                        "answer_source": ans_info["source"],
+                        "answer_source": clean_ans_source,
                     }
                 else:
                     item = {
                         "question": ex["question"],
-                        "source_context": ex.get("source_context"),
-                        "source": ex["source"],
+                        "source_context": clean_source_ctx,
+                        "source": clean_source,
                         "answer": None,
                         "answer_status": "missing",
                         "answer_source": None,
                     }
 
-                if focus_match:
-                    prioritized_items.append(item)
-                    if len(prioritized_items) >= limit:
-                        break
+                if is_dedicated:
+                    if focus_match:
+                        dedicated_prioritized_items.append(item)
+                        if len(dedicated_prioritized_items) >= limit:
+                            break
+                    else:
+                        dedicated_fallback_items.append(item)
                 else:
-                    fallback_items.append(item)
-            if len(prioritized_items) >= limit:
+                    if focus_match:
+                        other_prioritized_items.append(item)
+                        if len(other_prioritized_items) >= limit:
+                            break
+                    else:
+                        other_fallback_items.append(item)
+            if len(dedicated_prioritized_items) >= limit:
                 break
 
-        all_items = (prioritized_items + fallback_items)[:limit]
+        all_items = (
+            dedicated_prioritized_items
+            + dedicated_fallback_items
+            + other_prioritized_items
+            + other_fallback_items
+        )[:limit]
         if solve_missing and all_items:
             solve_start = time.monotonic()
             solve_budget_seconds = 180.0

@@ -323,6 +323,7 @@ def _migrate_timetable_v1(conn: sqlite3.Connection) -> None:
             title TEXT NOT NULL,
             course TEXT NOT NULL,
             weekday INTEGER NOT NULL,
+            session_date TEXT,
             start_time TEXT NOT NULL,
             end_time TEXT NOT NULL,
             duration_minutes INTEGER NOT NULL,
@@ -404,6 +405,12 @@ def _migrate_timetable_v6(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE study_sessions ADD COLUMN weekly_lesson_id INTEGER")
 
 
+def _migrate_timetable_v7(conn: sqlite3.Connection) -> None:
+    session_cols = {row[1] for row in conn.execute("PRAGMA table_info(study_sessions)").fetchall()}
+    if "session_date" not in session_cols and "id" in session_cols:
+        conn.execute("ALTER TABLE study_sessions ADD COLUMN session_date TEXT")
+
+
 timetable_migrations = MigrationManager(
     store_name="timetable",
     migrations=[
@@ -413,6 +420,7 @@ timetable_migrations = MigrationManager(
         Migration(4, "004_worksheet_generator_version", _migrate_timetable_v4),
         Migration(5, "005_session_practice_linkage", _migrate_timetable_v5),
         Migration(6, "006_session_weekly_lesson_linkage", _migrate_timetable_v6),
+        Migration(7, "007_session_date", _migrate_timetable_v7),
     ],
 )
 
