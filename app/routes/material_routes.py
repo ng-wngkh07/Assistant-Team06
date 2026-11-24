@@ -8,7 +8,7 @@ from typing import Literal, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from app.accounts import account_id
@@ -30,8 +30,8 @@ router = APIRouter()
 class MaterialUploadRequest(BaseModel):
     filename: str
     file_base64: str
-    quiz_count: int = Field(default=3, ge=1, le=10)
-    flashcard_count: int = Field(default=5, ge=1, le=15)
+    quiz_count: int = Field(default=3, ge=0, le=10)
+    flashcard_count: int = Field(default=5, ge=0, le=15)
     difficulty: Literal["easy", "medium", "hard"] = "medium"
     generate_study_set: bool = True
     persist_to_src: Optional[bool] = Field(
@@ -43,6 +43,12 @@ class MaterialUploadRequest(BaseModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def _validate_at_least_one_item(self):
+        if self.generate_study_set and (self.quiz_count + self.flashcard_count) < 1:
+            raise ValueError("Cần yêu cầu ít nhất 1 câu trắc nghiệm hoặc 1 thẻ ghi nhớ.")
+        return self
+
 
 class MaterialLibraryGenerateRequest(BaseModel):
     document_id: Optional[int] = Field(default=None, ge=1)
@@ -50,9 +56,15 @@ class MaterialLibraryGenerateRequest(BaseModel):
     filename: Optional[str] = None
     page_from: int = Field(default=1, ge=1)
     page_to: Optional[int] = Field(default=None, ge=1)
-    quiz_count: int = Field(default=3, ge=1, le=10)
-    flashcard_count: int = Field(default=5, ge=1, le=15)
+    quiz_count: int = Field(default=3, ge=0, le=10)
+    flashcard_count: int = Field(default=5, ge=0, le=15)
     difficulty: Literal["easy", "medium", "hard"] = "medium"
+
+    @model_validator(mode="after")
+    def _validate_at_least_one_item(self):
+        if (self.quiz_count + self.flashcard_count) < 1:
+            raise ValueError("Cần yêu cầu ít nhất 1 câu trắc nghiệm hoặc 1 thẻ ghi nhớ.")
+        return self
 
 
 class MaterialLibraryInspectRequest(BaseModel):

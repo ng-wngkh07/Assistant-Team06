@@ -3815,15 +3815,15 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         const quizStr = String(rawQuiz).trim();
         const quizNum = Number(quizStr);
-        if (!/^\d+$/.test(quizStr) || !Number.isInteger(quizNum) || quizNum < 1 || quizNum > 10) {
-            const msg = `Số câu trắc nghiệm phải là số nguyên từ 1 đến 10 (nhận được: "${quizStr}"). Vui lòng kiểm tra lại.`;
+        if (!/^\d+$/.test(quizStr) || !Number.isInteger(quizNum) || quizNum < 0 || quizNum > 10) {
+            const msg = `Số câu trắc nghiệm phải là số nguyên từ 0 đến 10 (nhận được: "${quizStr}"). Vui lòng kiểm tra lại.`;
             if (studyToolStatus) studyToolStatus.textContent = `❌ ${msg}`;
             alert(msg);
             return;
         }
         const quizCount = quizNum;
 
-        // 2. Resolve flashcard count (1-15, default 5, separate from quiz count)
+        // 2. Resolve flashcard count (0-15, default 5, separate from quiz count)
         let rawFlash = options.flashcard_count !== undefined ? options.flashcard_count : null;
         if (rawFlash === null) {
             const isLibPickerActive = libraryPickerModal && (libraryPickerModal.classList.contains("active") || libraryPickerModal.style.display === "flex" || libraryPickerModal.style.display === "block");
@@ -3839,13 +3839,19 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         const flashStr = String(rawFlash).trim();
         const flashNum = Number(flashStr);
-        if (!/^\d+$/.test(flashStr) || !Number.isInteger(flashNum) || flashNum < 1 || flashNum > 15) {
-            const msg = `Số thẻ flashcard phải là số nguyên từ 1 đến 15 (nhận được: "${flashStr}"). Vui lòng kiểm tra lại.`;
+        if (!/^\d+$/.test(flashStr) || !Number.isInteger(flashNum) || flashNum < 0 || flashNum > 15) {
+            const msg = `Số thẻ flashcard phải là số nguyên từ 0 đến 15 (nhận được: "${flashStr}"). Vui lòng kiểm tra lại.`;
             if (studyToolStatus) studyToolStatus.textContent = `❌ ${msg}`;
             alert(msg);
             return;
         }
         const flashcardCount = flashNum;
+        if (quizCount + flashcardCount < 1) {
+            const msg = "Cần yêu cầu ít nhất 1 câu trắc nghiệm hoặc 1 thẻ ghi nhớ.";
+            if (studyToolStatus) studyToolStatus.textContent = `❌ ${msg}`;
+            alert(msg);
+            return;
+        }
 
         // 3. Resolve difficulty
         let difficulty = options.difficulty;
@@ -3952,7 +3958,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const prov = describeStudyMaterialProvenance(data.material);
             const provNotice = ` [Nguồn: ${prov.label}]`;
             const actualCount = (data.material.quiz || []).length;
-            const reqCount = data.material.requested_quiz_count || data.material.requested_count || quizCount;
+            const reqCount = data.material.requested_quiz_count ?? data.material.requested_count ?? quizCount;
 
             if (wasWaitingExplicitly) {
                 // User remained explicitly waiting: open the study material modal directly
@@ -4111,7 +4117,7 @@ document.addEventListener("DOMContentLoaded", () => {
             studyMaterialTitle.textContent = `📖 Bộ Ôn Luyện: ${material.filename}`;
         }
         const quizCount = (material.quiz || []).length;
-        const requestedQuizCount = material.requested_quiz_count || material.requested_count || quizCount;
+        const requestedQuizCount = material.requested_quiz_count ?? material.requested_count ?? quizCount;
         const prov = describeStudyMaterialProvenance(material);
         const provLabel = prov.label;
 

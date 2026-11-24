@@ -3120,3 +3120,150 @@ def test_study_material_medium_balances_choices_and_hard_refills_uncovered_pages
         extracted, model="qwen3.5-9b-4bit", difficulty="hard", quiz_count=2, flashcard_count=0
     )
     assert len(hard_res["quiz"]) == 2
+
+
+def test_api_upload_and_library_accept_zero_quiz_or_zero_flashcard(client, monkeypatch):
+    seen_calls = []
+
+    def fake_extract(filename, file_bytes, **kwargs):
+        from app.pdf_extractor import PDFExtractionResult
+        res = PDFExtractionResult(filename=filename, filepath=Path(filename))
+        res.clean_title = filename
+        res.total_pages = 1
+        res.total_chars = 80
+        res.extracted_pages = [{"page_num": 1, "text": "Entropy đo độ bất định của nguồn tin rời rạc theo phân phối xác suất."}]
+        return res
+
+    def fake_gen(extracted, quiz_count=3, flashcard_count=5, difficulty="medium", **kwargs):
+        seen_calls.append((quiz_count, flashcard_count, difficulty))
+        return {
+            "id": "mat-zero-test",
+            "filename": extracted.filename,
+            "quiz": [] if quiz_count == 0 else [{"id": 1, "question": "Q", "choices": [], "answer": "A"}],
+            "flashcards": [] if flashcard_count == 0 else [{"id": 1, "front": "F", "back": "B"}],
+            "requested_quiz_count": quiz_count,
+            "actual_quiz_count": 0 if quiz_count == 0 else 1,
+        }
+
+    monkeypatch.setattr(study_material_manager, "extract_document", fake_extract)
+    monkeypatch.setattr(study_material_manager, "generate_materials_from_pages", fake_gen)
+    monkeypatch.setattr(study_material_manager, "generate_from_library_document", lambda **kw: fake_gen(
+        type("E", (), {"filename": kw.get("filename") or "synthetic.txt"})(),
+        quiz_count=kw["quiz_count"],
+        flashcard_count=kw["flashcard_count"],
+        difficulty=kw["difficulty"],
+    ))
+
+    b64 = base64.b64encode(b"Entropy sample text").decode("ascii")
+    r_fc = client.post("/api/materials/upload", json={
+        "filename": "notes.txt", "file_base64": b64, "quiz_count": 0, "flashcard_count": 4, "difficulty": "medium",
+    })
+    assert r_fc.status_code == 200, r_fc.text  # nosec B101
+    r_qz = client.post("/api/materials/upload", json={
+        "filename": "notes.txt", "file_base64": b64, "quiz_count": 2, "flashcard_count": 0, "difficulty": "hard",
+    })
+    assert r_qz.status_code == 200, r_qz.text  # nosec B101
+
+    r_both_zero = client.post("/api/materials/upload", json={
+        "filename": "notes.txt", "file_base64": b64, "quiz_count": 0, "flashcard_count": 0, "generate_study_set": True,
+    })
+    assert r_both_zero.status_code == 422  # nosec B101
+
+    r_extract_only = client.post("/api/materials/upload", json={
+        "filename": "notes.txt", "file_base64": b64, "quiz_count": 0, "flashcard_count": 0, "generate_study_set": False,
+    })
+    assert r_extract_only.status_code == 200, r_extract_only.text  # nosec B101
+
+    r_lib_fc = client.post("/api/materials/generate-from-library", json={
+        "filename": "synthetic.txt", "quiz_count": 0, "flashcard_count": 3, "difficulty": "medium",
+    })
+    assert r_lib_fc.status_code == 200, r_lib_fc.text  # nosec B101
+    r_lib_zero = client.post("/api/materials/generate-from-library", json={
+        "filename": "synthetic.txt", "quiz_count": 0, "flashcard_count": 0,
+    })
+    assert r_lib_zero.status_code == 422  # nosec B101
+    assert (0, 4, "medium") in seen_calls and (2, 0, "hard") in seen_calls and (0, 3, "medium") in seen_calls  # nosec B101
+
+
+def test_medium_zero_reviewed_triggers_refill_on_mlx(monkeypatch):
+    import json as _json
+    import app.model_resolver as resolver
+    import app.study_materials as sm
+    import app.trained_client as tc
+    from app.ollama_client import OllamaClient
+    from app.pdf_extractor import PDFExtractionResult
+
+    monkeypatch.setattr(resolver, "is_mlx_model", lambda _m=None: True)
+    monkeypatch.setattr(sm, "is_mlx_model", lambda _m=None: True)
+
+    page1 = (
+        "Thuyết bất hòa nhận thức giải thích cách cá nhân điều chỉnh thái độ "
+        "khi hành vi thực tế xung đột với niềm tin cốt lõi và không có lý do ngoại tại đủ lớn."
+    )
+    ext = PDFExtractionResult(filename="dissonance.md", filepath=Path("dissonance.md"))
+    ext.extracted_pages = [{"page_num": 1, "text": page1}]
+    ext.total_pages = 1
+    ext.total_chars = len(page1)
+
+    class MediumRefillMLX:
+        gen_calls = 0
+
+        def __init__(self, *args, **kwargs):
+            self.last_done_reason = "stop"
+
+        @classmethod
+        def available(cls, *args, **kwargs):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            self.last_done_reason = "stop"
+            prompt = messages[0]["content"]
+            if "Dữ liệu cần kiểm định:\n" in prompt:
+                bad = "Câu yếu" in prompt
+                return _json.dumps({
+                    "checks": [{
+                        "index": 1,
+                        "source_basis": page1,
+                        "matching_choices": "A" if not bad else "",
+                        "input_audit": "Rõ ràng.",
+                        "independent_solution": "Đáp án khớp nguồn.",
+                        "choice_comparison": "A đúng duy nhất.",
+                        "explanation_audit": "Đúng quy tắc nguồn.",
+                        "supported": not bad,
+                        "explanation_supported": not bad,
+                        "unique_answer": not bad,
+                        "qualifiers_preserved": not bad,
+                        "difficulty_matches": not bad,
+                        "verified_answer": "A" if not bad else "",
+                    }]
+                }, ensure_ascii=False)
+            MediumRefillMLX.gen_calls += 1
+            if MediumRefillMLX.gen_calls == 1:
+                return _json.dumps({"questions": [{
+                    "evidence_id": "Q1",
+                    "question": "Câu yếu không đạt kiểm định lần đầu?",
+                    "choices": {"A": "Thay đổi thái độ", "B": "Giữ nguyên", "C": "Bỏ qua", "D": "Không rõ"},
+                    "answer": "A",
+                    "explanation": "Chưa đủ căn cứ.",
+                    "difficulty": "medium",
+                }]}, ensure_ascii=False)
+            return _json.dumps({"questions": [{
+                "evidence_id": "Q1",
+                "question": "Khi nào một người thay đổi thái độ để giảm bất hòa nhận thức?",
+                "choices": {
+                    "A": "Khi hành vi trái niềm tin và thiếu lý do ngoại tại đủ lớn",
+                    "B": "Khi phần thưởng ngoại tại rất lớn",
+                    "C": "Khi hành vi hoàn toàn khớp với niềm tin",
+                    "D": "Khi không có xung đột nhận thức",
+                },
+                "answer": "A",
+                "explanation": "Hành vi trái niềm tin mà thiếu lý do ngoại tại đủ lớn gây bất hòa và buộc điều chỉnh thái độ.",
+                "difficulty": "medium",
+            }]}, ensure_ascii=False)
+
+    monkeypatch.setattr(tc, "TrainedModelClient", MediumRefillMLX)
+    res = sm.StudyMaterialManager(OllamaClient()).generate_materials_from_pages(
+        ext, model="qwen3.5-9b-4bit", difficulty="medium", quiz_count=2, flashcard_count=0
+    )
+    assert MediumRefillMLX.gen_calls == 2  # nosec B101
+    assert len(res["quiz"]) == 1 and "thay đổi thái độ" in res["quiz"][0]["question"]  # nosec B101

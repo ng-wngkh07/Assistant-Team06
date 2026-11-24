@@ -1322,8 +1322,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 tr.classList.add("timetable-conflict-row");
                 return;
             }
-            if (!start_time || !end_time || end_time <= start_time) {
+            if (!start_time || !end_time || start_time === end_time) {
                 errors.push(`Dòng ${idx + 1} (${title}): Giờ kết thúc phải lớn hơn giờ bắt đầu.`);
+                tr.classList.add("timetable-conflict-row");
+                return;
+            }
+            const isStudyWindow = activity_type === "study_window" || flexibility === "study_window";
+            if (end_time < start_time && isStudyWindow) {
+                errors.push(`Dòng ${idx + 1} (${title}): Khung giờ tự học (study_window) không hỗ trợ qua đêm; hãy tách thành 2 khung trong ngày.`);
                 tr.classList.add("timetable-conflict-row");
                 return;
             }
