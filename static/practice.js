@@ -122,6 +122,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (reviewCount) reviewCount.textContent = String(reviewItems.length);
     }
 
+    function parseErrorDetail(result, status) {
+        const detail = result && typeof result.detail === "string" ? result.detail
+            : (result && Array.isArray(result.detail)) ? result.detail.map(item => item?.msg).filter(Boolean).join(" ") : "";
+        return detail || `Yêu cầu thất bại (${status}).`;
+    }
+
     async function postJson(url, body) {
         const response = await fetch(url, {
             method: "POST",
@@ -131,9 +137,7 @@ document.addEventListener("DOMContentLoaded", () => {
         let result = {};
         try { result = await response.json(); } catch (_) {}
         if (!response.ok) {
-            const detail = typeof result.detail === "string" ? result.detail
-                : Array.isArray(result.detail) ? result.detail.map(item => item?.msg).filter(Boolean).join(" ") : "";
-            throw new Error(detail || `Yêu cầu thất bại (${response.status}).`);
+            throw new Error(parseErrorDetail(result, response.status));
         }
         return result;
     }
@@ -145,11 +149,147 @@ document.addEventListener("DOMContentLoaded", () => {
         let result = {};
         try { result = await response.json(); } catch (_) {}
         if (!response.ok) {
-            const detail = typeof result.detail === "string" ? result.detail
-                : Array.isArray(result.detail) ? result.detail.map(item => item?.msg).filter(Boolean).join(" ") : "";
-            throw new Error(detail || `Yêu cầu thất bại (${response.status}).`);
+            throw new Error(parseErrorDetail(result, response.status));
         }
         return result;
+    }
+
+    async function postLearningGenerate(body, onProgress) {
+        const canStream = typeof window !== "undefined"
+            && typeof window.ReadableStream === "function"
+            && typeof TextDecoder === "function";
+        if (!canStream) {
+            return await postJson("/api/learning/generate", body);
+        }
+        const response = await fetch("/api/learning/generate/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        if (response.status === 404 || response.status === 405) {
+            return await postJson("/api/learning/generate", body);
+        }
+        const contentType = (response.headers && typeof response.headers.get === "function")
+            ? (response.headers.get("content-type") || "")
+            : "";
+        if (!response.ok) {
+            let result = {};
+            if (typeof response.json === "function") {
+                try { result = await response.json(); } catch (_) {}
+            }
+            throw new Error(parseErrorDetail(result, response.status));
+        }
+        if (!contentType.includes("text/event-stream") || !response.body || typeof response.body.getReader !== "function") {
+            if (typeof response.json === "function") {
+                try {
+                    const direct = await response.json();
+                    if (direct && Array.isArray(direct.questions)) return direct;
+                } catch (_) {}
+            }
+            return await postJson("/api/learning/generate", body);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let completedSession = null;
+
+        const handleBlock = (block) => {
+            const dataLines = [];
+            for (const rawLine of block.split(/\r?\n/)) {
+                if (!rawLine || rawLine.startsWith(":")) continue;
+                if (rawLine.startsWith("data:")) {
+                    dataLines.push(rawLine.slice(5).trimStart());
+                }
+            }
+            if (!dataLines.length) return;
+            const evt = JSON.parse(dataLines.join("\n"));
+            if (evt.type === "progress") {
+                if (typeof onProgress === "function") onProgress(evt);
+            } else if (evt.type === "complete") {
+                completedSession = evt.session;
+            } else if (evt.type === "error") {
+                throw new Error(evt.detail || `Yêu cầu thất bại (${evt.status || 500}).`);
+            }
+        };
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (value) {
+                buffer += decoder.decode(value, { stream: !done });
+                const parts = buffer.split(/\r?\n\r?\n/);
+                buffer = parts.pop() || "";
+                for (const part of parts) {
+                    if (part.trim()) handleBlock(part);
+                }
+            }
+            if (done) {
+                buffer += decoder.decode();
+                if (buffer.trim()) handleBlock(buffer);
+                break;
+            }
+        }
+        if (!completedSession) {
+            throw new Error("Không nhận được kết quả hoàn chỉnh từ máy chủ.");
+        }
+        return completedSession;
+    }
+
+    function createLearningProgressHandler(topic, targetCount, statusEl) {
+        let latestQuestions = [];
+        return (evt) => {
+            const ready = Number(evt.ready_count || 0);
+            const reqTotal = Number(evt.requested_count || targetCount || 1);
+            if (Array.isArray(evt.questions) && evt.questions.length > 0) {
+                latestQuestions = evt.questions;
+            }
+            let msg = `Đang tạo ${reqTotal} câu hỏi về «${topic}»…`;
+            if (evt.stage === "bank_reused") {
+                msg = `Đã nạp ${ready}/${reqTotal} câu đã kiểm định từ ngân hàng; đang tạo phần còn lại…`;
+            } else if (evt.stage === "generating") {
+                msg = `Đang sinh câu hỏi (lượt ${evt.attempt || 1}/${evt.max_attempts || 1})… Hiện có ${ready}/${reqTotal} câu đạt chuẩn.`;
+            } else if (evt.stage === "verifying") {
+                msg = `Đang kiểm định nguồn và độ khó (${evt.candidate_count || 0} ứng viên, đã đạt ${ready}/${reqTotal} câu)…`;
+            } else if (evt.stage === "questions") {
+                msg = `Đã kiểm định xong ${ready}/${reqTotal} câu…`;
+            }
+            showMessage(msg);
+            if (latestQuestions.length > 0 && practiceBody) {
+                const preview = document.createElement("div");
+                preview.className = "practice-stream-preview";
+                if (preview.style) {
+                    preview.style.cssText = "margin-top: 12px; display: flex; flex-direction: column; gap: 8px; text-align: left;";
+                }
+                const heading = document.createElement("p");
+                heading.className = "text-muted";
+                heading.textContent = `Xem trước ${latestQuestions.length} câu đã kiểm định xong trong lúc chờ các câu còn lại:`;
+                preview.appendChild(heading);
+                latestQuestions.forEach((q, idx) => {
+                    const card = document.createElement("div");
+                    card.className = "practice-preview-item";
+                    if (card.style) {
+                        card.style.cssText = "padding: 8px 10px; border: 1px solid var(--border, #e2e8f0); border-radius: 6px; font-size: 0.92rem;";
+                    }
+                    const qTitle = document.createElement("strong");
+                    qTitle.textContent = `Câu ${idx + 1}: `;
+                    const qText = document.createElement("span");
+                    qText.textContent = String(q.question || "");
+                    card.append(qTitle, qText);
+                    if (q.source && (q.source.title || q.source.page_num)) {
+                        const srcNote = document.createElement("div");
+                        srcNote.className = "text-muted";
+                        if (srcNote.style) srcNote.style.fontSize = "0.8rem";
+                        const titleText = q.source.title || "Tài liệu";
+                        const pageText = q.source.page_num ? ` · trang ${q.source.page_num}` : "";
+                        srcNote.textContent = `Nguồn: ${titleText}${pageText}`;
+                        card.appendChild(srcNote);
+                    }
+                    preview.appendChild(card);
+                });
+                practiceBody.appendChild(preview);
+            }
+            if (statusEl) statusEl.textContent = msg;
+        };
     }
 
     function _restoreSessionProgress() {
@@ -760,7 +900,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 purpose: "practice",
                 weak_topics: [],
             };
-            practiceSession = await postJson("/api/learning/generate", body);
+            practiceSession = await postLearningGenerate(
+                body,
+                createLearningProgressHandler(topic, count, learningGenerateStatus),
+            );
             if (practiceSession) practiceSession.topic = topic;
             questionIndex = 0;
             if (learningGenerateStatus) learningGenerateStatus.textContent = practiceSession.warning || `Đã tạo ${practiceSession.count}/${count} câu · ${difficulty === "easy" ? "Dễ" : difficulty === "hard" ? "Khó" : "Trung bình"}.`;
@@ -836,7 +979,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 purpose: "review",
                 weak_topics: weakTopics,
             };
-            practiceSession = await postJson("/api/learning/generate", body);
+            practiceSession = await postLearningGenerate(
+                body,
+                createLearningProgressHandler(topic, body.count, reviewGenerateStatus),
+            );
             if (practiceSession) practiceSession.topic = topic;
             questionIndex = 0;
             renderQuestion();

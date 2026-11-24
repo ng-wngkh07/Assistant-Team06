@@ -328,3 +328,98 @@ def test_mlx_infer_context_prefix_cache_reuses_system_and_bounds_slots(tmp_path,
     q1_full = gen_prompts[0][1] + gen_prompts[0][0]
     q2_full = gen_prompts[1][1] + gen_prompts[1][0]
     assert q1_full[:-len("<user_query>Q1</user_query>\n<|im_end|>\n<|im_start|>assistant\n")] == q2_full[:-len("<user_query>Q2</user_query>\n<|im_end|>\n<|im_start|>assistant\n")]  # nosec B101
+
+
+def test_mlx_stream_retains_alternating_context_prefixes_and_short_system_prompts(tmp_path, monkeypatch, capsys):
+    """Alternating generation/review prefixes must not evict each other, and fallback works when prepare_review_cache returns empty."""
+    model_dir = _fake_model_dir(tmp_path)
+    monkeypatch.setattr(socket.socket, "connect", socket.socket.connect)
+    monkeypatch.setattr(socket, "create_connection", socket.create_connection)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
+    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "0")
+    monkeypatch.setenv("HF_DATASETS_OFFLINE", "0")
+
+    prefill_chunks = []
+
+    class FakeArray:
+        def __init__(self, data):
+            self.data = list(data.data) if isinstance(data, FakeArray) else list(data)
+
+        def __getitem__(self, item):
+            return self if item is None else self.data[item]
+
+    class FakeLayer:
+        def __init__(self, state=None):
+            self.state = list(state or [])
+
+    class FakeModel:
+        def __call__(self, arr, cache=None):
+            prefill_chunks.append(list(arr.data))
+            if cache:
+                base = list(cache[0].state or [])
+                cache[0].state = base + list(arr.data)
+
+    class Tok:
+        bos_token = None
+
+        def encode(self, text, add_special_tokens=True):
+            return [ord(ch) for ch in str(text)]
+
+        def apply_chat_template(self, messages, tokenize=False, **kwargs):
+            sys_txt = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+            usr_txt = messages[-1]["content"]
+            return f"<|im_start|>system\n{sys_txt}<|im_end|>\n<|im_start|>user\n{usr_txt}<|im_end|>\n<|im_start|>assistant\n"
+
+    tok = Tok()
+
+    class AutoTokenizer:
+        @staticmethod
+        def from_pretrained(path, **kwargs):
+            return tok
+
+    lm = types.ModuleType("mlx_lm")
+    lm.load = lambda path, **kw: (FakeModel(), tok)
+    lm.stream_generate = lambda model, active_tok, *, prompt=None, prompt_cache=None, **kw: iter([
+        types.SimpleNamespace(text="ok", finish_reason="stop", prompt_tokens=10, generation_tokens=2, prompt_tps=50.0, generation_tps=20.0, peak_memory=5.5)
+    ])
+    sampling = types.ModuleType("mlx_lm.sample_utils")
+    sampling.make_sampler = lambda **kw: kw
+    sampling.make_logits_processors = lambda **kw: [kw]
+    cache_mod = types.ModuleType("mlx_lm.models.cache")
+    cache_mod.make_prompt_cache = lambda _m: [FakeLayer([])]
+    models_mod = types.ModuleType("mlx_lm.models")
+    models_mod.cache = cache_mod
+    core = types.ModuleType("mlx.core")
+    core.array = FakeArray
+    core.eval = lambda *a, **kw: None
+    core.clear_cache = lambda: None
+    core.random = types.SimpleNamespace(seed=lambda value: None)
+    mlx = types.ModuleType("mlx")
+    mlx.core = core
+    transformers = types.ModuleType("transformers")
+    transformers.AutoTokenizer = AutoTokenizer
+    for name, mod in [
+        ("mlx_lm", lm), ("mlx_lm.sample_utils", sampling), ("mlx_lm.models", models_mod),
+        ("mlx_lm.models.cache", cache_mod), ("mlx", mlx), ("mlx.core", core), ("transformers", transformers),
+    ]:
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    short_sys = "S" * 24  # >= 16 tokens, < 64 tokens
+    gen_ctx = "P" * 90 + "\n<task>\n"
+    rev_ctx = "R" * 90 + "\nDữ liệu cần kiểm định:\n"
+    review_dir = str(tmp_path / "rev_cache")
+    reqs = [
+        {"model_path": str(model_dir), "messages": [{"role": "system", "content": short_sys}, {"role": "user", "content": gen_ctx + "q1"}], "max_tokens": 16, "context_prefix_marker": "\n<task>\n", "review_cache_dir": review_dir},
+        {"model_path": str(model_dir), "messages": [{"role": "system", "content": short_sys}, {"role": "user", "content": rev_ctx + "r1"}], "max_tokens": 16, "context_prefix_marker": "\nDữ liệu cần kiểm định:\n", "review_cache_dir": review_dir},
+        {"model_path": str(model_dir), "messages": [{"role": "system", "content": short_sys}, {"role": "user", "content": gen_ctx + "flash"}], "max_tokens": 16, "context_prefix_marker": "\n<task>\n", "review_cache_dir": review_dir},
+    ]
+    monkeypatch.setattr(sys, "argv", ["mlx_infer.py", "--stream"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO("\n".join(json.dumps(r) for r in reqs) + "\n"))
+    runpy.run_path(str(pathlib.Path(__file__).resolve().parent.parent / "app" / "mlx_infer.py"), run_name="__main__")
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines() if line.strip()]
+    errors = [e for e in events if e.get("error")]
+    assert not errors, f"Unexpected stream errors: {errors}"
+    done = [e for e in events if e.get("done")]
+    assert len(done) == 3
+    assert done[1]["review_cache"]["scope"] == "worker_context_prefix_kv"
+    assert done[2]["review_cache"]["reused_tokens"] == done[2]["review_cache"]["prefix_tokens"] > 64

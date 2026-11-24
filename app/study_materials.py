@@ -5,6 +5,7 @@ GPU lock coordination, and safe in-memory session tracking.
 """
 
 import base64
+import copy
 import hashlib
 import html
 import io
@@ -17,6 +18,8 @@ import sys
 import tempfile
 import threading
 import uuid
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Tuple
@@ -65,7 +68,7 @@ def _find_bounded_span_matches(quote: str, span: str) -> List[re.Match]:
         line_start = quote.rfind("\n", 0, m.start()) + 1
         line_end = quote.find("\n", m.end())
         line_text = quote[line_start:(len(quote) if line_end == -1 else line_end)].strip()
-        if line_text != m.group(0).strip():
+        if line_text != m.group(0).strip() and not line_text.startswith("#"):
             body_matches.append(m)
     return body_matches if len(body_matches) == 1 else matches
 
@@ -126,12 +129,18 @@ from app.flashcard_generator import (
 class StudyMaterialManager:
     """Manages document parsing, AI generation, and material caching."""
 
+    MAX_EXTRACT_CACHE = 16
+
     def __init__(self, ollama: Optional[OllamaClient] = None):
         self.ollama = ollama or OllamaClient()
         self.extractor = PDFExtractor()
         self._materials: Dict[str, Dict[str, Any]] = {}
         self._raw_files: Dict[str, bytes] = {}
+        self._extract_cache: OrderedDict[Tuple[Any, ...], PDFExtractionResult] = OrderedDict()
         self._lock = threading.Lock()
+        self._bg_ocr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bg-upload-ocr")
+        self._bg_ocr_inflight: set[str] = set()
+        self._bg_ocr_futures: List[Any] = []
 
     def evict_raw_file(self, *filenames: Optional[str]) -> None:
         """Evict raw file bytes from memory cache to avoid exposing failed uploads."""
@@ -295,24 +304,83 @@ class StudyMaterialManager:
         filename: str,
         file_bytes: bytes,
         allow_image_without_text: bool = False,
+        generate_study_set: bool = False,
+        quiz_count: int = 3,
+        flashcard_count: int = 5,
+        persist_to_src: bool = False,
+        force_fast_print_ocr: Optional[bool] = None,
     ) -> PDFExtractionResult:
         """Extract text content from uploaded file bytes safely via PDFExtractor."""
         ext = self.validate_file(filename, file_bytes)
         is_image = ext in IMAGE_EXTENSIONS
+        clean_filename = Path(filename).name
+        use_fast_ocr = (bool(generate_study_set) and not persist_to_src) or is_image
+        file_sha256 = hashlib.sha256(file_bytes).hexdigest()
+        cache_key = (
+            file_sha256,
+            ext,
+            clean_filename,
+            bool(allow_image_without_text),
+            bool(generate_study_set and not persist_to_src),
+            int(quiz_count or 3),
+            int(flashcard_count or 5),
+        )
+        with self._lock:
+            cached_extract = self._extract_cache.get(cache_key)
+            if (cached_extract is None or int(getattr(cached_extract, "ocr_truncated_pages", 0) or 0) > 0) and not is_image:
+                for ck, cval in self._extract_cache.items():
+                    if (
+                        len(ck) >= 5
+                        and ck[0] == file_sha256
+                        and ck[1] == ext
+                        and ck[2] == clean_filename
+                        and not bool(ck[4])
+                        and int(getattr(cval, "ocr_truncated_pages", 0) or 0) == 0
+                    ):
+                        cached_extract = cval
+                        cache_key = ck
+                        break
+            if cached_extract is not None:
+                self._extract_cache.move_to_end(cache_key)
+                cloned = copy.deepcopy(cached_extract)
+                setattr(cloned, "_raw_bytes", file_bytes)
+                return cloned
 
-        # Write to secure temp file
+        # Write to secure temp file preserving filename stem for handwriting/title heuristics
         upload_dir = DATA_DIR / "runtime" / "user_uploads"
         upload_dir.mkdir(parents=True, exist_ok=True)
-        temp_file = upload_dir / f"upload_{uuid.uuid4().hex[:12]}{ext}"
+        safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).stem).strip("._-") or "upload"
+        temp_file = upload_dir / f"upload_{uuid.uuid4().hex[:8]}_{safe_stem}{ext}"
 
         try:
             temp_file.write_bytes(file_bytes)
-            result = PDFExtractor.extract_file(temp_file, ocr=is_image)
+            if is_image and use_fast_ocr:
+                result = PDFExtractor.extract_file(temp_file, ocr=True, fast_print_ocr=True, rel_path=clean_filename)
+            else:
+                result = PDFExtractor.extract_file(temp_file, ocr=is_image, rel_path=clean_filename)
 
-            # Retry with OCR for scanned PDFs that yielded insufficient digital text
+            # Retry with bounded fast-first OCR for scanned PDFs that yielded insufficient digital text
             if ext == ".pdf" and (result.total_chars < MIN_EXTRACT_CHARS or not result.extracted_pages):
                 if PDFExtractor.ocr_available():
-                    result = PDFExtractor.extract_file(temp_file, ocr=True)
+                    if generate_study_set and not persist_to_src:
+                        target_pages = min(8, max(3, max(1, int(quiz_count or 3)) + 2))
+                        max_ocr_pages = min(12, max(4, (max(1, int(quiz_count or 3)) + max(0, int(flashcard_count or 0))) * 2))
+                        result = PDFExtractor.extract_file(
+                            temp_file,
+                            ocr=True,
+                            fast_print_ocr=True,
+                            ocr_max_pages=max_ocr_pages,
+                            ocr_target_substantive_pages=target_pages,
+                            ocr_budget_seconds=60.0,
+                            rel_path=clean_filename,
+                        )
+                    else:
+                        result = PDFExtractor.extract_file(
+                            temp_file,
+                            ocr=True,
+                            fast_print_ocr=bool(force_fast_print_ocr) if force_fast_print_ocr is not None else False,
+                            rel_path=clean_filename,
+                        )
 
             # Fallback OCR / image analysis for uploaded images
             if is_image and (result.total_chars < MIN_EXTRACT_CHARS or not result.extracted_pages):
@@ -320,7 +388,7 @@ class StudyMaterialManager:
                     temp_file, filename, file_bytes, result, allow_without_text=allow_image_without_text
                 )
 
-            result.filename = Path(filename).name
+            result.filename = clean_filename
             result.clean_title = PDFExtractionResult._clean_title(filename)
 
             if not is_image and (result.total_chars < MIN_EXTRACT_CHARS or not result.extracted_pages):
@@ -332,6 +400,12 @@ class StudyMaterialManager:
                 raise StudyMaterialError(
                     f"Không thể đọc hoặc trích xuất tệp hình ảnh '{filename}'."
                 )
+            cache_snapshot = copy.deepcopy(result)
+            with self._lock:
+                self._extract_cache[cache_key] = cache_snapshot
+                self._extract_cache.move_to_end(cache_key)
+                while len(self._extract_cache) > self.MAX_EXTRACT_CACHE:
+                    self._extract_cache.popitem(last=False)
             setattr(result, "_raw_bytes", file_bytes)
             return result
         finally:
@@ -340,6 +414,88 @@ class StudyMaterialManager:
                     temp_file.unlink()
                 except Exception:  # nosec B110
                     pass
+
+    def schedule_background_full_ocr(
+        self,
+        material_id: str,
+        filename: str,
+        file_bytes: bytes,
+        extracted: Any,
+        *,
+        account_scope: Optional[str] = None,
+    ) -> bool:
+        """Schedule low-priority full-document CPU OCR when an upload used bounded fast OCR."""
+        truncated = int(getattr(extracted, "ocr_truncated_pages", 0) or 0)
+        clean_filename = Path(filename).name
+        if truncated <= 0 or not clean_filename.lower().endswith(".pdf") or not file_bytes:
+            return False
+        file_sha256 = hashlib.sha256(file_bytes).hexdigest()
+        with self._lock:
+            if file_sha256 in self._bg_ocr_inflight:
+                return False
+            self._bg_ocr_inflight.add(file_sha256)
+            self._bg_ocr_futures = [fut for fut in self._bg_ocr_futures if not fut.done()]
+
+        def _worker() -> None:
+            from app.accounts import account_id as _account_ctx
+
+            token = _account_ctx.set(account_scope) if account_scope is not None else None
+            try:
+                full_res = self.extract_document(
+                    clean_filename,
+                    file_bytes,
+                    allow_image_without_text=True,
+                    generate_study_set=False,
+                    persist_to_src=True,
+                    force_fast_print_ocr=not bool(getattr(extracted, "handwriting_suspected", False)),
+                )
+                with self._lock:
+                    for ck in list(self._extract_cache.keys()):
+                        if len(ck) >= 3 and ck[0] == file_sha256 and ck[1] == ".pdf" and ck[2] == clean_filename:
+                            self._extract_cache[ck] = copy.deepcopy(full_res)
+                    existing = self._materials.get(material_id)
+                    updated = copy.deepcopy(existing) if isinstance(existing, dict) else None
+                if updated is not None:
+                    updated["pages"] = [
+                        {"page_num": int(p.get("page_num", 1)), "text": str(p.get("text", ""))}
+                        for p in (full_res.extracted_pages or [])
+                        if (p.get("text") or "").strip()
+                    ]
+                    updated["total_chars"] = int(getattr(full_res, "total_chars", 0) or 0)
+                    updated["ocr_truncated_pages"] = 0
+                    updated["ocr_background_complete"] = True
+                    persist_fn = getattr(self, "persist_material_record", None)
+                    if callable(persist_fn):
+                        persist_fn(updated)
+                    else:
+                        with self._lock:
+                            if material_id in self._materials:
+                                self._materials[material_id] = updated
+            except Exception as exc:
+                logger.warning("Background full OCR failed for %s: %s", clean_filename, exc)
+            finally:
+                with self._lock:
+                    self._bg_ocr_inflight.discard(file_sha256)
+                if token is not None:
+                    _account_ctx.reset(token)
+
+        fut = self._bg_ocr_executor.submit(_worker)
+        with self._lock:
+            self._bg_ocr_futures.append(fut)
+        return True
+
+    def wait_background_ocr(self, timeout: float = 5.0) -> None:
+        """Wait for queued/running background upload OCR tasks (used by tests and cleanup)."""
+        with self._lock:
+            pending = [f for f in self._bg_ocr_futures if not f.done()]
+        import time as _time
+        end = _time.monotonic() + max(0.0, float(timeout))
+        for fut in pending:
+            rem = max(0.01, end - _time.monotonic())
+            try:
+                fut.result(timeout=rem)
+            except Exception:  # nosec B110
+                pass
 
     def generate_materials_from_pages(
         self,
@@ -419,8 +575,12 @@ class StudyMaterialManager:
             return size + reserve + chat_overhead <= capacity
 
         candidate_passages = passages
-        if len(passages) > 16:
-            max_study_pages = min(20, max(12, (max(0, quiz_count) + max(0, flashcard_count)) * 2))
+        max_page_threshold = 6 if is_mlx else 16
+        if len(passages) > max_page_threshold:
+            if is_mlx:
+                max_study_pages = min(8, max(3, max(quiz_count, 1) + min(max(0, flashcard_count), 3)))
+            else:
+                max_study_pages = min(20, max(12, (max(0, quiz_count) + max(0, flashcard_count)) * 2))
             substantive = [
                 p for p in passages
                 if len((p.get("text") or "").strip()) >= 120
@@ -521,30 +681,33 @@ class StudyMaterialManager:
                 quote = q.get("evidence_quote")
                 distractors = q.get("distractors")
                 if not isinstance(span, str) or not isinstance(quote, str):
-                    return None, None
+                    return None, "span_or_distractor_shape"
                 span = html.unescape(span).strip()
-                if not 1 <= len(span) <= 80:
-                    return None, None
-                span_count = _count_bounded_span_occurrences(quote, span)
-                if span_count > 1:
-                    return None, "repeated_answer"
+                if not 2 <= len(span) <= 80:
+                    return None, "span_or_distractor_shape"
                 has_three_distractors = (
                     isinstance(distractors, list)
                     and len(distractors) == 3
                     and all(isinstance(d, str) and d.strip() for d in distractors)
                 )
-                if span_count == 1 and has_three_distractors:
-                    options_cf = [" ".join(html.unescape(d).split()).casefold() for d in [span, *distractors]]
-                    if len(set(options_cf)) != 4:
-                        return None, "duplicate_options"
-                if span_count != 1 or len(span) < 2 or len(span) >= len(quote) * 0.6 or not has_three_distractors:
-                    return None, None
+                if not has_three_distractors:
+                    return None, "span_or_distractor_shape"
+                span_count = _count_bounded_span_occurrences(quote, span)
+                if span_count == 0:
+                    return None, "span_not_in_excerpt"
+                if span_count > 1:
+                    return None, "repeated_answer"
+                options_cf = [" ".join(html.unescape(d).split()).casefold() for d in [span, *distractors]]
+                if len(set(options_cf)) != 4:
+                    return None, "duplicate_options"
+                if len(span) >= len(quote) * 0.6:
+                    return None, "span_or_distractor_shape"
                 masked_quote = self._mask_answer_in_quote(quote, span)
                 if not masked_quote:
-                    return None, None
+                    return None, "span_not_in_excerpt"
                 if (not _zero_condition_distractors_are_disjoint(span, distractors)
                         or not _information_unit_distractors_match(span, distractors)):
-                    return None, None
+                    return None, "incompatible_distractors"
                 options = [html.unescape(d).strip() for d in distractors]
                 answer_index = hashlib.sha256((quote + "\0" + span).encode()).digest()[0] % 4
                 options.insert(answer_index, span)
@@ -644,19 +807,89 @@ class StudyMaterialManager:
                 "evidence_quote": ev_quote,
                 "page_num": p_num,
                 "difficulty": evaluated_diff,
+                "answer_verified": False,
                 **({"format": "source_cloze"} if is_cloze else {}),
             }, None
 
+        original_page_chunks: Dict[int, List[str]] = {}
+        for orig_p in passages:
+            original_page_chunks.setdefault(int(orig_p["page_num"]), []).append(str(orig_p["text"]))
+
+        proven_quiz: List[Dict[str, Any]] = []
+        proven_questions: set[str] = set()
+        if quiz_count > 0 and difficulty == "medium" and active_client is not None:
+            from app.practice_proof import (
+                build_proof_backed_medium_questions,
+                verify_proof_backed_medium_question,
+            )
+            for candidate in build_proof_backed_medium_questions(
+                admitted_passages, count=quiz_count, context_passages=passages
+            ):
+                norm_q, _ = _normalize_quiz_item(candidate, next_id=len(proven_quiz) + 1)
+                if norm_q is None or norm_q["question"] in proven_questions:
+                    continue
+                if not any(
+                    self._quote_matches_chunk(norm_q["evidence_quote"], chunk_text)
+                    and verify_proof_backed_medium_question(norm_q, chunk_text, context_passages=passages)
+                    for chunk_text in page_chunks.get(norm_q["page_num"], [])
+                ):
+                    continue
+                if not any(
+                    self._quote_matches_chunk(norm_q["evidence_quote"], orig_text)
+                    and verify_proof_backed_medium_question(norm_q, orig_text, context_passages=passages)
+                    for orig_text in original_page_chunks.get(norm_q["page_num"], [])
+                ):
+                    continue
+                norm_q["difficulty"] = "medium"
+                norm_q["answer_verified"] = True
+                norm_q["generation"] = "source_proof"
+                proven_questions.add(norm_q["question"])
+                proven_quiz.append(norm_q)
+                if len(proven_quiz) >= quiz_count:
+                    break
+
+        remaining_quiz_count = max(0, quiz_count - len(proven_quiz))
+
+        def _is_too_easy_for_target(item: Dict[str, Any]) -> bool:
+            if difficulty == "easy":
+                return False
+            if item.get("format") == "source_cloze" or item.get("fallback") or item.get("is_fallback"):
+                return True
+            if is_mlx:
+                return False
+            return evaluate_question_difficulty(item) == "easy"
+
         def _distinct_clean_quiz_raw(raw_items: List[Any]) -> Tuple[List[Any], List[Optional[str]]]:
             clean_raw: List[Any] = []
-            seen_questions = set()
+            seen_questions = set(proven_questions)
+            cloze_answers_by_page: Dict[int, List[str]] = {}
             repair_reasons: List[Optional[str]] = []
             for raw_item in raw_items:
-                norm_item, reason = _normalize_quiz_item(raw_item, next_id=len(clean_raw) + 1)
+                norm_item, reason = _normalize_quiz_item(raw_item, next_id=len(proven_quiz) + len(clean_raw) + 1)
                 repair_reasons.append(reason)
-                if norm_item is not None and norm_item["question"] not in seen_questions:
-                    seen_questions.add(norm_item["question"])
-                    clean_raw.append(raw_item)
+                if norm_item is None or norm_item["question"] in seen_questions:
+                    continue
+                if _is_too_easy_for_target(norm_item):
+                    continue
+                if norm_item.get("format") == "source_cloze":
+                    ans_text = " ".join(
+                        next(
+                            (c["text"] for c in norm_item["choices"] if c["label"] == norm_item["answer"]),
+                            "",
+                        ).split()
+                    ).casefold()
+                    p_num = norm_item["page_num"]
+                    prior_answers = cloze_answers_by_page.get(p_num, ())
+                    if ans_text and any(
+                        ans_text == prev or ans_text in prev or prev in ans_text
+                        for prev in prior_answers
+                    ):
+                        repair_reasons[-1] = repair_reasons[-1] or "repeated_answer"
+                        continue
+                    if ans_text:
+                        cloze_answers_by_page.setdefault(p_num, []).append(ans_text)
+                seen_questions.add(norm_item["question"])
+                clean_raw.append(raw_item)
             return clean_raw, repair_reasons
 
         def _collect_valid_flashcards(raw_items: List[Any]) -> List[Dict[str, Any]]:
@@ -720,12 +953,18 @@ class StudyMaterialManager:
             return extra
 
         passage_evidence_ids = [f"Q{idx}" for idx in range(1, len(admitted_passages) + 1)]
-        first_batch_quiz_target = min(3, quiz_count) if quiz_count > 0 else 0
+        first_batch_quiz_target = min(3, remaining_quiz_count) if remaining_quiz_count > 0 else 0
         quiz_schema = quiz_response_schema(difficulty, passage_evidence_ids, max_items=first_batch_quiz_target)
+        review_timed_out_partial = False
 
-        if quiz_count > 0 and active_client is not None:
+        if remaining_quiz_count > 0 and active_client is not None:
             try:
                 quiz_prompt = build_quiz_prompt(admitted_passages, count=first_batch_quiz_target, difficulty=difficulty)
+                if proven_quiz:
+                    excluded_proven = [q["evidence_quote"][:120] for q in proven_quiz]
+                    proven_note = "\nKhông lặp lại các trích đoạn/quy tắc đã dùng: " + json.dumps(excluded_proven, ensure_ascii=False)
+                    if prompt_fits(quiz_prompt + proven_note):
+                        quiz_prompt += proven_note
                 quiz_temp = 0.0 if (is_mlx and difficulty == "easy") else 0.2
                 combined_prompt = (
                     build_combined_easy_study_prompt(
@@ -748,14 +987,23 @@ class StudyMaterialManager:
                     else quiz_schema
                 )
                 first_attempt_clean: List[Any] = []
+                attempt_target = first_batch_quiz_target
                 for attempt in range(2):
+                    extra_combined_tokens = (
+                        flashcard_count * 220 if (attempt == 0 and use_combined_first) else 0
+                    )
+                    quiz_max_tokens = (
+                        min(1500, max(550, attempt_target * 380 + extra_combined_tokens))
+                        if is_mlx
+                        else 1500
+                    )
                     with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
                         if is_mlx:
                             resp_content = active_client.chat_complete(
                                 messages=[{"role": "user", "content": attempt_prompt}],
                                 system_prompt=system_prompt,
                                 temperature=quiz_temp,
-                                max_tokens=1500,
+                                max_tokens=quiz_max_tokens,
                                 num_ctx=capacity,
                                 **_mlx_optional_kwargs(attempt_schema),
                             )
@@ -785,30 +1033,43 @@ class StudyMaterialManager:
                     )
                     clean_items, repair_reasons = _distinct_clean_quiz_raw(candidate_items)
                     if attempt == 0:
-                        quiz_raw_items = candidate_items
+                        quiz_raw_items = clean_items
                         first_attempt_clean = clean_items
                         if len(clean_items) >= first_batch_quiz_target:
                             break
                     else:
                         if clean_items and first_attempt_clean:
-                            seen_clean = {
-                                _normalize_quiz_item(item)[0]["question"]
-                                for item in clean_items
-                            }
-                            merged = list(clean_items)
-                            for prev in first_attempt_clean:
-                                prev_norm, _ = _normalize_quiz_item(prev)
-                                if prev_norm and prev_norm["question"] not in seen_clean:
-                                    merged.append(prev)
-                                    seen_clean.add(prev_norm["question"])
-                            quiz_raw_items = merged
+                            if is_mlx and len(first_attempt_clean) < first_batch_quiz_target:
+                                quiz_raw_items, _ = _distinct_clean_quiz_raw(first_attempt_clean + clean_items)
+                            else:
+                                seen_clean = {
+                                    _normalize_quiz_item(item)[0]["question"]
+                                    for item in clean_items
+                                }
+                                merged = list(clean_items)
+                                for prev in first_attempt_clean:
+                                    prev_norm, _ = _normalize_quiz_item(prev)
+                                    if prev_norm and prev_norm["question"] not in seen_clean:
+                                        merged.append(prev)
+                                        seen_clean.add(prev_norm["question"])
+                                quiz_raw_items = merged
                         elif first_attempt_clean and not clean_items:
                             quiz_raw_items = first_attempt_clean
-                        elif candidate_items:
-                            quiz_raw_items = candidate_items
+                        elif clean_items:
+                            quiz_raw_items = clean_items
                         break
 
                     repair_instruction = ""
+                    if "span_or_distractor_shape" in repair_reasons:
+                        repair_instruction += (
+                            "\nMỗi câu PHẢI có 1 cụm answer dài 2–80 ký tự chép nguyên văn từ passage Q "
+                            "và đúng 3 distractors khác rỗng cùng loại thông tin."
+                        )
+                    if "span_not_in_excerpt" in repair_reasons:
+                        repair_instruction += (
+                            "\nCụm answer PHẢI được chép NGUYÊN VĂN chính xác từng ký tự từ passage Q đã chọn "
+                            "(không dịch, không rút gọn hay sửa dấu)."
+                        )
                     if "repeated_answer" in repair_reasons:
                         repair_instruction += (
                             "\nChọn lại cụm answer KHÔNG bị lặp: chọn toàn bộ điều kiện gồm biểu thức "
@@ -821,7 +1082,31 @@ class StudyMaterialManager:
                             "Không lặp lựa chọn dù khác chữ hoa hoặc khoảng trắng. "
                             "Vẫn chỉ dùng nguồn và cấu trúc JSON trên."
                         )
-                    if (attempt == 0 and any(repair_reasons)
+                    if "incompatible_distractors" in repair_reasons:
+                        repair_instruction += (
+                            "\nBa distractors phải CÙNG đơn vị hoặc loại thông tin với answer nhưng thuộc miền giá trị "
+                            "hay điều kiện RỜI NHAU và loại trừ lẫn nhau."
+                        )
+                    if is_mlx and 0 < len(first_attempt_clean) < first_batch_quiz_target and any(repair_reasons):
+                        missing_quiz = first_batch_quiz_target - len(first_attempt_clean)
+                        excluded_items = [
+                            str(item.get("question") or item.get("answer") or "")[:200]
+                            for item in first_attempt_clean
+                            if isinstance(item, dict)
+                        ]
+                        repair_base = build_quiz_prompt(admitted_passages, count=missing_quiz, difficulty=difficulty)
+                        if excluded_items:
+                            repair_base += "\nKhông lặp lại các câu/cụm đã chọn: " + json.dumps(excluded_items, ensure_ascii=False)
+                        repair_full = repair_base + repair_instruction
+                        if (
+                            estimate_cost(admitted_passages) + len(repair_instruction.encode()) <= budget
+                            and prompt_fits(repair_full)
+                        ):
+                            attempt_prompt = repair_full
+                            attempt_schema = quiz_response_schema(difficulty, passage_evidence_ids, max_items=missing_quiz)
+                            attempt_target = missing_quiz
+                            continue
+                    elif (attempt == 0 and any(repair_reasons)
                             and estimate_cost(admitted_passages) + len(repair_instruction.encode()) <= budget
                             and prompt_fits(quiz_prompt + repair_instruction)):
                         attempt_prompt = quiz_prompt + repair_instruction
@@ -830,20 +1115,37 @@ class StudyMaterialManager:
                     break
                 # A fixed 1500-token response cannot reliably contain ten
                 # complete questions. Bound each turn and preserve the count.
-                for _ in range((quiz_count - 1) // 3):
-                    remaining = quiz_count - len(quiz_raw_items)
+                max_refill_batches = (
+                    ((remaining_quiz_count - 1) // 3)
+                    + (1 if 0 < len(quiz_raw_items) < first_batch_quiz_target else 0)
+                    if remaining_quiz_count > 3
+                    else 0
+                )
+                for _ in range(max_refill_batches):
+                    remaining = remaining_quiz_count - len(quiz_raw_items)
                     if remaining <= 0:
                         break
                     batch_target = min(3, remaining)
                     excluded = [str(item.get('question') or item.get('answer') or '')[:200]
                                 for item in quiz_raw_items if isinstance(item, dict)]
-                    next_prompt = build_quiz_prompt(admitted_passages, count=batch_target, difficulty=difficulty)
-                    next_prompt += '\nKhông lặp lại các câu/cụm đã chọn: ' + json.dumps(excluded, ensure_ascii=False)
-                    if not prompt_fits(next_prompt):
+                    excluded.extend(q['question'][:200] for q in proven_quiz)
+                    refill_passages = list(admitted_passages)
+                    next_prompt = ''
+                    while refill_passages:
+                        cand_prompt = build_quiz_prompt(refill_passages, count=batch_target, difficulty=difficulty)
+                        if excluded:
+                            cand_prompt += '\nKhông lặp lại các câu/cụm đã chọn: ' + json.dumps(excluded, ensure_ascii=False)
+                        if prompt_fits(cand_prompt):
+                            next_prompt = cand_prompt
+                            break
+                        refill_passages.pop()
+                    if not next_prompt:
                         break
-                    batch_quiz_schema = quiz_response_schema(difficulty, passage_evidence_ids, max_items=batch_target)
+                    refill_evidence_ids = [f"Q{idx}" for idx in range(1, len(refill_passages) + 1)]
+                    batch_quiz_schema = quiz_response_schema(difficulty, refill_evidence_ids, max_items=batch_target)
+                    refill_max_tokens = min(1500, max(550, batch_target * 380)) if is_mlx else 1500
                     with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
-                        options = ({'max_tokens': 1500, **_mlx_optional_kwargs(batch_quiz_schema)}
+                        options = ({'max_tokens': refill_max_tokens, **_mlx_optional_kwargs(batch_quiz_schema)}
                                    if is_mlx else {'model': model_name, 'num_predict': 1500, 'think': False})
                         raw = active_client.chat_complete(messages=[{'role': 'user', 'content': next_prompt}],
                             system_prompt=system_prompt, temperature=quiz_temp, num_ctx=capacity, **options)
@@ -852,11 +1154,23 @@ class StudyMaterialManager:
                     parsed = parse_json_from_response(raw)
                     if not parsed or not isinstance(parsed.get('questions'), list):
                         break
-                    quiz_raw_items.extend(parsed['questions'])
+                    prev_clean_count = len(quiz_raw_items)
+                    quiz_raw_items, _ = _distinct_clean_quiz_raw(quiz_raw_items + parsed['questions'])
+                    if len(quiz_raw_items) <= prev_clean_count:
+                        break
             except (GPUBusyError, DialogueBusyError):
                 raise
             except (subprocess.TimeoutExpired, TimeoutError) as e:
-                raise StudyMaterialError(f"Mô hình phản hồi quá thời gian quy định khi tạo câu hỏi ôn tập: {e}")
+                if proven_quiz:
+                    logger.warning(
+                        "LLM quiz generation timed out with %d/%d proof-backed items ready; returning partial set: %s",
+                        len(proven_quiz),
+                        quiz_count,
+                        e,
+                    )
+                    review_timed_out_partial = True
+                else:
+                    raise StudyMaterialError(f"Mô hình phản hồi quá thời gian quy định khi tạo câu hỏi ôn tập: {e}")
             except (RuntimeError, FileNotFoundError) as e:
                 raise StudyMaterialError(f"Mô hình AI chưa sẵn sàng hoặc thiếu tệp trọng số cục bộ: {e}")
             except Exception as e:
@@ -872,17 +1186,26 @@ class StudyMaterialManager:
                     if remaining <= 0:
                         break
                     batch_flash_target = min(8, remaining)
-                    flash_prompt = build_flashcards_prompt(admitted_passages, count=batch_flash_target)
                     excluded = [str(item.get('answer') or item.get('back') or '')[:80]
                                 for item in flashcard_raw_items if isinstance(item, dict)]
-                    if excluded:
-                        flash_prompt += '\nKhông lặp lại các cụm đã chọn: ' + json.dumps(excluded, ensure_ascii=False)
-                    if not prompt_fits(flash_prompt):
+                    refill_passages = list(admitted_passages)
+                    flash_prompt = ''
+                    while refill_passages:
+                        cand_flash = build_flashcards_prompt(refill_passages, count=batch_flash_target)
+                        if excluded:
+                            cand_flash += '\nKhông lặp lại các cụm đã chọn: ' + json.dumps(excluded, ensure_ascii=False)
+                        if prompt_fits(cand_flash):
+                            flash_prompt = cand_flash
+                            break
+                        refill_passages.pop()
+                    if not flash_prompt:
                         break
-                    batch_flash_schema = flashcard_response_schema(passage_evidence_ids, max_items=batch_flash_target)
+                    refill_flash_ids = [f"Q{idx}" for idx in range(1, len(refill_passages) + 1)]
+                    batch_flash_schema = flashcard_response_schema(refill_flash_ids, max_items=batch_flash_target)
+                    flash_max_tokens = min(1500, max(500, remaining * 260)) if is_mlx else 1500
                     with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
                         options = (
-                            {'max_tokens': 1500, **_mlx_optional_kwargs(batch_flash_schema)}
+                            {'max_tokens': flash_max_tokens, **_mlx_optional_kwargs(batch_flash_schema)}
                             if is_mlx else {'model': model_name, 'num_predict': 1500, 'think': False}
                         )
                         resp_flash = active_client.chat_complete(
@@ -910,20 +1233,22 @@ class StudyMaterialManager:
             except Exception as e:
                 logger.warning("LLM flashcard generation failed: %s. Using fallback.", e)
 
-        # Validate Quiz items strictly against admitted passages
-        valid_quiz = []
-        seen_quiz_questions = set()
+        # Validate LLM-proposed Quiz items strictly against admitted passages
+        model_valid_quiz = []
+        seen_quiz_questions = set(proven_questions)
         for q in quiz_raw_items:
-            norm_q, _ = _normalize_quiz_item(q, next_id=len(valid_quiz) + 1)
+            norm_q, _ = _normalize_quiz_item(q, next_id=len(proven_quiz) + len(model_valid_quiz) + 1)
             if norm_q is None or norm_q["question"] in seen_quiz_questions:
                 continue
+            if _is_too_easy_for_target(norm_q):
+                continue
             seen_quiz_questions.add(norm_q["question"])
-            valid_quiz.append(norm_q)
+            model_valid_quiz.append(norm_q)
 
         # Exact quote membership cannot prove the answer, distractors, or
-        # selected difficulty. Run the existing independent review contract.
-        review_timed_out_partial = False
-        if active_client is not None and valid_quiz:
+        # selected difficulty. Run the existing independent review contract for model proposals.
+        reviewed: List[Dict[str, Any]] = []
+        if active_client is not None and model_valid_quiz and remaining_quiz_count > 0:
             from app.practice import PracticeService, PracticeGenerationError
             from app.practice_adapter import SYSTEM_PROMPT as PRACTICE_SYSTEM_PROMPT
             review_system_prompt = PRACTICE_SYSTEM_PROMPT if is_mlx else system_prompt
@@ -956,51 +1281,187 @@ class StudyMaterialManager:
                 return raw
             reviewer = PracticeService(None, None)
             reviewer._chat_complete = review_chat
-            reviewed = []
-            batch_step = 3 if is_mlx else 1
-            start = 0
-            while start < len(valid_quiz) and len(reviewed) < quiz_count:
-                batch = valid_quiz[start:start + batch_step]
-                passages_for_review = {}
-                proposals = []
-                for index, item in enumerate(batch, 1):
-                    full_source = next(text for text in page_chunks[item['page_num']]
-                                       if self._quote_matches_chunk(item['evidence_quote'], text))
-                    passages_for_review[index] = {
-                        'safe_text': sanitize_for_prompt_context(full_source),
-                        'page_num': item['page_num'],
-                    }
-                    proposals.append({**item, 'source': {'chunk_id': index, 'snippet': item['evidence_quote']}})
-                try:
-                    accepted = reviewer._verify_questions(proposals, passages_for_review, model_name, difficulty=difficulty)
-                except PracticeGenerationError as exc:
-                    if len(batch) > 1 and "do not fit the context" in str(exc):
-                        batch_step = 1
-                        continue
-                    raise
-                except (GPUBusyError, DialogueBusyError):
-                    raise
-                except (TimeoutError, subprocess.TimeoutExpired) as exc:
-                    if reviewed:
-                        logger.warning(
-                            "Study material review timed out after accepting %d/%d items; returning partial verified set: %s",
-                            len(reviewed),
-                            quiz_count,
-                            exc,
+            batch_step = 1 if (is_mlx and difficulty in ("medium", "hard")) else (3 if is_mlx else 1)
+
+            def _run_review_pass(items_to_review: List[Dict[str, Any]], step: int) -> None:
+                nonlocal review_timed_out_partial
+                idx_pos = 0
+                cur_step = step
+                while idx_pos < len(items_to_review) and len(reviewed) < remaining_quiz_count:
+                    batch = items_to_review[idx_pos:idx_pos + cur_step]
+                    passages_for_review = {}
+                    proposals = []
+                    for index, item in enumerate(batch, 1):
+                        full_source = next(text for text in page_chunks[item['page_num']]
+                                           if self._quote_matches_chunk(item['evidence_quote'], text))
+                        passages_for_review[index] = {
+                            'safe_text': sanitize_for_prompt_context(full_source),
+                            'page_num': item['page_num'],
+                        }
+                        proposals.append({**item, 'source': {'chunk_id': index, 'snippet': item['evidence_quote']}})
+                    try:
+                        accepted = reviewer._verify_questions(
+                            proposals,
+                            passages_for_review,
+                            model_name,
+                            difficulty=difficulty,
+                            study_material_review=(is_mlx and difficulty == "medium"),
                         )
-                        review_timed_out_partial = True
+                    except PracticeGenerationError as exc:
+                        if len(batch) > 1 and "do not fit the context" in str(exc):
+                            cur_step = 1
+                            continue
+                        raise
+                    except (GPUBusyError, DialogueBusyError):
+                        raise
+                    except (TimeoutError, subprocess.TimeoutExpired) as exc:
+                        if proven_quiz or reviewed:
+                            logger.warning(
+                                "Study material review timed out after accepting %d/%d items; returning partial verified set: %s",
+                                len(proven_quiz) + len(reviewed),
+                                quiz_count,
+                                exc,
+                            )
+                            review_timed_out_partial = True
+                            break
+                        raise StudyMaterialError(f'Không hoàn thành được bước kiểm định câu hỏi: {exc}') from exc
+                    except RuntimeError as exc:
+                        raise StudyMaterialError(f'Không hoàn thành được bước kiểm định câu hỏi: {exc}') from exc
+                    for item in accepted:
+                        if _is_too_easy_for_target(item):
+                            continue
+                        clean_item = {k: v for k, v in item.items() if k != 'source'}
+                        is_proved = False
+                        if difficulty == "medium":
+                            from app.practice_proof import verify_proof_backed_medium_question
+                            is_proved = any(
+                                self._quote_matches_chunk(clean_item["evidence_quote"], orig_text)
+                                and verify_proof_backed_medium_question(clean_item, orig_text, context_passages=passages)
+                                for orig_text in original_page_chunks.get(clean_item["page_num"], [])
+                            )
+                        reviewed.append({
+                            **clean_item,
+                            'difficulty': difficulty,
+                            'answer_verified': is_proved,
+                            'generation': 'source_proof' if is_proved else 'model',
+                        })
+                        if len(reviewed) >= remaining_quiz_count:
+                            break
+                    idx_pos += len(batch)
+
+            _run_review_pass(model_valid_quiz, batch_step)
+
+            covered_pages = {
+                int(item.get("page_num") or 0)
+                for item in (*proven_quiz, *reviewed)
+                if item.get("page_num") is not None
+            }
+            has_uncovered_pages = any(int(p["page_num"]) not in covered_pages for p in admitted_passages)
+            if (
+                is_mlx
+                and difficulty in ("easy", "hard")
+                and not review_timed_out_partial
+                and len(reviewed) < remaining_quiz_count
+                and (len(reviewed) < len(model_valid_quiz) or has_uncovered_pages)
+            ):
+                refill_missing = remaining_quiz_count - len(reviewed)
+                excluded_after_review = [
+                    str(item.get('question') or '')[:200] for item in (*proven_quiz, *model_valid_quiz)
+                ]
+                if difficulty == "easy":
+                    excluded_after_review.extend(
+                        str(next((c["text"] for c in item.get("choices", []) if c.get("label") == item.get("answer")), ""))[:120]
+                        for item in model_valid_quiz
+                        if item.get("format") == "source_cloze"
+                    )
+                else:
+                    excluded_after_review.extend(
+                        str(item.get('evidence_quote') or '')[:120] for item in reviewed if item.get('evidence_quote')
+                    )
+                indexed_admitted = list(enumerate(admitted_passages, 1))
+                uncovered_indexed = [(idx, p) for idx, p in indexed_admitted if int(p["page_num"]) not in covered_pages]
+                covered_indexed = [(idx, p) for idx, p in indexed_admitted if int(p["page_num"]) in covered_pages]
+                prioritized_indexed = uncovered_indexed + covered_indexed if uncovered_indexed else list(indexed_admitted)
+                refill_pairs = list(prioritized_indexed)
+                refill_prompt = ''
+                while refill_pairs:
+                    cand_passages = [p for _idx, p in refill_pairs]
+                    cand_prompt = build_quiz_prompt(cand_passages, count=refill_missing, difficulty=difficulty)
+                    non_empty_ex = [x for x in excluded_after_review if x]
+                    if non_empty_ex:
+                        label_ex = 'Không lặp lại các câu/cụm đã chọn: ' if difficulty == 'easy' else 'Không lặp lại câu hỏi/trích đoạn đã dùng: '
+                        cand_prompt += '\n' + label_ex + json.dumps(non_empty_ex[:12], ensure_ascii=False)
+                    if prompt_fits(cand_prompt):
+                        refill_prompt = cand_prompt
                         break
-                    raise StudyMaterialError(f'Không hoàn thành được bước kiểm định câu hỏi: {exc}') from exc
-                except RuntimeError as exc:
-                    raise StudyMaterialError(f'Không hoàn thành được bước kiểm định câu hỏi: {exc}') from exc
-                for item in accepted:
-                    if item.get('format') == 'source_cloze' and evaluate_question_difficulty(item) != difficulty:
-                        continue
-                    reviewed.append({**{k: v for k, v in item.items() if k != 'source'}, 'difficulty': difficulty})
-                    if len(reviewed) >= quiz_count:
-                        break
-                start += len(batch)
-            valid_quiz = reviewed
+                    refill_pairs.pop()
+                if refill_prompt:
+                    try:
+                        refill_id_map = {f"Q{pos}": f"Q{orig_idx}" for pos, (orig_idx, _p) in enumerate(refill_pairs, 1)}
+                        refill_ids = list(refill_id_map)
+                        refill_schema = quiz_response_schema(difficulty, refill_ids, max_items=refill_missing)
+                        refill_max_tokens = min(1500, max(550, refill_missing * 380))
+                        with acquire_inference(dialogue_gate), gpu_coordinator.acquire_for_inference():
+                            refill_raw = active_client.chat_complete(
+                                messages=[{'role': 'user', 'content': refill_prompt}],
+                                system_prompt=system_prompt,
+                                temperature=0.0 if difficulty == 'easy' else 0.2,
+                                max_tokens=refill_max_tokens,
+                                num_ctx=capacity,
+                                **_mlx_optional_kwargs(refill_schema),
+                            )
+                        if getattr(active_client, 'last_done_reason', None) == 'stop':
+                            refill_parsed = parse_json_from_response(refill_raw)
+                            if refill_parsed and isinstance(refill_parsed.get('questions'), list):
+                                extra_valid: List[Dict[str, Any]] = []
+                                for rq in refill_parsed['questions']:
+                                    if isinstance(rq, dict) and isinstance(rq.get('evidence_id'), str) and rq['evidence_id'] in refill_id_map:
+                                        rq = {**rq, 'evidence_id': refill_id_map[rq['evidence_id']]}
+                                    norm_rq, _ = _normalize_quiz_item(rq, next_id=len(proven_quiz) + len(model_valid_quiz) + len(extra_valid) + 1)
+                                    if norm_rq is None or norm_rq['question'] in seen_quiz_questions:
+                                        continue
+                                    if _is_too_easy_for_target(norm_rq):
+                                        continue
+                                    seen_quiz_questions.add(norm_rq['question'])
+                                    extra_valid.append(norm_rq)
+                                if extra_valid:
+                                    _run_review_pass(extra_valid, batch_step)
+                    except (GPUBusyError, DialogueBusyError):
+                        raise
+                    except Exception as exc:
+                        logger.warning("Study material refill failed after partial review: %s", exc)
+
+        combined_quiz = list((proven_quiz + reviewed)[:quiz_count])
+        if is_mlx and combined_quiz:
+            from app.practice import PracticeService as _PracticeSvc
+            letter_counts = {lbl: 0 for lbl in "ABCD"}
+            balanced_quiz = []
+            for item in combined_quiz:
+                item_copy = dict(item)
+                if item_copy.get("format") != "source_cloze":
+                    q_key = " ".join(str(item_copy.get("question") or "").split()).casefold()
+                    ev_ref = str(item_copy.get("evidence_quote") or "")
+                    base_slot = hashlib.sha256(f"{q_key}\0{ev_ref}".encode("utf-8")).digest()[0] % 4
+                    slot_order = [(base_slot + off) % 4 for off in range(4)]
+                    target_slot = min(slot_order, key=lambda idx: letter_counts["ABCD"[idx]])
+                    rot_choices, rot_ans = _PracticeSvc._rotate_choices_if_safe(
+                        list(item_copy.get("choices") or []),
+                        str(item_copy.get("answer") or ""),
+                        str(item_copy.get("explanation") or ""),
+                        target_slot,
+                    )
+                    item_copy["choices"] = rot_choices
+                    item_copy["answer"] = rot_ans
+                    item_copy["correct_answer"] = rot_ans
+                final_ans = str(item_copy.get("answer") or "").upper()
+                if final_ans in letter_counts:
+                    letter_counts[final_ans] += 1
+                balanced_quiz.append(item_copy)
+            combined_quiz = balanced_quiz
+
+        valid_quiz = []
+        for idx, item in enumerate(combined_quiz, 1):
+            valid_quiz.append({**item, "id": idx})
 
         if quiz_count <= 0:
             norm_quiz = []
@@ -1034,6 +1495,16 @@ class StudyMaterialManager:
                 norm_quiz = []
                 quiz_mode = "unavailable"
 
+        if quiz_count > 0 and norm_quiz:
+            item_routes = {q.get("generation") or "model" for q in norm_quiz}
+            if item_routes == {"source_proof"}:
+                quiz_mode = "source_proof"
+            elif "source_proof" in item_routes:
+                quiz_mode = "source_proof+model"
+            else:
+                quiz_mode = "model"
+        all_answers_verified = bool(norm_quiz) and all(q.get("answer_verified") is True for q in norm_quiz)
+
         # Reconcile flashcards strictly against admitted passages (reusing combined turn if present)
         valid_flashcards = _collect_valid_flashcards(flashcard_raw_items)
 
@@ -1060,6 +1531,13 @@ class StudyMaterialManager:
             completeness_warning = (completeness_warning or '') + (
                 f" Chỉ có {actual_flashcard_count}/{flashcard_count} thẻ có căn cứ nguồn."
             )
+        ocr_truncated_pages = int(getattr(extracted_result, "ocr_truncated_pages", 0) or 0)
+        if ocr_truncated_pages > 0:
+            ocr_notice = (
+                f"Đã OCR nhanh {int(getattr(extracted_result, 'ocr_pages', 0) or 0)} trang đầu "
+                f"để tạo học liệu kịp thời (còn {ocr_truncated_pages} trang quét chưa xử lý)."
+            )
+            completeness_warning = (f"{completeness_warning} {ocr_notice}" if completeness_warning else ocr_notice)
 
         material_id = str(uuid.uuid4())
         pages_preview = [
@@ -1091,13 +1569,14 @@ class StudyMaterialManager:
             "study_generated": True,
             "saved_to_src": getattr(extracted_result, "saved_to_src", False),
             "src_path": getattr(extracted_result, "src_path", f"src/{extracted_result.filename}"),
+            "answers_verified": all_answers_verified,
             "generation": {
                 "quiz": quiz_mode,
                 "flashcards": flashcard_mode,
             },
             "source_validation": "verbatim_quote",
         }
-        if quiz_mode == "model" or flashcard_mode == "model":
+        if "model" in quiz_mode or flashcard_mode == "model":
             record["model"] = model_name
         if quiz_mode == "extractive_fallback" or flashcard_mode == "extractive_fallback":
             record["fallback_warning"] = (

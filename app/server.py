@@ -45,7 +45,7 @@ from app.gpu_lock import gpu_coordinator, GPUBusyError
 from app.document_lookup import DocumentLookup
 from app.dialogue import account_dialogue_gate, acquire_inference, dialogue_gate, DialogueBusyError, BUSY_TEXT
 from app import timetable_store, timetable_vision, timetable_ics
-from app.practice import PracticeGenerationError, PracticeService, PracticeSessionNotFound
+from app.practice import IdleBankSeeder, PracticeGenerationError, PracticeService, PracticeSessionNotFound
 from app.learning import LearningService
 from app.study_materials import study_material_manager, StudyMaterialError, StudyMaterialIndexError
 from app.input_policy import (
@@ -71,9 +71,21 @@ async def lifespan(_app: FastAPI):
     start_warmup = getattr(TrainedModelClient, "start_startup_warmup", None)
     if callable(start_warmup):
         start_warmup()
+    seeder = None
+    if os.environ.get("STUDY_IDLE_BANK_SEED", "").strip().lower() in {"1", "true"}:
+        seeder = IdleBankSeeder(
+            learning_service=learning_service,
+            gpu_coordinator=gpu_coordinator,
+            dialogue_gate=dialogue_gate,
+            model=DEFAULT_CHAT_MODEL,
+            target_per_topic=2,
+        )
+        seeder.start()
     try:
         yield
     finally:
+        if seeder is not None:
+            seeder.stop(timeout=2.0)
         stop_warmup = getattr(TrainedModelClient, "stop_startup_warmup", None)
         if callable(stop_warmup):
             stop_warmup(timeout=2.0)

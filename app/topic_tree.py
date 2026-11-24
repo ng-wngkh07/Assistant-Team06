@@ -417,6 +417,80 @@ def resolve_topic(value: Any) -> Optional[Tuple[str, Tuple[str, ...]]]:
     return None
 
 
+_FOCUS_STOPWORDS = frozenset({
+    "va", "cua", "trong", "cac", "nhung", "mot", "cho", "ve", "voi",
+    "theo", "bang", "hoc", "hay", "hoac", "la", "de", "khi", "tai",
+    "tu", "den", "nhu", "the", "nao", "giai", "thich", "dinh", "ly",
+    "cong", "thuc", "nguyen", "tac", "phan", "chuong", "bai", "co", "ban",
+    "nang", "cao", "of", "and", "in", "for", "the", "with", "on", "to",
+})
+
+
+def resolve_topic_query(
+    value: Any,
+) -> Tuple[Optional[Tuple[str, Tuple[str, ...]]], Tuple[str, ...]]:
+    """Resolve an authored topic, alias, or sub-topic phrase into (topic_pair, focus_terms).
+
+    Preserves exact ``resolve_topic`` hits first, and falls back to ``infer_query_topic_hierarchy``
+    when the user specifies a narrower sub-topic such as ``Xác suất Bayes`` or ``Trí nhớ ngắn hạn``.
+    """
+    target = normalized(value)
+    if not target:
+        return None, ()
+
+    direct = resolve_topic(value)
+    if direct:
+        label, _aliases = direct
+        if target == normalized(label):
+            return direct, ()
+        return direct, (target,)
+
+    hierarchy = infer_query_topic_hierarchy(value)
+    child_topics = hierarchy.get("child_topics") or []
+    if not child_topics:
+        return None, ()
+
+    best_label = None
+    best_score = (-1, -1)
+    for lbl in child_topics:
+        hits = [m.group(0) for m in PATTERNS[lbl].finditer(target)]
+        score = (len(hits), sum(len(h) for h in hits))
+        if score > best_score:
+            best_score = score
+            best_label = lbl
+
+    if not best_label:
+        return None, ()
+
+    best_pair = next((pair for pair in TOPICS if pair[0] == best_label), None)
+    if not best_pair:
+        return None, ()
+
+    label_words = set(re.findall(r"\w+", normalized(best_label)))
+    alias_hits = list(
+        dict.fromkeys(
+            normalized(m.group(0))
+            for m in PATTERNS[best_label].finditer(target)
+            if m.group(0).strip()
+        )
+    )
+    extra_words = [
+        w
+        for w in re.findall(r"\w+", target)
+        if len(w) >= 2 and w not in _FOCUS_STOPWORDS and w not in label_words
+    ]
+    focus_candidates: List[str] = []
+    # Prefer sub-topic phrases and tokens outside the generic authored label (e.g. 'bayes' in 'Xác suất Bayes').
+    if len(extra_words) >= 2:
+        focus_candidates.append(" ".join(extra_words))
+    for w in extra_words:
+        focus_candidates.append(w)
+    for hit in alias_hits:
+        if hit != normalized(best_label):
+            focus_candidates.append(hit)
+    return best_pair, tuple(dict.fromkeys(c for c in focus_candidates if c))
+
+
 def resolve_topic_hierarchy(value: Any) -> Optional[Dict[str, Any]]:
     """Resolve either a child topic or a parent domain into its hierarchy descriptor."""
     target = normalized(value)

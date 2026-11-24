@@ -7,6 +7,7 @@ import sqlite3
 import struct
 import sys
 import threading
+import unicodedata
 from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Collection, Tuple
@@ -19,6 +20,7 @@ from app.config import (
     RRF_K, DEFAULT_EMBED_MODEL
 )
 from app.text_cleaner import normalize_vietnamese_text, sanitize_for_prompt_context
+from app.bilingual_terms import bilingual_equivalents_for, expand_bilingual_query_terms
 from app.ollama_client import OllamaClient
 from app.indexer import unpack_vector
 from app.topic_router import TopicRouter
@@ -671,18 +673,34 @@ class HybridSearcher:
         document_ids: Optional[Collection[int]] = None,
     ) -> List[Dict[str, Any]]:
         """Perform Full-Text BM25 Search using SQLite FTS5 with heading demotion and document scope."""
-        fts_query = self._clean_fts_query(query)
-        if not fts_query:
+        clean_raw_fts = self._clean_fts_query(query)
+        if not clean_raw_fts:
             return []
-        fts_query = f"text : ({fts_query})"
+        bilingual_phrases = expand_bilingual_query_terms(query, max_terms=4)
+        bilingual_fts_terms: list[str] = []
+        seen_bp_fts: set[str] = set()
+        for bp in bilingual_phrases:
+            clean_bp = re.sub(r'["\'\*\^\:\(\)\[\]\{\}\+\-\~]', ' ', bp).strip()
+            if not clean_bp:
+                continue
+            for norm_bp in (unicodedata.normalize("NFC", clean_bp), unicodedata.normalize("NFD", clean_bp)):
+                if norm_bp and norm_bp not in seen_bp_fts:
+                    seen_bp_fts.add(norm_bp)
+                    bilingual_fts_terms.append(f'"{norm_bp}"')
+        if bilingual_fts_terms:
+            fts_query = f"text : ({clean_raw_fts} OR {' OR '.join(bilingual_fts_terms)})"
+        else:
+            fts_query = f"text : ({clean_raw_fts})"
 
         q_lower = query.lower()
         is_definition_q = any(k in q_lower for k in (
             "là gì", "định nghĩa", "khái niệm", "tính chất", "điều kiện", "nguyên lý",
-            "thế nào", "đặc điểm", "công thức", "lý thuyết", "học thuyết", "bản chất", "ý nghĩa"
+            "thế nào", "đặc điểm", "công thức", "lý thuyết", "học thuyết", "bản chất", "ý nghĩa",
+            "what is", "what are", "define", "definition", "meaning of",
         ))
         scope_tokens = extract_document_scope_tokens(query)
         concept_phrases = extract_query_concepts(query)
+        effective_concepts = list(dict.fromkeys([*concept_phrases, *bilingual_phrases]))
         diff_operands = extract_differential_operands(query)
         diff_fts_phrases = []
         for v_num, v_den, ord_val, coef in diff_operands:
@@ -761,21 +779,27 @@ class HybridSearcher:
                     except Exception:  # nosec B110
                         pass
 
-                # 1. Prioritized exact phrase queries for extracted concepts
-                for cp in concept_phrases:
+                # 1. Prioritized exact phrase queries for extracted concepts & bilingual equivalents
+                for cp in effective_concepts:
                     clean_cp = re.sub(r'["\'\*\^\:\(\)\[\]\{\}\+\-\~]', ' ', cp).strip()
                     if clean_cp:
-                        try:
-                            p_rows = conn.execute(f"""
-                                SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num,
-                                       c.chunk_index, c.text, bm25(chunks_fts) as rank_score
-                                FROM chunks_fts f JOIN chunks c ON f.rowid = c.id
-                                WHERE chunks_fts MATCH ? {doc_filter}
-                                ORDER BY rank_score ASC LIMIT ?
-                            """, (f'text : ("{clean_cp}")', *doc_params, fetch_limit)).fetchall()  # nosec B608
-                            phrase_rows.extend(p_rows)
-                        except Exception:  # nosec B110
-                            pass
+                        variants = (
+                            (unicodedata.normalize("NFC", clean_cp), unicodedata.normalize("NFD", clean_cp))
+                            if any(ord(ch) > 127 for ch in clean_cp)
+                            else (clean_cp,)
+                        )
+                        for var_cp in dict.fromkeys(variants):
+                            try:
+                                p_rows = conn.execute(f"""
+                                    SELECT c.id, c.doc_id, c.book_title, c.filename, c.page_num,
+                                           c.chunk_index, c.text, bm25(chunks_fts) as rank_score
+                                    FROM chunks_fts f JOIN chunks c ON f.rowid = c.id
+                                    WHERE chunks_fts MATCH ? {doc_filter}
+                                    ORDER BY rank_score ASC LIMIT ?
+                                """, (f'text : ("{var_cp}")', *doc_params, fetch_limit)).fetchall()  # nosec B608
+                                phrase_rows.extend(p_rows)
+                            except Exception:  # nosec B110
+                                pass
 
                 # 2. Ordered/conjunctive AND queries for multi-word concepts
                 for cp in concept_phrases:
@@ -877,7 +901,6 @@ class HybridSearcher:
 
                     # Prioritize named document scope using exact ASCII-folded tokens (Đ/đ -> d/D before NFD)
                     if scope_tokens:
-                        import unicodedata
                         def _fold_scope(s: str) -> str:
                             s = (s or "").replace("đ", "d").replace("Đ", "D")
                             return unicodedata.normalize("NFD", s).encode("ascii", "ignore").decode("ascii").lower()
@@ -908,7 +931,7 @@ class HybridSearcher:
                             relevance += doc_cov * 12.0
                     txt_norm = re.sub(r"xạtuyến", "xạ tuyến", txt_lower)
 
-                    locally_attached, has_explanation, is_cat = check_local_definition_and_catalog(txt, concept_phrases)
+                    locally_attached, has_explanation, is_cat = check_local_definition_and_catalog(txt, effective_concepts)
 
                     # Demote TOC chunks across all queries heavily
                     if is_heading_or_toc_chunk(txt):
@@ -966,15 +989,15 @@ class HybridSearcher:
                                 relevance -= 20.0
 
                     # Concept-tied scoring: prioritize exact concept hits and ordered/conjunctive candidates
-                    has_exact_concept = False
-                    if concept_phrases:
-                        for cp in concept_phrases:
-                            if cp.lower() in txt_lower:
-                                has_exact_concept = True
-                                break
+                    has_exact_concept = any(cp.lower() in txt_lower for cp in effective_concepts)
 
                     if len(concept_phrases) >= 2:
-                        matched_concepts = sum(1 for cp in concept_phrases if cp.lower() in txt_lower)
+                        matched_concepts = sum(
+                            1
+                            for cp in concept_phrases
+                            if cp.lower() in txt_lower
+                            or any(eq.lower() in txt_lower for eq in bilingual_equivalents_for(cp))
+                        )
                         if matched_concepts >= 2:
                             relevance += 25.0
                         elif matched_concepts == 1:
@@ -982,8 +1005,8 @@ class HybridSearcher:
                     elif has_exact_concept:
                         relevance += 25.0
 
-                    if not has_exact_concept and concept_phrases:
-                        for cp in concept_phrases:
+                    if not has_exact_concept and effective_concepts:
+                        for cp in effective_concepts:
                             cp_words = [w for w in re.findall(r"\w+", cp.lower()) if w not in STOPWORDS]
                             if len(cp_words) >= 2 and all(w in txt_lower for w in cp_words):
                                 relevance += 10.0

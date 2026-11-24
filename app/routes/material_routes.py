@@ -2,6 +2,7 @@
 
 import base64
 import logging
+import os
 from pathlib import Path
 from typing import Literal, Optional
 from urllib.parse import quote
@@ -9,6 +10,8 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
+
+from app.accounts import account_id
 
 from app.dialogue import DialogueBusyError
 from app.gpu_lock import GPUBusyError
@@ -131,12 +134,21 @@ async def upload_and_generate_materials(req: MaterialUploadRequest):
         quota_check = getattr(_srv.study_material_manager, "check_upload_quota", None)
         if callable(quota_check):
             quota_check(file_bytes)
+        should_persist = bool(req.persist_to_src)
+        extract_sig = getattr(_srv.study_material_manager.extract_document, "__call__", _srv.study_material_manager.extract_document)
+        import inspect as _inspect
+        extract_params = _inspect.signature(_srv.study_material_manager.extract_document).parameters
+        extract_kwargs = {"allow_image_without_text": not req.generate_study_set}
+        if "generate_study_set" in extract_params:
+            extract_kwargs["generate_study_set"] = req.generate_study_set
+            extract_kwargs["quiz_count"] = req.quiz_count
+            extract_kwargs["flashcard_count"] = req.flashcard_count
+            extract_kwargs["persist_to_src"] = should_persist
         extracted = _srv.study_material_manager.extract_document(
             req.filename,
             file_bytes,
-            allow_image_without_text=not req.generate_study_set,
+            **extract_kwargs,
         )
-        should_persist = bool(req.persist_to_src)
         ingestion_info = None
         if should_persist:
             ingestion_info = _srv.study_material_manager.ingest_to_src_and_index(
@@ -173,6 +185,19 @@ async def upload_and_generate_materials(req: MaterialUploadRequest):
             file_bytes,
             material_id=record.get("id"),
         )
+        if int(getattr(extracted, "ocr_truncated_pages", 0) or 0) > 0 and os.environ.get("STUDY_DISABLE_BG_OCR", "") != "1":
+            sched = getattr(_srv.study_material_manager, "schedule_background_full_ocr", None)
+            if callable(sched):
+                try:
+                    sched(
+                        record["id"],
+                        req.filename,
+                        file_bytes,
+                        extracted,
+                        account_scope=account_id.get(),
+                    )
+                except Exception:  # nosec B110
+                    logger.warning("Không thể lên lịch OCR nền cho %s", req.filename, exc_info=True)
         return record
 
     try:

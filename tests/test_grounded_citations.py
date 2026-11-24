@@ -274,3 +274,64 @@ def test_qa_mixed_refusal_and_substantive_claim_stays_answer(monkeypatch, tmp_pa
     )
     assert pure_res["response_kind"] == "insufficient_evidence"  # nosec B101
     assert pure_res["citations"] == []  # nosec B101
+
+
+def test_bilingual_compare_evidence_validators_and_fts_retrieval(tmp_path):
+    from app.bilingual_terms import bilingual_equivalents_for, expand_bilingual_query_terms
+    from app.indexer import KnowledgeIndexer
+    from app.rag_evidence_validator import concept_has_evidence, has_relevant_evidence
+    from app.rag_query_analyzer import extract_compare_concepts
+    from app.searcher import HybridSearcher
+
+    assert extract_compare_concepts("Compare stack and queue") == ("stack", "queue")  # nosec B101
+    assert extract_compare_concepts(
+        "What is the difference between working memory and short-term memory?"
+    ) == ("working memory", "short-term memory")  # nosec B101
+    assert extract_compare_concepts("Distinguish polymorphism and encapsulation") == (
+        "polymorphism",
+        "encapsulation",
+    )  # nosec B101
+
+    stack_queue_chunks = [
+        {"text": "Stack operates LIFO while Queue operates FIFO for sequential elements."}
+    ]
+    assert not weak_keyword_evidence("Compare stack and queue", stack_queue_chunks)  # nosec B101
+    assert has_relevant_evidence("Compare stack and queue", stack_queue_chunks)  # nosec B101
+
+    vi_deriv_chunk = [{"text": "Định nghĩa: Đạo hàm của hàm số f(x) là giới hạn của thương sai phân."}]
+    en_deriv_chunk = [{"text": "The derivative of a differentiable function measures its instantaneous rate of change."}]
+    assert not weak_keyword_evidence("derivative là gì?", vi_deriv_chunk)  # nosec B101
+    assert has_relevant_evidence("derivative là gì?", vi_deriv_chunk)  # nosec B101
+    assert not weak_keyword_evidence("đạo hàm là gì?", en_deriv_chunk)  # nosec B101
+    assert has_relevant_evidence("đạo hàm là gì?", en_deriv_chunk)  # nosec B101
+
+    vi_ll_chunk = [{"text": "Danh sách liên kết lưu các nút nối bằng con trỏ."}]
+    assert concept_has_evidence("linked list", vi_ll_chunk)  # nosec B101
+    assert not concept_has_evidence("binary tree", vi_ll_chunk)  # nosec B101
+    assert "đạo hàm" in bilingual_equivalents_for("derivative")  # nosec B101
+    assert "trí nhớ làm việc" in expand_bilingual_query_terms("What is working memory?")  # nosec B101
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "giai_tich.txt").write_text(
+        "Định nghĩa: Đạo hàm của hàm số tại một điểm là giới hạn của tỷ số gia số.",
+        encoding="utf-8",
+    )
+    (src / "cognition.txt").write_text(
+        "Working memory is an active cognitive system holding temporary information.",
+        encoding="utf-8",
+    )
+    db = tmp_path / "kb_bilingual.db"
+    KnowledgeIndexer(db, src).index_all(embed_model=None)
+    searcher = HybridSearcher(db)
+
+    en_to_vi = searcher.search_fts("What is a derivative?", limit=5)
+    assert any("giai_tich.txt" in item["filename"] for item in en_to_vi)  # nosec B101
+
+    vi_to_en = searcher.search_fts("trí nhớ làm việc là gì?", limit=5)
+    assert any("cognition.txt" in item["filename"] for item in vi_to_en)  # nosec B101
+
+    assert "cân bằng nash" in bilingual_equivalents_for("nash equilibrium")  # nosec B101
+    assert "tìm kiếm nhị phân" in bilingual_equivalents_for("binary search")  # nosec B101
+    assert "phân phối chuẩn" in bilingual_equivalents_for("normal distribution")  # nosec B101
+    assert "tìm kiếm nhị phân" in expand_bilingual_query_terms("binary search là gì?")  # nosec B101

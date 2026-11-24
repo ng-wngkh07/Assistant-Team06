@@ -2222,3 +2222,893 @@ def test_private_upload_easy_cloze_parity_with_compact_review_and_timeout_503(tm
             )
     finally:
         account_id.reset(tok)
+
+
+def test_library_docx_medium_study_set_uses_proof_lane_and_grounded_flashcards(client, monkeypatch):
+    import json as _json
+    import shutil
+    import app.config as cfg
+    import app.server as _srv
+    import app.token_counter as tkc
+    from app.ollama_client import OllamaClient
+    from app.practice_proof import verify_proof_backed_medium_question
+
+    monkeypatch.setattr(
+        tkc,
+        "get_exact_token_counter",
+        lambda *args: lambda messages: sum(len(m["content"]) // 3 for m in messages),
+    )
+
+    fixture_path = Path(__file__).parent / "fixtures" / "documents" / "On_Tap_Hoa_Hoc_12.docx"
+    shutil.copy2(fixture_path, cfg.SRC_DIR / "On_Tap_Hoa_Hoc_12.docx")
+
+    seen_prompts = []
+
+    class FlashcardOnlyClient:
+        last_done_reason = "stop"
+
+        def check_health(self):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            self.last_done_reason = "stop"
+            prompt = messages[0]["content"]
+            seen_prompts.append(prompt)
+            if "Kiểm định độc lập từng câu" in prompt:
+                raise AssertionError("Redundant semantic quiz review should be skipped when proof lane delivers full count")
+            if "flashcards" not in prompt.lower():
+                raise AssertionError("Redundant LLM quiz proposal should be skipped when proof lane delivers full count")
+            if "Xác suất Bayes" in prompt:
+                import re as _re
+                m_ev = _re.search(r'evidence_id="(Q\d+)">[^<]*Mẫu số P\(B\) phải dương', prompt)
+                ev_id = m_ev.group(1) if m_ev else "Q1"
+                return _json.dumps(
+                    {"flashcards": [{"answer": "Mẫu số P(B) phải dương", "evidence_id": ev_id}]},
+                    ensure_ascii=False,
+                )
+            return _json.dumps(
+                {
+                    "flashcards": [
+                        {"answer": "RCOOR' + NaOH → RCOONa + R'OH", "evidence_id": "Q1"},
+                        {"answer": "3RCOONa + C₃H₅(OH)₃", "evidence_id": "Q1"},
+                        {"answer": "2,4,6-tribromoaniline", "evidence_id": "Q2"},
+                        {"answer": "H₃N⁺-R-COO⁻", "evidence_id": "Q2"},
+                        {"answer": "Tơ nilon-6,6, Tơ lapsan, Nhựa phenol-formaldehyde", "evidence_id": "Q3"},
+                    ]
+                },
+                ensure_ascii=False,
+            )
+
+    monkeypatch.setattr(_srv, "DEFAULT_CHAT_MODEL", "test-ollama")
+    monkeypatch.setattr(OllamaClient, "check_health", lambda self: True)
+    monkeypatch.setattr(OllamaClient, "chat_complete", FlashcardOnlyClient.chat_complete)
+
+    res = client.post(
+        "/api/materials/generate-from-library",
+        json={
+            "filename": "On_Tap_Hoa_Hoc_12.docx",
+            "quiz_count": 3,
+            "flashcard_count": 5,
+            "difficulty": "medium",
+        },
+    )
+    assert res.status_code == 200, res.text  # nosec B101
+    mat = res.json()["material"]
+    assert mat["difficulty"] == "medium"  # nosec B101
+    assert mat["requested_quiz_count"] == 3  # nosec B101
+    assert mat["actual_quiz_count"] == 3  # nosec B101
+    assert mat["requested_flashcard_count"] == 5  # nosec B101
+    assert mat["actual_flashcard_count"] == 5  # nosec B101
+    assert mat["complete"] is True  # nosec B101
+    assert mat["warning"] is None  # nosec B101
+    assert mat["answers_verified"] is True  # nosec B101
+    assert mat["generation"] == {"quiz": "source_proof", "flashcards": "model"}  # nosec B101
+    assert mat["source_validation"] == "verbatim_quote"  # nosec B101
+    assert len(seen_prompts) == 1  # nosec B101  # Only the flashcard generation prompt was sent
+
+    page_map = {p["page_num"]: p["text"] for p in mat["pages"]}
+    quotes = []
+    for q in mat["quiz"]:
+        assert q["difficulty"] == "medium"  # nosec B101
+        assert q["answer_verified"] is True  # nosec B101
+        assert q["generation"] == "source_proof"  # nosec B101
+        assert q["answer"] in {"A", "B", "C", "D"}  # nosec B101
+        assert q["correct_answer"] == q["answer"]  # nosec B101
+        assert len(q["choices"]) == 4  # nosec B101
+        assert [c["label"] for c in q["choices"]] == ["A", "B", "C", "D"]  # nosec B101
+        assert len({c["text"] for c in q["choices"]}) == 4  # nosec B101
+        assert 20 <= len(q["evidence_quote"]) <= 240  # nosec B101
+        assert verify_proof_backed_medium_question(q, page_map[q["page_num"]], context_passages=mat["pages"]) is True  # nosec B101
+        quotes.append(q["evidence_quote"])
+    assert len(set(quotes)) == 3  # nosec B101
+    assert len({q["page_num"] for q in mat["quiz"]}) == 3  # nosec B101
+    assert any("(RCOO)₃C₃H₅ + 3NaOH" in q["evidence_quote"] for q in mat["quiz"])  # nosec B101
+    assert any("Phản ứng Biuret" in q["evidence_quote"] for q in mat["quiz"])  # nosec B101
+    rank_q = next(q for q in mat["quiz"] if "Dẫn điện tốt nhất" in q["evidence_quote"])
+    assert all(c["text"] in {"Mẫu Z > Mẫu X > Mẫu Y", "Mẫu X > Mẫu Z > Mẫu Y", "Mẫu Y > Mẫu X > Mẫu Z", "Mẫu Z > Mẫu Y > Mẫu X"} for c in rank_q["choices"])  # nosec B101
+    for c in rank_q["choices"]:
+        assert all(metal not in c["text"] for metal in ("Ag", "Cu", "Au", "Al", "Fe"))  # nosec B101
+    for card in mat["flashcards"]:
+        assert "[…]" in card["front"]  # nosec B101
+        assert card["back"] not in card["front"]  # nosec B101
+        assert card["evidence_quote"] in page_map[card["page_num"]]  # nosec B101
+
+    # Verify stored study set retrieval & PDF export contract work on the returned material_id
+    fetched = client.get(f"/api/materials/{mat['id']}")
+    assert fetched.status_code == 200  # nosec B101
+    assert fetched.json()["actual_quiz_count"] == 3  # nosec B101
+    assert fetched.json()["answers_verified"] is True  # nosec B101
+    pdf_res = client.post(
+        "/api/learning/export-pdf",
+        json={"topic": mat["filename"], "difficulty": "medium", "material_id": mat["id"]},
+    )
+    assert pdf_res.status_code == 200  # nosec B101
+    assert pdf_res.content.startswith(b"%PDF-")  # nosec B101
+
+    # Verify extended_probability.md library generation also uses Bayes source_proof fast-path without quiz LLM calls
+    ext_prob_path = Path(__file__).parent / "fixtures" / "documents" / "extended_probability.md"
+    shutil.copy2(ext_prob_path, cfg.SRC_DIR / "extended_probability.md")
+    seen_prompts.clear()
+    res_prob = client.post(
+        "/api/materials/generate-from-library",
+        json={"filename": "extended_probability.md", "quiz_count": 1, "flashcard_count": 1, "difficulty": "medium"},
+    )
+    assert res_prob.status_code == 200, res_prob.text  # nosec B101
+    prob_mat = res_prob.json()["material"]
+    assert prob_mat["actual_quiz_count"] == 1  # nosec B101
+    assert prob_mat["answers_verified"] is True  # nosec B101
+    assert prob_mat["generation"] == {"quiz": "source_proof", "flashcards": "model"}  # nosec B101
+    assert len(seen_prompts) == 1  # nosec B101
+
+    # Grounded flashcards remain independent: empty model flashcards trigger flashcard fallback without dropping proven quiz
+    monkeypatch.setattr(OllamaClient, "chat_complete", lambda self, *a, **kw: (setattr(self, "last_done_reason", "stop"), '{"flashcards": []}')[1])
+    res_fc_fallback = client.post(
+        "/api/materials/generate-from-library",
+        json={"filename": "On_Tap_Hoa_Hoc_12.docx", "quiz_count": 3, "flashcard_count": 5, "difficulty": "medium"},
+    )
+    assert res_fc_fallback.status_code == 200  # nosec B101
+    mat_fb = res_fc_fallback.json()["material"]
+    assert mat_fb["actual_quiz_count"] == 3  # nosec B101
+    assert mat_fb["answers_verified"] is True  # nosec B101
+    assert mat_fb["generation"] == {"quiz": "source_proof", "flashcards": "extractive_fallback"}  # nosec B101
+    assert "model" not in mat_fb  # nosec B101
+    assert mat_fb["actual_flashcard_count"] == 5  # nosec B101
+
+    # Easy difficulty must NOT bypass through the medium proof lane
+    easy_prompts = []
+
+    def easy_chat(self, messages, **kwargs):
+        self.last_done_reason = "stop"
+        easy_prompts.append(messages[0]["content"])
+        return _json.dumps({"questions": [], "flashcards": []})
+
+    monkeypatch.setattr(OllamaClient, "chat_complete", easy_chat)
+    res_easy = client.post(
+        "/api/materials/generate-from-library",
+        json={"filename": "On_Tap_Hoa_Hoc_12.docx", "quiz_count": 2, "flashcard_count": 2, "difficulty": "easy"},
+    )
+    assert res_easy.status_code == 200  # nosec B101
+    assert res_easy.json()["material"]["quiz"] == []  # nosec B101
+    assert any("source_cloze" in p for p in easy_prompts)  # nosec B101
+
+
+def test_cloze_heading_ignore_overlap_dedup_missing_repair_and_prompt_trims(monkeypatch):
+    import json as _json
+    from app.ollama_client import OllamaClient
+    import app.study_materials as sm
+    from app.practice_proof import native_grounded_review_prompt
+    from app.quiz_generator import build_quiz_prompt
+
+    # 1. Markdown heading occurrence does not force body match into repeated_answer rejection
+    quote = "# Este (CₙH₂ₙO₂)\nEste no, đơn chức, mạch hở có công thức phân tử CₙH₂ₙO₂ (n ≥ 2)."
+    matches = sm._find_bounded_span_matches(quote, "CₙH₂ₙO₂")
+    assert len(matches) == 1  # nosec B101
+
+    # 2. Concise word budget hint on medium/hard quiz prompt
+    medium_prompt = build_quiz_prompt([{"page_num": 1, "text": "Nội dung kiểm thử dài vừa đủ để tạo câu hỏi."}], count=1, difficulty="medium")
+    assert "Question tối đa 40 từ" in medium_prompt  # nosec B101
+
+    # 3. Duplicate long evidence_quote == source is omitted in native_grounded_review_prompt
+    long_src = "Nội dung giải thích dài hơn sáu trăm ký tự để kiểm tra lọc trường trùng lặp. " * 10
+    review_prompt = native_grounded_review_prompt([
+        {
+            "index": 1,
+            "question": "Câu hỏi kiểm thử?",
+            "choices": {"A": "1", "B": "2", "C": "3", "D": "4"},
+            "source": long_src,
+            "evidence_quote": long_src,
+            "explanation": "Giải thích.",
+        }
+    ], difficulty="medium")
+    payload = _json.loads(review_prompt.split("Dữ liệu cần kiểm định:\n", 1)[1])
+    assert "evidence_quote" not in payload[0]  # nosec B101
+
+    # 4. Overlapping cloze spans on same page deduped + missing-only repair on MLX
+    import app.trained_client as tc
+    import app.token_counter as token_counter
+    monkeypatch.setattr(token_counter, "get_exact_token_counter",
+                        lambda: lambda msgs: sum(len(m["content"]) for m in msgs))
+
+    page_text = (
+        "# Chương 1 (CₙH₂ₙO₂)\n"
+        "Este no, đơn chức, mạch hở có công thức phân tử CₙH₂ₙO₂ (n ≥ 2) theo tài liệu chuẩn hóa.\n"
+        "Phản ứng thủy phân este trong môi trường kiềm gọi là phản ứng xà phòng hóa hoàn toàn."
+    )
+    calls = []
+
+    class FakeMLX:
+        last_done_reason = "stop"
+
+        @staticmethod
+        def available():
+            return True
+
+        def chat_complete(self, **kwargs):
+            calls.append(kwargs)
+            idx = len(calls)
+            if idx == 1:
+                # Overlapping CₙH₂ₙO₂ and CₙH₂ₙO₂ (n ≥ 2) on same page 1: second must be dropped
+                return _json.dumps({
+                    "questions": [
+                        {
+                            "format": "source_cloze",
+                            "evidence_id": "Q1",
+                            "answer": "CₙH₂ₙO₂",
+                            "distractors": ["CₙH₂ₙO", "CₙH₂ₙ₊₂O₂", "CₙH₂ₙ₋₂O₂"],
+                        },
+                        {
+                            "format": "source_cloze",
+                            "evidence_id": "Q1",
+                            "answer": "CₙH₂ₙO₂ (n ≥ 2)",
+                            "distractors": ["CₙH₂ₙO (n ≥ 1)", "CₙH₂ₙ₊₂O₂ (n ≥ 2)", "CₙH₂ₙ₋₂O (n ≥ 3)"],
+                        },
+                    ],
+                    "flashcards": [
+                        {"evidence_id": "Q1", "front": "Phản ứng kiềm hóa este?", "back": "xà phòng hóa"}
+                    ],
+                })
+            if idx == 2:
+                # Repair must request ONLY missing_quiz=1, not full 2
+                schema_max = kwargs.get("response_schema", {}).get("properties", {}).get("questions", {}).get("maxItems")
+                assert schema_max == 1, f"Expected missing_quiz=1, got {schema_max}"  # nosec B101
+                return _json.dumps({
+                    "questions": [
+                        {
+                            "format": "source_cloze",
+                            "evidence_id": "Q1",
+                            "answer": "xà phòng hóa",
+                            "distractors": ["trùng hợp", "este hóa", "hiđro hóa"],
+                        }
+                    ]
+                })
+            if "Dữ liệu cần kiểm định:\n" in kwargs["messages"][0]["content"]:
+                review_items = _json.loads(
+                    kwargs["messages"][0]["content"].split("Dữ liệu cần kiểm định:\n", 1)[1]
+                )
+                checks = []
+                for item in review_items:
+                    ch = item.get("choices", {})
+                    ans_lbl = next(
+                        (k for k, v in ch.items() if v in {"CₙH₂ₙO₂", "xà phòng hóa"}),
+                        "A",
+                    )
+                    checks.append({
+                        "index": item["index"],
+                        "source_basis": page_text,
+                        "matching_choices": ans_lbl,
+                        "input_audit": "Đủ dữ kiện.",
+                        "independent_solution": "Khớp từ khóa nguồn.",
+                        "choice_comparison": "Duy nhất đáp án đúng.",
+                        "explanation_audit": "Đúng nguồn.",
+                        "supported": True,
+                        "explanation_supported": True,
+                        "unique_answer": True,
+                        "qualifiers_preserved": True,
+                        "difficulty_matches": True,
+                        "verified_answer": ans_lbl,
+                    })
+                return _json.dumps({"checks": checks})
+            return _json.dumps({"questions": []})
+
+    from types import SimpleNamespace
+    monkeypatch.setattr(tc, "TrainedModelClient", FakeMLX)
+    result = sm.StudyMaterialManager(OllamaClient()).generate_materials_from_pages(
+        SimpleNamespace(
+            extracted_pages=[{"page_num": 1, "text": page_text}],
+            filename="test_cloze.md",
+            clean_title="test_cloze",
+            total_pages=1,
+            total_chars=len(page_text),
+            is_scanned_like=False,
+        ),
+        model="qwen3.5-9b-4bit",
+        difficulty="easy",
+        quiz_count=2,
+        flashcard_count=1,
+    )
+    assert len(result["quiz"]) == 2  # nosec B101
+    assert len(calls) == 3  # nosec B101
+
+
+def test_upload_fast_print_ocr_uses_tesseract_without_gpu_lock_and_falls_back_on_handwriting(tmp_path, monkeypatch):
+    import io
+    import pymupdf
+    from PIL import Image, ImageDraw
+    import app.pdf_extractor as pe
+    import app.vision_ocr as vo
+    from app.study_materials import StudyMaterialManager
+
+    # 1. Multi-page image-only scanned PDF: fast print OCR runs Tesseract without GPU lock and truncates after target pages
+    doc = pymupdf.open()
+    for page_idx in range(1, 7):
+        page = doc.new_page(width=595, height=400)
+        img = Image.new("RGB", (595, 400), "white")
+        draw = ImageDraw.Draw(img)
+        draw.text((24, 40), f"Page {page_idx} study material printed sample", fill="black")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        page.insert_image(page.rect, stream=buf.getvalue())
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    gpu_locks = []
+
+    class ForbiddenGpuLock:
+        def __enter__(self):
+            gpu_locks.append("entered")
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    backends_called = []
+
+    def fake_ocr_available(cls, backend="tesseract"):
+        return backend in (vo.BACKEND_TESSERACT, vo.BACKEND_OLLAMA_VISION)
+
+    def fake_ocr_bytes(self, image_bytes, source_hash, source_relpath, page_num, is_handwriting_suspected=False, **kwargs):
+        backends_called.append((self.backend, page_num, is_handwriting_suspected))
+        if self.backend == vo.BACKEND_TESSERACT:
+            if is_handwriting_suspected:
+                raise AssertionError("Handwriting upload must bypass Tesseract and use VLM")
+            with vo._acquire_inference_lock() if False else ForbiddenGpuLock() if False else _nullctx():
+                pass
+            text = (
+                f"Trang {page_idx_text(page_num)}: Định luật bảo toàn năng lượng khẳng định năng lượng "
+                "không tự sinh ra và không tự mất đi mà chỉ chuyển hóa từ dạng này sang dạng khác "
+                "trong hệ cô lập hoàn toàn khi không có ngoại lực sinh công."
+            )
+            return {
+                "cache_key": "0" * 64,
+                "backend": vo.BACKEND_TESSERACT,
+                "ocr_type": "print_only",
+                "text": text,
+                "needs_review": True,
+                "is_verified": False,
+            }
+        with vo._acquire_inference_lock():
+            return {
+                "cache_key": "1" * 64,
+                "backend": vo.BACKEND_OLLAMA_VISION,
+                "ocr_type": "vision_llm",
+                "text": "Ghi chú viết tay: Thuật toán sắp xếp nổi bọt so sánh từng cặp phần tử kề nhau và hoán đổi.",
+                "needs_review": True,
+                "is_verified": False,
+            }
+
+    from contextlib import nullcontext as _nullctx
+    monkeypatch.setattr(vo, "_acquire_inference_lock", lambda **kw: ForbiddenGpuLock())
+    monkeypatch.setattr(vo.VisionOCRManager, "ocr_available", classmethod(fake_ocr_available))
+    monkeypatch.setattr(vo.VisionOCRManager, "_ocr_tesseract", lambda self, b: "Bản in Tesseract đủ dài " * 12)
+    monkeypatch.setattr(pe.PDFExtractor, "ocr_available", staticmethod(lambda: True))
+    # Exercise real VisionOCRManager.ocr_image_bytes locking branch directly
+    real_png_buf = io.BytesIO()
+    Image.new("RGB", (120, 40), "white").save(real_png_buf, format="PNG")
+    # Put a non-uniform pixel so blank-image short-circuit does not skip OCR execution
+    img_nonblank = Image.new("RGB", (120, 40), "white")
+    ImageDraw.Draw(img_nonblank).text((10, 10), "ABC", fill="black")
+    real_png_buf = io.BytesIO()
+    img_nonblank.save(real_png_buf, format="PNG")
+    tess_mgr = vo.VisionOCRManager(backend=vo.BACKEND_TESSERACT, cache_dir=tmp_path / "ocr1")
+    tess_res = tess_mgr.ocr_image_bytes(real_png_buf.getvalue(), "a" * 64, "sample.pdf", 1)
+    assert tess_res["backend"] == vo.BACKEND_TESSERACT
+    assert gpu_locks == []
+
+    monkeypatch.setattr(vo.VisionOCRManager, "ocr_image_bytes", fake_ocr_bytes)
+    mgr = StudyMaterialManager()
+    extracted = mgr.extract_document(
+        "printed_scan.pdf",
+        pdf_bytes,
+        generate_study_set=True,
+        quiz_count=1,
+        flashcard_count=1,
+        persist_to_src=False,
+    )
+    assert extracted.ocr_pages == 3  # target_pages = min(8, max(3, 1 + 2)) == 3
+    assert extracted.ocr_truncated_pages == 3
+    assert all(b == vo.BACKEND_TESSERACT for b, _, _ in backends_called)
+    assert gpu_locks == []
+
+    # 2. Handwriting image upload skips Tesseract and acquires VLM/GPU lock
+    backends_called.clear()
+    png_buf = io.BytesIO()
+    Image.new("RGB", (200, 100), "white").save(png_buf, format="PNG")
+    hw_extracted = mgr.extract_document(
+        "viet_tay_sap_xep.png",
+        png_buf.getvalue(),
+        generate_study_set=True,
+        persist_to_src=False,
+    )
+    assert backends_called == [(vo.BACKEND_OLLAMA_VISION, 1, True)]
+    assert len(gpu_locks) == 1
+    assert "nổi bọt" in hw_extracted.extracted_pages[0]["text"]
+
+
+def page_idx_text(n: int) -> int:
+    return n
+
+
+def test_parallel_tesseract_ocr_preserves_page_order_and_relpath_handwriting(tmp_path, monkeypatch):
+    import io
+    import threading
+    import pymupdf
+    from PIL import Image, ImageDraw
+    import app.pdf_extractor as pe
+    import app.vision_ocr as vo
+
+    # Build a 4-page scanned image-only PDF
+    doc = pymupdf.open()
+    for idx in range(1, 5):
+        page = doc.new_page(width=400, height=200)
+        img = Image.new("RGB", (360, 140), "white")
+        ImageDraw.Draw(img).text((12, 20), f"Scanned page {idx}", fill="black")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        page.insert_image(page.rect, stream=buf.getvalue())
+    pdf_path = tmp_path / "temp_sanitized_uuid.pdf"
+    doc.save(str(pdf_path))
+    doc.close()
+
+    thread_names = set()
+    active_lock = threading.Lock()
+    barrier = threading.Barrier(2, timeout=2.0)
+    saw_parallel = False
+
+    def parallel_ocr(self, **kwargs):
+        nonlocal saw_parallel
+        p = int(kwargs["page_num"])
+        with active_lock:
+            thread_names.add(threading.current_thread().name)
+        if kwargs.get("source_relpath") == "printed_parallel.pdf" and p in (1, 2):
+            try:
+                barrier.wait()
+                saw_parallel = True
+            except threading.BrokenBarrierError:
+                pass
+        return {
+            "cache_key": str(p) * 64,
+            "backend": self.backend,
+            "ocr_type": "print_only_tesseract" if self.backend == vo.BACKEND_TESSERACT else "vision_llm",
+            "text": f"Trang {p}: Nội dung lý thuyết dài đầy đủ thông tin để vượt ngưỡng tối thiểu kiểm tra OCR song song.",
+            "needs_review": False,
+            "handwriting_suspected": bool(kwargs.get("is_handwriting_suspected")),
+        }
+
+    monkeypatch.setattr(vo.VisionOCRManager, "ocr_available", classmethod(lambda cls, b=vo.BACKEND_TESSERACT: True))
+    monkeypatch.setattr(pe.PDFExtractor, "ocr_available", staticmethod(lambda: True))
+    monkeypatch.setattr(vo.VisionOCRManager, "ocr_image_bytes", parallel_ocr)
+
+    res = pe.PDFExtractor.extract_pdf(
+        pdf_path,
+        ocr=True,
+        fast_print_ocr=True,
+        rel_path="printed_parallel.pdf",
+    )
+    assert res.total_pages == 4
+    assert [p["page_num"] for p in res.extracted_pages] == [1, 2, 3, 4]
+    assert saw_parallel is True
+    assert len(thread_names) >= 2
+    assert res.handwriting_suspected is False
+
+    # Passing rel_path with Vietnamese handwriting cue must flag handwriting even when temp filename is sanitized
+    hw_res = pe.PDFExtractor.extract_pdf(
+        pdf_path,
+        ocr=True,
+        fast_print_ocr=True,
+        max_pages=1,
+        rel_path="sắp xếp ghi chú.pdf",
+    )
+    assert hw_res.handwriting_suspected is True
+
+
+def test_extract_document_sha256_cache_and_scanned_retry_relpath(tmp_path, monkeypatch):
+    import pymupdf
+    import app.pdf_extractor as pe
+
+    doc = pymupdf.open()
+    for idx in range(2):
+        doc.new_page(width=300, height=200)
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    extract_calls = []
+
+    def fake_extract_file(filepath, ocr=False, force_ocr=False, rel_path=None, **kwargs):
+        extract_calls.append((ocr, kwargs.get("fast_print_ocr", False), rel_path))
+        res = pe.PDFExtractionResult(filename=rel_path or Path(filepath).name, filepath=Path(filepath))
+        res.total_pages = 2
+        if not ocr:
+            # First pass has no digital text -> triggers bounded OCR retry
+            res.total_chars = 0
+            res.extracted_pages = [{"page_num": 1, "text": "", "char_count": 0, "has_text": False}]
+            return res
+        text = "Nội dung OCR đầy đủ phục vụ kiểm tra bộ nhớ đệm SHA-256 và đường dẫn tương đối rel_path cho tài liệu quét."
+        res.total_chars = len(text)
+        res.ocr_pages = 1
+        res.extracted_pages = [{"page_num": 1, "text": text, "char_count": len(text), "has_text": True}]
+        return res
+
+    monkeypatch.setattr(pe.PDFExtractor, "ocr_available", staticmethod(lambda: True))
+    monkeypatch.setattr(pe.PDFExtractor, "extract_file", classmethod(lambda cls, *a, **k: fake_extract_file(*a, **k)))
+
+    mgr = StudyMaterialManager()
+    r1 = mgr.extract_document(
+        "sắp xếp scan.pdf",
+        pdf_bytes,
+        generate_study_set=True,
+        quiz_count=2,
+        flashcard_count=2,
+        persist_to_src=False,
+    )
+    assert len(extract_calls) == 2
+    assert extract_calls[1][0] is True and extract_calls[1][1] is True
+    assert extract_calls[1][2] == "sắp xếp scan.pdf"
+
+    # Identical bytes & extraction parameters hit SHA-256 cache with zero additional extract_file calls
+    r2 = mgr.extract_document(
+        "sắp xếp scan.pdf",
+        pdf_bytes,
+        generate_study_set=True,
+        quiz_count=2,
+        flashcard_count=2,
+        persist_to_src=False,
+    )
+    assert r2 is not r1
+    assert r2.extracted_pages == r1.extracted_pages
+    assert len(extract_calls) == 2
+
+    # Different quiz_count changes bounded page target and triggers a cache miss
+    mgr.extract_document(
+        "sắp xếp scan.pdf",
+        pdf_bytes,
+        generate_study_set=True,
+        quiz_count=4,
+        flashcard_count=2,
+        persist_to_src=False,
+    )
+    assert len(extract_calls) == 4
+
+
+def test_schedule_background_full_ocr_upgrades_cache_and_material(monkeypatch):
+    import pymupdf
+    import app.pdf_extractor as pe
+
+    doc = pymupdf.open()
+    for _ in range(8):
+        doc.new_page(width=300, height=200)
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    ocr_modes = []
+
+    def fake_extract_file(filepath, ocr=False, force_ocr=False, rel_path=None, **kwargs):
+        res = pe.PDFExtractionResult(filename=rel_path or Path(filepath).name, filepath=Path(filepath))
+        res.total_pages = 8
+        if not ocr:
+            res.total_chars = 0
+            res.extracted_pages = [{"page_num": 1, "text": "", "char_count": 0, "has_text": False}]
+            return res
+        ocr_modes.append(bool(kwargs.get("fast_print_ocr", False)))
+        if kwargs.get("ocr_max_pages"):
+            # Initial fast truncated OCR: pages 1..4
+            pages = [
+                {
+                    "page_num": i,
+                    "text": f"Trang {i}: Nội dung OCR phần đầu đủ dài để phục vụ tạo học liệu tức thì.",
+                    "char_count": 78,
+                    "has_text": True,
+                }
+                for i in range(1, 5)
+            ]
+            res.ocr_pages = 4
+            res.ocr_truncated_pages = 4
+        else:
+            # Background full OCR: all 8 pages
+            pages = [
+                {
+                    "page_num": i,
+                    "text": f"Trang {i}: Nội dung OCR toàn bộ đầy đủ chi tiết cho trang {i} sau nền.",
+                    "char_count": 76,
+                    "has_text": True,
+                }
+                for i in range(1, 9)
+            ]
+            res.ocr_pages = 8
+            res.ocr_truncated_pages = 0
+        res.extracted_pages = pages
+        res.total_chars = sum(p["char_count"] for p in pages)
+        return res
+
+    monkeypatch.setattr(pe.PDFExtractor, "ocr_available", staticmethod(lambda: True))
+    monkeypatch.setattr(pe.PDFExtractor, "extract_file", classmethod(lambda cls, *a, **k: fake_extract_file(*a, **k)))
+
+    mgr = StudyMaterialManager()
+    initial = mgr.extract_document(
+        "scan_8p.pdf",
+        pdf_bytes,
+        generate_study_set=True,
+        quiz_count=2,
+        flashcard_count=2,
+        persist_to_src=False,
+    )
+    assert initial.ocr_truncated_pages == 4
+    mat_id = "mat-bg-1"
+    mgr._materials[mat_id] = {
+        "id": mat_id,
+        "filename": "scan_8p.pdf",
+        "total_pages": 8,
+        "total_chars": initial.total_chars,
+        "pages": [{"page_num": p["page_num"], "text": p["text"]} for p in initial.extracted_pages],
+    }
+
+    assert mgr.schedule_background_full_ocr(mat_id, "scan_8p.pdf", pdf_bytes, initial) is True
+    # Concurrent same-hash scheduling may deduplicate while in-flight before worker clears _bg_ocr_inflight
+    mgr.wait_background_ocr(timeout=5.0)
+
+    updated = mgr.get_material(mat_id)
+    assert updated["ocr_background_complete"] is True
+    assert updated["ocr_truncated_pages"] == 0
+    assert len(updated["pages"]) == 8
+    assert ocr_modes == [True, True]
+
+    # Repeated upload with same generate_study_set params now receives all 8 pages from upgraded cache
+    modes_before = len(ocr_modes)
+    upgraded_hit = mgr.extract_document(
+        "scan_8p.pdf",
+        pdf_bytes,
+        generate_study_set=True,
+        quiz_count=2,
+        flashcard_count=2,
+        persist_to_src=False,
+    )
+    assert len(upgraded_hit.extracted_pages) == 8
+    assert upgraded_hit.ocr_truncated_pages == 0
+    assert len(ocr_modes) == modes_before
+
+
+def test_study_material_easy_cloze_repairs_span_mismatch_and_refills_after_review_drop(monkeypatch):
+    import json as _json
+    from types import SimpleNamespace
+    import app.study_materials as sm
+    import app.trained_client as tc
+
+    page_text = (
+        "Este no đơn chức mạch hở có công thức chung là CₙH₂ₙO₂ với n ≥ 2. "
+        "Phản ứng thủy phân este trong môi trường kiềm được gọi là xà phòng hóa. "
+        "Chất béo là trieste của glixerol với axit béo bậc cao không phân nhánh."
+    )
+    calls = []
+
+    class FakeEasyRefillMLX:
+        last_done_reason = "stop"
+
+        @staticmethod
+        def available():
+            return True
+
+        def chat_complete(self, **kwargs):
+            prompt = kwargs["messages"][0]["content"]
+            calls.append(prompt)
+            if "Dữ liệu cần kiểm định:\n" in prompt:
+                items = _json.loads(prompt.split("Dữ liệu cần kiểm định:\n", 1)[1])
+                checks = []
+                for it in items:
+                    ch_vals = it.get("choices", {})
+                    is_bad = "glixerol" in ch_vals.values()
+                    ans_lbl = next(
+                        (k for k, v in ch_vals.items() if v in {"CₙH₂ₙO₂", "xà phòng hóa"}),
+                        "A",
+                    )
+                    checks.append({
+                        "index": it["index"],
+                        "source_basis": page_text if not is_bad else "",
+                        "matching_choices": ans_lbl if not is_bad else "",
+                        "input_audit": "Đủ dữ kiện.",
+                        "independent_solution": "Khớp nguồn." if not is_bad else "Không đủ căn cứ.",
+                        "choice_comparison": "Duy nhất." if not is_bad else "Sai.",
+                        "explanation_audit": "Đúng." if not is_bad else "Sai.",
+                        "supported": not is_bad,
+                        "explanation_supported": not is_bad,
+                        "unique_answer": not is_bad,
+                        "qualifiers_preserved": True,
+                        "difficulty_matches": not is_bad,
+                        "verified_answer": ans_lbl if not is_bad else "",
+                    })
+                return _json.dumps({"checks": checks}, ensure_ascii=False)
+
+            gen_idx = sum(1 for p in calls if "Dữ liệu cần kiểm định:\n" not in p)
+            if gen_idx == 1:
+                # 1 non-verbatim span triggers repair, plus 1 clean item
+                return _json.dumps({
+                    "questions": [
+                        {
+                            "format": "source_cloze",
+                            "evidence_id": "Q1",
+                            "answer": "cụm không tồn tại",
+                            "distractors": ["sai một", "sai hai", "sai ba"],
+                        },
+                        {
+                            "format": "source_cloze",
+                            "evidence_id": "Q1",
+                            "answer": "CₙH₂ₙO₂",
+                            "distractors": ["CₙH₂ₙO", "CₙH₂ₙ₊₂O₂", "CₙH₂ₙ₋₂O₂"],
+                        },
+                    ],
+                    "flashcards": [
+                        {"evidence_id": "Q1", "front": "Thủy phân este kiềm?", "back": "xà phòng hóa"}
+                    ],
+                }, ensure_ascii=False)
+            if gen_idx == 2:
+                # Attempt-1 repair returns an item that passes normalize but is rejected by review ("glixerol")
+                assert "nguyên văn" in prompt.casefold()
+                return _json.dumps({
+                    "questions": [{
+                        "format": "source_cloze",
+                        "evidence_id": "Q1",
+                        "answer": "glixerol",
+                        "distractors": ["etanol", "metanol", "propenol"],
+                    }]
+                }, ensure_ascii=False)
+            # Post-review refill returns missing 1 valid item ("xà phòng hóa")
+            schema_max = kwargs.get("response_schema", {}).get("properties", {}).get("questions", {}).get("maxItems")
+            assert schema_max == 1
+            return _json.dumps({
+                "questions": [{
+                    "format": "source_cloze",
+                    "evidence_id": "Q1",
+                    "answer": "xà phòng hóa",
+                    "distractors": ["este hóa", "trùng hợp", "hiđro hóa"],
+                }]
+            }, ensure_ascii=False)
+
+    from app.ollama_client import OllamaClient
+
+    monkeypatch.setattr(tc, "TrainedModelClient", FakeEasyRefillMLX)
+    result = sm.StudyMaterialManager(OllamaClient()).generate_materials_from_pages(
+        SimpleNamespace(
+            extracted_pages=[{"page_num": 1, "text": page_text}],
+            filename="hoa_hoc_12.docx",
+            clean_title="Ôn tập Hóa học 12",
+            total_pages=1,
+            total_chars=len(page_text),
+            is_scanned_like=False,
+        ),
+        model="qwen3.5-9b-4bit",
+        difficulty="easy",
+        quiz_count=2,
+        flashcard_count=1,
+    )
+    assert len(result["quiz"]) == 2
+
+
+def test_study_material_medium_balances_choices_and_hard_refills_uncovered_pages(monkeypatch):
+    import json as _json
+    from types import SimpleNamespace
+    import app.study_materials as sm
+    import app.model_resolver as resolver
+    import app.trained_client as tc
+
+    monkeypatch.setattr(resolver, "is_mlx_model", lambda _m: True)
+    page1 = (
+        "Phản ứng xà phòng hóa chất béo:\n"
+        "(RCOO)₃C₃H₅ + 3NaOH → 3RCOONa + C₃H₅(OH)₃.\n"
+        "Khi đun chất béo lỏng chưa no với H₂ xúc tác Ni thu được chất béo rắn."
+    )
+    page2 = (
+        "Phản ứng Biuret: Peptide có từ 2 liên kết peptide trở lên (tripeptide trở lên) tác dụng Cu(OH)₂/NaOH cho màu tím. "
+        "Dẫn điện tốt nhất: Ag > Cu > Au > Al > Fe."
+    )
+    page3 = (
+        "Điều kiện ăn mòn điện hóa gồm hai điện cực khác chất tiếp xúc nhau và cùng tiếp xúc dung dịch chất điện li."
+    )
+    extracted = SimpleNamespace(
+        extracted_pages=[
+            {"page_num": 1, "text": page1},
+            {"page_num": 2, "text": page2},
+            {"page_num": 3, "text": page3},
+        ],
+        filename="hoa_hoc_refill.docx",
+        clean_title="Ôn tập Hóa học",
+        total_pages=3,
+        total_chars=len(page1) + len(page2) + len(page3),
+        is_scanned_like=False,
+    )
+
+    class FakeMedHardMLX:
+        prompts = []
+        last_done_reason = "stop"
+
+        @classmethod
+        def available(cls, model_name=None):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            self.last_done_reason = "stop"
+            prompt = messages[-1]["content"]
+            type(self).prompts.append(prompt)
+            if "Dữ liệu cần kiểm định:\n" in prompt:
+                return _json.dumps({
+                    "checks": [{
+                        "index": 1,
+                        "source_basis": page3 if "điện hóa" in prompt else page1,
+                        "matching_choices": "A",
+                        "input_audit": "Đủ dữ kiện nguồn.",
+                        "independent_solution": "Bước 1 kiểm tra điều kiện 1; Bước 2 kiểm tra điều kiện 2.",
+                        "choice_comparison": "Chỉ A khớp đầy đủ hai điều kiện.",
+                        "explanation_audit": "Đúng hai bước.",
+                        "supported": True,
+                        "explanation_supported": True,
+                        "unique_answer": True,
+                        "qualifiers_preserved": True,
+                        "difficulty_matches": True,
+                        "verified_answer": "A",
+                    }]
+                }, ensure_ascii=False)
+            if '"flashcards"' in prompt and '"questions"' not in prompt:
+                return _json.dumps({
+                    "flashcards": [{"evidence_id": "Q1", "front": "Chất béo lỏng?", "back": "chưa no"}]
+                }, ensure_ascii=False)
+            import re as _re
+            if "Không lặp lại" not in prompt:
+                return _json.dumps({
+                    "questions": [{
+                        "evidence_id": "Q1",
+                        "question": "Nếu phản ứng 1 mol chất béo no rồi hiđro hóa tiếp thì sao?",
+                        "choices": {"A": "Bước 1 tạo RCOONa và glixerol; Bước 2 chất no không cộng H₂.", "B": "Sai 1", "C": "Sai 2", "D": "Sai 3"},
+                        "answer": "A",
+                        "explanation": "Bước 1 thủy phân tỉ lệ 1:3; Bước 2 gốc no không phản ứng H₂.",
+                        "evidence_quote": page1,
+                    }]
+                }, ensure_ascii=False)
+            assert prompt.index("Điều kiện ăn mòn điện hóa") < prompt.index("Phản ứng xà phòng hóa chất béo")
+            schema_max = kwargs.get("response_schema", {}).get("properties", {}).get("questions", {}).get("maxItems")
+            assert schema_max == 1
+            m_ev = _re.search(r'evidence_id="(Q\d+)"[^>]*>[^<]*Điều kiện ăn mòn điện hóa', prompt)
+            ev_id = m_ev.group(1) if m_ev else "Q2"
+            return _json.dumps({
+                "questions": [{
+                    "evidence_id": ev_id,
+                    "question": "Nếu dùng 1 điện cực đồng và 1 điện cực kẽm nối dây dẫn ngoài nhưng nhúng vào dầu hỏa không dẫn điện, ăn mòn điện hóa có xảy ra không?",
+                    "choices": {"A": "Không xảy ra vì thiếu dung dịch chất điện li.", "B": "Có", "C": "Chỉ hòa tan kẽm", "D": "Chỉ hòa tan đồng"},
+                    "answer": "A",
+                    "explanation": "Bước 1 có 2 điện cực tiếp xúc; Bước 2 thiếu dung dịch điện li nên không xảy ra.",
+                    "evidence_quote": page3,
+                }]
+            }, ensure_ascii=False)
+
+    from app.ollama_client import OllamaClient
+
+    monkeypatch.setattr(tc, "TrainedModelClient", FakeMedHardMLX)
+    FakeMedHardMLX.prompts = []
+    med_res = sm.StudyMaterialManager(OllamaClient()).generate_materials_from_pages(
+        extracted, model="qwen3.5-9b-4bit", difficulty="medium", quiz_count=2, flashcard_count=1
+    )
+    assert len(med_res["quiz"]) == 2
+    assert len({q["answer"] for q in med_res["quiz"]}) >= 2
+    assert all(q["answer"] == q["correct_answer"] for q in med_res["quiz"])
+
+    FakeMedHardMLX.prompts = []
+    hard_res = sm.StudyMaterialManager(OllamaClient()).generate_materials_from_pages(
+        extracted, model="qwen3.5-9b-4bit", difficulty="hard", quiz_count=2, flashcard_count=0
+    )
+    assert len(hard_res["quiz"]) == 2

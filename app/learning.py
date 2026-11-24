@@ -3,14 +3,16 @@
 import json
 import html
 import hashlib
+import inspect
 import logging
 import re
 import threading
+import time
 import unicodedata
-from collections import Counter
+from collections import Counter, OrderedDict
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from app.topic_catalog import (
     CHILD_TO_PARENT,
@@ -21,9 +23,11 @@ from app.topic_catalog import (
     normalized,
     resolve_topic,
     resolve_topic_hierarchy,
+    resolve_topic_query,
 )
 from app.config import DEFAULT_CHAT_MODEL
-from app.practice import PracticeGenerationError, PracticeService
+from app.flashcard_generator import strip_source_review_banner
+from app.practice import PracticeGenerationError, PracticeService, _GLUED_VI_OCR_RE
 from app.rag_agent import DIRECTIVE_STOPWORDS, QUERY_STOPWORDS
 from app.text_cleaner import sanitize_for_prompt_context
 
@@ -32,6 +36,8 @@ logger = logging.getLogger(__name__)
 # Decorative bullet glyphs and layout ornament patterns
 _ORNAMENT_LINE_PATTERN = re.compile(r"^[\s\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»|/\\_.]+$")
 _BULLET_PREFIX_PATTERN = re.compile(r"^[ \t]*[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*")
+_VNI_MIN_OCR_RE = re.compile(r"[A-Za-zÀ-ỹ]\u2212[A-Za-zÀ-ỹ]?")
+_VNI_BROKEN_WORD_RE = re.compile(r"(?i)\b(?:cõ|gõp|trõng|khõng|lõp|hõc)\b")
 
 
 def _clean_question_prefix(text: str) -> str:
@@ -131,15 +137,41 @@ def _normalize_text(text: Any) -> str:
     return normalized(text)
 
 
+def _build_fast_fold_table() -> dict[int, Optional[str]]:
+    """Build a C-level str.translate table mirroring normalized() without regex/NFC passes."""
+    table: dict[int, Optional[str]] = {ord("_"): " ", 0x00A0: " "}
+    for start, end in ((0x0080, 0x0250), (0x1E00, 0x1F00)):
+        for cp in range(start, end):
+            ch = chr(cp)
+            folded = unicodedata.normalize("NFKD", ch.casefold())
+            base = "".join(c for c in folded if not unicodedata.combining(c))
+            table[cp] = base.replace("đ", "d")
+    for start, end in ((0x0300, 0x0370), (0x1DC0, 0x1E00), (0xFE20, 0xFE30)):
+        for cp in range(start, end):
+            if unicodedata.combining(chr(cp)):
+                table[cp] = None
+    return table
+
+
+_FAST_FOLD_TABLE = _build_fast_fold_table()
+
+
+def _fast_fold_for_scan(text: Any) -> str:
+    """Fold diacritics and case using C-level translate for fast fallback chunk scans."""
+    return str(text or "").casefold().translate(_FAST_FOLD_TABLE)
+
+
 def _is_non_theory_heading(heading: str) -> bool:
     if not heading:
         return False
     h = heading.strip()
-    # Reject exercise / solution / answer key / table of contents / reference headings
+    # Reject exercise / solution / answer key / table of contents / reference / endnote headings
     if re.match(
-        r"(?i)^[#\s]*(?:(?:[ivxlcdm]+|\d+(?:[.:]\d+)*)[\.:]?\s*)?(?:bài\s+tập|đáp\s+án|lời\s+giải|exercises?|solutions?|answers?|answer\s+key|checkpoints?|table\s+of\s+contents?|mục\s+lục|contents?|tài\s+liệu\s+tham\s+khảo|references?)\b",
+        r"(?i)^[#\s]*(?:(?:[ivxlcdm]+|\d+(?:[.:]\d+)*)[\.:]?\s*)?(?:bài\s+tập(?:\s+trắc\s+nghiệm)?|tóm\s+tắt\s+bài\s+tập(?:\s+trắc\s+nghiệm)?|đáp\s+án|lời\s+giải|exercises?|solutions?|answers?|answer\s+key|checkpoints?|programming\s+challenges?|review\s+questions?|discussion\s+questions?|study\s+questions?|self[- ]check(?:\s+questions?)?|câu\s+hỏi\s+(?:ôn\s+tập|trắc\s+nghiệm|tự\s+luận)|endnotes?|table\s+of\s+contents?|mục\s+lục|contents?|tài\s+liệu\s+tham\s+khảo|references?)\b",
         h,
     ):
+        return True
+    if re.match(r"(?i)^[#\s]*(?:chapter\s+)?notes\s*$", h):
         return True
     # Reject conventions / preface / reader guide
     if re.match(
@@ -201,24 +233,69 @@ def _is_theory_chunk(raw_text: Any, heading_context: Optional[Any] = None) -> bo
     ):
         return False
 
+    # Reject course syllabi and CDIO/learning-outcome administrative matrices (not subject theory)
+    if (
+        re.search(
+            r"(?i)\b(?:đề\s+cương\s+môn\s+học|chuẩn\s+đầu\s+ra\s+(?:môn\s+học|của\s+môn\s+học|chương\s+trình)|"
+            r"mục\s+tiêu\s+môn\s+học|khung\s+chương\s+trình|course\s+syllabus|course\s+outline|learning\s+outcomes?\s+matrix)\b",
+            text[:500],
+        )
+        or re.search(r"FIT-HCMUS\s*\|\s*CDIO", text[:300])
+        or (
+            re.search(r"\bCDIO\b", text[:500])
+            and re.search(
+                r"(?i)(?:chuẩn\s+đầu\s+ra|bảng\s*(?:tiếp)?\s*:\s*(?:nội\s+dung|mã\s*\|)|mã\s+số\s+từ\s+L\d+|mục\s+tiêu\s+môn\s+học)",
+                text[:600],
+            )
+        )
+        or (
+            re.search(r"(?im)^L\d+\.\s*\|", text)
+            and re.search(r"(?i)(?:\b(?:không\s+)?đánh\s+dấu\b|\bLO\s+liên\s+quan\b|\[trống\]|\bI/T/U\b)", text)
+        )
+        or re.search(
+            r"(?i)(?:\|\s*(?:không\s+)?đánh\s+dấu\s*\||\[\s*(?:không\s+)?đánh\s+dấu\s*\][^\n]{0,120}\|)",
+            text,
+        )
+        or (
+            re.search(r"(?i)\[\s*(?:không\s+)?đánh\s+dấu\s*\]", text)
+            and ("|" in text or re.search(r"(?i)đề\s+cương\s+môn\s+học", text))
+        )
+    ):
+        return False
+
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
         return False
 
-    # Back-matter Glossary / Index / Bibliography blocks hold dictionary pointers rather than chapter theory.
+    # Back-matter Glossary / Index / Bibliography / Endnotes blocks hold non-theory pointers.
     head_folded = [_normalize_text(re.sub(r"^#{1,6}\s*", "", ln)) for ln in lines[:4]]
     if any(
         ln in {
             "glossary", "index", "subject index", "author index",
             "references", "bibliography", "bang thuat ngu", "chi muc",
-            "tai lieu tham khao",
+            "tai lieu tham khao", "notes", "endnotes", "chapter notes", "ghi chu",
         }
         for ln in head_folded
     ):
         return False
     glossary_ref_endings = len(re.findall(r"\.\s*\(\d{1,2}(?:,\s*\d{1,2})*\)\s*$", text, re.MULTILINE))
     see_also_pointers = len(re.findall(r"\bSee\s+(?:also\s+)?[A-Z]", text))
-    if glossary_ref_endings >= 2 or (see_also_pointers >= 2 and glossary_ref_endings >= 1):
+    endnote_citations = len(re.findall(r"(?m)^\s*\d{1,3}\.\s+(?:Ibid\.|Op\.\s*cit\.|See\b|Adapted\s+from\b|Quoted\s+in\b)", text))
+    if glossary_ref_endings >= 2 or (see_also_pointers >= 2 and glossary_ref_endings >= 1) or endnote_citations >= 2:
+        return False
+
+    # Reject unanswered True/False self-test lists, numbered question banks, and MCQ question banks
+    if len(re.findall(r"(?im)(?:^|\s)\d{1,3}\.\s*(?:T\s*/?\s*F|True\s*/?\s*False)\b", text)) >= 2:
+        return False
+    if re.search(
+        r"(?i)\b(?:tóm\s+tắt\s+bài\s+tập\s+trắc\s+nghiệm|ngân\s+hàng\s+câu\s+hỏi\s+trắc\s+nghiệm|multiple[- ]choice\s+questions?)\b",
+        text[:400],
+    ):
+        return False
+
+    # Reject numbered chapter-outline / mini-TOC listings without prose explanation
+    toc_outline_lines = len(re.findall(r"(?m)^\s*\d{1,4}\s+[A-ZÀ-Ỹ][^\n.!?]{5,90}$", text))
+    if toc_outline_lines >= 3 and len(lines) <= toc_outline_lines + 4:
         return False
 
     # Standalone Markdown headings do not supply substantive question evidence.
@@ -228,6 +305,25 @@ def _is_theory_chunk(raw_text: Any, heading_context: Optional[Any] = None) -> bo
     # Reject chunks where non-heading lines contain no substantive word characters
     non_heading_lines = [ln for ln in lines if not re.match(r"^#{1,6}(?:\s+|$)", ln)]
     if not any(re.search(r"\w", ln) for ln in non_heading_lines):
+        return False
+
+    numbered_q_lines = re.findall(
+        r"(?m)^\s*(?:Q?\d{1,3}[.)]|\([a-z\d]{1,3}\))\s+[^\n]{4,260}\?\s*$",
+        text,
+    )
+    if len(numbered_q_lines) >= 2:
+        non_q_prose = [
+            ln for ln in non_heading_lines
+            if not re.match(r"^\s*(?:Q?\d{1,3}[.)]|\([a-z\d]{1,3}\))\s+", ln)
+            and not ln.rstrip().endswith("?")
+            and len(ln) >= 60
+            and re.search(r"[.!]", ln)
+        ]
+        if len(non_q_prose) < 2 or len(numbered_q_lines) >= 4:
+            return False
+
+    mcq_choice_lines = [ln for ln in non_heading_lines if re.match(r"^[A-D][.)]\s+\S", ln)]
+    if len(mcq_choice_lines) >= 3 and not re.search(r"(?i)\b(?:lời\s+giải|giải\s+thích|explanation|solution)\s*:", text):
         return False
 
     # Reject separately extracted body sections if their active heading context is non-theory
@@ -241,12 +337,22 @@ def _is_theory_chunk(raw_text: Any, heading_context: Optional[Any] = None) -> bo
             if _is_non_theory_heading(heading_context):
                 return False
 
-    # Exam logistics do not establish subject knowledge, even beneath a course header.
+    # Exam logistics and study schedules do not establish subject knowledge, even beneath a course header.
     normalized_lines = [_normalize_text(line) for line in lines]
     if any(re.match(
         r"^(?:[\d.]+\s*)?(?:exam\s+strategy|test[- ]taking\s+strategy|"
-        r"chien\s+luoc\s+lam\s+bai|phan\s+bo\s+thoi\s+gian\s+lam\s+bai)\b", line
+        r"chien\s+luoc\s+lam\s+bai|phan\s+bo\s+thoi\s+gian\s+lam\s+bai|"
+        r"ke\s+hoach\s+on(?:\s+tap)?\s+\d+\s+ngay|format\s+cuoi\s+ky|"
+        r"so\s+tay\s+quy\s+trinh(?:\s+mot\s+trang)?|ban\s+do\s+nguon\s+va\s+pham\s+vi|"
+        r"phieu\s+cong\s+thuc\s+co\s+dong|tu\s+web)\b", line
     ) for line in normalized_lines[:5]):
+        return False
+    header_window = " ".join(normalized_lines[:10])
+    if (
+        "khong nen xem thu dong" in header_window
+        or "playlist chinh thuc" in header_window
+        or (re.search(r"\bngay\b", header_window) and re.search(r"\bbai toi thieu\b", header_window))
+    ):
         return False
     logistics_lines = sum(bool(re.search(
         r"\b(?:neu\s+ket[^.]{0,50}\bphut|chua\s+(?:it\s+nhat\s+)?\d+\s+phut|"
@@ -262,6 +368,25 @@ def _is_theory_chunk(raw_text: Any, heading_context: Optional[Any] = None) -> bo
             and re.search(r"(?i)\b(?:course\s+notes|lecture\s+notes|giáo\s+trình|tài\s+liệu)\b", text)
             and not re.search(r"[.!?;:]\s+\S", text)):
         return False
+
+    # Reject chapter-objective / study-outline bullet lists lacking explanatory prose
+    if any(
+        re.search(
+            r"\b(?:muc\s+tieu\s+(?:nghien\s+cuu|hoc\s+tap|chuong)|learning\s+objectives?|chapter\s+objectives?|chapter\s+outline|noi\s+dung\s+(?:chuong|chinh))\b",
+            ln,
+        )
+        for ln in normalized_lines[:8]
+    ):
+        has_narrative_prose = any(
+            len(re.findall(r"[.!?](?:\s|$)", ln)) >= 2 and len(ln) >= 150
+            for ln in non_heading_lines
+        )
+        outline_items = sum(
+            bool(re.match(r"^(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+✓]|\d+(?:\.\d+)*[.)]?)\s+\S", ln))
+            for ln in non_heading_lines
+        )
+        if not has_narrative_prose and (outline_items >= 2 or len(lines) <= 10):
+            return False
 
     for line in lines[:5]:
         if _is_non_theory_heading(line):
@@ -303,20 +428,77 @@ def _get_sqlite_fingerprint(db_path: Any) -> tuple:
         return ()
 
 
+_SHARED_CACHE_LOCK = threading.Lock()
+_SHARED_DB_CACHES: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+
+def _new_learning_cache_bucket() -> dict[str, Any]:
+    return {
+        "lock": threading.RLock(),
+        "catalog_members": None,
+        "catalog_key": None,
+        "doc_topic_cache": {},
+        "doc_topic_cache_fp": None,
+        "matching_docs_cache": OrderedDict(),
+        "topic_passages_cache": OrderedDict(),
+        "exercise_extract_cache": OrderedDict(),
+        "exercise_topic_pages_cache": OrderedDict(),
+    }
+
+
+def _shared_learning_cache_bucket(db_path: Any) -> dict[str, Any]:
+    if not db_path:
+        return _new_learning_cache_bucket()
+    try:
+        key = str(Path(db_path).resolve())
+    except (OSError, TypeError, ValueError):
+        key = str(db_path)
+    with _SHARED_CACHE_LOCK:
+        bucket = _SHARED_DB_CACHES.get(key)
+        if bucket is None:
+            bucket = _new_learning_cache_bucket()
+            _SHARED_DB_CACHES[key] = bucket
+        else:
+            _SHARED_DB_CACHES.move_to_end(key)
+        while len(_SHARED_DB_CACHES) > 32:
+            _SHARED_DB_CACHES.popitem(last=False)
+        return bucket
+
+
+def _lru_cache_put(lock: Any, cache: OrderedDict, key: Any, value: Any, max_items: int = 256) -> None:
+    with lock:
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > max_items:
+            cache.popitem(last=False)
+
+
 class LearningService:
     def __init__(self, document_lookup, practice_service: PracticeService, searcher=None):
         self.document_lookup = document_lookup
         self.practice_service = practice_service
         self.searcher = searcher
-        self._cached_catalog_members = None
-        self._cached_catalog_key = None
-        self._catalog_lock = threading.Lock()
+        bucket = _shared_learning_cache_bucket(getattr(document_lookup, "db_path", None))
+        self._cache_bucket = bucket
+        self._catalog_lock = bucket["lock"]
+        self._exercise_cache_lock = bucket["lock"]
+        self._doc_topic_cache = bucket["doc_topic_cache"]
+        self._matching_docs_cache = bucket["matching_docs_cache"]
+        self._topic_passages_cache = bucket["topic_passages_cache"]
+        self._exercise_extract_cache = bucket["exercise_extract_cache"]
+        self._exercise_topic_pages_cache = bucket["exercise_topic_pages_cache"]
 
     def invalidate_catalog_cache(self) -> None:
-        """Clear cached catalog topic memberships."""
+        """Clear cached catalog topic memberships and exercise caches for this DB."""
         with self._catalog_lock:
-            self._cached_catalog_members = None
-            self._cached_catalog_key = None
+            self._cache_bucket["catalog_members"] = None
+            self._cache_bucket["catalog_key"] = None
+            self._cache_bucket["doc_topic_cache"].clear()
+            self._cache_bucket["doc_topic_cache_fp"] = None
+            self._cache_bucket["matching_docs_cache"].clear()
+            self._cache_bucket["topic_passages_cache"].clear()
+            self._cache_bucket["exercise_extract_cache"].clear()
+            self._cache_bucket["exercise_topic_pages_cache"].clear()
 
     def _catalog_members(self, available):
         by_id = {doc["id"]: doc for doc in available}
@@ -326,14 +508,10 @@ class LearningService:
         db_path = getattr(self.document_lookup, "db_path", None)
         sidecar_path = Path(db_path).with_name("retrieval_tree.db") if db_path else None
 
-        # Validate sidecar BEFORE cached membership reuse so removed/modified sidecars don't remain active via cache
+        # Compute sidecar fingerprint first; only read retrieval_tree.db on cache miss.
         from app.retrieval_tree import read_source_bound_tree_memberships, get_source_binding_fingerprint
-        sidecar_members = None
-        sidecar_fp = None
-        if db_path and sidecar_path and sidecar_path.is_file():
-            sidecar_members = read_source_bound_tree_memberships(db_path, sidecar_path)
-            if sidecar_members is not None:
-                sidecar_fp = get_source_binding_fingerprint(sidecar_path)
+        has_sidecar = bool(db_path and sidecar_path and sidecar_path.is_file())
+        sidecar_fp = get_source_binding_fingerprint(sidecar_path) if has_sidecar else None
 
         fp = _get_sqlite_fingerprint(db_path)
         key = (
@@ -342,18 +520,20 @@ class LearningService:
             sidecar_fp,
         )
         with self._catalog_lock:
-            if self._cached_catalog_members is not None and self._cached_catalog_key == key:
-                return self._cached_catalog_members
+            if self._cache_bucket["catalog_members"] is not None and self._cache_bucket["catalog_key"] == key:
+                return self._cache_bucket["catalog_members"]
 
-        if sidecar_members is not None:
-            # Intersect permitted available document IDs
-            members = {label: set() for label, _ in TOPICS}
-            for label in members:
-                members[label] = {did for did in sidecar_members.get(label, set()) if did in by_id}
-            with self._catalog_lock:
-                self._cached_catalog_members = members
-                self._cached_catalog_key = key
-            return members
+        if has_sidecar:
+            sidecar_members = read_source_bound_tree_memberships(db_path, sidecar_path)
+            if sidecar_members is not None:
+                # Intersect permitted available document IDs
+                members = {label: set() for label, _ in TOPICS}
+                for label in members:
+                    members[label] = {did for did in sidecar_members.get(label, set()) if did in by_id}
+                with self._catalog_lock:
+                    self._cache_bucket["catalog_members"] = members
+                    self._cache_bucket["catalog_key"] = key
+                return members
 
         with closing(self.document_lookup.connect()) as db:
             members = {label: set() for label, _ in TOPICS}
@@ -406,55 +586,203 @@ class LearningService:
                             members[label].add(doc_id)
 
             with self._catalog_lock:
-                self._cached_catalog_members = members
-                self._cached_catalog_key = key
+                self._cache_bucket["catalog_members"] = members
+                self._cache_bucket["catalog_key"] = key
             return members
 
+    @staticmethod
+    def _is_dedicated_topic_doc(doc: dict[str, Any], label: str, aliases: tuple[str, ...]) -> bool:
+        title_norm = normalized(doc.get("clean_title") or "")
+        file_norm = normalized(doc.get("filename") or "")
+        label_norm = normalized(label)
+        pattern = PATTERNS.get(label)
+        for raw_field in (
+            title_norm,
+            file_norm,
+            re.sub(r"[-_]+", " ", title_norm),
+            re.sub(r"[-_]+", " ", file_norm),
+        ):
+            if not raw_field:
+                continue
+            if label_norm and label_norm in raw_field:
+                return True
+            if pattern is not None and pattern.search(raw_field):
+                return True
+            if aliases and matches(raw_field, aliases):
+                return True
+        return False
+
     def topics(self) -> dict[str, Any]:
-        members = self._catalog_members(self.document_lookup.documents())
+        docs = self.document_lookup.documents()
+        members = self._catalog_members(docs)
+        docs_by_id = {int(doc["id"]): doc for doc in docs if doc.get("id") is not None}
         counts = {label: len(members[label]) for label, _ in TOPICS}
+        topic_items = []
+        for label, aliases in TOPICS:
+            doc_ids = members[label]
+            if not doc_ids:
+                continue
+            dedicated_count = sum(
+                1 for did in doc_ids
+                if did in docs_by_id and self._is_dedicated_topic_doc(docs_by_id[did], label, aliases)
+            )
+            topic_items.append({
+                "id": label,
+                "label": label,
+                "document_count": len(doc_ids),
+                "dedicated_document_count": dedicated_count,
+                "coverage": "dedicated" if dedicated_count > 0 else "mention_only",
+                "parent_id": CHILD_TO_PARENT.get(label, {}).get("parent_id", "general"),
+                "parent_label": CHILD_TO_PARENT.get(label, {}).get("parent_label", label),
+            })
         return {
-            "topics": [
-                {
-                    "id": label,
-                    "label": label,
-                    "document_count": len(members[label]),
-                    "parent_id": CHILD_TO_PARENT.get(label, {}).get("parent_id", "general"),
-                    "parent_label": CHILD_TO_PARENT.get(label, {}).get("parent_label", label),
-                }
-                for label, _ in TOPICS if members[label]
-            ],
+            "topics": topic_items,
             "topic_tree": get_topic_tree_catalog(counts),
             "catalog_version": 1,
             "origin": "authored_catalog",
         }
 
-    def _extract_document_topic(self, doc: dict) -> str:
-        doc_id = doc["id"]
-        fallback = doc.get("clean_title") or doc.get("filename") or f"Tài liệu {doc_id}"
+    @staticmethod
+    def _has_chunks_fts(db: Any) -> bool:
+        try:
+            table_exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunks_fts'"
+            ).fetchone()
+            if table_exists:
+                return db.execute("SELECT 1 FROM chunks_fts LIMIT 1").fetchone() is not None
+        except Exception:  # nosec B110
+            return False
+        return False
+
+    @staticmethod
+    def _fts_phrase_query(phrases: list[str]) -> Optional[str]:
+        branches: list[str] = []
+        seen_branches: set[str] = set()
+        for raw_phrase in phrases:
+            phrase = str(raw_phrase or "").strip()
+            if not phrase:
+                continue
+            words = [w for w in re.findall(r"[^\W_]+", phrase) if len(w) >= 2]
+            if not words:
+                continue
+            for form in ("NFC", "NFD"):
+                norm_words = [unicodedata.normalize(form, w).replace('"', '""') for w in words]
+                expr = " AND ".join(f'text: "{nw}"' for nw in norm_words)
+                wrapped = f"({expr})" if len(norm_words) > 1 else expr
+                if wrapped not in seen_branches:
+                    seen_branches.add(wrapped)
+                    branches.append(wrapped)
+        return " OR ".join(branches) if branches else None
+
+    @staticmethod
+    def _parse_first_chunk_topic(text: str, fallback: str) -> str:
+        clean = str(text or "").replace("\xa0", " ")
+        lines = [line.strip() for line in clean.splitlines() if line.strip()]
+        if lines:
+            first = lines[0]
+            first = re.sub(r"^#+\s*", "", first).strip()
+            first = re.split(r"\s*[—–\-:]\s*", first)[0].strip()
+            generic = {
+                "lý thuyết", "bài tập", "đáp án", "lời giải",
+                "tài liệu demo tự biên soạn", "synthetic study demo",
+                "theory", "exercises", "answers",
+            }
+            if first.casefold() not in generic and 2 <= len(first) <= 100:
+                return first
+        return fallback
+
+    def _skip_redundant_inspect(self) -> bool:
+        """Skip per-doc inspect_document_status when DocumentLookup.documents() just verified freshness."""
+        try:
+            from app.document_lookup import DocumentLookup
+        except Exception:
+            return False
+        lookup = self.document_lookup
+        if type(lookup) is not DocumentLookup:
+            return False
+        inst = getattr(lookup, "__dict__", {})
+        for attr in ("documents", "inspect_document_status", "document", "document_by_filename"):
+            if attr in inst:
+                return False
+        return True
+
+    def _batch_extract_document_topics(self, docs: list[dict]) -> dict[int, str]:
+        if not docs:
+            return {}
+        db_path = getattr(self.document_lookup, "db_path", None)
+        fp = _get_sqlite_fingerprint(db_path)
+        with self._catalog_lock:
+            if fp != self._cache_bucket["doc_topic_cache_fp"]:
+                self._doc_topic_cache.clear()
+                self._cache_bucket["doc_topic_cache_fp"] = fp
+            cached: dict[int, str] = {}
+            missing_docs: list[dict] = []
+            for doc in docs:
+                key = (
+                    int(doc.get("id") or 0),
+                    str(doc.get("file_hash") or ""),
+                    str(doc.get("clean_title") or ""),
+                    str(doc.get("filename") or ""),
+                )
+                if key in self._doc_topic_cache:
+                    cached[doc["id"]] = self._doc_topic_cache[key]
+                else:
+                    missing_docs.append(doc)
+
+        if not missing_docs:
+            return cached
+
+        first_chunks: dict[int, str] = {}
         try:
             with closing(self.document_lookup.connect()) as db:
-                row = db.execute(
-                    "SELECT text FROM chunks WHERE doc_id=? ORDER BY page_num, chunk_index LIMIT 1",
-                    (doc_id,),
-                ).fetchone()
-                if row:
-                    text = str(row["text"]).replace("\xa0", " ")
-                    lines = [line.strip() for line in text.splitlines() if line.strip()]
-                    if lines:
-                        first = lines[0]
-                        first = re.sub(r"^#+\s*", "", first).strip()
-                        first = re.split(r"\s*[—–\-:]\s*", first)[0].strip()
-                        generic = {
-                            "lý thuyết", "bài tập", "đáp án", "lời giải",
-                            "tài liệu demo tự biên soạn", "synthetic study demo",
-                            "theory", "exercises", "answers",
-                        }
-                        if first.casefold() not in generic and 2 <= len(first) <= 100:
-                            return first
+                missing_ids = [d["id"] for d in missing_docs]
+                scope = ",".join("?" for _ in missing_ids)
+                # Page <= 2 covers the first non-empty chunk for virtually all documents in one query.
+                rows = db.execute(
+                    f"SELECT doc_id, text FROM chunks "  # nosec B608
+                    f"WHERE doc_id IN ({scope}) AND page_num <= 2 "
+                    f"ORDER BY doc_id, page_num, chunk_index",
+                    missing_ids,
+                )
+                for r in rows:
+                    did = r["doc_id"]
+                    if did not in first_chunks:
+                        first_chunks[did] = str(r["text"] or "")
+                still_missing = [did for did in missing_ids if did not in first_chunks]
+                for did in still_missing:
+                    row = db.execute(
+                        "SELECT text FROM chunks WHERE doc_id=? ORDER BY page_num, chunk_index LIMIT 1",
+                        (did,),
+                    ).fetchone()
+                    if row:
+                        first_chunks[did] = str(row["text"] or "")
         except Exception:  # nosec B110
             pass
-        return fallback
+
+        with self._catalog_lock:
+            for doc in missing_docs:
+                did = doc["id"]
+                fallback = doc.get("clean_title") or doc.get("filename") or f"Tài liệu {did}"
+                topic_str = (
+                    self._parse_first_chunk_topic(first_chunks[did], fallback)
+                    if did in first_chunks
+                    else fallback
+                )
+                key = (
+                    int(did or 0),
+                    str(doc.get("file_hash") or ""),
+                    str(doc.get("clean_title") or ""),
+                    str(doc.get("filename") or ""),
+                )
+                self._doc_topic_cache[key] = topic_str
+                cached[did] = topic_str
+        return cached
+
+    def _extract_document_topic(self, doc: dict) -> str:
+        return self._batch_extract_document_topics([doc]).get(
+            doc["id"],
+            doc.get("clean_title") or doc.get("filename") or f"Tài liệu {doc['id']}",
+        )
 
     def _matching_documents(self, topic: str) -> list[dict]:
         target = _normalize_text(topic)
@@ -463,62 +791,41 @@ class LearningService:
         if not available or not target:
             return []
 
+        db_path_obj = getattr(self.document_lookup, "db_path", None)
+        db_fp = _get_sqlite_fingerprint(db_path_obj) if db_path_obj else ()
+        match_cache_key: Optional[tuple[Any, ...]] = None
+        if db_fp:
+            match_cache_key = (
+                str(db_path_obj or ""),
+                db_fp,
+                target,
+                tuple((d["id"], str(d.get("file_hash") or "")) for d in available),
+            )
+            with self._catalog_lock:
+                cached_ids = self._matching_docs_cache.get(match_cache_key)
+                if cached_ids is not None:
+                    self._matching_docs_cache.move_to_end(match_cache_key)
+                    by_id = {d["id"]: d for d in available}
+                    return [by_id[did] for did in cached_ids if did in by_id]
+
+        def _cache_and_return(docs: list[dict], *, cacheable: bool = True) -> list[dict]:
+            if cacheable and match_cache_key is not None:
+                _lru_cache_put(
+                    self._catalog_lock,
+                    self._matching_docs_cache,
+                    match_cache_key,
+                    tuple(d["id"] for d in docs),
+                    max_items=256,
+                )
+            return docs
+
         # 1. Exact match against authored topic label
         for label, _ in TOPICS:
             if target == normalized(label):
                 ids = self._catalog_members(available)[label]
-                return [doc for doc in available if doc["id"] in ids]
+                return _cache_and_return([doc for doc in available if doc["id"] in ids])
 
-        matched_ids = set()
-        matched_docs = []
-
-        # 1. Exact or bidirectional substring match against document-extracted topic / clean_title / filename
-        for doc in available:
-            doc_topic = _normalize_text(self._extract_document_topic(doc))
-            clean_title = _normalize_text(doc.get("clean_title") or "")
-            filename = _normalize_text(doc.get("filename") or "")
-            if any(
-                (doc_topic and (doc_topic == tv or tv in doc_topic or doc_topic in tv))
-                or (clean_title and (clean_title == tv or tv in clean_title or clean_title in tv))
-                or (filename and tv in filename)
-                for tv in target_variants
-            ):
-                matched_ids.add(doc["id"])
-                matched_docs.append(doc)
-
-        # 2. Add remaining documents whose chunks body contains target or orthographic equivalent
-        remaining_docs = [d for d in available if d["id"] not in matched_ids]
-        if remaining_docs:
-            remaining_ids = [d["id"] for d in remaining_docs]
-            scope = ",".join("?" for _ in remaining_ids)
-            try:
-                with closing(self.document_lookup.connect()) as db:
-                    cursor = db.execute(
-                        f"SELECT doc_id, text FROM chunks WHERE doc_id IN ({scope})",  # nosec B608
-                        remaining_ids,
-                    )
-                    found_ids = set()
-                    for r in cursor:
-                        c_text = _normalize_text(r["text"])
-                        if any(tv in c_text for tv in target_variants):
-                            found_ids.add(r["doc_id"])
-                            if len(found_ids) == len(remaining_ids):
-                                break
-                    for doc in remaining_docs:
-                        if doc["id"] in found_ids and doc["id"] not in matched_ids:
-                            matched_ids.add(doc["id"])
-                            matched_docs.append(doc)
-            except Exception:  # nosec B110
-                pass
-
-        if matched_docs:
-            return matched_docs
-
-        authored = resolve_topic(topic)
-        if authored:
-            ids = self._catalog_members(available)[authored[0]]
-            return [doc for doc in available if doc["id"] in ids]
-
+        # 2. Exact match against authored parent domain
         hierarchy = resolve_topic_hierarchy(topic)
         if hierarchy and hierarchy.get("is_parent"):
             catalog_members = self._catalog_members(available)
@@ -526,9 +833,182 @@ class LearningService:
             for child_label in hierarchy.get("child_topics", ()):
                 parent_doc_ids.update(catalog_members.get(child_label, set()))
             if parent_doc_ids:
-                return [doc for doc in available if doc["id"] in parent_doc_ids]
+                return _cache_and_return([doc for doc in available if doc["id"] in parent_doc_ids])
 
-        return []
+        authored, focus_terms = resolve_topic_query(topic)
+        doc_topics_map = self._batch_extract_document_topics(available)
+
+        matched_ids: set[int] = set()
+        matched_docs: list[dict] = []
+
+        # 3. Title / extracted-topic / filename match (batched & cached, no N-connection loop)
+        for doc in available:
+            doc_topic = _normalize_text(doc_topics_map.get(doc["id"], ""))
+            clean_title = _normalize_text(doc.get("clean_title") or "")
+            filename = _normalize_text(doc.get("filename") or "")
+            if any(
+                (doc_topic and (doc_topic == tv or tv in doc_topic))
+                or (clean_title and (clean_title == tv or tv in clean_title))
+                or (filename and tv in filename)
+                for tv in target_variants
+            ):
+                matched_ids.add(doc["id"])
+                matched_docs.append(doc)
+
+        # 4. If an authored topic or sub-topic resolved (e.g. "Xác suất", "Xác suất Bayes", "Không gian vector"),
+        # start from catalog_members and narrow to focus-term-bearing documents via FTS5 when present.
+        authored_ids: set[int] = set()
+        if authored:
+            authored_ids = set(self._catalog_members(available).get(authored[0], set()))
+
+        if authored:
+            label_words = set(re.findall(r"\w+", normalized(authored[0])))
+            alias_phrases = [
+                a for a in authored[1]
+                if normalized(a) in target or any(normalized(a) == normalized(tv) for tv in target_variants)
+            ]
+            # Extra distinguishing tokens outside the generic authored label (e.g. "bayes" in "Xác suất Bayes")
+            specific_words = [
+                w for w in re.findall(r"[^\W_]+", str(topic or ""))
+                if len(w) >= 2 and _normalize_text(w) not in label_words and _normalize_text(w) not in QUERY_STOPWORDS and _normalize_text(w) not in DIRECTIVE_STOPWORDS
+            ]
+            # Accent-preserved query phrases for FTS5 lookup; do not broaden specific sub-topics with base aliases
+            fts_phrases: list[str] = []
+            if any(ord(ch) > 127 for ch in str(topic or "")):
+                fts_phrases.append(str(topic))
+            if specific_words:
+                fts_phrases.append(" ".join(specific_words))
+            else:
+                fts_phrases.extend(alias_phrases)
+            fts_query = self._fts_phrase_query(fts_phrases)
+
+            focused_ids: set[int] = set(matched_ids)
+            used_fts = False
+            if fts_query:
+                try:
+                    with closing(self.document_lookup.connect()) as db:
+                        if self._has_chunks_fts(db):
+                            used_fts = True
+                            avail_ids = {d["id"] for d in available}
+                            rows = db.execute(
+                                "SELECT DISTINCT c.doc_id FROM chunks_fts f "
+                                "JOIN chunks c ON c.id = f.rowid "
+                                "WHERE chunks_fts MATCH ?",
+                                (fts_query,),
+                            )
+                            for r in rows:
+                                did = r[0]
+                                if did in avail_ids:
+                                    focused_ids.add(did)
+                except Exception:  # nosec B110
+                    used_fts = False
+
+            if not used_fts or not focused_ids:
+                # Fallback scan within authored_ids (plus unmatched title hits) when FTS unavailable/unaccented
+                search_pool = authored_ids or {d["id"] for d in available}
+                scan_ids = [did for did in search_pool if did not in focused_ids]
+                if scan_ids:
+                    scope = ",".join("?" for _ in scan_ids)
+                    focus_tokens = [w for ft in focus_terms for w in re.findall(r"\w+", ft) if len(w) >= 2]
+                    try:
+                        with closing(self.document_lookup.connect()) as db:
+                            cursor = db.execute(
+                                f"SELECT doc_id, text FROM chunks WHERE doc_id IN ({scope})",  # nosec B608
+                                scan_ids,
+                            )
+                            for r in cursor:
+                                c_text = _normalize_text(r["text"])
+                                if any(tv in c_text for tv in target_variants) or (
+                                    focus_tokens and all(tok in c_text for tok in focus_tokens)
+                                ):
+                                    focused_ids.add(r["doc_id"])
+                                    if len(focused_ids) == len(search_pool):
+                                        break
+                    except Exception:  # nosec B110
+                        pass
+
+            # Intersect with authored_ids when sub-topic focus also matched catalog members, keeping explicit title matches
+            narrowed = [
+                d for d in available
+                if d["id"] in matched_ids or (d["id"] in focused_ids and (not authored_ids or d["id"] in authored_ids))
+            ]
+            if narrowed:
+                return _cache_and_return(narrowed)
+            if matched_docs:
+                return _cache_and_return(matched_docs)
+            if authored_ids:
+                return _cache_and_return([d for d in available if d["id"] in authored_ids])
+
+        # 5. Custom / non-authored topic lookup: try FTS5 first, then scan chunks only if needed
+        remaining_docs = [d for d in available if d["id"] not in matched_ids]
+        scan_failed = False
+        if remaining_docs:
+            remaining_ids = [d["id"] for d in remaining_docs]
+            remaining_set = set(remaining_ids)
+            fts_found_ids: set[int] = set()
+            ran_fts = False
+            fts_query = self._fts_phrase_query([str(topic), *(tv for tv in target_variants if any(ord(c) > 127 for c in tv))])
+            try:
+                with closing(self.document_lookup.connect()) as db:
+                    if fts_query and self._has_chunks_fts(db):
+                        ran_fts = True
+                        rows = db.execute(
+                            "SELECT DISTINCT c.doc_id FROM chunks_fts f "
+                            "JOIN chunks c ON c.id = f.rowid "
+                            "WHERE chunks_fts MATCH ?",
+                            (fts_query,),
+                        )
+                        for r in rows:
+                            if r[0] in remaining_set:
+                                fts_found_ids.add(r[0])
+
+                    if fts_found_ids:
+                        for doc in remaining_docs:
+                            if doc["id"] in fts_found_ids and doc["id"] not in matched_ids:
+                                matched_ids.add(doc["id"])
+                                matched_docs.append(doc)
+                    elif (not ran_fts) or all(ord(ch) < 128 for ch in str(topic or "")):
+                        scope = ",".join("?" for _ in remaining_ids)
+                        cursor = db.execute(
+                            f"SELECT doc_id, text FROM chunks WHERE doc_id IN ({scope})",  # nosec B608
+                            remaining_ids,
+                        )
+                        found_ids: set[int] = set()
+                        target_tokens = [
+                            w for w in re.findall(r"\w+", target)
+                            if len(w) >= 2 and w not in QUERY_STOPWORDS and w not in DIRECTIVE_STOPWORDS
+                        ]
+                        variants_tuple = tuple(target_variants)
+                        variant_token_sets = [
+                            [w for w in tv.split() if len(w) >= 2]
+                            for tv in variants_tuple
+                            if " " in tv
+                        ]
+                        for r in cursor:
+                            did = r["doc_id"]
+                            if did in found_ids:
+                                continue
+                            c_text = _fast_fold_for_scan(r["text"])
+                            matched_chunk = (
+                                (len(target_tokens) >= 2 and all(tok in c_text for tok in target_tokens))
+                                or any(tv in c_text for tv in variants_tuple)
+                            )
+                            if not matched_chunk and variant_token_sets:
+                                if any(all(w in c_text for w in wset) for wset in variant_token_sets if wset):
+                                    collapsed = " ".join(c_text.split())
+                                    matched_chunk = any(tv in collapsed for tv in variants_tuple)
+                            if matched_chunk:
+                                found_ids.add(did)
+                                if len(found_ids) == len(remaining_ids):
+                                    break
+                        for doc in remaining_docs:
+                            if doc["id"] in found_ids and doc["id"] not in matched_ids:
+                                matched_ids.add(doc["id"])
+                                matched_docs.append(doc)
+            except Exception:  # nosec B110
+                scan_failed = True
+
+        return _cache_and_return(matched_docs, cacheable=not scan_failed)
 
     def _select_topic_passages(
         self,
@@ -540,7 +1020,7 @@ class LearningService:
     ) -> list[dict]:
         matching_docs = self._matching_documents(topic)
         inspect_fn = getattr(self.document_lookup, "inspect_document_status", None)
-        if callable(inspect_fn):
+        if callable(inspect_fn) and not self._skip_redundant_inspect():
             matching_docs = [
                 d for d in matching_docs
                 if inspect_fn(doc_id=d["id"]).get("fresh")
@@ -548,7 +1028,7 @@ class LearningService:
         if not matching_docs:
             raise PracticeGenerationError(f"Không tìm thấy tài liệu phù hợp với chủ đề «{topic}».")
 
-        authored = resolve_topic(topic)
+        authored, focus_terms = resolve_topic_query(topic)
         topic_norm = _normalize_text(topic)
         topic_variants = _topic_orthography_variants(topic_norm)
         topic_terms = [
@@ -560,45 +1040,143 @@ class LearningService:
             if len(w) >= 2 and w not in QUERY_STOPWORDS and w not in DIRECTIVE_STOPWORDS
         ]
 
+        db_path_obj = getattr(self.document_lookup, "db_path", None)
+        db_fp = _get_sqlite_fingerprint(db_path_obj) if db_path_obj else ()
+        passage_cache_key: Optional[tuple[Any, ...]] = None
+        if db_fp:
+            passage_cache_key = (
+                str(db_path_obj or ""),
+                db_fp,
+                tuple((d["id"], str(d.get("file_hash") or "")) for d in matching_docs),
+                topic_norm,
+                difficulty,
+                tuple(weak_terms),
+                int(limit),
+            )
+            with self._catalog_lock:
+                cached_passages = self._topic_passages_cache.get(passage_cache_key)
+                if cached_passages is not None:
+                    self._topic_passages_cache.move_to_end(passage_cache_key)
+                    return [dict(p) for p in cached_passages]
+
+        label_words = set(re.findall(r"\w+", normalized(authored[0]))) if authored else set()
+        distinct_focus_terms = [
+            ft for ft in focus_terms
+            if ft and ft != topic_norm and (not authored or any(tok not in label_words for tok in re.findall(r"\w+", ft)))
+        ]
+        if not distinct_focus_terms and focus_terms:
+            distinct_focus_terms = list(focus_terms)
+
         doc_ids = [d["id"] for d in matching_docs]
         scope = ",".join("?" for _ in doc_ids)
         doc_map = {d["id"]: d for d in matching_docs}
+        doc_topics_map = self._batch_extract_document_topics(matching_docs)
+        doc_focus_counts: dict[int, int] = {}
+        authored_pattern = PATTERNS.get(authored[0]) if authored else None
 
-        def relevance_score(raw_text: str, doc_info: dict) -> int:
+        def relevance_score(raw_text: str, doc_info: dict) -> tuple[int, bool]:
             c_norm = _normalize_text(raw_text)
-            if authored and not matches(c_norm, authored[1]):
-                return 0
             score = 0
-            if authored and matches(c_norm, authored[1]):
-                score += 100
+            if authored:
+                authored_hits = authored_pattern.findall(c_norm) if authored_pattern is not None else []
+                if not authored_hits and (authored_pattern is not None or not matches(c_norm, authored[1])):
+                    return (0, False)
+                hit_count = len(authored_hits) if authored_hits else 1
+                score += 100 + min(4, max(0, hit_count - 1)) * 25
             if topic_variants and any(tv in c_norm for tv in topic_variants):
                 score += 100
+            # Strongly reward sub-topic focus terms (e.g. "bayes" for "Xác suất Bayes", "dao ham" for "Đạo hàm")
+            focus_hit_bonus = 0
+            for ft in distinct_focus_terms:
+                if ft in c_norm:
+                    focus_hit_bonus += 120 + min(4, c_norm.count(ft)) * 15
+            if not distinct_focus_terms:
+                for ft in focus_terms:
+                    if ft in c_norm:
+                        focus_hit_bonus += 80 + min(4, c_norm.count(ft)) * 12
+            score += min(focus_hit_bonus, 320)
+
             score += sum(10 for t in topic_terms if t in c_norm)
             score += sum(5 for w in weak_terms if w in c_norm)
 
+            did = doc_info.get("id")
+            if did in doc_focus_counts:
+                score += min(45, doc_focus_counts[did] * 4)
+
             doc_title = _normalize_text(doc_info.get("clean_title") or "")
             doc_fname = _normalize_text(doc_info.get("filename") or "")
-            if (authored and (matches(doc_title, authored[1]) or matches(doc_fname, authored[1]))) or any(
-                tv in doc_title or tv in doc_fname for tv in topic_variants
+            doc_extracted = _normalize_text(doc_topics_map.get(did, ""))
+            doc_fields = (
+                doc_title,
+                doc_fname,
+                doc_extracted,
+                re.sub(r"[-_]+", " ", doc_title),
+                re.sub(r"[-_]+", " ", doc_fname),
+                re.sub(r"[-_]+", " ", doc_extracted),
+            )
+            doc_field_match = bool(
+                (authored and any(matches(field, authored[1]) for field in doc_fields if field))
+                or any(tv in field for field in doc_fields for tv in topic_variants)
+            )
+            if doc_field_match:
+                score += 180
+
+            if re.search(
+                r"(?i)\b(?:khái\s+niệm|định\s+nghĩa|bản\s+chất|nguyên\s+lý|cốt\s+lõi|đặc\s+điểm|tính\s+chất|"
+                r"vấn\s+đề\s+giải\s+quyết|cơ\s+chế|definition|concept|property|principle|mechanism|"
+                r"algorithm|complexity|operation)\b",
+                raw_text,
+            ):
+                score += 40
+
+            if difficulty != "hard" and (
+                ("|" in raw_text and re.search(r"\|[-:]+\|", raw_text))
+                or re.search(
+                    r"(?i)(?:tính\s+chất[\s\S]+vấn\s+đề\s+giải\s+quyết[\s\S]+cơ\s+chế|"
+                    r"đóng\s+gói[\s\S]+trừu\s+tượng[\s\S]+kế\s+thừa[\s\S]+đa\s+hình)",
+                    raw_text,
+                )
             ):
                 score += 60
 
-            if re.search(r"(?i)\b(?:khái\s+niệm|định\s+nghĩa|bản\s+chất|nguyên\s+lý|cốt\s+lõi|đặc\s+điểm|tính\s+chất|vấn\s+đề\s+giải\s+quyết|cơ\s+chế)\b", raw_text):
-                score += 40
-
-            if ("|" in raw_text and re.search(r"\|[-:]+\|", raw_text)) or re.search(r"(?i)(?:tính\s+chất[\s\S]+vấn\s+đề\s+giải\s+quyết[\s\S]+cơ\s+chế|đóng\s+gói[\s\S]+trừu\s+tượng[\s\S]+kế\s+thừa[\s\S]+đa\s+hình)", raw_text):
-                score += 60
+            if difficulty == "hard":
+                if "Table [row:" in raw_text:
+                    score -= 120
+                if re.search(
+                    r"(?i)\b(?:step\s+\d|bước\s+\d|while\b|for\b|else\b|nullptr|pointer|insert|delete|algorithm|o\()",
+                    raw_text,
+                ):
+                    score += 45
 
             if re.search(r"\b(?:class\s+\w+|struct\s+\w+|public:|private:|protected:|virtual\s+|override)\b", raw_text):
                 score += 30
 
-            if difficulty == "hard":
+            if difficulty in {"medium", "hard"}:
+                dialogue_turns = len(
+                    re.findall(
+                        r'(?:^|\s)(?:Tôi|Ông|Bà|Anh|Cô|Hắn|Chị|Em|Mẹ|Cha)\s*:\s*[“"\']',
+                        raw_text,
+                    )
+                )
+                if dialogue_turns >= 2 and not doc_field_match:
+                    score -= 80
                 rule_clauses = re.split(r"[.!?;\n]+", c_norm)
                 rule_count = sum(bool(re.search(
                     r"\b(?:neu|chi\s+(?:khi|duoc|co)|khong\s+(?:duoc|the)|"
-                    r"phai|tru\s+khi|unless|must|cannot|only\s+(?:if|when))\b",
+                    r"phai|tru\s+khi|unless|must|cannot|only\s+(?:if|when)|if|when|requires?|suy\s+ra|ti\s+le)\b",
                     clause)) for clause in rule_clauses)
-                score += 60 * min(rule_count, 3)
+                if difficulty == "hard":
+                    multi_topic_hit = (
+                        (len(authored_hits) if authored else 0) >= 2
+                        or doc_field_match
+                        or len(topic_variants and [tv for tv in topic_variants if tv in c_norm] or []) >= 1
+                    )
+                    weight = 50 if multi_topic_hit else 30
+                else:
+                    weight = 20
+                score += weight * min(rule_count, 3)
+                if difficulty == "medium" and re.search(r"(?:P\(|=|→|\b(?:công\s+thức|định\s+lý|quy\s+tắc|ví\s+dụ)\b)", raw_text, re.IGNORECASE):
+                    score += 25
 
             ch_m = re.search(r"(?im)^[#\s]*(?:chương|phần|bài)\s+\d+[:\s]+([^\n]+)", raw_text)
             if ch_m:
@@ -606,37 +1184,160 @@ class LearningService:
                 if authored and not matches(ch_title, authored[1]) and not any(tv in ch_title for tv in topic_variants):
                     score -= 100
 
-            return score
+            low_quality = False
+            if score > 0:
+                stripped_raw = strip_source_review_banner(raw_text).strip()
+                pua_count = sum(1 for ch in stripped_raw if "\ue000" <= ch <= "\uf8ff")
+                glued_count = len(_GLUED_VI_OCR_RE.findall(stripped_raw))
+                vni_corrupt_count = len(_VNI_MIN_OCR_RE.findall(stripped_raw)) + len(_VNI_BROKEN_WORD_RE.findall(stripped_raw))
+                has_sentence_punct = bool(re.search(r"[.!?]", stripped_raw))
+                is_cover_or_title = len(stripped_raw) < 160 and not has_sentence_punct
+                low_quality = is_cover_or_title or (glued_count >= 2) or (vni_corrupt_count >= 2)
+                if is_cover_or_title:
+                    score -= 160
+                if glued_count >= 2:
+                    score -= min(160, 80 + (glued_count - 2) * 20)
+                if vni_corrupt_count >= 2:
+                    score -= min(180, 90 + (vni_corrupt_count - 2) * 30)
+                if pua_count > 0:
+                    score -= min(75, 25 + (pua_count - 1) * 15)
+                if not low_quality and pua_count == 0 and len(stripped_raw) >= 140:
+                    score += 30
+                score = max(1, score)
 
-        scored_candidates = []
-        seen_texts = set()
+            return score, low_quality
+
+        scored_candidates: list[tuple[int, bool, dict]] = []
+        blocked_formula_pages: set[tuple[str, int]] = set()
+        seen_texts: set[bytes] = set()
         try:
             with closing(self.document_lookup.connect()) as db:
-                cursor = db.execute(
-                    f"SELECT id AS chunk_id, doc_id, book_title, filename, page_num, chunk_index, text "
-                    f"FROM chunks WHERE doc_id IN ({scope}) ORDER BY doc_id, page_num, chunk_index",  # nosec B608
+                has_quality_table = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='corpus_page_quality'"
+                ).fetchone()
+                if has_quality_table:
+                    for qrow in db.execute(
+                        "SELECT filename, page_num, warnings_json FROM corpus_page_quality WHERE needs_review=1"
+                    ):
+                        try:
+                            warns = json.loads(qrow["warnings_json"]) if qrow["warnings_json"] else []
+                        except Exception:
+                            warns = []
+                        if "unrepresented_formula_or_diagram_suspected" in warns:
+                            blocked_formula_pages.add((str(qrow["filename"] or ""), int(qrow["page_num"])))
+                total_chunks_row = db.execute(
+                    f"SELECT COUNT(*) FROM chunks WHERE doc_id IN ({scope})",  # nosec B608
                     doc_ids,
-                )
-                current_doc_id = None
-                heading_stack: list[tuple[int, str]] = []
-                for r in cursor:
-                    if r["doc_id"] != current_doc_id:
-                        current_doc_id = r["doc_id"]
-                        heading_stack.clear()
-                    raw_text = r["text"]
-                    _update_heading_stack(heading_stack, raw_text)
-                    if not _is_theory_chunk(raw_text, heading_context=heading_stack):
-                        continue
-                    exact_text = re.sub(r"\s+", " ", unicodedata.normalize("NFC", raw_text)).strip().casefold()
-                    text_key = hashlib.sha256(exact_text.encode("utf-8")).digest()
-                    if text_key in seen_texts:
-                        continue
-                    seen_texts.add(text_key)
+                ).fetchone()
+                total_chunks = int(total_chunks_row[0]) if total_chunks_row else 0
 
-                    doc_info = doc_map.get(r["doc_id"], {})
-                    s = relevance_score(raw_text, doc_info)
-                    if s > 0:
-                        scored_candidates.append((s, dict(r)))
+                use_fts_prefilter = total_chunks > 400 and self._has_chunks_fts(db)
+                candidate_rows: list[Any] = []
+                if use_fts_prefilter:
+                    specific_phrases: list[str] = []
+                    if any(ord(ch) > 127 for ch in str(topic or "")):
+                        specific_phrases.append(str(topic))
+                    if authored:
+                        for alias in authored[1]:
+                            a_norm = normalized(alias)
+                            if a_norm in topic_norm or any(a_norm == ft or a_norm in ft for ft in focus_terms):
+                                specific_phrases.append(alias)
+                    for ft in distinct_focus_terms:
+                        if any(ch.isalpha() for ch in ft):
+                            # Add non-stopword distinct tokens (e.g. "bayes")
+                            for tok in re.findall(r"[^\W_]+", ft):
+                                if len(tok) >= 3 and tok not in label_words:
+                                    specific_phrases.append(tok)
+
+                    specific_fts = self._fts_phrase_query(specific_phrases)
+                    if specific_fts:
+                        candidate_rows = db.execute(
+                            f"SELECT c.id AS chunk_id, c.doc_id, c.book_title, c.filename, c.page_num, c.chunk_index, c.text "
+                            f"FROM chunks_fts f JOIN chunks c ON c.id = f.rowid "
+                            f"WHERE c.doc_id IN ({scope}) AND chunks_fts MATCH ? "
+                            f"ORDER BY rank LIMIT 900",  # nosec B608
+                            [*doc_ids, specific_fts],
+                        ).fetchall()
+                        for r in candidate_rows:
+                            did = r["doc_id"]
+                            doc_focus_counts[did] = doc_focus_counts.get(did, 0) + 1
+
+                    broad_threshold = 600 if not distinct_focus_terms else limit * 4
+                    if len(candidate_rows) < broad_threshold and authored:
+                        broad_fts = self._fts_phrase_query(list(authored[1]))
+                        if broad_fts:
+                            seen_cids = {r["chunk_id"] for r in candidate_rows}
+                            extra_rows = db.execute(
+                                f"SELECT c.id AS chunk_id, c.doc_id, c.book_title, c.filename, c.page_num, c.chunk_index, c.text "
+                                f"FROM chunks_fts f JOIN chunks c ON c.id = f.rowid "
+                                f"WHERE c.doc_id IN ({scope}) AND chunks_fts MATCH ? "
+                                f"ORDER BY rank LIMIT 900",  # nosec B608
+                                [*doc_ids, broad_fts],
+                            ).fetchall()
+                            for r in extra_rows:
+                                if r["chunk_id"] not in seen_cids:
+                                    candidate_rows.append(r)
+                                    seen_cids.add(r["chunk_id"])
+
+                if candidate_rows:
+                    # For markdown docs in prefiltered mode, retrieve prior headings if needed
+                    md_headings_cache: dict[int, list[tuple[int, int, str]]] = {}
+                    for r in candidate_rows:
+                        raw_text = r["text"]
+                        fname = str(r["filename"] or "")
+                        heading_ctx: list[tuple[int, str]] = []
+                        if fname.lower().endswith((".md", ".markdown")):
+                            did = r["doc_id"]
+                            if did not in md_headings_cache:
+                                hrows = db.execute(
+                                    "SELECT page_num, chunk_index, text FROM chunks "
+                                    "WHERE doc_id=? AND text LIKE '#%' ORDER BY page_num, chunk_index",
+                                    (did,),
+                                ).fetchall()
+                                md_headings_cache[did] = [
+                                    (hr["page_num"], hr["chunk_index"], str(hr["text"] or ""))
+                                    for hr in hrows
+                                ]
+                            for hp, hci, ht in md_headings_cache[did]:
+                                if (hp, hci) <= (r["page_num"], r["chunk_index"]):
+                                    _update_heading_stack(heading_ctx, ht)
+                        if not _is_theory_chunk(raw_text, heading_context=heading_ctx or None):
+                            continue
+                        exact_text = re.sub(r"\s+", " ", unicodedata.normalize("NFC", raw_text)).strip().casefold()
+                        text_key = hashlib.sha256(exact_text.encode("utf-8")).digest()
+                        if text_key in seen_texts:
+                            continue
+                        seen_texts.add(text_key)
+                        doc_info = doc_map.get(r["doc_id"], {})
+                        s, lq = relevance_score(raw_text, doc_info)
+                        if s > 0:
+                            scored_candidates.append((s, lq, dict(r)))
+                else:
+                    cursor = db.execute(
+                        f"SELECT id AS chunk_id, doc_id, book_title, filename, page_num, chunk_index, text "
+                        f"FROM chunks WHERE doc_id IN ({scope}) ORDER BY doc_id, page_num, chunk_index",  # nosec B608
+                        doc_ids,
+                    )
+                    current_doc_id = None
+                    heading_stack: list[tuple[int, str]] = []
+                    for r in cursor:
+                        if r["doc_id"] != current_doc_id:
+                            current_doc_id = r["doc_id"]
+                            heading_stack.clear()
+                        raw_text = r["text"]
+                        _update_heading_stack(heading_stack, raw_text)
+                        if not _is_theory_chunk(raw_text, heading_context=heading_stack):
+                            continue
+                        exact_text = re.sub(r"\s+", " ", unicodedata.normalize("NFC", raw_text)).strip().casefold()
+                        text_key = hashlib.sha256(exact_text.encode("utf-8")).digest()
+                        if text_key in seen_texts:
+                            continue
+                        seen_texts.add(text_key)
+
+                        doc_info = doc_map.get(r["doc_id"], {})
+                        s, lq = relevance_score(raw_text, doc_info)
+                        if s > 0:
+                            scored_candidates.append((s, lq, dict(r)))
         except Exception:  # nosec B110
             pass
 
@@ -644,13 +1345,56 @@ class LearningService:
             raise PracticeGenerationError(f"Không tìm thấy đoạn lý thuyết phù hợp trong tài liệu cho chủ đề «{topic}».")
 
         scored_candidates.sort(key=lambda item: item[0], reverse=True)
-        max_score = scored_candidates[0][0]
+        quality_owner = (
+            getattr(self, "searcher", None)
+            or getattr(self.practice_service, "searcher", None)
+            or self.document_lookup
+        )
+        attach_quality = getattr(quality_owner, "_attach_page_quality_metadata", None)
+        if callable(attach_quality) and scored_candidates:
+            attach_quality([item[2] for item in scored_candidates[: max(limit * 4, 48)]])
+
+        def _has_formula_gap(cand: dict) -> bool:
+            if (str(cand.get("filename") or ""), int(cand.get("page_num") or 0)) in blocked_formula_pages:
+                return True
+            pq = cand.get("page_quality") or {}
+            return bool(
+                pq.get("needs_review")
+                and "unrepresented_formula_or_diagram_suspected" in (pq.get("warnings") or [])
+            )
+
+        clean_pool = [item for item in scored_candidates if not _has_formula_gap(item[2])]
+        candidate_pool = clean_pool if clean_pool else scored_candidates
+
+        max_score = candidate_pool[0][0]
         if max_score >= 100:
             threshold = max(50, max_score * 0.5)
         else:
             threshold = max_score * 0.5
-        matching_scored = [c for score, c in scored_candidates if score >= threshold]
-        return matching_scored[:limit]
+        matching_scored = [c for score, _lq, c in candidate_pool if score >= threshold]
+        if len(matching_scored) < limit:
+            seen_chunk_ids = {c.get("chunk_id") for c in matching_scored}
+            backfill_floor = max(20, max_score * 0.25)
+            for score, low_quality, cand in candidate_pool:
+                if len(matching_scored) >= limit:
+                    break
+                if low_quality or score < backfill_floor:
+                    continue
+                cid = cand.get("chunk_id")
+                if cid in seen_chunk_ids:
+                    continue
+                seen_chunk_ids.add(cid)
+                matching_scored.append(cand)
+        result = matching_scored[:limit]
+        if passage_cache_key is not None:
+            _lru_cache_put(
+                self._catalog_lock,
+                self._topic_passages_cache,
+                passage_cache_key,
+                [dict(p) for p in result],
+                max_items=128,
+            )
+        return result
 
     def generate(
         self,
@@ -661,15 +1405,27 @@ class LearningService:
         weak_topics: Optional[list[str]] = None,
         model: Optional[str] = None,
         reuse_verified_bank: Optional[bool] = None,
+        on_progress: Optional[Callable[[dict[str, Any]], None]] = None,
     ) -> dict[str, Any]:
+        passage_limit = max(12 if difficulty == "hard" else 6, min(18, max(1, int(count or 3)) + 6))
         selected_passages = self._select_topic_passages(
-            topic, difficulty=difficulty, weak_topics=weak_topics, limit=6,
+            topic, difficulty=difficulty, weak_topics=weak_topics, limit=passage_limit,
         )
-        extra_kwargs = (
+        extra_kwargs: dict[str, Any] = (
             {"reuse_verified_bank": reuse_verified_bank}
             if reuse_verified_bank is not None
             else {}
         )
+        if on_progress is not None:
+            try:
+                gen_params = inspect.signature(self.practice_service.generate_from_passages).parameters
+                if "on_progress" in gen_params or any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD
+                    for param in gen_params.values()
+                ):
+                    extra_kwargs["on_progress"] = on_progress
+            except (TypeError, ValueError):
+                pass
         return self.practice_service.generate_from_passages(
             passages=selected_passages,
             count=count,
@@ -784,24 +1540,7 @@ class LearningService:
                 except OSError:
                     continue
 
-        if pdf_p and pdf_p.is_file():
-            try:
-                import pymupdf as fitz
-                with fitz.open(str(pdf_p)) as pdf_doc:
-                    chunk_pages = {int(ch.get("page_num", 1)) for ch in chunks if ch.get("page_num")}
-                    for p_no in chunk_pages:
-                        if 1 <= p_no <= len(pdf_doc):
-                            p_obj = pdf_doc.load_page(p_no - 1)
-                            h = p_obj.rect.height
-                            for b in p_obj.get_text("blocks"):
-                                if b[1] >= h * 0.90 or b[3] >= h - 35:
-                                    for line in b[4].splitlines():
-                                        ln = line.strip()
-                                        if ln and not ln.endswith((";", "{", "}")) and "?" not in ln:
-                                            footers.add(ln)
-            except Exception:  # nosec B110
-                pass
-        elif doc_id == 123 or "KTLT_C14_ConTroNangCao" in filename:
+        if not (pdf_p and pdf_p.is_file()) and (doc_id == 123 or "KTLT_C14_ConTroNangCao" in filename):
             # Established source evidence for doc123 (physical 39, bottom margin y513.54-526.93 in Verdana)
             footers.add("Dữ liệu kiểu con trỏ (nâng cao)")
 
@@ -812,6 +1551,8 @@ class LearningService:
         # number separately, then bind content to its actual body chunk/page.
         pending_markdown = None
         in_exercise_section = False
+        prev_chunk_emitted_exercise = False
+        prev_chunk_header = ""
         def markdown_blocks():
             for chunk in chunks:
                 for block in re.split(r"(?m)(?=^#{1,6}\s)", chunk.get("text", "")):
@@ -825,8 +1566,24 @@ class LearningService:
                 continue
 
             # Skip preface or introductory chunks describing book structure
+            stripped_for_hdr = re.sub(
+                r"^\s*\[(?:NỘI\s+DUNG\s+NGUỒN|BẢN\s+CHỮ\s+CHƯA\s+QUA\s+KIỂM\s+ĐỊNH)[^\]\n]*\]\s*",
+                "",
+                strip_source_review_banner(text),
+            ).strip()
+            body_lines_hdr = [ln.strip() for ln in stripped_for_hdr.splitlines() if ln.strip()]
+            cur_chunk_header = body_lines_hdr[0] if body_lines_hdr else ""
+            is_repeated_running_header = bool(
+                prev_chunk_header
+                and cur_chunk_header
+                and len(cur_chunk_header) < 90
+                and cur_chunk_header.casefold() == prev_chunk_header.casefold()
+            )
+            exercises_len_before = len(exercises)
             first_non_empty = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
             if re.match(r"(?i)^[#\s]*(?:preface|lời\s+nói\s+đầu|mở\s+đầu|introduction|about\s+the\s+author)\b", first_non_empty):
+                prev_chunk_emitted_exercise = False
+                prev_chunk_header = cur_chunk_header
                 continue
 
             doc_id = doc["id"]
@@ -1045,7 +1802,7 @@ class LearningService:
                     else:
                         in_exercise_section = False
             else:
-                if re.search(r"(?im)^[ \t]*(?:#+\s*)?(?:chương\s+\d+|phần\s+[ivx\d]+\s*[.:]\s*(?:hướng\s+dẫn|lý\s+thuyết|tóm\s+tắt)|hướng\s+dẫn|lý\s+thuyết|tóm\s+tắt)\b", text):
+                if not is_repeated_running_header and re.search(r"(?im)^[ \t]*(?:#+\s*)?(?:chương\s+\d+|phần\s+[ivx\d]+\s*[.:]\s*(?:hướng\s+dẫn|lý\s+thuyết|tóm\s+tắt)|hướng\s+dẫn|lý\s+thuyết|tóm\s+tắt)\b", text):
                     in_exercise_section = False
                 if re.search(r"(?im)^[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(?:đáp\s+án|lời\s+giải|answer|solution)\b", text):
                     in_exercise_section = False
@@ -1077,12 +1834,109 @@ class LearningService:
                                     "snippet": clean_ans,
                                 },
                             }
-                elif in_exercise_section or re.search(r"(?im)^[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(?:bài|câu|exercise|problem)\s+\d+[\.:]", text):
-                    _collect_section_exercises(text, is_checkpoint=False, allow_dotted=in_exercise_section)
+                elif in_exercise_section or prev_chunk_emitted_exercise or re.search(r"(?im)^[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(?:bài|câu|exercise|problem)\s+\d+[\.:]", text):
+                    cont_handled = False
+                    if (in_exercise_section or prev_chunk_emitted_exercise) and exercises:
+                        work_text = stripped_for_hdr if stripped_for_hdr else text
+                        if is_repeated_running_header:
+                            work_lines = work_text.splitlines()
+                            for w_idx, w_ln in enumerate(work_lines):
+                                if w_ln.strip():
+                                    work_text = "\n".join(work_lines[w_idx + 1:]).strip()
+                                    break
+                        first_ex_m = re.search(
+                            r"(?im)(?:^|\n)[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?"
+                            r"(?:(?:bài|câu|exercise|problem)\s+\d+(?:[.:]\d+)*[\.:]?[ \t]*|\d+\.\d+(?=\s+[^\n]{15,}))",
+                            work_text,
+                        )
+                        head_raw = work_text[:first_ex_m.start()].strip() if first_ex_m else work_text.strip()
+                        head_clean = _strip_trailing_ornaments_and_footer(
+                            _clean_question_prefix(head_raw),
+                            clean_title=clean_title,
+                            recurring_footers=recurring_footers,
+                        ).strip()
+                        prev_q = exercises[-1]["question"].rstrip()
+                        prev_open = not re.search(r"[.?!]\s*$", prev_q)
+                        cont_starts = bool(re.match(r"^(?:[a-zà-ỹ]|\([a-z\d]\)|[a-d][.)]\s)", head_clean))
+                        if (
+                            head_clean
+                            and (prev_open or cont_starts)
+                            and not _is_non_theory_heading(head_clean.splitlines()[0])
+                            and not re.match(r"^(?:#+\s*|chương\s+\d+)", head_clean, re.I)
+                        ):
+                            sep = "\n" if (re.match(r"^(?:\([a-z\d]\)|[a-d][.)]\s)", head_clean) or prev_q.endswith((":", "-"))) else " "
+                            merged_q = f"{prev_q}{sep}{head_clean}"
+                            exercises[-1]["question"] = merged_q
+                            exercises[-1]["source"]["snippet"] = merged_q
+                            cont_handled = True
+                            if first_ex_m:
+                                _collect_section_exercises(
+                                    work_text[first_ex_m.start():],
+                                    is_checkpoint=False,
+                                    allow_dotted=in_exercise_section,
+                                )
+                    if not cont_handled:
+                        _collect_section_exercises(text, is_checkpoint=False, allow_dotted=in_exercise_section)
+
+            prev_chunk_emitted_exercise = len(exercises) > exercises_len_before
+            prev_chunk_header = cur_chunk_header
+
+        if (exercises or answers) and pdf_p and pdf_p.is_file():
+            try:
+                import pymupdf as fitz
+                extracted_pages = {
+                    int(ex["source"]["page_num"])
+                    for ex in exercises
+                    if (ex.get("source") or {}).get("page_num")
+                } | {
+                    int(ans["source"]["page_num"])
+                    for ans in answers.values()
+                    if (ans.get("source") or {}).get("page_num")
+                }
+                pdf_footers: set[str] = set()
+                with fitz.open(str(pdf_p)) as pdf_doc:
+                    for p_no in sorted(extracted_pages):
+                        if 1 <= p_no <= len(pdf_doc):
+                            p_obj = pdf_doc.load_page(p_no - 1)
+                            h = p_obj.rect.height
+                            for b in p_obj.get_text("blocks"):
+                                if b[1] >= h * 0.90 or b[3] >= h - 35:
+                                    for line in b[4].splitlines():
+                                        ln = line.strip()
+                                        if ln and not ln.endswith((";", "{", "}")) and "?" not in ln:
+                                            pdf_footers.add(ln)
+                if pdf_footers:
+                    for ex in exercises:
+                        cleaned_q = _strip_trailing_ornaments_and_footer(
+                            ex["question"], clean_title=clean_title, recurring_footers=pdf_footers
+                        )
+                        ex["question"] = cleaned_q
+                        ex["source"]["snippet"] = cleaned_q
+                        if ex.get("source_context"):
+                            cleaned_ctx = _strip_trailing_ornaments_and_footer(
+                                ex["source_context"], clean_title=clean_title, recurring_footers=pdf_footers
+                            )
+                            ex["source_context"] = cleaned_ctx
+                            ex["source"]["source_context"] = cleaned_ctx
+                    for ans in answers.values():
+                        cleaned_a = _strip_trailing_ornaments_and_footer(
+                            ans["answer"], clean_title=clean_title, recurring_footers=pdf_footers
+                        )
+                        ans["answer"] = cleaned_a
+                        ans["source"]["snippet"] = cleaned_a
+            except Exception:  # nosec B110
+                pass
 
         return exercises, answers, ans_counts
 
-    def _solve_and_verify_exercise(self, question: str, theory_chunks: list[dict], model: str) -> tuple[Optional[str], str]:
+    def _solve_and_verify_exercise(
+        self,
+        question: str,
+        theory_chunks: list[dict],
+        model: str,
+        *,
+        timeout: Optional[float] = 90.0,
+    ) -> tuple[Optional[str], str]:
         """Solve missing exercise using theory context and independently verify the solution."""
         if not theory_chunks:
             return None, "unverified"
@@ -1109,8 +1963,20 @@ class LearningService:
             s = re.sub(r"(?is)<\s*(?:think|analysis|reasoning)\b[^>]*>.*?<\s*/\s*(?:think|analysis|reasoning)\s*>", "", t)
             return re.sub(r"(?is)^.*?<\s*/\s*(?:think|analysis|reasoning)\s*>", "", s).strip()
 
+        chat_fn = self.practice_service._chat_complete
+        chat_kwargs: dict[str, Any] = {}
+        if timeout is not None:
+            try:
+                sig = inspect.signature(chat_fn)
+                if "timeout" in sig.parameters or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+                ):
+                    chat_kwargs["timeout"] = min(90.0, max(15.0, float(timeout)))
+            except (TypeError, ValueError):
+                pass
+
         try:
-            solver_raw = self.practice_service._chat_complete(solver_prompt, model, 600)
+            solver_raw = chat_fn(solver_prompt, model, 600, **chat_kwargs)
             solver_data = self.practice_service._parse_json(solver_raw)
             solution = _clean_think(str(solver_data.get("solution", "")))
             final_answer = _clean_think(str(solver_data.get("final_answer", "")))
@@ -1134,7 +2000,7 @@ class LearningService:
             '{"solution_supported": true/false, "conditions_preserved": true/false, "verified": true/false, "verified_answer": "kết quả đáp án bạn xác nhận"}'
         )
         try:
-            verifier_raw = self.practice_service._chat_complete(verifier_prompt, model, 300)
+            verifier_raw = chat_fn(verifier_prompt, model, 300, **chat_kwargs)
             verifier_data = self.practice_service._parse_json(verifier_raw)
             if not isinstance(verifier_data, dict):
                 return None, "unverified"
@@ -1159,7 +2025,11 @@ class LearningService:
         return None, "unverified"
 
     def _get_relevant_theory_chunks(
-        self, doc_id: int, question: str, max_chunks: int = 4
+        self,
+        doc_id: int,
+        question: str,
+        max_chunks: int = 4,
+        preloaded_chunks: Optional[list[dict]] = None,
     ) -> list[dict]:
         clean_q = re.sub(r"(?im)^\s*(?:bài|câu|exercise|problem)\s+\d+[\.:]?", "", question)
         clean_norm = _normalize_text(clean_q)
@@ -1179,15 +2049,10 @@ class LearningService:
 
         candidates = []
         try:
-            with closing(self.document_lookup.connect()) as db:
-                cursor = db.execute(
-                    "SELECT id AS chunk_id, id, doc_id, book_title, filename, page_num, chunk_index, text "
-                    "FROM chunks WHERE doc_id=? ORDER BY page_num, chunk_index",
-                    (doc_id,),
-                )
+            if preloaded_chunks is not None:
                 heading_stack: list[tuple[int, str]] = []
-                for r in cursor:
-                    raw_text = r["text"]
+                for r in preloaded_chunks:
+                    raw_text = r.get("text", "")
                     _update_heading_stack(heading_stack, raw_text)
                     if not _is_theory_chunk(raw_text, heading_context=heading_stack):
                         continue
@@ -1197,6 +2062,25 @@ class LearningService:
                         candidates.append((s, dict(r)))
                         candidates.sort(key=lambda item: item[0], reverse=True)
                         del candidates[max_chunks:]
+            else:
+                with closing(self.document_lookup.connect()) as db:
+                    cursor = db.execute(
+                        "SELECT id AS chunk_id, id, doc_id, book_title, filename, page_num, chunk_index, text "
+                        "FROM chunks WHERE doc_id=? ORDER BY page_num, chunk_index",
+                        (doc_id,),
+                    )
+                    heading_stack = []
+                    for r in cursor:
+                        raw_text = r["text"]
+                        _update_heading_stack(heading_stack, raw_text)
+                        if not _is_theory_chunk(raw_text, heading_context=heading_stack):
+                            continue
+                        c_norm = _normalize_text(raw_text)
+                        s = score_theory(c_norm)
+                        if s > 0:
+                            candidates.append((s, dict(r)))
+                            candidates.sort(key=lambda item: item[0], reverse=True)
+                            del candidates[max_chunks:]
         except Exception:
             return []
 
@@ -1215,7 +2099,7 @@ class LearningService:
     ) -> dict[str, Any]:
         matching_docs = self._matching_documents(topic)
         inspect_fn = getattr(self.document_lookup, "inspect_document_status", None)
-        if callable(inspect_fn):
+        if callable(inspect_fn) and not self._skip_redundant_inspect():
             matching_docs = [
                 d for d in matching_docs
                 if inspect_fn(doc_id=d["id"]).get("fresh")
@@ -1223,67 +2107,235 @@ class LearningService:
         if not matching_docs:
             return {"items": []}
 
-        authored = resolve_topic(topic)
+        authored, focus_terms = resolve_topic_query(topic)
         topic_norm = _normalize_text(topic)
         topic_terms = [
             w for w in re.findall(r"\w+", topic_norm)
             if len(w) >= 2 and w not in QUERY_STOPWORDS and w not in DIRECTIVE_STOPWORDS
         ]
+        label_words = set(re.findall(r"\w+", normalized(authored[0]))) if authored else set()
+        distinct_focus_terms = [
+            ft for ft in focus_terms
+            if ft and ft != topic_norm and (not authored or any(tok not in label_words for tok in re.findall(r"\w+", ft)))
+        ]
+        if not distinct_focus_terms and focus_terms:
+            distinct_focus_terms = list(focus_terms)
 
-        all_items = []
+        doc_topics_map = self._batch_extract_document_topics(matching_docs)
+        exercise_fts_query = self._fts_phrase_query([
+            "bài tập",
+            "exercises",
+            "exercise",
+            "practice problems",
+            "practice problem",
+            "problems",
+            "checkpoints",
+            "checkpoint",
+            "answer key",
+            "lời giải",
+            "đáp án",
+        ])
+        exercise_heading_re = re.compile(
+            r"(?im)(?:^|\n)[ \t]*(?:#+\s*)?(?:(?:phần|section|part)\s+[ivx\d]+\s*[.:]\s*)?(?:bài\s+tập|exercises|practice\s+problems?|checkpoints?)\b"
+        )
+        all_items: list[dict[str, Any]] = []
+        prioritized_items: list[dict[str, Any]] = []
+        fallback_items: list[dict[str, Any]] = []
+        doc_chunk_loaders: dict[int, Callable[[], list[dict]]] = {}
+        db_path_obj = getattr(self.document_lookup, "db_path", None)
+        db_path_str = str(db_path_obj or "")
+        db_fp = _get_sqlite_fingerprint(db_path_obj) if db_path_obj else ()
+        can_use_extract_cache = (
+            bool(db_fp)
+            and getattr(self._extract_exercises_and_answers, "__func__", None) is LearningService._extract_exercises_and_answers
+        )
+
+        def _store_exercise_cache(c_key: tuple[Any, ...], payload: tuple[list, dict, dict]) -> None:
+            if not can_use_extract_cache:
+                return
+            _lru_cache_put(self._exercise_cache_lock, self._exercise_extract_cache, c_key, payload)
+
+        cached_extracts_by_doc: dict[int, tuple[list, dict, dict]] = {}
+        uncached_doc_ids: list[int] = []
+        for doc in matching_docs:
+            doc_id = doc["id"]
+            ex_cache_key = (db_path_str, doc_id, str(doc.get("file_hash") or ""), db_fp)
+            cached_extract = None
+            if can_use_extract_cache:
+                with self._exercise_cache_lock:
+                    cached_extract = self._exercise_extract_cache.get(ex_cache_key)
+                    if cached_extract is not None:
+                        self._exercise_extract_cache.move_to_end(ex_cache_key)
+            if cached_extract is not None:
+                cached_extracts_by_doc[doc_id] = cached_extract
+            else:
+                uncached_doc_ids.append(doc_id)
+
+        skipped_uncached_ids: set[int] = set()
+        uncached_chunks_by_doc: dict[int, list[dict]] = {}
+        if uncached_doc_ids:
+            with closing(self.document_lookup.connect()) as db:
+                has_fts = bool(exercise_fts_query and self._has_chunks_fts(db))
+                fts_hit_docs: set[int] = set()
+                doc_chunk_counts: dict[int, int] = {}
+                matched_ex_texts_by_doc: dict[int, list[str]] = {}
+                if has_fts:
+                    for start in range(0, len(uncached_doc_ids), 400):
+                        batch_ids = uncached_doc_ids[start : start + 400]
+                        batch_scope = ",".join("?" for _ in batch_ids)
+                        for row in db.execute(
+                            f"SELECT DISTINCT c.doc_id FROM chunks_fts f JOIN chunks c ON c.id = f.rowid "
+                            f"WHERE c.doc_id IN ({batch_scope}) AND chunks_fts MATCH ?",  # nosec B608
+                            [*batch_ids, exercise_fts_query],
+                        ):
+                            fts_hit_docs.add(int(row[0]))
+                        for row in db.execute(
+                            f"SELECT doc_id, COUNT(*) FROM chunks WHERE doc_id IN ({batch_scope}) GROUP BY doc_id",  # nosec B608
+                            batch_ids,
+                        ):
+                            doc_chunk_counts[int(row[0])] = int(row[1])
+                    large_hit_ids = [
+                        did for did in fts_hit_docs if doc_chunk_counts.get(did, 0) > 200
+                    ]
+                    for start in range(0, len(large_hit_ids), 400):
+                        batch_ids = large_hit_ids[start : start + 400]
+                        batch_scope = ",".join("?" for _ in batch_ids)
+                        for row in db.execute(
+                            f"SELECT c.doc_id, c.text FROM chunks_fts f JOIN chunks c ON c.id = f.rowid "
+                            f"WHERE c.doc_id IN ({batch_scope}) AND chunks_fts MATCH ?",  # nosec B608
+                            [*batch_ids, exercise_fts_query],
+                        ):
+                            matched_ex_texts_by_doc.setdefault(int(row[0]), []).append(str(row[1] or ""))
+
+                docs_to_load: list[int] = []
+                for did in uncached_doc_ids:
+                    if has_fts:
+                        if did not in fts_hit_docs:
+                            skipped_uncached_ids.add(did)
+                            continue
+                        if doc_chunk_counts.get(did, 0) > 200 and not any(
+                            exercise_heading_re.search(t) for t in matched_ex_texts_by_doc.get(did, ())
+                        ):
+                            skipped_uncached_ids.add(did)
+                            continue
+                    docs_to_load.append(did)
+
+                for start in range(0, len(docs_to_load), 400):
+                    batch_ids = docs_to_load[start : start + 400]
+                    batch_scope = ",".join("?" for _ in batch_ids)
+                    for row in db.execute(
+                        f"SELECT id AS chunk_id, id, doc_id, book_title, filename, page_num, chunk_index, text "
+                        f"FROM chunks WHERE doc_id IN ({batch_scope}) ORDER BY doc_id, page_num, chunk_index",  # nosec B608
+                        batch_ids,
+                    ):
+                        uncached_chunks_by_doc.setdefault(int(row["doc_id"]), []).append(dict(row))
+
         for doc in matching_docs:
             doc_id = doc["id"]
             doc_title = _normalize_text(doc.get("clean_title") or "")
             doc_filename = _normalize_text(doc.get("filename") or "")
-            extracted_topic = _normalize_text(self._extract_document_topic(doc))
+            extracted_topic = _normalize_text(doc_topics_map.get(doc_id, ""))
+            doc_fields = (
+                doc_title,
+                doc_filename,
+                extracted_topic,
+                re.sub(r"[-_]+", " ", doc_title),
+                re.sub(r"[-_]+", " ", doc_filename),
+                re.sub(r"[-_]+", " ", extracted_topic),
+            )
 
             # Check if the document itself is dedicated to the topic
             if authored:
-                is_dedicated = (
-                    matches(doc_title, authored[1])
-                    or matches(doc_filename, authored[1])
-                    or matches(extracted_topic, authored[1])
-                )
+                is_dedicated = any(matches(field, authored[1]) for field in doc_fields if field)
             else:
-                is_dedicated = (
-                    (topic_norm in doc_title)
-                    or (topic_norm in doc_filename)
-                    or (topic_norm in extracted_topic)
-                )
+                is_dedicated = any(topic_norm in field for field in doc_fields if field)
 
-            with closing(self.document_lookup.connect()) as db:
-                cursor = db.execute(
-                    "SELECT id AS chunk_id, id, doc_id, book_title, filename, page_num, chunk_index, text "
-                    "FROM chunks WHERE doc_id=? ORDER BY page_num, chunk_index",
-                    (doc_id,),
-                )
-                chunks_list = [dict(r) for r in cursor]
+            ex_cache_key = (db_path_str, doc_id, str(doc.get("file_hash") or ""), db_fp)
+            chunks_list: Optional[list[dict]] = None
+            if doc_id in cached_extracts_by_doc:
+                doc_exercises, doc_answers, ans_counts = cached_extracts_by_doc[doc_id]
+            else:
+                chunks_list = uncached_chunks_by_doc.get(doc_id)
+                if doc_id in skipped_uncached_ids or chunks_list is None:
+                    _store_exercise_cache(ex_cache_key, ([], {}, {}))
+                    continue
 
-            doc_exercises, doc_answers, ans_counts = self._extract_exercises_and_answers(chunks_list, doc)
+                doc_exercises, doc_answers, ans_counts = self._extract_exercises_and_answers(chunks_list, doc)
+                _store_exercise_cache(ex_cache_key, (doc_exercises, doc_answers, ans_counts))
+
             if not doc_exercises:
                 continue
 
-            # Identify pages teaching the concept in broader documents
+            chunks_holder: list[Optional[list[dict]]] = [chunks_list]
+
+            def _doc_chunks(
+                did: int = doc_id,
+                holder: list[Optional[list[dict]]] = chunks_holder,
+            ) -> list[dict]:
+                if holder[0] is None:
+                    with closing(self.document_lookup.connect()) as db:
+                        cursor = db.execute(
+                            "SELECT id AS chunk_id, id, doc_id, book_title, filename, page_num, chunk_index, text "
+                            "FROM chunks WHERE doc_id=? ORDER BY page_num, chunk_index",
+                            (did,),
+                        )
+                        holder[0] = [dict(r) for r in cursor]
+                return holder[0]
+
+            doc_chunk_loaders[doc_id] = _doc_chunks
+
+            # Identify pages teaching the concept in broader documents (cached across calls per DB revision)
             topic_pages = set()
-            if not is_dedicated:
-                heading_stack: list[tuple[int, str]] = []
-                for c in chunks_list:
-                    c_text = c.get("text", "")
-                    _update_heading_stack(heading_stack, c_text)
-                    if not _is_theory_chunk(c_text, heading_context=heading_stack):
-                        continue
-                    c_norm = _normalize_text(c_text)
-                    if authored and not matches(c_norm, authored[1]):
-                        continue
-                    if not (authored and matches(c_norm, authored[1])) and topic_norm not in c_norm:
-                        continue
-                    # Exclude passing mentions where the chapter/section is an unrelated topic
-                    sec_m = re.search(r"(?im)^[#\s]*(?:(?:chương|phần|bài|chapter|section)\s+\d+[:\s]+|\d+\.\d+\s+)([^\n]+)", c_text)
-                    if sec_m:
-                        sec_title = _normalize_text(sec_m.group(1))
-                        if authored and not matches(sec_title, authored[1]) and topic_norm not in sec_title:
+            focus_pages = set()
+            if not is_dedicated or distinct_focus_terms:
+                pages_cache_key = (
+                    db_path_str,
+                    doc_id,
+                    str(doc.get("file_hash") or ""),
+                    db_fp,
+                    topic_norm,
+                    bool(is_dedicated),
+                    tuple(distinct_focus_terms),
+                )
+                cached_pages = None
+                if can_use_extract_cache:
+                    with self._exercise_cache_lock:
+                        cached_pages = self._exercise_topic_pages_cache.get(pages_cache_key)
+                        if cached_pages is not None:
+                            self._exercise_topic_pages_cache.move_to_end(pages_cache_key)
+                if cached_pages is not None:
+                    topic_pages = set(cached_pages[0])
+                    focus_pages = set(cached_pages[1])
+                else:
+                    heading_stack: list[tuple[int, str]] = []
+                    for c in _doc_chunks():
+                        c_text = c.get("text", "")
+                        _update_heading_stack(heading_stack, c_text)
+                        if not _is_theory_chunk(c_text, heading_context=heading_stack):
                             continue
-                    topic_pages.add(c.get("page_num", 1))
+                        c_norm = _normalize_text(c_text)
+                        if authored and not matches(c_norm, authored[1]):
+                            continue
+                        if not (authored and matches(c_norm, authored[1])) and topic_norm not in c_norm:
+                            continue
+                        # Exclude passing mentions where the chapter/section is an unrelated topic
+                        sec_m = re.search(r"(?im)^[#\s]*(?:(?:chương|phần|bài|chapter|section)\s+\d+[:\s]+|\d+\.\d+\s+)([^\n]+)", c_text)
+                        if sec_m:
+                            sec_title = _normalize_text(sec_m.group(1))
+                            if authored and not matches(sec_title, authored[1]) and topic_norm not in sec_title:
+                                continue
+                        p_num = c.get("page_num", 1)
+                        if not is_dedicated:
+                            topic_pages.add(p_num)
+                        if distinct_focus_terms and any(ft in c_norm for ft in distinct_focus_terms):
+                            focus_pages.add(p_num)
+                    if can_use_extract_cache:
+                        _lru_cache_put(
+                            self._exercise_cache_lock,
+                            self._exercise_topic_pages_cache,
+                            pages_cache_key,
+                            (frozenset(topic_pages), frozenset(focus_pages)),
+                        )
 
             ex_counts = Counter(e["id"] for e in doc_exercises)
 
@@ -1310,50 +2362,88 @@ class LearningService:
                 if not (direct_match or local_section_match):
                     continue
 
+                focus_match = (
+                    not distinct_focus_terms
+                    or any(ft in combined_norm for ft in distinct_focus_terms)
+                    or (bool(focus_pages) and any(abs(ex["source"]["page_num"] - p) <= 2 for p in focus_pages))
+                )
+
                 ex_id = ex["id"]
                 is_ambiguous = (ex_counts[ex_id] > 1) or (ans_counts.get(ex_id, 0) > 1)
 
                 if ex_id in doc_answers and not is_ambiguous:
                     ans_info = doc_answers[ex_id]
-                    all_items.append({
+                    item = {
                         "question": ex["question"],
                         "source_context": ex.get("source_context"),
                         "source": ex["source"],
                         "answer": ans_info["answer"],
                         "answer_status": "source_document",
                         "answer_source": ans_info["source"],
-                    })
-                elif not solve_missing:
-                    all_items.append({
+                    }
+                else:
+                    item = {
                         "question": ex["question"],
                         "source_context": ex.get("source_context"),
                         "source": ex["source"],
                         "answer": None,
                         "answer_status": "missing",
                         "answer_source": None,
-                    })
-                else:
-                    theory_chunks = self._get_relevant_theory_chunks(
-                        doc["id"], ex["question"], max_chunks=4
-                    )
-                    solved_ans, status = self._solve_and_verify_exercise(
-                        ex["question"], theory_chunks, model or DEFAULT_CHAT_MODEL
-                    )
-                    all_items.append({
-                        "question": ex["question"],
-                        "source_context": ex.get("source_context"),
-                        "source": ex["source"],
-                        "answer": solved_ans,
-                        "answer_status": status,
-                        "answer_source": None,
-                    })
+                    }
 
-                if len(all_items) >= limit:
-                    break
-            if len(all_items) >= limit:
+                if focus_match:
+                    prioritized_items.append(item)
+                    if len(prioritized_items) >= limit:
+                        break
+                else:
+                    fallback_items.append(item)
+            if len(prioritized_items) >= limit:
                 break
 
+        all_items = (prioritized_items + fallback_items)[:limit]
+        if solve_missing and all_items:
+            solve_start = time.monotonic()
+            solve_budget_seconds = 180.0
+            accepts_timeout = False
+            try:
+                sig_solve = inspect.signature(self._solve_and_verify_exercise)
+                accepts_timeout = (
+                    "timeout" in sig_solve.parameters
+                    or any(
+                        p.kind == inspect.Parameter.VAR_KEYWORD
+                        for p in sig_solve.parameters.values()
+                    )
+                )
+            except (TypeError, ValueError):
+                accepts_timeout = False
+
+            for item in all_items:
+                if item.get("answer_status") != "missing":
+                    continue
+                remaining = solve_budget_seconds - (time.monotonic() - solve_start)
+                if remaining < 20.0:
+                    break
+                item_doc_id = (item.get("source") or {}).get("doc_id")
+                loader = doc_chunk_loaders.get(item_doc_id) if item_doc_id is not None else None
+                preloaded = loader() if loader is not None else None
+                theory_chunks = self._get_relevant_theory_chunks(
+                    item_doc_id, item["question"], max_chunks=4, preloaded_chunks=preloaded
+                )
+                if accepts_timeout:
+                    solved_ans, status = self._solve_and_verify_exercise(
+                        item["question"],
+                        theory_chunks,
+                        model or DEFAULT_CHAT_MODEL,
+                        timeout=min(90.0, remaining / 2.0),
+                    )
+                else:
+                    solved_ans, status = self._solve_and_verify_exercise(
+                        item["question"], theory_chunks, model or DEFAULT_CHAT_MODEL
+                    )
+                item["answer"] = solved_ans
+                item["answer_status"] = status
+
         return {
-            "items": all_items[:limit],
+            "items": all_items,
             "processing_level": "careful",
         }

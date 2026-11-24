@@ -8,6 +8,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 # Enforce offline HuggingFace / Transformers worker environment
 os.environ["HF_HUB_OFFLINE"] = "1"
@@ -57,7 +58,7 @@ def _prefix_tokens_for_split(tokenizer, prefix_text: str, full_tokens: list[int]
         if left != right:
             break
         matched += 1
-    if matched < 64:
+    if matched < 16:
         return []
     return list(full_tokens[:matched])
 
@@ -211,7 +212,7 @@ def _prepare_stream_prefix_cache(
                 base_snap=sys_snap,
                 base_len=len(sys_tokens) if sys_snap is not None else 0,
             )
-            _store_lru_snapshot(context_prefix_store, ctx_key, snap, max_entries=1)
+            _store_lru_snapshot(context_prefix_store, ctx_key, snap, max_entries=4)
             diagnostics = {
                 "reused_tokens": len(sys_tokens) if sys_reused else 0,
                 "prefix_tokens": len(ctx_tokens),
@@ -828,11 +829,7 @@ def _run_request(
     from app.mlx_review_cache import prepare_review_cache
     generation_prompt, cache_kwargs, cache_diagnostics = prepare_review_cache(
         model, active_tok, prompt, request, adapter_acceptance)
-    if (
-        not cache_kwargs
-        and state is not None
-        and not request.get("review_cache_dir")
-    ):
+    if not cache_kwargs and state is not None:
         active_prompt_tokens = (
             list(prompt_tokens)
             if active_tok is tokenizer
@@ -857,6 +854,7 @@ def _run_request(
     parts = []
     loop_guarded = False
     chars_since_loop_check = 0
+    schema_max_items = _schema_max_items(response_schema)
     for chunk in stream_generate(model, active_tok, prompt=generation_prompt, **gen_kwargs):
         if first_token_seconds is None:
             first_token_seconds = time.perf_counter() - generation_started
@@ -868,7 +866,7 @@ def _run_request(
         chars_since_loop_check += len(text_piece)
         if chars_since_loop_check >= 24:
             chars_since_loop_check = 0
-            if _has_streaming_repetition_loop("".join(parts[-400:])):
+            if _has_streaming_repetition_loop("".join(parts[-400:]), max_schema_items=schema_max_items):
                 loop_guarded = True
                 break
     answer = "".join(parts)
@@ -915,12 +913,29 @@ def _run_request(
     }
 
 
+def _schema_max_items(schema: Any) -> int:
+    """Return maxItems across top-level schema arrays so multi-item JSON doesn't trigger single-item loop limits."""
+    if not isinstance(schema, dict):
+        return 1
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        return 1
+    best = 1
+    for val in props.values():
+        if isinstance(val, dict) and val.get("type") == "array":
+            raw_max = val.get("maxItems")
+            if isinstance(raw_max, int) and not isinstance(raw_max, bool) and raw_max > best:
+                best = raw_max
+    return best
+
+
 def _has_streaming_repetition_loop(
     text: str,
     *,
     min_period: int = 40,
     max_period: int = 260,
     repeats: int = 4,
+    max_schema_items: int = 1,
 ) -> bool:
     """Detect degenerate consecutive or paraphrased clause-level loops in streaming JSON/text output."""
     if not text:
@@ -935,18 +950,19 @@ def _has_streaming_repetition_loop(
     if len(text) >= 360:
         from collections import Counter
 
+        clause_repeat_threshold = max(3, max_schema_items + 2) if max_schema_items > 1 else 3
         tail = text[-2400:]
         counts: Counter[str] = Counter()
         for raw_clause in re.split(r"[;\n]+|(?<!\d)[.!?]+(?!\d)", tail):
             cleaned = re.sub(
-                r'^\s*[\{\[\"\':,]+(?:\s*(?:claims|text)\s*[\"\':,\{\[]*)*',
+                r'^(?:[\s\{\[\}\],:\']+|"(?=[\s\}\],\{])|\s*"[A-Za-z0-9_]{1,40}"\s*:\s*[\{\[\"]?)+',
                 "",
                 raw_clause,
-            ).strip()
+            ).strip().lstrip("\"'")
             norm = re.sub(r"\s+", " ", cleaned).lower()
             if len(norm) >= 30 and len(re.findall(r"\w+", norm)) >= 6:
                 counts[norm] += 1
-                if counts[norm] >= 3:
+                if counts[norm] >= clause_repeat_threshold:
                     return True
     return False
 

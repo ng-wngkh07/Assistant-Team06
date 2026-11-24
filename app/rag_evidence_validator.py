@@ -9,6 +9,11 @@ import unicodedata
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List
 
+from app.bilingual_terms import (
+    ACADEMIC_BILINGUAL_EQUIVALENTS,
+    _fold_bilingual_phrase,
+    bilingual_equivalents_for,
+)
 from app.evaluation_metrics import has_repetition
 from app.rag_query_analyzer import COMPARE_SCOPE_SPLIT_RE, DIRECTIVE_STOPWORDS, QUERY_STOPWORDS
 from app.searcher import extract_document_scope_tokens
@@ -51,7 +56,42 @@ def weak_keyword_evidence(query: str, chunks: list[dict]) -> bool:
             if t_ascii and t_ascii in c_ascii_words:
                 found.add(t)
 
+    if len(found) / len(terms) >= 0.75:
+        return False
+    found.update(_cross_lingual_terms_found(query, terms, chunks))
     return len(found) / len(terms) < 0.75
+
+
+def _cross_lingual_terms_found(query: str, terms: set[str], chunks: list[dict]) -> set[str]:
+    """Match academic EN<->VI concept pairs between query and retrieved chunk bodies."""
+    matched: set[str] = set()
+    q_fold = _fold_bilingual_phrase(query)
+    if not q_fold:
+        return matched
+    c_raw_cf = " ".join(unicodedata.normalize("NFC", str(c.get("text", ""))).casefold() for c in chunks)
+    c_fold = _fold_bilingual_phrase(c_raw_cf)
+    for en, vi in ACADEMIC_BILINGUAL_EQUIVALENTS:
+        en_fold = _fold_bilingual_phrase(en)
+        vi_fold = _fold_bilingual_phrase(vi)
+        if en_fold == vi_fold:
+            continue
+        if re.search(rf"(?<!\w){re.escape(en_fold)}s?(?!\w)", q_fold) and (
+            re.search(rf"(?<!\w){re.escape(vi)}(?!\w)", c_raw_cf)
+            or re.search(rf"(?<!\w){re.escape(vi_fold)}(?!\w)", c_fold)
+        ):
+            for tok in re.findall(r"\w+", en_fold):
+                if tok in terms:
+                    matched.add(tok)
+        if re.search(rf"(?<!\w){re.escape(vi_fold)}(?!\w)", q_fold) and re.search(
+            rf"(?<!\w){re.escape(en_fold)}s?(?!\w)", c_fold
+        ):
+            for tok in re.findall(r"\w+", vi.casefold()):
+                if tok in terms:
+                    matched.add(tok)
+            for t in terms:
+                if _fold_bilingual_phrase(t) in re.findall(r"\w+", vi_fold):
+                    matched.add(t)
+    return matched
 
 
 def has_unsupported_bare_quantity(claim: str, sources: list[str]) -> bool:
@@ -294,7 +334,7 @@ def is_unanswered_calculation_source(text: str) -> bool:
     )
 
 
-def concept_has_evidence(concept: str, chunks: List[Dict[str, Any]]) -> bool:
+def _single_concept_has_evidence(concept: str, chunks: List[Dict[str, Any]]) -> bool:
     if not chunks:
         return False
     norm_concept = re.sub(r"\s+", " ", concept).strip()
@@ -351,21 +391,35 @@ def concept_has_evidence(concept: str, chunks: List[Dict[str, Any]]) -> bool:
     return False
 
 
+def concept_has_evidence(concept: str, chunks: List[Dict[str, Any]]) -> bool:
+    if _single_concept_has_evidence(concept, chunks):
+        return True
+    return any(
+        _single_concept_has_evidence(eq, chunks)
+        for eq in bilingual_equivalents_for(concept)
+    )
+
+
 def detect_partial_evidence(query: str, chunks: List[Dict[str, Any]]) -> bool:
     """Conservatively detect a two-sided comparison with lexical support for only one side."""
     if not chunks:
         return False
-    if not re.search(r"so sánh|khác nhau|khác gì|điểm khác biệt|phân biệt|\bvs\b|versus", query, re.I):
+    if not re.search(
+        r"so sánh|khác nhau|khác gì|điểm khác biệt|phân biệt|\b(?:compare|contrast|distinguish|differences?\s+between|vs|versus)\b",
+        query,
+        re.I,
+    ):
         return False
     bounded_query = re.split(COMPARE_SCOPE_SPLIT_RE, query, maxsplit=1, flags=re.I)[0]
-    parts = re.split(r"\s+(?:và|với|vs|versus)\s+", bounded_query, maxsplit=1, flags=re.I)
+    parts = re.split(r"\s+(?:và|với|vs\.?|versus|and|with)\s+", bounded_query, maxsplit=1, flags=re.I)
     if len(parts) != 2:
         return False
     left_text = re.sub(
-        r"^\s*(?:hãy\s+)?(?:so\s+sánh|đối\s+chiếu|phân\s+biệt)"
+        r"^\s*(?:hãy\s+|please\s+)?(?:explain\s+|what\s+(?:is|are)(?:\s+the)?\s+)?"
+        r"(?:so\s+sánh|đối\s+chiếu|phân\s+biệt|compare|contrast|distinguish|differences?)"
         r"(?:\s+(?:ngắn\s+gọn|nhanh|chi\s+tiết|cụ\s+thể|tóm\s+tắt))?"
         r"(?:\s+(?:(?:sự|những|các)\s+)?(?:điểm\s+)?(?:giống(?:\s+nhau)?(?:\s+và\s+khác(?:\s+nhau)?)?|khác\s+nhau|khác\s+biệt))?"
-        r"(?:\s+giữa)?\s+",
+        r"(?:\s+(?:giữa|between))?\s*",
         "",
         parts[0],
         flags=re.I,

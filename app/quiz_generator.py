@@ -152,6 +152,7 @@ def build_quiz_prompt(passages: List[Dict[str, Any]], count: int = 3, difficulty
             "<task>\n"
             f"Tạo đúng {count} câu trắc nghiệm độ khó {difficulty}. {blueprint} "
             "Chỉ dùng kiến thức trong passage. Bảo toàn mọi điều kiện, đơn vị và ngoại lệ. "
+            "Question tối đa 40 từ, mỗi lựa chọn tối đa 16 từ, explanation tối đa 35 từ. "
             "Bốn lựa chọn ngắn, cùng loại, khác nghĩa; đúng duy nhất một lựa chọn. "
             "Ba phương án nhiễu thể hiện lỗi hiểu sai cụ thể, không dùng các câu chung chung vô nghĩa. "
             "Không hỏi 'tài liệu nói gì', không dùng điền khuyết cho medium/hard. "
