@@ -3187,10 +3187,14 @@ def test_api_upload_and_library_accept_zero_quiz_or_zero_flashcard(client, monke
 
 def test_medium_zero_reviewed_triggers_refill_on_mlx(monkeypatch):
     import json as _json
+    import app.model_resolver as resolver
     import app.study_materials as sm
     import app.trained_client as tc
     from app.ollama_client import OllamaClient
     from app.pdf_extractor import PDFExtractionResult
+
+    monkeypatch.setattr(resolver, "is_mlx_model", lambda _m=None: True)
+    monkeypatch.setattr(sm, "is_mlx_model", lambda _m=None: True)
 
     page1 = (
         "Thuyết bất hòa nhận thức giải thích cách cá nhân điều chỉnh thái độ "
