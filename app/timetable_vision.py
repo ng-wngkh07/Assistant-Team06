@@ -222,33 +222,108 @@ def format_clock_time(val: Any) -> Optional[str]:
     return None
 
 
-def detect_conflicts(entries: List[Dict[str, Any]]) -> List[str]:
-    """Detect overlapping time slots for the same weekday."""
-    warnings = []
+def _detect_conflict_details(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return structured same-weekday overlapping slot diagnostics (ignoring touching boundaries)."""
+    conflicts: List[Dict[str, Any]] = []
     by_day: Dict[int, List[Dict[str, Any]]] = {}
     for e in entries:
         w = e.get("weekday")
         if w is not None and isinstance(w, int) and 1 <= w <= 7:
             by_day.setdefault(w, []).append(e)
 
-    for w, day_entries in by_day.items():
-        day_name = f"Thứ {w+1 if w < 7 else 'Chủ nhật'}"
+    for w, day_entries in sorted(by_day.items()):
+        day_name = f"Thứ {w + 1}" if w < 7 else "Chủ nhật"
         valid_timed = []
         for e in day_entries:
             st, et = e.get("start_time"), e.get("end_time")
-            if st and et:
-                valid_timed.append((st, et, e.get("course", "Không rõ")))
+            if st and et and et > st:
+                valid_timed.append((st, et, e.get("course") or "Không rõ"))
 
         for i in range(len(valid_timed)):
             for j in range(i + 1, len(valid_timed)):
                 s1, e1, c1 = valid_timed[i]
                 s2, e2, c2 = valid_timed[j]
-                # Check overlap: s1 < e2 and s2 < e1
                 if s1 < e2 and s2 < e1:
-                    warnings.append(
-                        f"Xung đột lịch {day_name}: '{c1}' ({s1}-{e1}) và '{c2}' ({s2}-{e2}) bị trùng giờ."
+                    ov_start = max(s1, s2)
+                    ov_end = min(e1, e2)
+                    msg = (
+                        f"Xung đột lịch {day_name}: '{c1}' ({s1}-{e1}) "
+                        f"và '{c2}' ({s2}-{e2}) bị trùng giờ."
                     )
-    return warnings
+                    conflicts.append({
+                        "weekday": w,
+                        "weekday_label": day_name,
+                        "start_time": ov_start,
+                        "end_time": ov_end,
+                        "courses": [c1, c2],
+                        "slots": [f"{s1}-{e1}", f"{s2}-{e2}"],
+                        "message": msg,
+                    })
+    return conflicts
+
+
+def detect_conflicts(entries: List[Dict[str, Any]]) -> List[str]:
+    """Detect overlapping time slots for the same weekday."""
+    return [c["message"] for c in _detect_conflict_details(entries)]
+
+
+def _build_extract_diagnostics(
+    entries: List[Dict[str, Any]],
+    partial_entries: List[Dict[str, Any]],
+    uncertainties: List[str],
+    data_sufficiency: Optional[Dict[str, Any]] = None,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Build structured conflict and row/time warning lists for timetable extract drafts."""
+    conflicts = _detect_conflict_details(entries)
+    warnings: List[Dict[str, Any]] = []
+    seen_warn_keys: set[tuple[Any, str]] = set()
+
+    def _add_warn(row_idx: Optional[int], code: str, course: str, message: str) -> None:
+        key = (row_idx, code)
+        if key in seen_warn_keys:
+            return
+        seen_warn_keys.add(key)
+        warnings.append({
+            "row": row_idx,
+            "code": code,
+            "course": course,
+            "message": message,
+        })
+
+    for idx, entry in enumerate(entries, 1):
+        course = str(entry.get("course") or "").strip()
+        w = entry.get("weekday")
+        st = entry.get("start_time")
+        et = entry.get("end_time")
+        if w not in range(1, 8):
+            _add_warn(idx, "invalid_weekday", course, f"Buổi {idx} ({course or 'Không rõ'}): thiếu hoặc sai thứ trong tuần.")
+        if st and et and et <= st:
+            _add_warn(idx, "valid_time_range", course, f"Buổi {idx} ({course or 'Không rõ'}): giờ kết thúc ({et}) phải sau giờ bắt đầu ({st}).")
+        elif not st or not et:
+            # Check if an earlier normalization note flagged reversed hours for this row
+            if course and any(course in u and "không lớn hơn giờ bắt đầu" in u for u in (uncertainties or [])):
+                _add_warn(idx, "valid_time_range", course, f"Buổi {idx} ({course}): giờ kết thúc đọc được không lớn hơn giờ bắt đầu.")
+            _add_warn(idx, "missing_time", course, f"Buổi {idx} ({course or 'Không rõ'}): thiếu hoặc chưa rõ giờ bắt đầu/kết thúc (null).")
+
+    for missing_item in (data_sufficiency or {}).get("missing_fields") or []:
+        r_idx = missing_item.get("row")
+        fields = missing_item.get("fields") or []
+        course_name = ""
+        if isinstance(r_idx, int) and 1 <= r_idx <= len(entries):
+            course_name = str(entries[r_idx - 1].get("course") or "").strip()
+        for field in fields:
+            if field in ("valid_time_range",):
+                _add_warn(r_idx, "valid_time_range", course_name, f"Buổi {r_idx} ({course_name or 'Không rõ'}): khoảng giờ không hợp lệ.")
+            elif field in ("start_time", "end_time"):
+                _add_warn(r_idx, "missing_time", course_name, f"Buổi {r_idx} ({course_name or 'Không rõ'}): thiếu trường '{field}'.")
+            elif field == "weekday":
+                _add_warn(r_idx, "invalid_weekday", course_name, f"Buổi {r_idx} ({course_name or 'Không rõ'}): thiếu hoặc sai thứ học.")
+
+    for p_entry in partial_entries or []:
+        p_course = str(p_entry.get("course") or "").strip()
+        _add_warn(None, "partial_entry", p_course, f"Môn '{p_course or 'Không rõ'}' mới đọc được một phần từ ảnh.")
+
+    return conflicts, warnings
 
 
 def assess_timetable_completeness(entries, classification=None):
@@ -355,10 +430,18 @@ def call_vlm_extract(
         timetable_store.save_draft(draft_id, image_hash, filename, record['entries'], record['uncertainties'],
             raw_model_output=json.dumps(record, ensure_ascii=False), model_digest=digest, prompt_version=version,
             options={'engine':literal['engine'], 'cpu_only':True, 'literal_cells':True})
+        conflicts_detail, warnings_detail = _build_extract_diagnostics(
+            record["entries"],
+            record.get("partial_entries", []),
+            record["uncertainties"],
+            record["data_sufficiency"],
+        )
         return {'draft_id':draft_id, 'status':'draft', 'filename':filename, 'image_hash':image_hash,
             'model_digest':digest, 'entries':record['entries'],
             'partial_entries':record.get('partial_entries', []),
             'uncertainties':record['uncertainties'],
+            'conflicts': conflicts_detail,
+            'warnings': warnings_detail,
             'has_periods_without_clock_time':False, 'cached':bool(cached), 'extraction_method':'literal_table_ocr',
             'classification':record.get('classification', 'registered_classes'),
             'data_sufficiency':record['data_sufficiency']}
@@ -373,6 +456,12 @@ def call_vlm_extract(
         draft_id = uuid.uuid4().hex
         entries = cached_data.get("entries", [])
         uncertainties = cached_data.get("uncertainties", [])
+        conflicts_detail, warnings_detail = _build_extract_diagnostics(
+            entries,
+            cached_data.get("partial_entries", []),
+            uncertainties,
+            cached_data["data_sufficiency"],
+        )
         timetable_store.save_draft(
             draft_id=draft_id,
             image_hash=image_hash,
@@ -392,6 +481,8 @@ def call_vlm_extract(
             "model_digest": model_digest,
             "entries": entries,
             "uncertainties": uncertainties,
+            "conflicts": conflicts_detail,
+            "warnings": warnings_detail,
             "has_periods_without_clock_time": cached_data.get("has_periods_without_clock_time", False),
             "cached": True,
             "data_sufficiency": cached_data["data_sufficiency"],
@@ -424,6 +515,8 @@ def call_vlm_extract(
                 "model_digest": model_digest,
                 "entries": [],
                 "uncertainties": blank["uncertainties"],
+                "conflicts": [],
+                "warnings": _build_extract_diagnostics([], [], blank["uncertainties"], blank["data_sufficiency"])[1],
                 "data_sufficiency": blank["data_sufficiency"],
                 "has_periods_without_clock_time": False,
                 "cached": False,
@@ -647,6 +740,12 @@ def call_vlm_extract(
         "raw_output": raw_response,
     })
     uncertainties = cache_record["uncertainties"]
+    conflicts_detail, warnings_detail = _build_extract_diagnostics(
+        normalized_entries,
+        [],
+        uncertainties,
+        cache_record["data_sufficiency"],
+    )
     timetable_store.set_vlm_cache(image_hash, model_digest, cache_version, cache_record)
 
     # 6. Save draft
@@ -671,6 +770,8 @@ def call_vlm_extract(
         "model_digest": model_digest,
         "entries": normalized_entries,
         "uncertainties": uncertainties,
+        "conflicts": conflicts_detail,
+        "warnings": warnings_detail,
         "has_periods_without_clock_time": has_periods_without_clock_time,
         "cached": False,
         "data_sufficiency": cache_record["data_sufficiency"],

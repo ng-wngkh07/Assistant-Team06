@@ -8,10 +8,13 @@ All data is stored strictly in the local SQLite timetable database (TIMETABLE_DB
 and never enters the RAG index or training datasets.
 """
 
+from collections import OrderedDict
+import hashlib
 import json
 import logging
 import os
 import re
+import threading
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -148,6 +151,25 @@ def subtract_intervals(
 # ==============================================================================
 
 
+def _expand_interval(weekday: int, s_min: int, e_min: int) -> List[Tuple[int, int, int]]:
+    """Split a weekday interval into same-day segments (wrapping overnight intervals across midnight)."""
+    if s_min < e_min:
+        return [(weekday, s_min, e_min)]
+    if s_min > e_min:
+        segs: List[Tuple[int, int, int]] = [(weekday, s_min, 1440)]
+        if e_min > 0:
+            segs.append(((weekday % 7) + 1, 0, e_min))
+        return segs
+    return []
+
+
+def _intervals_overlap_week(w1: int, s1: int, e1: int, w2: int, s2: int, e2: int) -> bool:
+    """Return True if two weekly intervals overlap strictly on any day (ignoring touching boundaries)."""
+    segs1 = _expand_interval(w1, s1, e1)
+    segs2 = _expand_interval(w2, s2, e2)
+    return any(dw1 == dw2 and ds1 < de2 and ds2 < de1 for dw1, ds1, de1 in segs1 for dw2, ds2, de2 in segs2)
+
+
 def validate_routine_data(data: Dict[str, Any]) -> Dict[str, Any]:
     title = str(data.get("title") or "").strip()
     if not title:
@@ -164,8 +186,6 @@ def validate_routine_data(data: Dict[str, Any]) -> Dict[str, Any]:
     end_time = str(data.get("end_time") or "").strip()
     s_min = time_to_minutes(start_time)
     e_min = time_to_minutes(end_time)
-    if e_min <= s_min:
-        raise ValueError(f"Giờ kết thúc ({end_time}) phải lớn hơn giờ bắt đầu ({start_time})")
 
     activity_type = str(data.get("activity_type") or "other").strip()
     if activity_type not in ACTIVITY_TYPES:
@@ -188,6 +208,11 @@ def validate_routine_data(data: Dict[str, Any]) -> Dict[str, Any]:
         flexibility = "study_window"
     elif flexibility == "study_window" and activity_type != "study_window":
         activity_type = "study_window"
+
+    if e_min == s_min:
+        raise ValueError(f"Giờ kết thúc ({end_time}) phải lớn hơn giờ bắt đầu ({start_time})")
+    if e_min < s_min and flexibility == "study_window":
+        raise ValueError(f"Khung giờ học (study_window) không hỗ trợ qua đêm; giờ kết thúc ({end_time}) phải lớn hơn giờ bắt đầu ({start_time})")
 
     is_recurring = 1 if data.get("is_recurring", True) else 0
     note = str(data.get("note") or "").strip()
@@ -238,8 +263,12 @@ def check_routine_conflicts_with_classes(
     warnings: List[str] = []
     classes = timetable_store.get_confirmed_entries(db_path=db_path)
     day_label = WEEKDAY_NAMES.get(weekday, f"Thứ {weekday}")
+    s_min = time_to_minutes(start_time)
+    e_min = time_to_minutes(end_time)
     for c in classes:
-        if c["weekday"] == weekday and start_time < c["end_time"] and c["start_time"] < end_time:
+        c_s = time_to_minutes(c["start_time"])
+        c_e = time_to_minutes(c["end_time"])
+        if _intervals_overlap_week(weekday, s_min, e_min, int(c["weekday"]), c_s, c_e):
             warnings.append(
                 f"Hoạt động '{title}' ({day_label} {start_time}-{end_time}) trùng giờ với lớp học cố định "
                 f"'{c['course']}' ({c['start_time']}-{c['end_time']})."
@@ -250,7 +279,9 @@ def check_routine_conflicts_with_classes(
             continue
         if r["flexibility"] == "study_window":
             continue
-        if r["weekday"] == weekday and start_time < r["end_time"] and r["start_time"] < end_time:
+        r_s = time_to_minutes(r["start_time"])
+        r_e = time_to_minutes(r["end_time"])
+        if _intervals_overlap_week(weekday, s_min, e_min, int(r["weekday"]), r_s, r_e):
             warnings.append(
                 f"Hoạt động '{title}' ({day_label} {start_time}-{end_time}) trùng giờ với hoạt động cá nhân "
                 f"'{r['title']}' ({r['start_time']}-{r['end_time']})."
@@ -768,6 +799,46 @@ def _merge_llm_planner_strategy(
     return merged
 
 
+_AI_NOTES_LLM_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+_AI_NOTES_LLM_CACHE_LOCK = threading.Lock()
+_AI_NOTES_LLM_CACHE_MAX = 64
+
+_COVERED_PHRASE_PATTERNS = (
+    r"(?:chỉ\s+(?:xếp\s+)?học|học(?:\s+(?:sáng|chiều|tối|đêm))?|khung\s+giờ\s+(?:tự\s+)?học)\s+(?:từ\s*)?\d{1,2}(?:[:h]\d{2})?\s*(?:h|giờ|sáng|chiều|tối)?\s*(?:đến|tới|-|–)\s*\d{1,2}(?:[:h]\d{2})?\s*(?:h|giờ|chiều|tối|đêm)?",
+    r"(?:chỉ\s+học\s+từ|bắt\s+đầu(?:\s+học)?\s+từ|không\s+(?:xếp\s+)?học\s+trước|học\s+từ)\s*\d{1,2}(?:[:h]\d{2})?\s*(?:h|giờ|sáng)?",
+    r"(?:không\s+(?:xếp\s+)?học\s+sau|không\s+học\s+quá|nghỉ(?:\s+học)?\s+sau|dừng(?:\s+học)?\s+trước|kết\s+thúc\s+trước|học\s+trước)\s*\d{1,2}(?:[:h]\d{2})?\s*(?:h|giờ)?",
+    r"tối\s+đa\s*\d+(?:[.,]\d+)?\s*(?:giờ|tiếng|h)(?:\s*(?:/|mỗi|1)?\s*ngày)?",
+    r"(?:tối\s+đa|mỗi\s+ngày(?:\s+chỉ)?)\s*\d+\s*môn(?:\s*(?:mỗi\s+ngày|trong\s+ngày|khác\s+nhau))?",
+    r"(?:mỗi\s+phiên|phiên\s+học|chia\s+thành)\s*\d{2,3}\s*phút",
+    r"trước\s+(?:buổi\s+học|tiết\s+học|ngày\s+học|lớp)|ôn\s+trước\s+hôm\s+học",
+    r"(?:ưu\s+tiên|thích|chỉ\s+rảnh|nghỉ(?:\s+hoàn\s+toàn)?|tránh|không\s+(?:xếp\s+)?học|bận(?:\s+cả\s+ngày)?|đi\s+làm|làm\s+thêm)",
+    r"(?:buổi\s*)?(?:sáng\s+sớm|sáng|trưa|chiều|tối|ban\s+đêm)",
+    r"(?:thứ\s*(?:[2-7]|hai|ba|tư|năm|sáu|bảy)|\bt[2-7]\b|chủ\s+nhật|\bcn\b)",
+    r"(?:tự\s+)?học|xếp\s+lịch|mỗi\s+ngày|một\s+ngày|hoàn\s+toàn|khác\s+nhau|trong\s+tuần|cuối\s+tuần",
+)
+_COVERED_CONNECTOR_WORDS = {"và", "với", "hoặc", "nhưng", "vào", "lúc", "cho", "của", "các", "cùng", "hơn", "mỗi", "một", "ngày", "buổi", "phiên"}
+
+
+def _is_covered_by_deterministic_parser(
+    clean_notes: str,
+    parsed_ai: Dict[str, Any],
+    known_courses: List[str],
+) -> bool:
+    """Return True when deterministic regex parsing already captures all directives in ai_notes."""
+    if not clean_notes or not (parsed_ai.get("insights") or []):
+        return False
+    lower = clean_notes.lower()
+    for course in known_courses:
+        c_low = (course or "").strip().lower()
+        if len(c_low) >= 2 and c_low in lower:
+            return False
+    stripped = lower
+    for pat in _COVERED_PHRASE_PATTERNS:
+        stripped = re.sub(pat, " ", stripped)
+    tokens = [tok for tok in re.findall(r"[a-zA-ZÀ-ỹ]+", stripped) if tok not in _COVERED_CONNECTOR_WORDS]
+    return len(tokens) == 0
+
+
 def _enhance_preferences_with_local_llm(
     *,
     parsed_ai: Dict[str, Any],
@@ -787,6 +858,16 @@ def _enhance_preferences_with_local_llm(
     if use_llm is None and (in_pytest or not clean_notes):
         return parsed_ai
 
+    known_courses: List[str] = []
+    for src in (confirmed_classes, tasks, weekly_lessons):
+        for item in src:
+            c = str(item.get("course") or "").strip()
+            if c and c not in known_courses:
+                known_courses.append(c)
+
+    if use_llm is None and _is_covered_by_deterministic_parser(clean_notes, parsed_ai, known_courses):
+        return parsed_ai
+
     try:
         from app.gpu_lock import GPUBusyError, gpu_coordinator
         from app.model_resolver import is_mlx_model
@@ -799,18 +880,31 @@ def _enhance_preferences_with_local_llm(
     except Exception:
         return parsed_ai
 
+    cache_key = hashlib.sha256(
+        json.dumps(
+            {
+                "notes": clean_notes,
+                "courses": sorted(known_courses),
+                "earliest": prefs.get("earliest_study_time", "07:00"),
+                "latest": prefs.get("latest_study_time", "22:30"),
+                "max_daily": prefs.get("max_daily_study_minutes", 240),
+                "pref_session": prefs.get("preferred_session_minutes", 60),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    with _AI_NOTES_LLM_CACHE_LOCK:
+        cached_strategy = _AI_NOTES_LLM_CACHE.get(cache_key)
+        if cached_strategy is not None:
+            _AI_NOTES_LLM_CACHE.move_to_end(cache_key)
+            return _merge_llm_planner_strategy(parsed_ai, cached_strategy, known_courses)
+
     if not is_mlx_model(DEFAULT_CHAT_MODEL) or not TrainedModelClient.available(DEFAULT_CHAT_MODEL):
         return parsed_ai
     allowed, _ = gpu_coordinator.check_inference_allowed()
     if not allowed:
         return parsed_ai
-
-    known_courses: List[str] = []
-    for src in (confirmed_classes, tasks, weekly_lessons):
-        for item in src:
-            c = str(item.get("course") or "").strip()
-            if c and c not in known_courses:
-                known_courses.append(c)
 
     context_payload = {
         "confirmed_classes": [
@@ -876,6 +970,11 @@ def _enhance_preferences_with_local_llm(
         strategy = json.loads(raw)
         if not isinstance(strategy, dict):
             return parsed_ai
+        with _AI_NOTES_LLM_CACHE_LOCK:
+            _AI_NOTES_LLM_CACHE[cache_key] = strategy
+            _AI_NOTES_LLM_CACHE.move_to_end(cache_key)
+            while len(_AI_NOTES_LLM_CACHE) > _AI_NOTES_LLM_CACHE_MAX:
+                _AI_NOTES_LLM_CACHE.popitem(last=False)
         return _merge_llm_planner_strategy(parsed_ai, strategy, known_courses)
     except (GPUBusyError, ValueError, RuntimeError, OSError) as exc:
         logger.debug("Local LLM planner extraction skipped/fallback: %s", exc)
@@ -902,6 +1001,8 @@ def _parse_task_deadline(data: Dict[str, Any], existing: Optional[Dict[str, Any]
             deadline_time = t_part.strip()[:5]
         elif DATE_REGEX.match(s):
             deadline_date = s
+        elif not deadline_date and (deadline_weekday is None or deadline_weekday == ""):
+            raise ValueError("Ngày hạn nộp (deadline) phải có định dạng YYYY-MM-DD")
 
     if deadline_date is not None:
         deadline_date = str(deadline_date).strip() or None
@@ -915,8 +1016,11 @@ def _parse_task_deadline(data: Dict[str, Any], existing: Optional[Dict[str, Any]
         # ISO weekday: Monday=1 .. Sunday=7
         deadline_weekday = dt_obj.isoweekday()
 
+    t_str = str(deadline_time or "23:59").strip()
+    time_to_minutes(t_str)  # validates HH:MM
+
     if deadline_weekday is None or deadline_weekday == "":
-        raise ValueError("Vui lòng chọn ngày/thứ hạn nộp (deadline)")
+        return 7, t_str, None
     try:
         w = int(deadline_weekday)
     except (TypeError, ValueError):
@@ -924,8 +1028,6 @@ def _parse_task_deadline(data: Dict[str, Any], existing: Optional[Dict[str, Any]
     if w < 1 or w > 7:
         raise ValueError("Thứ hạn nộp phải từ 1 (Thứ 2) đến 7 (Chủ nhật)")
 
-    t_str = str(deadline_time or "23:59").strip()
-    time_to_minutes(t_str)  # validates HH:MM
     return w, t_str, deadline_date
 
 
@@ -2015,11 +2117,15 @@ def generate_study_plan(
                         break
 
     class_weekdays_by_course: Dict[str, set[int]] = {}
+    class_minutes_by_day: Dict[int, int] = {}
     for cls in confirmed_classes:
         c_key = (cls.get("course") or "").strip().casefold()
         w_cls = cls.get("weekday")
-        if c_key and isinstance(w_cls, int) and 1 <= w_cls <= 7:
-            class_weekdays_by_course.setdefault(c_key, set()).add(w_cls)
+        if isinstance(w_cls, int) and 1 <= w_cls <= 7:
+            if c_key:
+                class_weekdays_by_course.setdefault(c_key, set()).add(w_cls)
+            dur_cls = max(0, time_to_minutes(cls["end_time"]) - time_to_minutes(cls["start_time"]))
+            class_minutes_by_day[w_cls] = class_minutes_by_day.get(w_cls, 0) + dur_cls
 
     course_priorities_cf: Dict[str, Dict[str, Any]] = parsed_ai.get("course_priorities") or {}
 
@@ -2099,10 +2205,10 @@ def generate_study_plan(
                                 or pref_session_min
                             )
                             target_chunk = min(needed_min, target_sess_pref)
-                            if needed_min > target_chunk and (needed_min - target_chunk) < min_session_min:
+                            if needed_min > target_chunk:
                                 if max_placeable >= needed_min and needed_min <= target_sess_pref + min_session_min:
                                     target_chunk = needed_min
-                                else:
+                                elif (needed_min - target_chunk) < min_session_min:
                                     target_chunk = max(min_session_min, (needed_min + 1) // 2)
                             alloc_dur = min(max_placeable, target_chunk)
 
@@ -2113,7 +2219,7 @@ def generate_study_plan(
                         alloc_e = slot_s + alloc_dur
 
                         avoid_penalty = -200 if w in parsed_ai["avoided_weekdays"] else 0
-                        load_score = (max_daily_min - daily_used_minutes[w]) * 0.4
+                        load_score = (max_daily_min - daily_used_minutes[w]) * 0.4 - class_minutes_by_day.get(w, 0) * 0.15
                         earliness_score = (8 - w) * 15
                         tod_bonus = _slot_preference_bonus(alloc_s, alloc_e, parsed_ai["preferred_periods"])
                         same_task_today = sum(
@@ -2874,6 +2980,52 @@ def confirm_study_plan(
         "saved_count": len(normalized_new),
         "sessions": get_study_sessions(db_path=db_path),
     }
+
+
+def collect_manual_session_warnings(
+    session: Dict[str, Any],
+    db_path: Optional[Path | str] = None,
+) -> List[str]:
+    """Return non-fatal warnings when a manual study session sits outside study_window or exceeds daily cap."""
+    w = int(session.get("weekday") or 0)
+    if w < 1 or w > 7:
+        return []
+    st = str(session.get("start_time") or "").strip()
+    et = str(session.get("end_time") or "").strip()
+    s_min = time_to_minutes(st)
+    e_min = time_to_minutes(et)
+    title = str(session.get("title") or "").strip() or "Phiên học"
+    day_label = WEEKDAY_NAMES.get(w, f"Thứ {w}")
+    warnings: List[str] = []
+
+    routines = get_routines(db_path=db_path)
+    study_windows = [
+        r for r in routines
+        if r.get("flexibility") == "study_window" or r.get("activity_type") == "study_window"
+    ]
+    if study_windows:
+        day_windows = merge_intervals([
+            (time_to_minutes(r["start_time"]), time_to_minutes(r["end_time"]))
+            for r in study_windows
+            if int(r["weekday"]) == w
+        ])
+        if not any(ws <= s_min and e_min <= we for ws, we in day_windows):
+            warnings.append(
+                f"Phiên học '{title}' ({day_label} {st}-{et}) nằm ngoài khung giờ có thể học (study_window) đã khai báo."
+            )
+
+    prefs = get_preferences(db_path=db_path)
+    max_daily = int(prefs.get("max_daily_study_minutes") or 240)
+    sessions = get_study_sessions(db_path=db_path)
+    sid = session.get("id")
+    daily_total = sum(int(s.get("duration_minutes") or 0) for s in sessions if int(s["weekday"]) == w)
+    if sid is None or not any(s.get("id") == sid for s in sessions):
+        daily_total += max(0, e_min - s_min)
+    if daily_total > max_daily:
+        warnings.append(
+            f"Tổng thời lượng tự học ngày {day_label} ({daily_total} phút) vượt quá giới hạn tối đa {max_daily} phút/ngày."
+        )
+    return warnings
 
 
 def add_manual_study_session(data: Dict[str, Any], db_path: Optional[Path | str] = None) -> Dict[str, Any]:

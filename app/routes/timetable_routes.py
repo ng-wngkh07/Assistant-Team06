@@ -1,5 +1,6 @@
 """Timetable & Vision Schedule API Routes (Single Responsibility Module)."""
 
+from datetime import date, timedelta
 import logging
 import os
 import re
@@ -263,6 +264,52 @@ async def clear_timetable():
     return {"status": "ok"}
 
 
+def _routine_ics_entries(routines: List[Dict[str, Any]], week_start) -> List[Dict[str, Any]]:
+    """Convert non-study-window routines into single-day ICS entries (splitting overnight spans)."""
+    out: List[Dict[str, Any]] = []
+    for r in routines:
+        if r.get("flexibility") == "study_window":
+            continue
+        w = int(r["weekday"])
+        st = str(r["start_time"])
+        et = str(r["end_time"])
+        is_rec = bool(r.get("is_recurring", True))
+        base = {
+            "course": f"[Cá nhân] {r['title']}",
+            "room": r.get("activity_type_label") or "",
+            "notes": r.get("flexibility_label") or "",
+        }
+        if st < et:
+            out.append({
+                **base,
+                "uid": f"routine:{r['id']}",
+                "event_date": None if is_rec else (week_start + timedelta(days=w - 1)).isoformat(),
+                "weekday": w,
+                "start_time": st,
+                "end_time": et,
+            })
+        else:
+            out.append({
+                **base,
+                "uid": f"routine:{r['id']}:pm",
+                "event_date": None if is_rec else (week_start + timedelta(days=w - 1)).isoformat(),
+                "weekday": w,
+                "start_time": st,
+                "end_time": "23:59",
+            })
+            if et > "00:00":
+                next_w = (w % 7) + 1
+                out.append({
+                    **base,
+                    "uid": f"routine:{r['id']}:am",
+                    "event_date": None if is_rec else (week_start + timedelta(days=next_w - 1)).isoformat(),
+                    "weekday": next_w,
+                    "start_time": "00:00",
+                    "end_time": et,
+                })
+    return out
+
+
 def _resolve_public_base_url(request: Optional[Request] = None) -> str:
     env_url = os.getenv("STUDY_PUBLIC_URL", "").strip()
     if env_url.startswith(("http://", "https://")):
@@ -289,7 +336,6 @@ async def export_timetable_ics(
         deadlines = []
         if include_planner:
             preferences = await run_in_threadpool(study_planner.get_preferences)
-            from datetime import date, timedelta
             from app.accounts import account_id
             tasks = await run_in_threadpool(study_planner.get_tasks)
             week_start = study_planner._infer_week_monday(preferences, tasks)
@@ -297,18 +343,7 @@ async def export_timetable_ics(
                 sd = date.fromisoformat(start_date)
                 week_start = sd - timedelta(days=sd.weekday())
             routines = await run_in_threadpool(study_planner.get_routines)
-            for r in routines:
-                if r["flexibility"] != "study_window":
-                    entries.append({
-                        "uid": f"routine:{r['id']}",
-                        "event_date": None if r.get("is_recurring", True) else (week_start + timedelta(days=r["weekday"]-1)).isoformat(),
-                        "course": f"[Cá nhân] {r['title']}",
-                        "weekday": r["weekday"],
-                        "start_time": r["start_time"],
-                        "end_time": r["end_time"],
-                        "room": r.get("activity_type_label") or "",
-                        "notes": r.get("flexibility_label") or "",
-                    })
+            entries.extend(_routine_ics_entries(routines, week_start))
             sessions = await run_in_threadpool(study_planner.get_study_sessions)
             for s in sessions:
                 entries.append({
@@ -323,7 +358,7 @@ async def export_timetable_ics(
                     "classified_topic": s.get("classified_topic") or "",
                     "pdf_url": s.get("pdf_url") or "",
                 })
-            deadlines = await run_in_threadpool(study_planner.get_tasks)
+            deadlines = [t for t in tasks if t.get("deadline_date") and not t.get("completed")]
         if not entries and not deadlines:
             raise HTTPException(
                 status_code=400,
@@ -640,7 +675,8 @@ async def list_planner_sessions():
 async def add_planner_session(payload: StudySessionPayload):
     try:
         session = await run_in_threadpool(study_planner.add_manual_study_session, payload.model_dump())
-        return {"status": "ok", "session": session}
+        warnings = await run_in_threadpool(study_planner.collect_manual_session_warnings, session)
+        return {"status": "ok", "session": session, "warnings": warnings}
     except ValueError as e:
         msg = sanitize_error_detail(str(e))
         if any(kw in msg for kw in (
@@ -658,7 +694,8 @@ async def update_planner_session(session_id: int, payload: StudySessionUpdatePay
     try:
         clean = {k: v for k, v in payload.model_dump(exclude_unset=True).items()}
         session = await run_in_threadpool(study_planner.update_study_session, session_id, clean)
-        return {"status": "ok", "session": session}
+        warnings = await run_in_threadpool(study_planner.collect_manual_session_warnings, session)
+        return {"status": "ok", "session": session, "warnings": warnings}
     except KeyError as e:
         raise HTTPException(status_code=404, detail=sanitize_error_detail(str(e)))
     except ValueError as e:
@@ -1051,18 +1088,7 @@ async def export_timetable_bundle_zip(
             sd = date.fromisoformat(start_date)
             week_start = sd - timedelta(days=sd.weekday())
         routines = await run_in_threadpool(study_planner.get_routines)
-        for r in routines:
-            if r["flexibility"] != "study_window":
-                entries.append({
-                    "uid": f"routine:{r['id']}",
-                    "event_date": None if r.get("is_recurring", True) else (week_start + timedelta(days=r["weekday"] - 1)).isoformat(),
-                    "course": f"[Cá nhân] {r['title']}",
-                    "weekday": r["weekday"],
-                    "start_time": r["start_time"],
-                    "end_time": r["end_time"],
-                    "room": r.get("activity_type_label") or "",
-                    "notes": r.get("flexibility_label") or "",
-                })
+        entries.extend(_routine_ics_entries(routines, week_start))
 
         sessions = await run_in_threadpool(study_planner.get_study_sessions)
         for s in sessions:

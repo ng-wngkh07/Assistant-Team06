@@ -1359,10 +1359,12 @@ class StudyMaterialManager:
             has_uncovered_pages = any(int(p["page_num"]) not in covered_pages for p in admitted_passages)
             if (
                 is_mlx
-                and difficulty in ("easy", "hard")
                 and not review_timed_out_partial
                 and len(reviewed) < remaining_quiz_count
-                and (len(reviewed) < len(model_valid_quiz) or has_uncovered_pages)
+                and (
+                    (difficulty in ("easy", "hard") and (len(reviewed) < len(model_valid_quiz) or has_uncovered_pages))
+                    or (difficulty == "medium" and (len(proven_quiz) + len(reviewed)) == 0 and len(model_valid_quiz) > 0)
+                )
             ):
                 refill_missing = remaining_quiz_count - len(reviewed)
                 excluded_after_review = [
@@ -1391,6 +1393,11 @@ class StudyMaterialManager:
                     if non_empty_ex:
                         label_ex = 'Không lặp lại các câu/cụm đã chọn: ' if difficulty == 'easy' else 'Không lặp lại câu hỏi/trích đoạn đã dùng: '
                         cand_prompt += '\n' + label_ex + json.dumps(non_empty_ex[:12], ensure_ascii=False)
+                    if difficulty == "hard" and len(reviewed) < len(model_valid_quiz):
+                        cand_prompt += (
+                            "\nLưu ý sửa lỗi kiểm định: câu trước chỉ kiểm tra một điều kiện đơn lẻ hoặc suy luận vượt nguồn. "
+                            "Hãy đặt câu hỏi mới kết hợp ít nhất hai bước suy luận/tính toán hoặc áp dụng công thức cùng cận/điều kiện trong nguồn."
+                        )
                     if prompt_fits(cand_prompt):
                         refill_prompt = cand_prompt
                         break

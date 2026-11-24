@@ -1563,3 +1563,145 @@ def test_study_planner_range_and_partial_window_avoided_guard(tmp_path):
     )
     assert 3 not in merged["avoided_weekdays"]  # nosec B101
     assert merged["max_daily_min"] == 240  # nosec B101
+
+
+def test_overnight_routines_optional_deadlines_manual_warnings_and_ics_export(isolated_client, monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    _freeze_planner_now(monkeypatch, datetime(2026, 11, 9, 7, 0, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh")))
+
+    # Overnight protected/fixed routines succeed while overnight study_window stays rejected (422)
+    bulk_res = isolated_client.put("/api/timetable/planner/routines/bulk", json={"routines": [
+        {"weekday": 1, "start_time": "23:00", "end_time": "06:30", "title": "Ngủ tối T2", "activity_type": "rest", "flexibility": "protected"},
+        {"weekday": 1, "start_time": "17:30", "end_time": "20:30", "title": "Làm thêm", "activity_type": "work", "flexibility": "fixed"},
+        {"weekday": 1, "start_time": "08:00", "end_time": "12:00", "title": "Tự học T2", "activity_type": "study_window"},
+        {"weekday": 5, "start_time": "18:00", "end_time": "21:00", "title": "Tự học T6", "activity_type": "study_window"},
+    ]})
+    assert bulk_res.status_code == 200, bulk_res.text  # nosec B101
+
+    bad_sw = isolated_client.post("/api/timetable/planner/routines", json={
+        "weekday": 1, "start_time": "23:00", "end_time": "06:30", "title": "Học đêm", "activity_type": "study_window",
+    })
+    assert bad_sw.status_code == 422  # nosec B101
+
+    # Overlapping fixed routine or overnight morning segment is blocked with 409
+    overlap_fixed = isolated_client.post("/api/timetable/planner/sessions", json={
+        "title": "Đè fixed", "course": "Toán", "weekday": 1, "start_time": "18:00", "end_time": "19:00",
+    })
+    assert overlap_fixed.status_code == 409  # nosec B101
+    overlap_sleep = isolated_client.post("/api/timetable/planner/sessions", json={
+        "title": "Đè ngủ sáng T3", "course": "Toán", "weekday": 2, "start_time": "06:00", "end_time": "06:30",
+    })
+    assert overlap_sleep.status_code == 409  # nosec B101
+
+    # Manual session outside declared study_window succeeds with explicit warning
+    out_win = isolated_client.post("/api/timetable/planner/sessions", json={
+        "title": "Học ngoài khung", "course": "Toán", "weekday": 7, "start_time": "10:00", "end_time": "11:00",
+    })
+    assert out_win.status_code == 200, out_win.text  # nosec B101
+    out_data = out_win.json()
+    assert any("study_window" in w for w in (out_data.get("warnings") or []))  # nosec B101
+
+    # Updating session stays outside study_window and retains warnings
+    sid = out_data["session"]["id"]
+    upd_res = isolated_client.put(f"/api/timetable/planner/sessions/{sid}", json={
+        "start_time": "10:30", "end_time": "11:30",
+    })
+    assert upd_res.status_code == 200  # nosec B101
+    assert any("study_window" in w for w in (upd_res.json().get("warnings") or []))  # nosec B101
+
+    # Optional deadline tasks succeed, schedule in planner, quarantine missing estimate, and export cleanly to ICS
+    t1 = isolated_client.post("/api/timetable/planner/tasks", json={
+        "title": "Ôn tập không hạn chót", "course": "Toán", "estimated_minutes": 90,
+    })
+    assert t1.status_code == 200, t1.text  # nosec B101
+    t2 = isolated_client.post("/api/timetable/planner/tasks", json={
+        "title": "Bài chưa ước lượng", "course": "Lý", "estimated_minutes": None,
+    })
+    assert t2.status_code == 200, t2.text  # nosec B101
+
+    gen_req = isolated_client.post("/api/timetable/planner/generate", json={"require_estimates": True})
+    assert gen_req.status_code == 422 and "Bài chưa ước lượng" in gen_req.text  # nosec B101
+
+    gen = isolated_client.post("/api/timetable/planner/generate", json={"require_estimates": False})
+    assert gen.status_code == 200, gen.text  # nosec B101
+    draft = gen.json()["draft"]
+    assert sum(s["duration_minutes"] for s in draft["sessions"] if s.get("task_id") == t1.json()["task"]["id"]) == 90  # nosec B101
+    assert any("Bài chưa ước lượng" in item.get("title", "") for item in draft["missing_estimate_tasks"])  # nosec B101
+
+    ics_res = isolated_client.get("/api/timetable/export.ics?start_date=2026-11-09&end_date=2026-11-30&include_planner=true")
+    assert ics_res.status_code == 200, ics_res.text  # nosec B101
+    assert "BEGIN:VCALENDAR" in ics_res.text and "Ngủ tối T2" in ics_res.text  # nosec B101
+
+
+def test_extract_diagnostics_and_ai_notes_deterministic_fast_path():
+    from app import study_planner
+
+    entries = [
+        {"course": "Toán", "weekday": 1, "start_time": "07:30", "end_time": "09:00"},
+        {"course": "Lý", "weekday": 1, "start_time": "09:00", "end_time": "10:30"},
+        {"course": "CTDL", "weekday": 3, "start_time": "13:00", "end_time": "15:00"},
+        {"course": "Xác suất", "weekday": 3, "start_time": "14:30", "end_time": "16:00"},
+        {"course": "Anh văn", "weekday": 5, "start_time": None, "end_time": None},
+    ]
+    conflicts, warnings = timetable_vision._build_extract_diagnostics(
+        entries,
+        [],
+        ["Môn B: giờ kết thúc đọc được không lớn hơn giờ bắt đầu"],
+        {"missing_fields": [{"row": 5, "fields": ["start_time", "end_time"]}]},
+    )
+    assert len(conflicts) == 1  # nosec B101
+    assert conflicts[0]["weekday"] == 3  # nosec B101
+    assert conflicts[0]["start_time"] == "14:30" and conflicts[0]["end_time"] == "15:00"  # nosec B101
+    assert any(w["code"] == "missing_time" and w["row"] == 5 for w in warnings)  # nosec B101
+
+    base = {
+        "earliest_study_time": "07:00",
+        "latest_study_time": "22:30",
+        "max_daily_study_minutes": 240,
+        "preferred_session_minutes": 60,
+    }
+    simple_note = "Ưu tiên học buổi sáng, nghỉ Chủ nhật, mỗi phiên 60 phút, tối đa 2 tiếng mỗi ngày"
+    parsed_simple = study_planner.parse_ai_preference_notes(simple_note, base)
+    assert study_planner._is_covered_by_deterministic_parser(simple_note, parsed_simple, ["Toán", "Lý"]) is True  # nosec B101
+
+    course_note = "Ưu tiên môn Toán nhiều hơn, học buổi sáng"
+    parsed_course = study_planner.parse_ai_preference_notes(course_note, base)
+    assert study_planner._is_covered_by_deterministic_parser(course_note, parsed_course, ["Toán", "Lý"]) is False  # nosec B101
+
+    nuanced_note = "Ưu tiên buổi sáng nhưng tránh học liên tiếp hai ngày khó"
+    parsed_nuanced = study_planner.parse_ai_preference_notes(nuanced_note, base)
+    assert study_planner._is_covered_by_deterministic_parser(nuanced_note, parsed_nuanced, []) is False  # nosec B101
+
+
+def test_planner_prefers_lighter_class_day_and_coalesces_min_remainder(isolated_client, monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    _freeze_planner_now(monkeypatch, datetime(2026, 11, 9, 7, 0, 0, tzinfo=ZoneInfo("Asia/Ho_Chi_Minh")))
+    for cls in (
+        {"course": "Sáng T3", "weekday": 2, "start_time": "07:30", "end_time": "11:30"},
+        {"course": "Chiều T3", "weekday": 2, "start_time": "13:00", "end_time": "15:45"},
+        {"course": "Sáng T5", "weekday": 4, "start_time": "08:00", "end_time": "09:30"},
+    ):
+        assert isolated_client.post("/api/timetable/manual", json=cls).status_code == 200  # nosec B101
+
+    isolated_client.put("/api/timetable/planner/preferences", json={
+        "preferred_session_minutes": 60,
+        "min_session_minutes": 30,
+        "max_daily_study_minutes": 180,
+        "ai_notes": "Ưu tiên buổi tối",
+        "week_start_date": "2026-11-30",
+    })
+    isolated_client.put("/api/timetable/planner/routines/bulk", json={"routines": [
+        {"weekday": 2, "start_time": "19:00", "end_time": "21:00", "title": "Tối T3", "activity_type": "study_window"},
+        {"weekday": 4, "start_time": "14:00", "end_time": "16:00", "title": "Chiều T5", "activity_type": "study_window"},
+        {"weekday": 4, "start_time": "19:00", "end_time": "21:00", "title": "Tối T5", "activity_type": "study_window"},
+    ]})
+    isolated_client.post("/api/timetable/planner/tasks", json={
+        "title": "Ôn tập 90p", "course": "CS", "estimated_minutes": 90,
+    })
+    gen = isolated_client.post("/api/timetable/planner/generate", json={})
+    assert gen.status_code == 200  # nosec B101
+    sessions = gen.json()["draft"]["sessions"]
+    assert len(sessions) == 1  # nosec B101
+    assert sessions[0]["weekday"] == 4 and sessions[0]["start_time"] == "19:00" and sessions[0]["end_time"] == "20:30"  # nosec B101

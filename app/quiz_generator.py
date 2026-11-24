@@ -132,8 +132,10 @@ def build_quiz_prompt(passages: List[Dict[str, Any]], count: int = 3, difficulty
         blueprint = (
             "Mỗi câu áp dụng MỘT quy tắc từ nguồn vào một tình huống mới cụ thể, hoặc phân biệt hai khái niệm."
             if difficulty == "medium"
-            else "Mỗi câu kết hợp ÍT NHẤT HAI quy tắc/điều kiện từ nguồn để phân tích một tình huống hoặc ngoại lệ. "
-            "Giải thích đủ hai bước suy luận; hỏi lại một định nghĩa hay thêm chữ 'ngoại trừ' không làm câu trở thành khó."
+            else "Mỗi câu kết hợp ÍT NHẤT HAI quy tắc/điều kiện hoặc hai bước suy luận/tính toán từ nguồn "
+            "để phân tích một tình huống, ví dụ áp dụng công thức/số liệu hoặc ngoại lệ (bước 1 tính/xác định, "
+            "bước 2 kiểm tra điều kiện hay cận). Giải thích đủ hai bước suy luận; hỏi lại một định nghĩa, "
+            "hỏi một điều kiện đơn lẻ hay thêm chữ 'ngoại trừ' không làm câu trở thành khó."
         )
         shape = {
             "questions": [
