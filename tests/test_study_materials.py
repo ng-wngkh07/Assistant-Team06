@@ -3267,3 +3267,107 @@ def test_medium_zero_reviewed_triggers_refill_on_mlx(monkeypatch):
     )
     assert MediumRefillMLX.gen_calls == 2  # nosec B101
     assert len(res["quiz"]) == 1 and "thay đổi thái độ" in res["quiz"][0]["question"]  # nosec B101
+
+
+def test_strip_non_learning_markdown_sections_filters_boilerplate_and_keeps_exercises(monkeypatch):
+    import json as _json
+    import app.model_resolver as resolver
+    import app.study_materials as sm
+    import app.trained_client as tc
+    from app.ollama_client import OllamaClient
+    from app.pdf_extractor import PDFExtractionResult
+
+    monkeypatch.setattr(resolver, "is_mlx_model", lambda _m=None: True)
+    monkeypatch.setattr(sm, "is_mlx_model", lambda _m=None: True)
+
+    sample_md = (
+        "# Hướng dẫn đọc tài liệu\n"
+        "Chào mừng sinh viên sử dụng giáo trình Phương pháp tính.\n\n"
+        "# Từ điển Anh–Việt\n"
+        "- Derivative: Đạo hàm\n"
+        "- Convergence: Hội tụ\n\n"
+        "# Bài tập chương 2\n"
+        "**Bài tập 2.1.** Xác định sai số tuyệt đối tối đa khi làm tròn số e thành 2.72 đến 2 chữ số thập phân.\n\n"
+        "# Tài liệu tham khảo\n"
+        "1. Numerical Analysis Textbook.\n"
+    )
+    cleaned = sm._strip_non_learning_markdown_sections(sample_md)
+    assert "Bài tập 2.1" in cleaned  # nosec B101
+    assert "Từ điển Anh–Việt" not in cleaned  # nosec B101
+    assert "Hướng dẫn đọc" not in cleaned  # nosec B101
+    assert "Tài liệu tham khảo" not in cleaned  # nosec B101
+
+    glossary_only = "# Từ điển Anh–Việt\n- Vector: Véc tơ\n- Scalar: Vô hướng\n"
+    assert sm._strip_non_learning_markdown_sections(glossary_only) == glossary_only  # nosec B101
+
+    ext = PDFExtractionResult(filename="sample_exercises.md", filepath=Path("sample_exercises.md"))
+    ext.extracted_pages = [{"page_num": 1, "text": sample_md}]
+    ext.total_pages = 1
+    ext.total_chars = len(sample_md)
+
+    captured_prompts = []
+
+    class FilterCheckMLX:
+        last_done_reason = "stop"
+
+        @classmethod
+        def available(cls, *args, **kwargs):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            self.last_done_reason = "stop"
+            prompt = messages[0]["content"]
+            captured_prompts.append(prompt)
+            if "Dữ liệu cần kiểm định:\n" in prompt:
+                return _json.dumps({
+                    "checks": [{
+                        "index": 1,
+                        "source_basis": "**Bài tập 2.1.** Xác định sai số tuyệt đối tối đa khi làm tròn số e thành 2.72 đến 2 chữ số thập phân.",
+                        "matching_choices": "A",
+                        "input_audit": "Đủ dữ kiện.",
+                        "independent_solution": "Sai số làm tròn tối đa bằng nửa đơn vị hàng chữ số thập phân cuối: 0.005.",
+                        "choice_comparison": "Chỉ A bằng 0.005.",
+                        "explanation_audit": "Đúng công thức.",
+                        "supported": True,
+                        "explanation_supported": True,
+                        "unique_answer": True,
+                        "qualifiers_preserved": True,
+                        "difficulty_matches": True,
+                        "verified_answer": "A",
+                    }]
+                }, ensure_ascii=False)
+            return _json.dumps({"questions": [{
+                "evidence_id": "Q1",
+                "question": "Khi làm tròn số e đến 2 chữ số thập phân thành 2.72 theo chuẩn, sai số tuyệt đối tối đa là bao nhiêu?",
+                "choices": {"A": "0.005", "B": "0.05", "C": "0.01", "D": "0.5"},
+                "answer": "A",
+                "explanation": "Nửa đơn vị chữ số thập phân thứ hai là 0.5 × 10^-2 = 0.005.",
+                "difficulty": "medium",
+            }]}, ensure_ascii=False)
+
+    monkeypatch.setattr(tc, "TrainedModelClient", FilterCheckMLX)
+    res = sm.StudyMaterialManager(OllamaClient()).generate_materials_from_pages(
+        ext, model="qwen3.5-9b-4bit", difficulty="medium", quiz_count=1, flashcard_count=0
+    )
+    assert len(res["quiz"]) == 1  # nosec B101
+    gen_prompt = captured_prompts[0]
+    assert "Bài tập 2.1" in gen_prompt  # nosec B101
+    assert "Từ điển Anh–Việt" not in gen_prompt and "Hướng dẫn đọc" not in gen_prompt  # nosec B101
+
+    # Also verify multi-page Markdown extraction (one section per page as emitted by PDFExtractor)
+    captured_prompts.clear()
+    ext_multi = PDFExtractionResult(filename="sample_multi.md", filepath=Path("sample_multi.md"))
+    ext_multi.extracted_pages = [
+        {"page_num": 1, "text": "# Hướng dẫn đọc tài liệu\nChào mừng sinh viên sử dụng giáo trình."},
+        {"page_num": 2, "text": "# Từ điển Anh–Việt\n- Derivative: Đạo hàm\n- Convergence: Hội tụ"},
+        {"page_num": 3, "text": "# Bài tập chương 2\n**Bài tập 2.1.** Xác định sai số tuyệt đối tối đa khi làm tròn số e thành 2.72 đến 2 chữ số thập phân."},
+        {"page_num": 4, "text": "# Tài liệu tham khảo\n1. Numerical Analysis Textbook."},
+    ]
+    ext_multi.total_pages = 4
+    ext_multi.total_chars = sum(len(p["text"]) for p in ext_multi.extracted_pages)
+    res_multi = sm.StudyMaterialManager(OllamaClient()).generate_materials_from_pages(
+        ext_multi, model="qwen3.5-9b-4bit", difficulty="medium", quiz_count=1, flashcard_count=0
+    )
+    assert len(res_multi["quiz"]) == 1  # nosec B101
+    assert "Bài tập 2.1" in captured_prompts[0]  # nosec B101
+    assert "Từ điển Anh–Việt" not in captured_prompts[0] and "Tài liệu tham khảo" not in captured_prompts[0]  # nosec B101

@@ -46,6 +46,55 @@ _NEGATION_PREFIX_TOKENS = frozenset({
 _DASH_CLASS = "[-\u2013\u2014\u2212]"
 _DASH_CHARS = frozenset("-\u2013\u2014\u2212")
 
+_NON_LEARNING_MD_HEADING_RE = re.compile(
+    r"(?i)^(?:(?:[ivxlcdm]+|\d+(?:[.:]\d+)*)[\.:]?\s*)?"
+    r"(?:hướng\s+dẫn\s+đọc(?:\s+tài\s+liệu)?|cách\s+đọc\s+tài\s+liệu|"
+    r"quy\s+ước\s+(?:code|trình\s+bày|ký\s+hiệu)|lời\s+nói\s+đầu|mở\s+đầu|"
+    r"preface|about\s+the\s+author|"
+    r"từ\s+điển(?:\s+anh[\s\-\u2013\u2014]+việt)?|bảng\s+thuật\s+ngữ|glossary(?:\s+đọc\s+đề)?|"
+    r"tài\s+liệu\s+tham\s+khảo|references?|bibliography|endnotes?|"
+    r"mục\s+lục|table\s+of\s+contents?|contents?|"
+    r"ghi\s+chú\s+dữ\s+liệu\s+không\s+đáng\s+tin|dữ\s+liệu\s+không\s+đáng\s+tin|"
+    r"dữ\s+liệu\s+kiểm\s+thử|thử\s+nghiệm\s+injection)\b"
+)
+
+
+def _strip_non_learning_markdown_sections(text: str, *, allow_empty: bool = False) -> str:
+    """Drop reader-guide, dictionary/glossary, TOC, and reference Markdown sections when learning content remains."""
+    raw = str(text or "")
+    lines = raw.splitlines()
+    if not any(re.match(r"^\s{0,3}#{1,6}\s+\S", ln) for ln in lines):
+        return raw
+
+    kept_lines: list[str] = []
+    skip_level: Optional[int] = None
+    removed_any = False
+    for line in lines:
+        m = re.match(r"^\s{0,3}(#{1,6})\s+(.+?)\s*$", line)
+        if m:
+            level = len(m.group(1))
+            title = m.group(2).strip()
+            if skip_level is not None and level <= skip_level:
+                skip_level = None
+            if _NON_LEARNING_MD_HEADING_RE.match(title):
+                skip_level = level
+                removed_any = True
+                continue
+        if skip_level is None:
+            kept_lines.append(line)
+
+    if not removed_any:
+        return raw
+    filtered = "\n".join(kept_lines).strip()
+    if allow_empty:
+        return filtered
+    non_heading_chars = sum(
+        len(ln.strip()) for ln in kept_lines if ln.strip() and not re.match(r"^\s{0,3}#{1,6}\s+", ln)
+    )
+    if non_heading_chars >= 25:
+        return filtered
+    return raw
+
 
 def _find_bounded_span_matches(quote: str, span: str) -> List[re.Match]:
     """Find span matches in quote respecting word/hyphen boundaries, ignoring standalone heading repeats when a single body match exists."""
@@ -574,19 +623,32 @@ class StudyMaterialManager:
                 size = sum(len(m['content'].encode()) for m in messages)
             return size + reserve + chat_overhead <= capacity
 
-        candidate_passages = passages
+        cleaned_passages = [
+            {"page_num": p["page_num"], "text": _strip_non_learning_markdown_sections(p["text"], allow_empty=True)}
+            for p in passages
+        ]
+        non_empty_cleaned = [p for p in cleaned_passages if p["text"].strip()]
+        remaining_body_chars = sum(
+            len(ln.strip())
+            for p in non_empty_cleaned
+            for ln in p["text"].splitlines()
+            if ln.strip() and not re.match(r"^\s{0,3}#{1,6}\s+", ln)
+        )
+        prompt_passages = non_empty_cleaned if (non_empty_cleaned and remaining_body_chars >= 25) else passages
+
+        candidate_passages = prompt_passages
         max_page_threshold = 6 if is_mlx else 16
-        if len(passages) > max_page_threshold:
+        if len(prompt_passages) > max_page_threshold:
             if is_mlx:
                 max_study_pages = min(8, max(3, max(quiz_count, 1) + min(max(0, flashcard_count), 3)))
             else:
                 max_study_pages = min(20, max(12, (max(0, quiz_count) + max(0, flashcard_count)) * 2))
             substantive = [
-                p for p in passages
+                p for p in prompt_passages
                 if len((p.get("text") or "").strip()) >= 120
                 and not str(p.get("text") or "").strip().startswith("[Tài liệu hình ảnh:")
             ]
-            pool = substantive if substantive else passages
+            pool = substantive if substantive else prompt_passages
             if len(pool) > max_study_pages:
                 step = len(pool) / max_study_pages
                 candidate_passages = [pool[int(i * step)] for i in range(max_study_pages)]

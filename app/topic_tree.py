@@ -425,6 +425,100 @@ _FOCUS_STOPWORDS = frozenset({
     "nang", "cao", "of", "and", "in", "for", "the", "with", "on", "to",
 })
 
+# Query-time-only topic routing hints (never alter TOPIC_TREE/TOPICS hashes in retrieval_tree.db).
+_QUERY_TOPIC_HINTS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    (
+        "Giải tích và vi tích phân",
+        (
+            "giai tich",
+            "giai tich mot bien",
+            "phep tinh vi tich phan",
+            "vi phan",
+            "khai trien taylor",
+            "khai trien maclaurin",
+            "gia tri trung binh",
+            "lagrange",
+            "rolle",
+        ),
+    ),
+    (
+        "Lập trình đồng thời",
+        (
+            "da luong",
+            "lap trinh da luong",
+            "mutex",
+            "deadlock",
+            "scoped_lock",
+            "std::thread",
+            "critical section",
+        ),
+    ),
+    (
+        "Cấu trúc dữ liệu và giải thuật",
+        (
+            "cay do den",
+            "red black tree",
+            "red-black tree",
+            "bang bam",
+            "open addressing",
+            "chaining",
+            "cay nhi phan",
+            "ngan xep",
+            "hang doi",
+        ),
+    ),
+    (
+        "Sinh học và di truyền học",
+        (
+            "than kinh",
+            "sinh hoc than kinh",
+            "dien the hoat dong",
+            "action potential",
+            "neuroanatomy",
+            "neuroscience",
+            "neurobiology",
+            "synapse",
+            "neuron",
+        ),
+    ),
+)
+
+_QUERY_HINT_PATTERNS: Dict[str, re.Pattern[str]] = {
+    label: re.compile("|".join(r"(?<!\w)" + re.escape(normalized(a)) + r"(?!\w)" for a in aliases))
+    for label, aliases in _QUERY_TOPIC_HINTS
+}
+
+_QUERY_FOCUS_SYNONYMS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("giai tich", ("calculus", "differential", "integral", "derivative", "mean value", "lagrange", "rolle")),
+    ("vi phan", ("calculus", "differential", "derivative")),
+    ("lagrange", ("lagrange", "mean value", "calculus")),
+    ("rolle", ("rolle", "mean value", "calculus")),
+    ("da luong", ("concurrency", "multithreading", "thread", "mutex", "deadlock")),
+    ("c++", ("c++", "cplusplus", "cpp")),
+    ("than kinh", ("neuroanatomy", "neuroscience", "neurobiology", "neural", "neuron", "action potential", "synapse")),
+    ("dien the hoat dong", ("action potential", "neuron", "resting potential", "depolarization")),
+    ("cau truc du lieu", ("data structures", "data structure", "binary search tree", "red-black", "hash table", "linked list", "stack", "queue")),
+    ("cay do den", ("red-black", "binary search tree", "bst", "tree")),
+    ("bang bam", ("hash table", "hash map", "hashing", "chaining", "open addressing")),
+    ("tri rieng", ("eigenvalue", "eigenvector", "diagonalization")),
+    ("cheo hoa", ("diagonalization", "eigenvalue", "eigenvector")),
+)
+
+
+def expand_topic_focus_terms(phrase: Any) -> Tuple[str, ...]:
+    """Return bilingual query focus synonyms for cross-lingual course retrieval."""
+    norm = normalized(phrase)
+    if not norm:
+        return ()
+    expanded: List[str] = []
+    for trigger, equivalents in _QUERY_FOCUS_SYNONYMS:
+        if re.search(r"(?<!\w)" + re.escape(trigger) + r"(?!\w)", norm):
+            for eq in equivalents:
+                eq_norm = normalized(eq)
+                if eq_norm and eq_norm not in expanded:
+                    expanded.append(eq_norm)
+    return tuple(expanded)
+
 
 def resolve_topic_query(
     value: Any,
@@ -432,7 +526,8 @@ def resolve_topic_query(
     """Resolve an authored topic, alias, or sub-topic phrase into (topic_pair, focus_terms).
 
     Preserves exact ``resolve_topic`` hits first, and falls back to ``infer_query_topic_hierarchy``
-    when the user specifies a narrower sub-topic such as ``Xác suất Bayes`` or ``Trí nhớ ngắn hạn``.
+    plus query-time academic hints when the user specifies a narrower sub-topic such as
+    ``Xác suất Bayes``, ``Đa luồng C++``, or ``Giải tích một biến``.
     """
     target = normalized(value)
     if not target:
@@ -446,15 +541,27 @@ def resolve_topic_query(
         return direct, (target,)
 
     hierarchy = infer_query_topic_hierarchy(value)
-    child_topics = hierarchy.get("child_topics") or []
+    child_topics: List[str] = list(hierarchy.get("child_topics") or [])
+    for hint_label, hint_pattern in _QUERY_HINT_PATTERNS.items():
+        if hint_label not in child_topics and hint_pattern.search(target):
+            child_topics.append(hint_label)
     if not child_topics:
         return None, ()
 
     best_label = None
-    best_score = (-1, -1)
+    best_score = (-1, -1, -1)
     for lbl in child_topics:
-        hits = [m.group(0) for m in PATTERNS[lbl].finditer(target)]
-        score = (len(hits), sum(len(h) for h in hits))
+        core_hits = [m.group(0) for m in PATTERNS[lbl].finditer(target)]
+        hint_pat = _QUERY_HINT_PATTERNS.get(lbl)
+        hint_hits = [m.group(0) for m in hint_pat.finditer(target)] if hint_pat is not None else []
+        all_hits = list(dict.fromkeys([*hint_hits, *core_hits]))
+        if not all_hits:
+            continue
+        score = (
+            max(len(h) for h in all_hits),
+            len(all_hits),
+            sum(len(h) for h in all_hits),
+        )
         if score > best_score:
             best_score = score
             best_label = lbl
@@ -467,10 +574,14 @@ def resolve_topic_query(
         return None, ()
 
     label_words = set(re.findall(r"\w+", normalized(best_label)))
+    hint_pat = _QUERY_HINT_PATTERNS.get(best_label)
     alias_hits = list(
         dict.fromkeys(
             normalized(m.group(0))
-            for m in PATTERNS[best_label].finditer(target)
+            for m in (
+                [*PATTERNS[best_label].finditer(target)]
+                + ([*hint_pat.finditer(target)] if hint_pat is not None else [])
+            )
             if m.group(0).strip()
         )
     )
@@ -483,6 +594,9 @@ def resolve_topic_query(
     # Prefer sub-topic phrases and tokens outside the generic authored label (e.g. 'bayes' in 'Xác suất Bayes').
     if len(extra_words) >= 2:
         focus_candidates.append(" ".join(extra_words))
+    for hit in alias_hits:
+        if hit != normalized(best_label) and len(hit) > 3:
+            focus_candidates.append(hit)
     for w in extra_words:
         focus_candidates.append(w)
     for hit in alias_hits:

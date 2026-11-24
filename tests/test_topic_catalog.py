@@ -1633,4 +1633,61 @@ def test_select_topic_passages_penalizes_dialogue_novels_on_hard(tmp_path):
 
     svc = LearningService(DocumentLookup(db, src), None)
     passages = svc._select_topic_passages("Hóa học", difficulty="hard", limit=2)
-    assert passages[0]["doc_id"] == 2
+    assert passages[0]["doc_id"] == 2  # nosec B101
+
+
+def test_query_time_topic_hints_and_bilingual_retrieval_preserve_taxonomy_hash(tmp_path):
+    """Query-time routing hints and cross-lingual focus terms must resolve accurately without altering taxonomy hashes."""
+    from app.retrieval_tree import compute_taxonomy_hash
+    from app.topic_tree import expand_topic_focus_terms, resolve_topic_query
+
+    before_hash = compute_taxonomy_hash()
+    calc_pair, _calc_focus = resolve_topic_query("Giải tích một biến")
+    assert calc_pair is not None and calc_pair[0] == "Giải tích và vi tích phân"  # nosec B101
+
+    conc_pair, _conc_focus = resolve_topic_query("Đa luồng C++")
+    assert conc_pair is not None and conc_pair[0] == "Lập trình đồng thời"  # nosec B101
+
+    neuro_pair, neuro_focus = resolve_topic_query("Sinh học thần kinh")
+    assert neuro_pair is not None and neuro_pair[0] == "Sinh học và di truyền học"  # nosec B101
+    assert "neuroanatomy" in expand_topic_focus_terms(" ".join(neuro_focus))  # nosec B101
+    assert compute_taxonomy_hash() == before_hash  # nosec B101
+
+    src = tmp_path / "src"
+    src.mkdir()
+    db = tmp_path / "kb_cross_lingual.db"
+    KnowledgeIndexer(db, src)
+
+    files = [
+        (1, "dsa_notes.txt", "Ghi chú DSA", "Cấu trúc dữ liệu ngăn xếp và thuật toán tìm kiếm nhị phân.", 1),
+        (2, "tree_bst.txt", "Binary Search Tree", "Binary search tree and data structures guarantee sorted in-order traversal.", 1),
+        (3, "lect_conc.txt", "C++ Concurrency", "C++ multithreading concurrency uses mutex and deadlock avoidance.", 1),
+        (4, "neuro_text.txt", "Neuroanatomy", "Biology and neuroanatomy explain action potential propagation along neurons.", 1),
+        (5, "calc_book.txt", "Calculus Early", "Calculus derivative and Lagrange mean value theorem with continuous functions.", 1),
+    ]
+    with sqlite3.connect(db) as conn:
+        for did, fname, title, text, pnum in files:
+            fp = src / fname
+            fp.write_text(text, encoding="utf-8")
+            conn.execute(
+                "INSERT INTO documents(id,filename,clean_title,filepath,file_size,file_hash,total_pages,extracted_pages_count,status) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (did, fname, title, str(fp), len(text), f"hx_{did}", 1, 1, "indexed"),
+            )
+            conn.execute(
+                "INSERT INTO chunks(doc_id,filename,book_title,page_num,chunk_index,text) VALUES(?,?,?,?,?,?)",
+                (did, fname, title, pnum, 0, text),
+            )
+
+    svc = LearningService(DocumentLookup(db, src), None)
+    dsa_docs = {d["id"] for d in svc._matching_documents("Cấu trúc dữ liệu")}
+    assert {1, 2}.issubset(dsa_docs)  # nosec B101
+
+    conc_passages = svc._select_topic_passages("Đa luồng C++", limit=2)
+    assert conc_passages and conc_passages[0]["doc_id"] == 3  # nosec B101
+
+    neuro_passages = svc._select_topic_passages("Sinh học thần kinh", limit=2)
+    assert neuro_passages and neuro_passages[0]["doc_id"] == 4  # nosec B101
+
+    calc_passages = svc._select_topic_passages("Giải tích một biến", limit=2)
+    assert calc_passages and calc_passages[0]["doc_id"] == 5  # nosec B101

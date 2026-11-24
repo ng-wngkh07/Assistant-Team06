@@ -18,6 +18,7 @@ from app.topic_catalog import (
     CHILD_TO_PARENT,
     TOPICS,
     PATTERNS,
+    expand_topic_focus_terms,
     get_topic_tree_catalog,
     matches,
     normalized,
@@ -25,6 +26,7 @@ from app.topic_catalog import (
     resolve_topic_hierarchy,
     resolve_topic_query,
 )
+from app.bilingual_terms import expand_bilingual_query_terms
 from app.config import DEFAULT_CHAT_MODEL
 from app.flashcard_generator import strip_source_review_banner
 from app.practice import PracticeGenerationError, PracticeService, _GLUED_VI_OCR_RE
@@ -872,7 +874,18 @@ class LearningService:
                 w for w in re.findall(r"[^\W_]+", str(topic or ""))
                 if len(w) >= 2 and _normalize_text(w) not in label_words and _normalize_text(w) not in QUERY_STOPWORDS and _normalize_text(w) not in DIRECTIVE_STOPWORDS
             ]
-            # Accent-preserved query phrases for FTS5 lookup; do not broaden specific sub-topics with base aliases
+            bilingual_expansions = list(
+                dict.fromkeys(
+                    eq
+                    for eq in (
+                        *expand_topic_focus_terms(topic),
+                        *(syn for ft in focus_terms for syn in expand_topic_focus_terms(ft)),
+                        *expand_bilingual_query_terms(str(topic or "")),
+                    )
+                    if eq and _normalize_text(eq) not in QUERY_STOPWORDS and _normalize_text(eq) not in DIRECTIVE_STOPWORDS
+                )
+            )
+            # Accent-preserved query phrases for FTS5 lookup; expand only bilingual focus equivalents without broadening leaf aliases
             fts_phrases: list[str] = []
             if any(ord(ch) > 127 for ch in str(topic or "")):
                 fts_phrases.append(str(topic))
@@ -880,9 +893,31 @@ class LearningService:
                 fts_phrases.append(" ".join(specific_words))
             else:
                 fts_phrases.extend(alias_phrases)
+            fts_phrases.extend(bilingual_expansions)
             fts_query = self._fts_phrase_query(fts_phrases)
 
             focused_ids: set[int] = set(matched_ids)
+            distinctive_doc_hints = [
+                _normalize_text(eq)
+                for eq in bilingual_expansions
+                if len(_normalize_text(eq)) >= 5
+            ]
+            if distinctive_doc_hints:
+                for doc in available:
+                    did = doc["id"]
+                    if authored_ids and did not in authored_ids:
+                        continue
+                    d_fields = (
+                        _normalize_text(doc_topics_map.get(did, "")),
+                        _normalize_text(doc.get("clean_title") or ""),
+                        _normalize_text(doc.get("filename") or ""),
+                    )
+                    if any(
+                        re.search(r"(?<!\w)" + re.escape(hint) + r"(?!\w)", df)
+                        for df in d_fields if df
+                        for hint in distinctive_doc_hints
+                    ):
+                        focused_ids.add(did)
             used_fts = False
             if fts_query:
                 try:
@@ -910,6 +945,7 @@ class LearningService:
                 if scan_ids:
                     scope = ",".join("?" for _ in scan_ids)
                     focus_tokens = [w for ft in focus_terms for w in re.findall(r"\w+", ft) if len(w) >= 2]
+                    bilingual_norm_terms = [_normalize_text(eq) for eq in bilingual_expansions if _normalize_text(eq)]
                     try:
                         with closing(self.document_lookup.connect()) as db:
                             cursor = db.execute(
@@ -918,8 +954,10 @@ class LearningService:
                             )
                             for r in cursor:
                                 c_text = _normalize_text(r["text"])
-                                if any(tv in c_text for tv in target_variants) or (
-                                    focus_tokens and all(tok in c_text for tok in focus_tokens)
+                                if (
+                                    any(tv in c_text for tv in target_variants)
+                                    or (focus_tokens and all(tok in c_text for tok in focus_tokens))
+                                    or any(bt in c_text for bt in bilingual_norm_terms)
                                 ):
                                     focused_ids.add(r["doc_id"])
                                     if len(focused_ids) == len(search_pool):
@@ -1067,6 +1105,26 @@ class LearningService:
         if not distinct_focus_terms and focus_terms:
             distinct_focus_terms = list(focus_terms)
 
+        bilingual_focus_terms = list(
+            dict.fromkeys(
+                eq
+                for eq in (
+                    *expand_topic_focus_terms(topic_norm),
+                    *(syn for ft in (*distinct_focus_terms, *focus_terms) for syn in expand_topic_focus_terms(ft)),
+                    *(normalized(t) for t in expand_bilingual_query_terms(str(topic or ""))),
+                )
+                if eq
+                and eq not in distinct_focus_terms
+                and eq not in QUERY_STOPWORDS
+                and eq not in DIRECTIVE_STOPWORDS
+            )
+        )
+        # Keep only distinctive whole phrases or ASCII terms >=4 chars for filename/FTS focus matching
+        distinctive_bilingual_terms = [
+            eq for eq in (*distinct_focus_terms, *bilingual_focus_terms)
+            if (" " in eq and len(eq) >= 6) or (" " not in eq and eq.isascii() and len(eq) >= 4)
+        ]
+
         doc_ids = [d["id"] for d in matching_docs]
         scope = ",".join("?" for _ in doc_ids)
         doc_map = {d["id"]: d for d in matching_docs}
@@ -1076,13 +1134,26 @@ class LearningService:
 
         def relevance_score(raw_text: str, doc_info: dict) -> tuple[int, bool]:
             c_norm = _normalize_text(raw_text)
+            bilingual_hits = [
+                eq for eq in bilingual_focus_terms
+                if re.search(r"(?<!\w)" + re.escape(eq) + r"(?!\w)", c_norm)
+            ]
             score = 0
+            authored_hits: list[str] = []
             if authored:
                 authored_hits = authored_pattern.findall(c_norm) if authored_pattern is not None else []
-                if not authored_hits and (authored_pattern is not None or not matches(c_norm, authored[1])):
+                has_topic_focus_match = bool(
+                    bilingual_hits
+                    or any(
+                        re.search(r"(?<!\w)" + re.escape(ft) + r"(?!\w)", c_norm)
+                        for ft in distinct_focus_terms
+                        if (" " in ft and len(ft) >= 6) or (" " not in ft and ft.isascii() and len(ft) >= 4)
+                    )
+                )
+                if not authored_hits and (authored_pattern is not None or not matches(c_norm, authored[1])) and not has_topic_focus_match:
                     return (0, False)
                 hit_count = len(authored_hits) if authored_hits else 1
-                score += 100 + min(4, max(0, hit_count - 1)) * 25
+                score += (100 + min(4, max(0, hit_count - 1)) * 25) if authored_hits else 70
             if topic_variants and any(tv in c_norm for tv in topic_variants):
                 score += 100
             # Strongly reward sub-topic focus terms (e.g. "bayes" for "Xác suất Bayes", "dao ham" for "Đạo hàm")
@@ -1094,7 +1165,9 @@ class LearningService:
                 for ft in focus_terms:
                     if ft in c_norm:
                         focus_hit_bonus += 80 + min(4, c_norm.count(ft)) * 12
-            score += min(focus_hit_bonus, 320)
+            for eq in bilingual_hits:
+                focus_hit_bonus += 95 + min(3, c_norm.count(eq)) * 12
+            score += min(focus_hit_bonus, 340)
 
             score += sum(10 for t in topic_terms if t in c_norm)
             score += sum(5 for w in weak_terms if w in c_norm)
@@ -1117,6 +1190,11 @@ class LearningService:
             doc_field_match = bool(
                 (authored and any(matches(field, authored[1]) for field in doc_fields if field))
                 or any(tv in field for field in doc_fields for tv in topic_variants)
+                or any(
+                    re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", field)
+                    for field in doc_fields if field
+                    for term in distinctive_bilingual_terms
+                )
             )
             if doc_field_match:
                 score += 180
@@ -1244,10 +1322,12 @@ class LearningService:
                                 specific_phrases.append(alias)
                     for ft in distinct_focus_terms:
                         if any(ch.isalpha() for ch in ft):
-                            # Add non-stopword distinct tokens (e.g. "bayes")
-                            for tok in re.findall(r"[^\W_]+", ft):
-                                if len(tok) >= 3 and tok not in label_words:
-                                    specific_phrases.append(tok)
+                            ft_tokens = [t for t in re.findall(r"[^\W_]+", ft) if len(t) >= 2]
+                            if len(ft_tokens) == 1 and len(ft_tokens[0]) >= 3 and ft_tokens[0] not in label_words:
+                                specific_phrases.append(ft_tokens[0])
+                            elif len(ft_tokens) >= 2:
+                                specific_phrases.append(" ".join(ft_tokens))
+                    specific_phrases.extend(bilingual_focus_terms)
 
                     specific_fts = self._fts_phrase_query(specific_phrases)
                     if specific_fts:
@@ -1363,15 +1443,55 @@ class LearningService:
                 and "unrepresented_formula_or_diagram_suspected" in (pq.get("warnings") or [])
             )
 
+        focus_dedicated_doc_ids: set[int] = set()
+        if distinctive_bilingual_terms:
+            for d in matching_docs:
+                did = d.get("id")
+                if did is None:
+                    continue
+                d_title = _normalize_text(d.get("clean_title") or "")
+                d_fname = _normalize_text(d.get("filename") or "")
+                d_ext = _normalize_text(doc_topics_map.get(did, ""))
+                d_fields = (
+                    d_title, d_fname, d_ext,
+                    re.sub(r"[-_]+", " ", d_title),
+                    re.sub(r"[-_]+", " ", d_fname),
+                    re.sub(r"[-_]+", " ", d_ext),
+                )
+                if any(
+                    re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", field)
+                    for field in d_fields if field
+                    for term in distinctive_bilingual_terms
+                ) or any(tv in field for field in d_fields for tv in topic_variants):
+                    focus_dedicated_doc_ids.add(did)
+
         clean_pool = [item for item in scored_candidates if not _has_formula_gap(item[2])]
         candidate_pool = clean_pool if clean_pool else scored_candidates
+
+        if focus_dedicated_doc_ids:
+            dedicated_pool = [
+                item for item in candidate_pool
+                if item[2].get("doc_id") in focus_dedicated_doc_ids and not item[1]
+            ]
+            if len(dedicated_pool) >= min(limit, 3):
+                other_pool = [
+                    item for item in candidate_pool
+                    if item[2].get("doc_id") not in focus_dedicated_doc_ids or item[1]
+                ]
+                candidate_pool = dedicated_pool + other_pool
 
         max_score = candidate_pool[0][0]
         if max_score >= 100:
             threshold = max(50, max_score * 0.5)
         else:
             threshold = max_score * 0.5
-        matching_scored = [c for score, _lq, c in candidate_pool if score >= threshold]
+        if focus_dedicated_doc_ids and len([i for i in candidate_pool if i[2].get("doc_id") in focus_dedicated_doc_ids and not i[1]]) >= limit:
+            matching_scored = [
+                c for score, _lq, c in candidate_pool
+                if c.get("doc_id") in focus_dedicated_doc_ids and score >= threshold
+            ]
+        else:
+            matching_scored = [c for score, _lq, c in candidate_pool if score >= threshold]
         if len(matching_scored) < limit:
             seen_chunk_ids = {c.get("chunk_id") for c in matching_scored}
             backfill_floor = max(20, max_score * 0.25)
