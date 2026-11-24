@@ -418,3 +418,127 @@ test('Selected page practice honors the requested count and keeps three as the d
         assert.equal(app.practiceRequests[0].source_chunk_id, 17);
     }
 });
+
+test('Learning generate consumes SSE stream progress events and renders final session', async () => {
+    const seenMessages = [];
+    const seenUrls = [];
+    const elements = new Map();
+    const documentListeners = {};
+    let ready;
+    const document = {
+        addEventListener(name, handler) {
+            if (name === 'DOMContentLoaded') ready = handler;
+            else (documentListeners[name] ||= []).push(handler);
+        },
+        dispatchEvent() { return true; },
+        getElementById(id) {
+            if (!elements.has(id)) elements.set(id, new Element(id.endsWith('dialog') ? 'dialog' : 'div'));
+            return elements.get(id);
+        },
+        createElement(tag) { return new Element(tag); },
+    };
+    const ssePayloads = [
+        'data: ' + JSON.stringify({ type: 'progress', stage: 'generating', attempt: 1, max_attempts: 1, ready_count: 0, requested_count: 2 }) + '\n\n',
+        ': keepalive\n\n',
+        'data: ' + JSON.stringify({ type: 'progress', stage: 'verifying', attempt: 1, candidate_count: 2, ready_count: 0, requested_count: 2 }) + '\n\n',
+        'data: ' + JSON.stringify({
+            type: 'progress',
+            stage: 'questions',
+            ready_count: 1,
+            requested_count: 2,
+            questions: [{
+                id: 'q1',
+                question: 'Câu xem trước đầu tiên từ luồng SSE?',
+                choices: [],
+                source: { doc_id: 1, chunk_id: 5, title: 'Tài liệu', page_num: 2 },
+            }],
+        }) + '\n\n',
+        'data: ' + JSON.stringify({ type: 'progress', stage: 'generating', attempt: 2, max_attempts: 2, ready_count: 1, requested_count: 2 }) + '\n\n',
+        'data: ' + JSON.stringify({
+            type: 'complete',
+            session: {
+                practice_id: 'sse-session-12345678',
+                count: 1,
+                requested_count: 2,
+                difficulty: 'medium',
+                questions: [{
+                    id: 'q1',
+                    question: 'Theo đoạn trích, kết quả thế nào?',
+                    choices: [
+                        { label: 'A', text: 'Sai 1' },
+                        { label: 'B', text: 'Đúng theo nguồn' },
+                        { label: 'C', text: 'Sai 2' },
+                        { label: 'D', text: 'Sai 3' },
+                    ],
+                    source: { doc_id: 1, chunk_id: 5, title: 'Tài liệu', page_num: 2, pdf_url: '/api/documents/1/pdf#page=2' },
+                }],
+            },
+        }) + '\n\n',
+    ];
+    let previewSnapshots = [];
+    const practiceBodyObserver = elements;
+    const origGetEl = document.getElementById.bind(document);
+    document.getElementById = (id) => {
+        const el = origGetEl(id);
+        if (id === 'practice-body' && !el._wrappedReplace) {
+            el._wrappedReplace = true;
+            const origAppend = el.appendChild.bind(el);
+            el.appendChild = (child) => {
+                const res = origAppend(child);
+                if (child && child.className === 'practice-stream-preview') {
+                    previewSnapshots.push(textOf(el));
+                }
+                return res;
+            };
+        }
+        return el;
+    };
+    const fetch = async (url) => {
+        seenUrls.push(url);
+        if (url === '/api/learning/topics') return { ok: true, json: async () => ({ topics: [{ id: 'Trí nhớ', label: 'Trí nhớ', document_count: 1 }] }) };
+        if (url === '/api/documents') return { ok: true, json: async () => ({ documents: [] }) };
+        if (url === '/api/learning/generate/stream') {
+            const encoder = new TextEncoder();
+            const stream = new ReadableStream({
+                start(controller) {
+                    for (const frame of ssePayloads) controller.enqueue(encoder.encode(frame));
+                    controller.close();
+                },
+            });
+            return {
+                ok: true,
+                status: 200,
+                headers: { get: (k) => (k.toLowerCase() === 'content-type' ? 'text/event-stream; charset=utf-8' : null) },
+                body: stream,
+            };
+        }
+        throw new Error(`Unexpected request ${url}`);
+    };
+    const origStatusEl = document.getElementById('learning-generate-status');
+    let lastStatus = '';
+    Object.defineProperty(origStatusEl, 'textContent', {
+        get() { return lastStatus; },
+        set(val) { lastStatus = val; seenMessages.push(val); },
+    });
+    const script = fs.readFileSync(path.join(__dirname, '../static/practice.js'), 'utf8');
+    vm.runInNewContext(script, {
+        document, fetch, URL, URLSearchParams, TextDecoder,
+        localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+        window: { location: { origin: 'http://localhost' }, confirm: () => true, ReadableStream },
+        CustomEvent: class CustomEvent { constructor(type, init = {}) { this.type = type; this.detail = init.detail; } },
+    });
+    ready();
+    await Promise.resolve();
+    elements.get('learning-topic').value = 'Trí nhớ';
+    elements.get('learning-count').value = '2';
+    elements.get('learning-difficulty').value = 'medium';
+    await elements.get('btn-learning-generate').click();
+
+    assert.ok(seenUrls.includes('/api/learning/generate/stream'));
+    assert.ok(seenMessages.some(msg => msg.includes('Đang sinh câu hỏi (lượt 1/1)')));
+    assert.ok(seenMessages.some(msg => msg.includes('Đang kiểm định nguồn và độ khó (2 ứng viên')));
+    assert.ok(previewSnapshots.length >= 2);
+    assert.ok(previewSnapshots.some(txt => txt.includes('Câu xem trước đầu tiên từ luồng SSE?') && txt.includes('trang 2')));
+    assert.match(textOf(elements.get('practice-body')), /Theo đoạn trích, kết quả thế nào\?/);
+    assert.match(lastStatus, /Đã tạo 1\/2 câu/);
+});

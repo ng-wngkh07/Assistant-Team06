@@ -318,8 +318,13 @@ class VisionOCRManager:
 
         if is_blank:
             text = ""
+        elif active_backend == BACKEND_TESSERACT:
+            # Pure-CPU Tesseract does not use GPU/MLX unified memory; avoid stalling behind LLM/VLM locks.
+            if cancel_event is not None and cancel_event.is_set():
+                raise IndexingCancelledError("Đã hủy tác vụ OCR theo yêu cầu dừng.")
+            text = self._ocr_tesseract(image_bytes)
         else:
-            # Run OCR with GPU lock coordination
+            # Run Vision-LLM OCR with GPU lock coordination
             with _acquire_inference_lock(timeout=gpu_timeout, cancel_event=cancel_event):
                 if cancel_event is not None and cancel_event.is_set():
                     raise IndexingCancelledError("Đã hủy tác vụ OCR theo yêu cầu dừng.")
@@ -415,8 +420,6 @@ class VisionOCRManager:
                             raise RuntimeError(f"Không thể trích xuất JSON văn bản hợp lệ từ VLM: {err}") from err
                     else:
                         text = self._ocr_ollama_vlm(image_bytes)
-                elif active_backend == BACKEND_TESSERACT:
-                    text = self._ocr_tesseract(image_bytes)
                 else:
                     raise ValueError(f"Backend OCR không được hỗ trợ: {active_backend}")
 

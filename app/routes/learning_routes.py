@@ -1,12 +1,14 @@
 """Practice & Topic-Based Learning API Routes (Single Responsibility Module)."""
 
+import asyncio
 import inspect
+import json
 import logging
 import re
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
@@ -38,25 +40,51 @@ def _bank_refresh_kwargs(target_fn: Any, refresh: bool) -> dict[str, Any]:
     return {}
 
 
-def _raise_learning_http_error(exc: Exception, *, context_label: str, fallback_detail: str | None = None) -> None:
-    """Map practice/learning route exceptions cleanly with sanitized error details."""
+def _on_progress_kwargs(target_fn: Any, callback: Any) -> dict[str, Any]:
+    """Forward on_progress only when accepted by the target callable signature."""
+    if callback is None:
+        return {}
+    try:
+        params = inspect.signature(target_fn).parameters
+    except (TypeError, ValueError):
+        return {}
+    if "on_progress" in params or any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    ):
+        return {"on_progress": callback}
+    return {}
+
+
+def _map_learning_http_error(
+    exc: Exception,
+    *,
+    context_label: str,
+    fallback_detail: str | None = None,
+) -> tuple[int, str, dict[str, str]]:
+    """Map practice/learning route exceptions to (status, sanitized_detail, headers)."""
     if isinstance(exc, DialogueBusyError):
-        raise HTTPException(
-            status_code=409,
-            detail=sanitize_error_detail(str(exc)),
-            headers={"Retry-After": "2"},
-        ) from exc
+        return (409, sanitize_error_detail(str(exc)), {"Retry-After": "2"})
     if isinstance(exc, GPUBusyError):
-        raise HTTPException(
-            status_code=503,
-            detail=sanitize_error_detail(str(exc)),
-            headers={"Retry-After": "2"},
-        ) from exc
+        return (503, sanitize_error_detail(str(exc)), {"Retry-After": "2"})
     if isinstance(exc, PracticeGenerationError):
-        raise HTTPException(status_code=422, detail=sanitize_error_detail(str(exc))) from exc
+        return (422, sanitize_error_detail(str(exc)), {})
     logger.exception(context_label)
     detail = fallback_detail if fallback_detail is not None else sanitize_error_detail(runtime_failure_message(exc))
-    raise HTTPException(status_code=502, detail=detail) from exc
+    return (502, detail, {})
+
+
+def _raise_learning_http_error(exc: Exception, *, context_label: str, fallback_detail: str | None = None) -> None:
+    """Map practice/learning route exceptions cleanly with sanitized error details."""
+    status_code, detail, headers = _map_learning_http_error(
+        exc,
+        context_label=context_label,
+        fallback_detail=fallback_detail,
+    )
+    raise HTTPException(
+        status_code=status_code,
+        detail=detail,
+        headers=headers or None,
+    ) from exc
 
 
 class PracticeGenerateRequest(BaseModel):
@@ -243,6 +271,77 @@ async def generate_learning(req: LearningGenerateRequest):
         return project_public_response(await run_in_threadpool(run_generation))
     except Exception as exc:
         _raise_learning_http_error(exc, context_label="Không tạo được bộ câu hỏi theo chủ đề")
+
+
+@router.post("/api/learning/generate/stream")
+async def generate_learning_stream(req: LearningGenerateRequest):
+    from app import server as _srv
+
+    async def event_generator():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+        closed = False
+
+        def _push(frame: Optional[str]) -> None:
+            if closed or loop.is_closed():
+                return
+            try:
+                loop.call_soon_threadsafe(queue.put_nowait, frame)
+            except RuntimeError:
+                pass
+
+        def on_progress(payload: dict[str, Any]) -> None:
+            event = project_public_response({"type": "progress", **payload})
+            _push(f"data: {json.dumps(event, ensure_ascii=False)}\n\n")
+
+        def run_generation() -> None:
+            try:
+                with acquire_inference(_srv.dialogue_gate), _srv.gpu_coordinator.acquire_for_inference():
+                    result = _srv.learning_service.generate(
+                        topic=req.topic,
+                        count=req.count,
+                        difficulty=req.difficulty,
+                        purpose=req.purpose,
+                        weak_topics=req.weak_topics,
+                        model=_srv.DEFAULT_CHAT_MODEL,
+                        **_bank_refresh_kwargs(_srv.learning_service.generate, req.refresh),
+                        **_on_progress_kwargs(_srv.learning_service.generate, on_progress),
+                    )
+                complete_event = {
+                    "type": "complete",
+                    "session": project_public_response(result),
+                }
+                _push(f"data: {json.dumps(complete_event, ensure_ascii=False)}\n\n")
+            except Exception as exc:
+                status_code, detail, _ = _map_learning_http_error(
+                    exc,
+                    context_label="Không tạo được bộ câu hỏi theo chủ đề",
+                )
+                err_event = {"type": "error", "status": status_code, "detail": detail}
+                _push(f"data: {json.dumps(err_event, ensure_ascii=False)}\n\n")
+            finally:
+                _push(None)
+
+        worker = asyncio.create_task(run_in_threadpool(run_generation))
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if chunk is None:
+                    break
+                yield chunk
+            await worker
+        finally:
+            closed = True
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/api/learning/exercises")

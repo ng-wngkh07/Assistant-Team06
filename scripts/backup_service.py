@@ -121,8 +121,17 @@ def create_backup(
     if out_p.exists():
         raise FileExistsError(f"Backup destination '{out_p}' already exists. Refusing to overwrite.")
     out_p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    def _check_entry_safety(entry: Path) -> None:
+        try:
+            check_source_path_safety(entry)
+        except FileNotFoundError:
+            if entry.name.endswith(("-wal", "-shm", "-journal")):
+                return
+            raise
+
     for source_entry in src_root.rglob("*"):
-        check_source_path_safety(source_entry)
+        _check_entry_safety(source_entry)
 
     with tempfile.TemporaryDirectory() as staging_dir:
         staging_root = Path(staging_dir)
@@ -156,7 +165,7 @@ def create_backup(
         # 2. Iterate account subdirectories (32-character hex account IDs)
         account_pattern = re.compile(r"^[a-f0-9]{32}$")
         for item in sorted(src_root.iterdir()):
-            check_source_path_safety(item)
+            _check_entry_safety(item)
             if item.is_dir() and account_pattern.match(item.name):
                 acc_name = item.name
                 acc_staging = staging_root / acc_name

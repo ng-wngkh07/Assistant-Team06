@@ -485,7 +485,10 @@ def test_medium_hard_and_general_easy_preserve_full_semantic_review(monkeypatch,
             user_text = messages[0]['content']
             if 'Kiểm định độc lập từng câu' in user_text:
                 review_prompts.append((user_text, kwargs['response_schema']))
-                assert 'Kiểm định độc lập từng câu từ source và question' in user_text
+                assert (
+                    'Kiểm định độc lập từng câu từ source và question' in user_text
+                    or (difficulty == 'medium' and 'Kiểm định độc lập từng câu trắc nghiệm mức medium từ source và question' in user_text)
+                )
                 assert 'điền khuyết từ source' not in user_text
                 required_fields = set(kwargs['response_schema']['properties']['checks']['items']['required'])
                 assert {'input_audit', 'independent_solution', 'explanation_audit', 'explanation_supported', 'difficulty_matches'} <= required_fields
@@ -698,3 +701,400 @@ def test_cloze_explanation_provenance_and_full_audit_gates(monkeypatch, tmp_path
     assert 'Kiểm định độc lập từng câu từ source và question' in prompt_text
     required_fields = set(schema['properties']['checks']['items']['required'])
     assert {'explanation_audit', 'explanation_supported'} <= required_fields
+
+
+def test_partial_proof_lane_refills_only_remaining_from_model_and_blocks_easy_recall_promotion(monkeypatch):
+    import app.token_counter as token_counter
+    monkeypatch.setattr(
+        token_counter,
+        'get_exact_token_counter',
+        lambda: lambda messages: sum(len(m['content']) for m in messages),
+    )
+
+    page_text = (
+        'Thang tính chất mẫu: Hạng I > Hạng II > Hạng III > Hạng IV > Hạng V.\n'
+        'Cơ chế lưu đệm chỉ ghi dữ liệu vào cache khi cờ Dirty được bật.'
+    )
+    extracted = PDFExtractionResult(filename='mixed_rules.txt', filepath=Path('mixed_rules.txt'))
+    extracted.extracted_pages = [{'page_num': 1, 'text': page_text}]
+    extracted.total_pages = 1
+    extracted.total_chars = len(page_text)
+
+    # 1. Partial proof (1 item) + model returns only easy recall ("là gì") -> must reject easy promotion & return 1/3 partial
+    seen_quiz_prompts = []
+
+    class EasyRecallProposingClient:
+        last_done_reason = 'stop'
+
+        def check_health(self):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            prompt = messages[0]['content']
+            if 'Kiểm định độc lập từng câu' in prompt:
+                return json.dumps({
+                    'checks': [{
+                        'index': 1,
+                        'input_audit': 'Đề bài đầy đủ dữ kiện.',
+                        'independent_solution': 'Theo nguồn, cơ chế chỉ ghi vào cache.',
+                        'choice_comparison': 'A khớp.',
+                        'explanation_audit': 'Giải thích đúng.',
+                        'supported': True,
+                        'explanation_supported': True,
+                        'unique_answer': True,
+                        'qualifiers_preserved': True,
+                        'difficulty_matches': True,
+                        'verified_answer': 'A',
+                    }]
+                }, ensure_ascii=False)
+            if 'flashcards' in prompt.lower():
+                return json.dumps({'flashcards': [{'answer': 'cờ Dirty', 'evidence_id': 'Q1'}]}, ensure_ascii=False)
+            seen_quiz_prompts.append(prompt)
+            return json.dumps({
+                'questions': [{
+                    'question': 'Cơ chế lưu đệm là gì?',
+                    'choices': {
+                        'A': 'Chỉ ghi dữ liệu vào cache khi cờ Dirty được bật',
+                        'B': 'Ghi thẳng xuống đĩa quang',
+                        'C': 'Xóa toàn bộ bộ nhớ',
+                        'D': 'Ngắt nguồn điện',
+                    },
+                    'answer': 'A',
+                    'explanation': 'Theo tài liệu, cơ chế chỉ ghi vào cache.',
+                    'evidence_id': 'Q1',
+                    'difficulty': 'medium',
+                }]
+            }, ensure_ascii=False)
+
+    partial_res = StudyMaterialManager(EasyRecallProposingClient()).generate_materials_from_pages(
+        extracted, quiz_count=3, flashcard_count=1, difficulty='medium', model='test-remote'
+    )
+    assert len(seen_quiz_prompts) == 1
+    assert 'Tạo đúng 2 câu trắc nghiệm độ khó medium' in seen_quiz_prompts[0]
+    assert partial_res['actual_quiz_count'] == 1
+    assert partial_res['requested_quiz_count'] == 3
+    assert partial_res['complete'] is False
+    assert partial_res['answers_verified'] is True
+    assert partial_res['generation']['quiz'] == 'source_proof'
+    assert partial_res['quiz'][0]['answer_verified'] is True
+    assert '1/3 câu' in partial_res['warning']
+
+    # 2. Passage with 0 proof candidates + model returns only easy recall -> must raise 422-mapped StudyMaterialError
+    no_proof_text = 'Cơ chế lưu đệm chỉ ghi dữ liệu vào cache khi cờ Dirty được bật.'
+    no_proof_ext = PDFExtractionResult(filename='no_proof.txt', filepath=Path('no_proof.txt'))
+    no_proof_ext.extracted_pages = [{'page_num': 1, 'text': no_proof_text}]
+    no_proof_ext.total_pages = 1
+    no_proof_ext.total_chars = len(no_proof_text)
+    with pytest.raises(StudyMaterialError, match='trung bình'):
+        StudyMaterialManager(EasyRecallProposingClient()).generate_materials_from_pages(
+            no_proof_ext, quiz_count=1, flashcard_count=1, difficulty='medium', model='test-remote'
+        )
+
+    # 3. Clean-count multi-batch refill for quiz_count=5 when batch 1 has 2 valid + 1 invalid item
+    class RefillBatchClient:
+        last_done_reason = 'stop'
+
+        def __init__(self):
+            self.quiz_prompts = []
+
+        def check_health(self):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            prompt = messages[0]['content']
+            if 'Kiểm định độc lập từng câu' in prompt:
+                items = json.JSONDecoder().raw_decode(prompt.split('Dữ liệu cần kiểm định:\n', 1)[1])[0]
+                return json.dumps({
+                    'checks': [{
+                        'index': item['index'],
+                        'input_audit': 'Đề bài nêu rõ điều kiện áp dụng.',
+                        'independent_solution': 'Kết luận suy ra trực tiếp từ quy tắc nguồn.',
+                        'choice_comparison': 'Lựa chọn A khớp duy nhất.',
+                        'explanation_audit': 'Giải thích bám sát nguồn.',
+                        'supported': True,
+                        'explanation_supported': True,
+                        'unique_answer': True,
+                        'qualifiers_preserved': True,
+                        'difficulty_matches': True,
+                        'verified_answer': 'A',
+                    } for item in items]
+                }, ensure_ascii=False)
+            if 'flashcards' in prompt.lower():
+                return json.dumps({'flashcards': [{'answer': 'cờ Dirty', 'evidence_id': 'Q1'}]}, ensure_ascii=False)
+            self.quiz_prompts.append(prompt)
+            if len(self.quiz_prompts) == 1:
+                return json.dumps({
+                    'questions': [
+                        {
+                            'question': 'Trong trường hợp cờ Dirty bật, áp dụng quy tắc lưu đệm nào (mẫu 1)?',
+                            'choices': {'A': 'Ghi vào cache (1)', 'B': 'Ghi đĩa (1)', 'C': 'Xóa cache (1)', 'D': 'Tắt máy (1)'},
+                            'answer': 'A',
+                            'explanation': 'Áp dụng quy tắc lưu đệm theo tài liệu.',
+                            'evidence_id': 'Q1',
+                            'difficulty': 'medium',
+                        },
+                        {
+                            'question': 'Trong trường hợp cờ Dirty bật, áp dụng quy tắc lưu đệm nào (mẫu 2)?',
+                            'choices': {'A': 'Ghi vào cache (2)', 'B': 'Ghi đĩa (2)', 'C': 'Xóa cache (2)', 'D': 'Tắt máy (2)'},
+                            'answer': 'A',
+                            'explanation': 'Áp dụng quy tắc lưu đệm theo tài liệu.',
+                            'evidence_id': 'Q1',
+                            'difficulty': 'medium',
+                        },
+                        {
+                            'question': 'Cơ chế lưu đệm là gì?',  # Invalid easy recall for medium!
+                            'choices': {'A': 'Định nghĩa', 'B': 'Sai 1', 'C': 'Sai 2', 'D': 'Sai 3'},
+                            'answer': 'A',
+                            'explanation': 'Định nghĩa.',
+                            'evidence_id': 'Q1',
+                            'difficulty': 'medium',
+                        },
+                    ]
+                }, ensure_ascii=False)
+            return json.dumps({
+                'questions': [
+                    {
+                        'question': f'Trong trường hợp cờ Dirty bật, áp dụng quy tắc lưu đệm nào (mẫu {i})?',
+                        'choices': {'A': f'Ghi vào cache ({i})', 'B': f'Ghi đĩa ({i})', 'C': f'Xóa cache ({i})', 'D': f'Tắt máy ({i})'},
+                        'answer': 'A',
+                        'explanation': 'Áp dụng quy tắc lưu đệm theo tài liệu.',
+                        'evidence_id': 'Q1',
+                        'difficulty': 'medium',
+                    }
+                    for i in (3, 4, 5)
+                ]
+            }, ensure_ascii=False)
+
+    refill_client = RefillBatchClient()
+    refill_res = StudyMaterialManager(refill_client).generate_materials_from_pages(
+        no_proof_ext, quiz_count=5, flashcard_count=1, difficulty='medium', model='test-remote'
+    )
+    assert len(refill_client.quiz_prompts) == 2
+    assert 'Tạo đúng 3 câu trắc nghiệm độ khó medium' in refill_client.quiz_prompts[1]
+    assert refill_res['actual_quiz_count'] == 5
+    assert refill_res['complete'] is True
+
+    # 4. Step 1 proposal timeout when partial proof-backed items already exist preserves partial verified set
+    class TimeoutProposalClient:
+        last_done_reason = 'stop'
+
+        def check_health(self):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            prompt = messages[0]['content']
+            if 'flashcards' in prompt.lower():
+                return json.dumps({'flashcards': [{'answer': 'cờ Dirty', 'evidence_id': 'Q1'}]}, ensure_ascii=False)
+            raise TimeoutError('Simulated generation timeout on remaining medium items')
+
+    partial_timeout_res = StudyMaterialManager(TimeoutProposalClient()).generate_materials_from_pages(
+        extracted, quiz_count=3, flashcard_count=1, difficulty='medium', model='test-remote'
+    )
+    assert partial_timeout_res['actual_quiz_count'] == 1
+    assert partial_timeout_res['complete'] is False
+    assert partial_timeout_res['answers_verified'] is True
+    assert partial_timeout_res['generation']['quiz'] == 'source_proof'
+    assert '1/3 câu' in partial_timeout_res['warning']
+    assert 'quá thời gian' in partial_timeout_res['warning']
+
+
+def test_suppressed_proof_uses_ordinary_review_and_preserves_unverified_provenance(monkeypatch):
+    import app.token_counter as token_counter
+    monkeypatch.setattr(
+        token_counter,
+        'get_exact_token_counter',
+        lambda: lambda messages: sum(len(m['content']) for m in messages),
+    )
+
+    # 1. Adjacent-page correction suppresses automatic proof -> falls back to ordinary model + independent review
+    suppressed_ext = PDFExtractionResult(filename='suppressed_neighbor.txt', filepath=Path('suppressed_neighbor.txt'))
+    suppressed_ext.extracted_pages = [
+        {'page_num': 1, 'text': 'Thang độ dẫn nhiệt: Kim cương > Bạc > Đồng > Vàng > Nhôm.'},
+        {'page_num': 2, 'text': 'Đính chính trang trước: Bạc > Kim cương > Đồng > Vàng > Nhôm.'},
+    ]
+    suppressed_ext.total_pages = 2
+    suppressed_ext.total_chars = sum(len(p['text']) for p in suppressed_ext.extracted_pages)
+
+    class OrdinaryReviewClient:
+        last_done_reason = 'stop'
+
+        def __init__(self):
+            self.review_calls = 0
+
+        def check_health(self):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            prompt = messages[0]['content']
+            if 'Kiểm định độc lập từng câu' in prompt:
+                self.review_calls += 1
+                items = json.JSONDecoder().raw_decode(prompt.split('Dữ liệu cần kiểm định:\n', 1)[1])[0]
+                return json.dumps({
+                    'checks': [{
+                        'index': item['index'],
+                        'input_audit': 'Đề bài nêu rõ phần đính chính.',
+                        'independent_solution': 'Theo phần đính chính, Bạc dẫn tốt hơn Kim cương.',
+                        'choice_comparison': 'Chỉ A khớp.',
+                        'explanation_audit': 'Giải thích bám theo trang 2.',
+                        'supported': True,
+                        'explanation_supported': True,
+                        'unique_answer': True,
+                        'qualifiers_preserved': True,
+                        'difficulty_matches': True,
+                        'verified_answer': 'A',
+                    } for item in items]
+                }, ensure_ascii=False)
+            if 'flashcards' in prompt.lower():
+                return json.dumps({'flashcards': [{'answer': 'Kim cương', 'evidence_id': 'Q1'}]}, ensure_ascii=False)
+            return json.dumps({
+                'questions': [{
+                    'question': 'Trong trường hợp áp dụng phần đính chính, kim loại nào đứng đầu thang dẫn nhiệt?',
+                    'choices': {'A': 'Bạc', 'B': 'Đồng', 'C': 'Vàng', 'D': 'Nhôm'},
+                    'answer': 'A',
+                    'explanation': 'Theo phần đính chính trong cùng điều kiện ở trang 2.',
+                    'evidence_id': 'Q2',
+                    'difficulty': 'medium',
+                }]
+            }, ensure_ascii=False)
+
+    ordinary_client = OrdinaryReviewClient()
+    suppressed_res = StudyMaterialManager(ordinary_client).generate_materials_from_pages(
+        suppressed_ext, quiz_count=1, flashcard_count=1, difficulty='medium', model='test-remote'
+    )
+    assert ordinary_client.review_calls == 1
+    assert suppressed_res['generation'] == {'quiz': 'model', 'flashcards': 'model'}
+    assert suppressed_res['answers_verified'] is False
+    assert suppressed_res['quiz'][0]['answer_verified'] is False
+    assert suppressed_res['quiz'][0]['generation'] == 'model'
+
+    # 2. Mixed source (1 proof-backed item + 1 ordinary model-reviewed item) reports mixed provenance and answers_verified=False
+    mixed_ext = PDFExtractionResult(filename='mixed_proof_model.txt', filepath=Path('mixed_proof_model.txt'))
+    mixed_ext.extracted_pages = [
+        {'page_num': 1, 'text': 'Thang tính chất mẫu: Hạng I > Hạng II > Hạng III > Hạng IV > Hạng V.'},
+        {'page_num': 2, 'text': 'Chính sách ghi chậm chỉ cập nhật cache trước khi ghi xuống bộ nhớ chính.'},
+    ]
+    mixed_ext.total_pages = 2
+    mixed_ext.total_chars = sum(len(p['text']) for p in mixed_ext.extracted_pages)
+
+    class MixedRefillClient(OrdinaryReviewClient):
+        def chat_complete(self, messages, **kwargs):
+            prompt = messages[0]['content']
+            if 'Kiểm định độc lập từng câu' in prompt:
+                return super().chat_complete(messages, **kwargs)
+            if 'flashcards' in prompt.lower():
+                return json.dumps({'flashcards': [{'answer': 'Hạng I', 'evidence_id': 'Q1'}]}, ensure_ascii=False)
+            return json.dumps({
+                'questions': [{
+                    'question': 'Trong trường hợp ghi dữ liệu mới, điều kiện cập nhật bộ nhớ chính là gì?',
+                    'choices': {'A': 'Đợi ghi từ cache xuống', 'B': 'Xóa toàn bộ cache', 'C': 'Ghi đè đĩa quang', 'D': 'Tắt bộ đệm'},
+                    'answer': 'A',
+                    'explanation': 'Áp dụng cơ chế ghi chậm ở trang 2.',
+                    'evidence_id': 'Q2',
+                    'difficulty': 'medium',
+                }]
+            }, ensure_ascii=False)
+
+    mixed_res = StudyMaterialManager(MixedRefillClient()).generate_materials_from_pages(
+        mixed_ext, quiz_count=2, flashcard_count=1, difficulty='medium', model='test-remote'
+    )
+    assert mixed_res['actual_quiz_count'] == 2
+    assert mixed_res['generation'] == {'quiz': 'source_proof+model', 'flashcards': 'model'}
+    assert mixed_res['answers_verified'] is False
+    assert mixed_res['quiz'][0]['answer_verified'] is True
+    assert mixed_res['quiz'][0]['generation'] == 'source_proof'
+    assert mixed_res['quiz'][1]['answer_verified'] is False
+    assert mixed_res['quiz'][1]['generation'] == 'model'
+
+
+def test_compact_medium_review_omits_duplicate_quote_batches_single_and_recovers_partial_timeout(monkeypatch, tmp_path):
+    from app.practice_proof import compact_medium_review_prompt, compact_medium_review_schema
+
+    short_quote = 'Chính sách Write-Back chỉ cập nhật cache trước khi ghi xuống RAM.'
+    prompt = compact_medium_review_prompt([{
+        'index': 1,
+        'source': short_quote,
+        'question': 'Trong trường hợp ghi dữ liệu mới với Write-Back, hệ thống cập nhật ở đâu?',
+        'choices': {'A': 'Chỉ cập nhật cache', 'B': 'Ghi ngay xuống RAM', 'C': 'Xóa cache', 'D': 'Tắt CPU'},
+        'proposed_answer': 'A',
+        'explanation': 'Theo nguồn, Write-Back chỉ cập nhật cache trước.',
+        'evidence_quote': short_quote,
+    }])
+    assert '\nDữ liệu cần kiểm định:\n' in prompt
+    payload = json.JSONDecoder().raw_decode(prompt.split('Dữ liệu cần kiểm định:\n', 1)[1])[0]
+    assert 'evidence_quote' not in payload[0]
+    assert 'proposed_answer' not in payload[0]
+    schema = compact_medium_review_schema(1)
+    item_props = schema['properties']['checks']['items']['properties']
+    assert {'input_audit', 'source_basis', 'independent_solution', 'choice_comparison', 'explanation_audit', 'difficulty_matches'} <= set(item_props)
+    assert item_props['input_audit']['maxLength'] == 200
+    assert item_props['independent_solution']['maxLength'] == 200
+    assert item_props['choice_comparison']['maxLength'] == 200
+    assert item_props['explanation_audit']['maxLength'] == 200
+
+    extracted = _long_three_page_source()
+    review_calls = []
+
+    class SingleBatchTimeoutClient:
+        last_done_reason = 'stop'
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        @classmethod
+        def available(cls, *args, **kwargs):
+            return True
+
+        def chat_complete(self, messages, **kwargs):
+            user_text = messages[0]['content']
+            if 'Kiểm định độc lập từng câu trắc nghiệm mức medium' in user_text:
+                items = json.JSONDecoder().raw_decode(user_text.split('Dữ liệu cần kiểm định:\n', 1)[1])[0]
+                review_calls.append((len(items), kwargs.get('context_prefix_marker'), kwargs.get('max_tokens')))
+                if len(review_calls) == 1:
+                    return json.dumps({
+                        'checks': [{
+                            'index': 1,
+                            'input_audit': 'Source specifies Write-Back behavior.',
+                            'source_basis': 'Chính sách ghi chậm (Write-Back) chỉ cập nhật cache và bật bit Dirty trước khi trả về.',
+                            'independent_solution': 'Write-Back updates cache and Dirty bit first.',
+                            'supported': True,
+                            'qualifiers_preserved': True,
+                            'choice_comparison': 'Only A matches; B,C,D contradict.',
+                            'matching_choices': 'A',
+                            'unique_answer': True,
+                            'verified_answer': 'A',
+                            'explanation_audit': 'Matches source.',
+                            'explanation_supported': True,
+                            'difficulty_matches': True,
+                        }]
+                    }, ensure_ascii=False)
+                raise TimeoutError('Simulated MLX review timeout on second medium item')
+            return json.dumps({
+                'questions': [
+                    {
+                        'question': 'Trong trường hợp ghi dữ liệu mới với chính sách Write-Back, hệ thống cập nhật thành phần nào trước?',
+                        'choices': {'A': 'Chỉ cập nhật cache', 'B': 'Ghi thẳng xuống RAM', 'C': 'Xóa bộ nhớ đệm', 'D': 'Ngắt bộ xử lý'},
+                        'answer': 'A',
+                        'explanation': 'Áp dụng quy tắc Write-Back từ trang 1.',
+                        'evidence_id': 'Q1',
+                        'difficulty': 'medium',
+                    },
+                    {
+                        'question': 'Khi tỷ lệ trượt đệm tăng cao, thành phần nào trở thành nút thắt của hệ thống?',
+                        'choices': {'A': 'Băng thông bộ nhớ chính', 'B': 'Thanh ghi đa dụng', 'C': 'Bộ đếm chương trình', 'D': 'Tập lệnh SIMD'},
+                        'answer': 'A',
+                        'explanation': 'Áp dụng quy tắc bộ nhớ đệm từ trang 2.',
+                        'evidence_id': 'Q2',
+                        'difficulty': 'medium',
+                    },
+                ]
+            }, ensure_ascii=False)
+
+    _setup_fake_mlx(monkeypatch, tmp_path, SingleBatchTimeoutClient)
+    res = StudyMaterialManager().generate_materials_from_pages(
+        extracted, quiz_count=2, flashcard_count=0, difficulty='medium', model='qwen3.5-9b-4bit'
+    )
+    assert len(review_calls) == 2
+    assert all(count == 1 and marker == '\nDữ liệu cần kiểm định:\n' and max_tok == 380 for count, marker, max_tok in review_calls)
+    assert res['actual_quiz_count'] == 1
+    assert res['complete'] is False
+    assert '1/2 câu' in res['warning']

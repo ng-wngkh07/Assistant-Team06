@@ -15,6 +15,7 @@ from app.topic_tree import (
     normalized,
     resolve_topic,
     resolve_topic_hierarchy,
+    resolve_topic_query,
 )
 from app.topic_router import TopicRouter
 
@@ -30,4 +31,5 @@ __all__ = [
     "normalized",
     "resolve_topic",
     "resolve_topic_hierarchy",
+    "resolve_topic_query",
 ]

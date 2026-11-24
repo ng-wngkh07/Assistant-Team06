@@ -1417,3 +1417,14 @@ def test_mlx_infer_detects_paraphrased_clause_loop_and_allows_clean_multi_claim(
         ']}'
     )
     assert mlx_infer._has_streaming_repetition_loop(legitimate) is False  # nosec B101
+
+    three_item_review = (
+        '{"checks":['
+        '{"index":1,"input_audit":"Task asks X; rule given; no input is missing.","explanation_audit":"The explanation accurately follows the source rule."},'
+        '{"index":2,"input_audit":"Task asks Y; rule given; no input is missing.","explanation_audit":"The explanation accurately follows the source rule."},'
+        '{"index":3,"input_audit":"Task asks Z; rule given; no input is missing.","explanation_audit":"The explanation accurately follows the source rule."}'
+        ']}'
+    )
+    assert mlx_infer._has_streaming_repetition_loop(three_item_review, max_schema_items=3) is False  # nosec B101
+    looping_three_item = three_item_review + '"x":"The explanation accurately follows the source rule. The explanation accurately follows the source rule."}'
+    assert mlx_infer._has_streaming_repetition_loop(looping_three_item, max_schema_items=3) is True  # nosec B101

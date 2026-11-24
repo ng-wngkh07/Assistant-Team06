@@ -3949,8 +3949,8 @@ document.addEventListener("DOMContentLoaded", () => {
             appendStudyCardToChat(data.material);
             syncGenerateButtonState();
 
-            const isFallback = (data.material.generation && (data.material.generation.quiz === "extractive_fallback" || data.material.generation.flashcards === "extractive_fallback")) || Boolean(data.material.fallback_warning);
-            const provNotice = isFallback ? " [Nguồn: Trích xuất trực tiếp (fallback)]" : " [Nguồn: Mô hình AI]";
+            const prov = describeStudyMaterialProvenance(data.material);
+            const provNotice = ` [Nguồn: ${prov.label}]`;
             const actualCount = (data.material.quiz || []).length;
             const reqCount = data.material.requested_quiz_count || data.material.requested_count || quizCount;
 
@@ -4022,12 +4022,59 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // --- Study Material Modal Presentation ---
+    function describeStudyMaterialProvenance(material) {
+        const gen = (material && material.generation) || {};
+        const quizGen = gen.quiz || "";
+        const flashGen = gen.flashcards || "";
+        const isFallback = quizGen === "extractive_fallback" || flashGen === "extractive_fallback" || Boolean(material && material.fallback_warning);
+        const hasSourceProof = quizGen === "source_proof" || quizGen === "source_proof+model";
+        const modelSuffix = material && material.model ? `: ${material.model}` : "";
+
+        if (isFallback && hasSourceProof) {
+            return {
+                isFallback: true,
+                label: "Trích xuất trực tiếp (fallback) · Chứng minh nguồn",
+                badgeText: "⚠️ Trích xuất trực tiếp (fallback) · Chứng minh nguồn",
+            };
+        }
+        if (isFallback) {
+            return {
+                isFallback: true,
+                label: "Trích xuất trực tiếp (fallback)",
+                badgeText: "⚠️ Trích xuất trực tiếp (fallback)",
+            };
+        }
+        if (quizGen === "source_proof") {
+            const cardSuffix = flashGen === "model" && material && material.model ? ` · Thẻ: ${material.model}` : "";
+            return {
+                isFallback: false,
+                label: `Chứng minh trực tiếp từ nguồn${cardSuffix}`,
+                badgeText: `✓ Chứng minh từ nguồn${cardSuffix}`,
+            };
+        }
+        if (quizGen === "source_proof+model") {
+            return {
+                isFallback: false,
+                label: `Chứng minh từ nguồn + Mô hình AI${modelSuffix}`,
+                badgeText: `✓ Chứng minh nguồn + Mô hình AI${modelSuffix}`,
+            };
+        }
+        return {
+            isFallback: false,
+            label: `Mô hình AI${modelSuffix}`,
+            badgeText: `🤖 Mô hình AI${modelSuffix}`,
+        };
+    }
+
     function isStudyMaterialVerified(material) {
         if (!material) return false;
+        const quiz = material.quiz || [];
+        if (quiz.some(q => q && q.answer_verified === false)) {
+            return false;
+        }
         if (material.answers_verified === true || material.is_verified === true || material.semantically_verified === true) {
             return true;
         }
-        const quiz = material.quiz || [];
         if (quiz.length > 0 && quiz.every(q => q && (q.is_verified === true || q.answer_verified === true || q.answer_status === "source_document" || q.answer_status === "model_verified"))) {
             return true;
         }
@@ -4036,7 +4083,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function isQuestionItemVerified(q, material) {
         if (!q) return false;
-        if (q.is_verified === true || q.answer_verified === true || q.answer_status === "source_document" || q.answer_status === "model_verified") {
+        if (typeof q.answer_verified === "boolean") {
+            return q.answer_verified;
+        }
+        if (q.is_verified === true || q.answer_status === "source_document" || q.answer_status === "model_verified") {
             return true;
         }
         if (material && (material.answers_verified === true || material.is_verified === true || material.semantically_verified === true)) {
@@ -4062,15 +4112,16 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         const quizCount = (material.quiz || []).length;
         const requestedQuizCount = material.requested_quiz_count || material.requested_count || quizCount;
-        const isFallback = (material.generation && (material.generation.quiz === "extractive_fallback" || material.generation.flashcards === "extractive_fallback")) || Boolean(material.fallback_warning);
-        const provLabel = isFallback
-            ? "Trích xuất trực tiếp (fallback)"
-            : (material.model ? `Mô hình AI: ${material.model}` : "Mô hình AI");
+        const prov = describeStudyMaterialProvenance(material);
+        const provLabel = prov.label;
 
         const isVerified = isStudyMaterialVerified(material);
+        const hasPartialVerified = !isVerified && (material.quiz || []).some(q => isQuestionItemVerified(q, material));
         const verifyNotice = isVerified
             ? "· Đáp án đã đối chiếu nguồn"
-            : "· Chưa xác minh đáp án đúng (không xác minh ngữ nghĩa)";
+            : (hasPartialVerified
+                ? "· Một phần đáp án đã đối chiếu nguồn (câu còn lại chưa xác minh)"
+                : "· Chưa xác minh đáp án đúng (không xác minh ngữ nghĩa)");
 
         let subtitleText = "";
         if (requestedQuizCount && quizCount < requestedQuizCount) {
@@ -4103,7 +4154,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (sourcePageCount) sourcePageCount.textContent = String(material.total_pages || 1);
         if (sourceDocType) {
             const baseType = (material.filename && material.filename.endsWith(".pdf")) ? "PDF Document" : "Văn bản học tập";
-            sourceDocType.textContent = isFallback ? `${baseType} (Phương thức: Trích xuất trực tiếp - fallback)` : `${baseType} (Phương thức: ${material.model || "Mô hình AI"})`;
+            sourceDocType.textContent = `${baseType} (Phương thức: ${provLabel})`;
         }
         if (sourceProcessedAt) sourceProcessedAt.textContent = new Date().toLocaleTimeString("vi-VN");
         if (sourceTextPreview) {
@@ -4279,7 +4330,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (quizCitationPage) quizCitationPage.textContent = `Trang ${q.page_num || 1}`;
                 if (quizCitationQuote) {
                     const quoteText = q.evidence_quote ? `"${q.evidence_quote}"` : "(Tham khảo nội dung tổng quát từ tài liệu)";
-                    quizCitationQuote.textContent = `${quoteText} — (Đoạn trích đối chiếu nguồn, không khẳng định xác minh đáp án)`;
+                    quizCitationQuote.textContent = isVerified
+                        ? `${quoteText} — (Đoạn trích đối chiếu nguồn đã xác minh đáp án)`
+                        : `${quoteText} — (Đoạn trích đối chiếu nguồn, không khẳng định xác minh đáp án)`;
                 }
             } else {
                 quizFeedbackBox.hidden = true;
@@ -4325,7 +4378,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (i === currentQuizIndex) b.classList.add("active");
             const ans = quizUserAnswers[i];
             if (ans) {
-                const isVerified = isStudyMaterialVerified(currentStudyMaterial);
+                const isVerified = isQuestionItemVerified(quiz[i], currentStudyMaterial);
                 if (isVerified) {
                     b.classList.add(ans.isCorrect ? "correct" : "wrong");
                 } else {
@@ -4535,10 +4588,15 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!messagesContainer || !material) return;
         const quizCount = (material.quiz || []).length;
         const cardCount = (material.flashcards || []).length;
-        const isFallback = (material.generation && (material.generation.quiz === "extractive_fallback" || material.generation.flashcards === "extractive_fallback")) || Boolean(material.fallback_warning);
+        const prov = describeStudyMaterialProvenance(material);
+        const isFallback = prov.isFallback;
         const provBadge = isFallback
-            ? `<span class="scope-pill" style="margin-left: 8px; font-size: 11px; background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);">⚠️ Trích xuất trực tiếp (fallback)</span>`
-            : `<span class="scope-pill" style="margin-left: 8px; font-size: 11px; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">🤖 Mô hình AI${material.model ? `: ${escapeHtml(material.model)}` : ""}</span>`;
+            ? `<span class="scope-pill" style="margin-left: 8px; font-size: 11px; background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);">${escapeHtml(prov.badgeText)}</span>`
+            : `<span class="scope-pill" style="margin-left: 8px; font-size: 11px; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">${escapeHtml(prov.badgeText)}</span>`;
+        const isVerified = isStudyMaterialVerified(material);
+        const verificationNote = isVerified
+            ? "Đáp án trắc nghiệm đã được đối chiếu chứng minh trực tiếp từ tài liệu nguồn."
+            : "Lưu ý: Đoạn trích hợp lệ dùng để đối chiếu nguồn, không là xác minh đáp án đúng.";
         const warningsList = (Array.isArray(material.warnings) ? material.warnings : []).filter(Boolean);
         const warningNotice = (isFallback && material.fallback_warning)
             ? `<div style="font-size: 0.82rem; color: #f59e0b; margin-top: 6px; padding: 6px 10px; background: rgba(245, 158, 11, 0.08); border-radius: 6px;">⚠️ ${escapeHtml(material.fallback_warning)}</div>`
@@ -4567,7 +4625,7 @@ document.addEventListener("DOMContentLoaded", () => {
                             <li><strong>${cardCount} thẻ ghi nhớ Flashcard 3D</strong> phục vụ ghi nhớ thuật ngữ và khái niệm.</li>
                         </ul>
                         ${warningNotice}
-                        <p style="font-size: 0.8rem; color: var(--text-muted); margin: 6px 0 0 0;"><em>Lưu ý: Đoạn trích hợp lệ dùng để đối chiếu nguồn, không là xác minh đáp án đúng.</em></p>
+                        <p style="font-size: 0.8rem; color: var(--text-muted); margin: 6px 0 0 0;"><em>${verificationNote}</em></p>
                     </div>
                     <div class="study-card-actions">
                         <button type="button" class="btn btn-primary btn-sm btn-reopen-study" data-material-id="${escapeHtml(material.id)}">

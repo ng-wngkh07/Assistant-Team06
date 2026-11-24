@@ -719,3 +719,107 @@ test('Batch 3 UI: modal PDF export, topic flashcards control, private upload per
   assert.match(timetableJs, /practice_id:\s*tr\.dataset\.practiceId/);
   assert.match(timetableJs, /weekly_lesson_id:\s*tr\.dataset\.weeklyLessonId/);
 });
+
+test('PRAC-02B: source_proof provenance and per-item answer_verified grade truthfully in normal UI', async () => {
+  const h = createHarness();
+
+  await h.elements.get('btn-study-tool-library').dispatchEvent({ type: 'click' });
+  await new Promise((r) => setImmediate(r));
+  const generateBtn = h.elements.get('library-picker-table-body').querySelector('.btn-generate-from-doc');
+
+  generateBtn.dispatchEvent({ type: 'click' });
+  await new Promise((r) => setImmediate(r));
+
+  h.resolveGeneration({
+    material: {
+      filename: 'On_Tap_Hoa_Hoc_12.docx',
+      difficulty: 'medium',
+      answers_verified: true,
+      generation: { quiz: 'source_proof', flashcards: 'model' },
+      model: 'qwen3.5-9b-4bit',
+      quiz: [
+        {
+          id: 1,
+          question: 'Áp dụng quy tắc dẫn điện cho Mẫu X, Mẫu Y, Mẫu Z?',
+          choices: [
+            { label: 'A', text: 'Mẫu Z > Mẫu X > Mẫu Y' },
+            { label: 'B', text: 'Mẫu X > Mẫu Z > Mẫu Y' },
+          ],
+          correct_answer: 'A',
+          answer_verified: true,
+          generation: 'source_proof',
+          page_num: 3,
+          evidence_quote: 'Dẫn điện tốt nhất: Ag > Cu > Au > Al > Fe',
+        },
+      ],
+      flashcards: [],
+    },
+  });
+  await new Promise((r) => setTimeout(r, 20));
+
+  const subtitle = h.elements.get('study-material-subtitle').textContent;
+  assert.match(subtitle, /Chứng minh trực tiếp từ nguồn/i);
+  assert.match(subtitle, /Đáp án đã đối chiếu nguồn/i);
+
+  const choiceBtns = h.elements.get('quiz-choices-container').querySelectorAll('button');
+  choiceBtns[0].dispatchEvent({ type: 'click' });
+
+  const updatedBtns = h.elements.get('quiz-choices-container').querySelectorAll('button');
+  assert.equal(updatedBtns[0].classList.contains('correct'), true);
+  assert.equal(h.elements.get('quiz-feedback-title').textContent, 'Chính xác!');
+  assert.match(h.elements.get('quiz-score-text').textContent, /Điểm: 1 \/ 1 \(Tổng 1 câu\)/i);
+  assert.match(h.elements.get('quiz-citation-quote').textContent, /đã xác minh đáp án/i);
+
+  const h2 = createHarness();
+  await h2.elements.get('btn-study-tool-library').dispatchEvent({ type: 'click' });
+  await new Promise((r) => setImmediate(r));
+  const generateBtn2 = h2.elements.get('library-picker-table-body').querySelector('.btn-generate-from-doc');
+  generateBtn2.dispatchEvent({ type: 'click' });
+  await new Promise((r) => setImmediate(r));
+
+  h2.resolveGeneration({
+    material: {
+      filename: 'mixed.txt',
+      difficulty: 'medium',
+      answers_verified: false,
+      generation: { quiz: 'source_proof+model', flashcards: 'model' },
+      model: 'qwen3.5-9b-4bit',
+      quiz: [
+        {
+          id: 1,
+          question: 'Q1?',
+          choices: [{ label: 'A', text: '1' }, { label: 'B', text: '2' }],
+          correct_answer: 'A',
+          answer_verified: true,
+          generation: 'source_proof',
+          page_num: 1,
+          evidence_quote: 'Quote 1',
+        },
+        {
+          id: 2,
+          question: 'Q2?',
+          choices: [{ label: 'A', text: '3' }, { label: 'B', text: '4' }],
+          correct_answer: 'A',
+          answer_verified: false,
+          generation: 'model',
+          page_num: 2,
+          evidence_quote: 'Quote 2',
+        },
+      ],
+      flashcards: [],
+    },
+  });
+  await new Promise((r) => setTimeout(r, 20));
+
+  const mixedSubtitle = h2.elements.get('study-material-subtitle').textContent;
+  assert.match(mixedSubtitle, /Chứng minh từ nguồn \+ Mô hình AI/i);
+  assert.match(mixedSubtitle, /Một phần đáp án đã đối chiếu nguồn/i);
+
+  h2.elements.get('quiz-choices-container').querySelectorAll('button')[0].dispatchEvent({ type: 'click' });
+  assert.equal(h2.elements.get('quiz-feedback-title').textContent, 'Chính xác!');
+
+  h2.elements.get('btn-quiz-next').dispatchEvent({ type: 'click' });
+  h2.elements.get('quiz-choices-container').querySelectorAll('button')[0].dispatchEvent({ type: 'click' });
+  assert.equal(h2.elements.get('quiz-choices-container').querySelectorAll('button')[0].classList.contains('proposed-match'), true);
+  assert.match(h2.elements.get('quiz-feedback-title').textContent, /Khớp với đáp án đề xuất \(A\) — Chưa xác minh ngữ nghĩa/i);
+});

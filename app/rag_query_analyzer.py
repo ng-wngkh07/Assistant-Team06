@@ -19,6 +19,10 @@ _BASE_QUERY_STOPWORDS = {
     "của", "và", "trong", "theo", "như", "thế", "nào", "được", "là", "cho",
     "về", "giữa", "gì", "tại", "sao", "bao", "nhiêu", "the", "and", "what",
     "how", "such", "with", "có", "hay", "không", "ở", "này", "đó", "kia",
+    "is", "are", "was", "were", "be", "do", "does", "did", "can", "could",
+    "of", "in", "on", "to", "for", "from", "into", "about", "between",
+    "this", "that", "these", "those", "which", "when", "where", "why", "who",
+    "an", "at", "by", "as", "or", "it", "its", "vs", "versus",
 }
 QUERY_STOPWORDS = _BASE_QUERY_STOPWORDS | {_normalize_stopword(w) for w in _BASE_QUERY_STOPWORDS if _normalize_stopword(w)}
 
@@ -29,6 +33,11 @@ _BASE_DIRECTIVE_STOPWORDS = {
     "từng", "bước", "thật", "rõ", "ràng", "tóm", "tắt", "ngắn", "gọn",
     "chi", "tiết", "cụ", "thể", "so", "sánh", "đối", "chiếu", "phân", "biệt",
     "thao", "tác", "tên", "gọi",
+    "explain", "define", "describe", "compare", "contrast", "difference",
+    "differences", "distinguish", "list", "summarize", "summary", "overview",
+    "give", "meaning", "definition", "concept", "concepts", "example",
+    "examples", "please", "tell", "show", "state", "step", "steps",
+    "briefly", "short", "detail", "details", "detailed",
 }
 DIRECTIVE_STOPWORDS = _BASE_DIRECTIVE_STOPWORDS | {
     _normalize_stopword(w) for w in _BASE_DIRECTIVE_STOPWORDS if _normalize_stopword(w)
@@ -146,7 +155,8 @@ def _strip_parenthetical_gloss(concept: str) -> str:
 def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Optional[Tuple[str, str]]:
     """Extract two distinct concepts for compare mode, or None if not an explicit compare intent."""
     if not is_legacy_compare and not re.search(
-        r"\b(?:so\s+sánh|đối\s+chiếu|phân\s+biệt|khác\s+nhau|khác\s+gì|điểm\s+khác|versus|\bvs\.?\b)\b",
+        r"\b(?:so\s+sánh|đối\s+chiếu|phân\s+biệt|khác\s+nhau|khác\s+gì|điểm\s+khác|"
+        r"compare|contrast|distinguish|differences?\s+between|versus|\bvs\.?\b)\b",
         query,
         flags=re.I,
     ):
@@ -162,24 +172,27 @@ def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Opt
         flags=re.I,
     ).strip()
     prefix_pattern = (
-        r"^(?:hãy\s+|vui\s+lòng\s+)?"
-        r"(?:(?:trình\s+bày|giải\s+thích|nêu|mô\s+tả|định\s+nghĩa|cho\s+biết|phân\s+tích)\s+(?:và\s+)?)?"
-        r"(?:(?:so\s+sánh|đối\s+chiếu|phân\s+biệt)"
+        r"^(?:hãy\s+|vui\s+lòng\s+|please\s+)?"
+        r"(?:(?:trình\s+bày|giải\s+thích|nêu|mô\s+tả|định\s+nghĩa|cho\s+biết|phân\s+tích|explain|what\s+(?:is|are)(?:\s+the)?)\s+(?:(?:và|and)\s+)?)?"
+        r"(?:(?:so\s+sánh|đối\s+chiếu|phân\s+biệt|compare|contrast|distinguish|(?:the\s+)?differences?)"
         r"(?:\s+(?:ngắn\s+gọn|nhanh|chi\s+tiết|cụ\s+thể|tóm\s+tắt))?"
         r"(?:\s+(?:(?:sự|những|các)\s+)?(?:điểm\s+)?(?:giống(?:\s+nhau)?(?:\s+và\s+khác(?:\s+nhau)?)?|khác\s+nhau|khác\s+biệt))?"
         r"|giải\s+thích\s+(?:sự|điểm)\s+khác\s+(?:nhau|biệt)"
-        r"|(?:sự|điểm)\s+khác\s+(?:nhau|biệt))\s+(?:giữa\s+)?"
+        r"|(?:sự|điểm)\s+khác\s+(?:nhau|biệt))\s*(?:(?:giữa|between)\s+)?"
     )
     q_cleaned = re.sub(prefix_pattern, "", q, flags=re.I).strip()
     if q_cleaned.lower().startswith("giữa "):
         q_cleaned = q_cleaned[5:].strip()
-    q_cleaned = re.sub(r"^khái\s+niệm\s+", "", q_cleaned, flags=re.I).strip()
+    elif q_cleaned.lower().startswith("between "):
+        q_cleaned = q_cleaned[8:].strip()
+    q_cleaned = re.sub(r"^(?:khái\s+niệm|the\s+concepts?\s+of)\s+", "", q_cleaned, flags=re.I).strip()
 
     suffix_pattern = (
         r"\s+(?:(?:giống(?:\s+nhau)?\s+và\s+)?khác\s+nhau"
         r"(?:\s+(?:ở|về)\s+(?:điểm|chỗ|mặt)(?:\s+\w+){0,4})?"
         r"(?:\s+(?:thế\s+nào|như\s+thế\s+nào|ra\s+sao|gì|nào))?"
-        r"|khác\s+gì(?:\s+nhau)?|có\s+gì\s+khác\s+nhau|như\s+thế\s+nào|ra\s+sao|là\s+gì)\??$"
+        r"|khác\s+gì(?:\s+nhau)?|có\s+gì\s+khác\s+nhau|như\s+thế\s+nào|ra\s+sao|là\s+gì"
+        r"|differ|different)\??$"
     )
     q_cleaned = re.sub(suffix_pattern, "", q_cleaned, flags=re.I).strip()
 
@@ -190,6 +203,8 @@ def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Opt
         r"\s+versus\s+",
         r"\s+khác\s+gì\s+",
         r"\s+khác\s+nhau\s+với\s+",
+        r"\s+and\s+",
+        r"\s+with\s+",
     ]
     for pat in split_patterns:
         parts = re.split(pat, q_cleaned, maxsplit=1, flags=re.I)
