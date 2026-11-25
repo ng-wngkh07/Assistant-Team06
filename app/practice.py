@@ -673,19 +673,63 @@ _GLUED_VI_OCR_RE = re.compile(
 )
 
 
+_PREFILTER_STOPWORDS = frozenset({
+    "của", "và", "là", "có", "trong", "được", "các", "một", "những", "cho",
+    "với", "từ", "khi", "nào", "để", "tại", "theo", "hay", "hoặc", "do",
+    "vì", "bởi", "ra", "này", "đó", "trên", "dưới", "gì", "sao", "như",
+    "the", "of", "and", "is", "are", "in", "on", "to", "for", "a", "an",
+    "that", "this", "by", "with", "which", "what",
+})
+_PREFILTER_RECALL_LEAD_RE = re.compile(
+    r"^(?:theo\s+(?:đoạn\s+trích|tài\s+liệu|văn\s+bản|nội\s+dung(?:\s+trên)?)"
+    r"|dựa\s+(?:vào|trên)\s+(?:đoạn\s+trích|tài\s+liệu))\b",
+    re.I,
+)
+_PREFILTER_PURE_RECALL_TAIL_RE = re.compile(
+    r"(?:là\s+gì|được\s+gọi\s+là(?:\s+gì)?|gồm\s+(?:những|các)\s+gì"
+    r"|có\s+nghĩa\s+là\s+gì|nhận\s+định\s+nào\s+(?:sau\s+đây\s+)?(?:là\s+)?(?:đúng|chính\s+xác)"
+    r"|nội\s+dung\s+nào\s+được\s+nêu|nêu\s+(?:ra\s+)?gì"
+    r"|(?:có\s+|lưu\s+ý\s+)?điều\s+kiện\s+(?:gì|nào)|(?:dẫn\s+đến\s+|gây\s+ra\s+)?hệ\s+quả\s+gì)\s*\??$",
+    re.I,
+)
+_PREFILTER_REASONING_CUE_RE = re.compile(
+    r"(?:\b(?:nếu|giả\s+sử|trong\s+trường\s+hợp|điều\s+kiện\b(?!\s+(?:nào|gì|cần(?:\s+và\s+đủ)?(?:\s+để)?)\b)|khi\s+thay\s+đổi"
+    r"|tính\s+giá\s+trị|tính\s+toán\s+.*=|bao\s+nhiêu|bằng\s+mấy"
+    r"|khác\s+(?:nhau\s+ở|gì\s+(?:so\s+)?với)|phân\s+biệt|so\s+sánh|áp\s+dụng|suy\s+ra"
+    r"|ngoại\s+trừ|không\s+(?:đúng|áp\s+dụng|thể)\s+khi|tăng\s+hay\s+giảm|nếu\s+tăng|nếu\s+giảm)\b"
+    r"|[=<>+\-*/]|\d)",
+    re.I,
+)
+_PREFILTER_VAGUE_USAGE_RE = re.compile(
+    r"^(?:theo\s+(?:đoạn\s+trích|tài\s+liệu),\s*)?khi\s+(?:sử\s+dụng|dùng|áp\s+dụng)\s+(?:phải|cần|thì)\b",
+    re.I,
+)
+_PREFILTER_APPLIED_SCENARIO_RE = re.compile(
+    r"(?:\b(?:nếu|giả\s+sử|khi\s+(?:thay\s+đổi|tăng|giảm|vượt)|so\s+sánh|phân\s+biệt|khác\s+gì)\b|[=<>+\-*/])",
+    re.I,
+)
+
+
 def _deterministic_prefilter_reject_reason(
     question: dict[str, Any],
     supporting_source: str,
     difficulty: Optional[str] = None,
 ) -> Optional[str]:
     """High-precision deterministic reject checks run before LLM grounded review."""
-    del supporting_source, difficulty
+    del supporting_source
     q_text = str(question.get("question") or "").strip()
     expl_text = str(question.get("explanation") or "").strip()
     raw_choices = question.get("choices") or {}
+    choice_by_label: dict[str, str] = {}
     if isinstance(raw_choices, dict):
+        choice_by_label = {str(k or "").strip().upper(): str(v or "").strip() for k, v in raw_choices.items()}
         choice_texts = [str(v or "").strip() for v in raw_choices.values()]
     elif isinstance(raw_choices, list):
+        choice_by_label = {
+            str((item or {}).get("label") or "").strip().upper(): str((item or {}).get("text") or "").strip()
+            for item in raw_choices
+            if isinstance(item, dict)
+        }
         choice_texts = [str((item or {}).get("text") or "").strip() for item in raw_choices if isinstance(item, dict)]
     else:
         return "prefilter_invalid_choices"
@@ -705,7 +749,45 @@ def _deterministic_prefilter_reject_reason(
         if any(meta in folded_ch for meta in _PREFILTER_META_CHOICES):
             return "prefilter_meta_choice"
 
+    is_cloze = question.get("format") == "source_cloze"
     ans_letter = str(question.get("answer") or "").strip().upper()
+    if not is_cloze and ans_letter in {"A", "B", "C", "D"} and ans_letter in choice_by_label:
+        q_words = re.findall(r"[^\W_]+", q_text.casefold())
+        q_norm = " ".join(q_words)
+        q_token_set = {w for w in q_words if len(w) >= 2 and w not in _PREFILTER_STOPWORDS}
+
+        def _content_tokens(text: str) -> list[str]:
+            return [w for w in re.findall(r"[^\W_]+", text.casefold()) if len(w) >= 2 and w not in _PREFILTER_STOPWORDS]
+
+        ans_text = choice_by_label[ans_letter]
+        ans_norm = " ".join(re.findall(r"[^\W_]+", ans_text.casefold()))
+        other_texts = [txt for lbl, txt in choice_by_label.items() if lbl != ans_letter]
+        other_norms = [" ".join(re.findall(r"[^\W_]+", txt.casefold())) for txt in other_texts]
+        if len(ans_norm) >= 10 and ans_norm in q_norm and not any(len(on) >= 6 and on in q_norm for on in other_norms):
+            return "prefilter_stem_answer_leak"
+        ans_tokens = _content_tokens(ans_text)
+        if len(ans_norm) >= 22 and len(ans_tokens) >= 5 and q_token_set:
+            ans_overlap = sum(1 for tok in ans_tokens if tok in q_token_set) / len(ans_tokens)
+            if ans_overlap >= 0.85:
+                distractor_overlaps = 0
+                for other in other_texts:
+                    o_tokens = _content_tokens(other)
+                    if len(o_tokens) >= 2 and (sum(1 for tok in o_tokens if tok in q_token_set) / len(o_tokens)) >= 0.5:
+                        distractor_overlaps += 1
+                if distractor_overlaps <= 1:
+                    return "prefilter_stem_answer_leak"
+
+    if not is_cloze and difficulty in ("medium", "hard") and q_text:
+        q_compact = " ".join(q_text.split())
+        if _PREFILTER_VAGUE_USAGE_RE.match(q_compact):
+            return "prefilter_recall_stem_not_medium_or_hard"
+        if _PREFILTER_RECALL_LEAD_RE.match(q_compact):
+            has_pure_tail = bool(_PREFILTER_PURE_RECALL_TAIL_RE.search(q_compact))
+            has_reasoning = bool(_PREFILTER_REASONING_CUE_RE.search(q_compact))
+            has_applied_scenario = bool(_PREFILTER_APPLIED_SCENARIO_RE.search(q_compact))
+            if (has_pure_tail and not has_applied_scenario) or not has_reasoning:
+                return "prefilter_recall_stem_not_medium_or_hard"
+
     if expl_text and ans_letter in {"A", "B", "C", "D"}:
         for match in _PREFILTER_ANSWER_CLAIM_RE.finditer(expl_text):
             prefix_tail = expl_text[max(0, match.start() - 12):match.start()].casefold()
@@ -2119,12 +2201,23 @@ class PracticeService:
         norm_supp = cls._normalized(supporting_source)
         norm_expl = cls._normalized(expl_quote)
         norm_expl_unesc = cls._normalized(html.unescape(expl_quote))
-        if norm_expl != norm_supp and norm_expl_unesc != norm_supp:
+        norm_raw = cls._normalized(raw_quote)
+        norm_raw_unesc = cls._normalized(html.unescape(raw_quote))
+        min_suffix_len = max(20, (len(norm_supp) + 1) // 2)
+        expl_matches_supp = (
+            norm_expl == norm_supp
+            or norm_expl_unesc == norm_supp
+            or (len(norm_expl) >= min_suffix_len and norm_supp.endswith(norm_expl))
+            or (len(norm_expl_unesc) >= min_suffix_len and norm_supp.endswith(norm_expl_unesc))
+        )
+        if not expl_matches_supp:
             return False
         return (
             expl_quote == raw_quote
-            or norm_expl == cls._normalized(raw_quote)
-            or norm_expl_unesc == cls._normalized(html.unescape(raw_quote))
+            or norm_expl == norm_raw
+            or norm_expl_unesc == norm_raw_unesc
+            or (len(norm_expl) >= min_suffix_len and norm_raw.endswith(norm_expl))
+            or (len(norm_expl_unesc) >= min_suffix_len and norm_raw_unesc.endswith(norm_expl_unesc))
         )
 
     def _verify_questions(
@@ -2700,6 +2793,10 @@ class PracticeService:
             else (270.0 if (is_mlx_deadline and allow_retry) else 180.0)
         )
         total_deadline = per_batch_budget * max(1, base_attempts)
+        if is_real_mlx_practice:
+            # Cap live single-node MLX practice below the 360s HTTP timeout so hard/large
+            # batches resolve cleanly or fail closed without saturating the GPU queue.
+            total_deadline = min(total_deadline, 220.0 if count <= 3 else 290.0)
         start_time = time.monotonic()
         empty_attempt_keys: set[tuple[Any, ...]] = set()
         rejected_candidate_keys: set[tuple[Any, ...]] = set()

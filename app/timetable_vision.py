@@ -323,6 +323,15 @@ def _build_extract_diagnostics(
         p_course = str(p_entry.get("course") or "").strip()
         _add_warn(None, "partial_entry", p_course, f"Môn '{p_course or 'Không rõ'}' mới đọc được một phần từ ảnh.")
 
+    if not entries and not warnings:
+        _add_warn(
+            None,
+            "no_entries_found",
+            "",
+            "Không nhận diện được lịch học nào từ hình ảnh (ảnh mờ, sai định dạng hoặc không phải thời khóa biểu). "
+            "Vui lòng tải ảnh rõ nét hơn hoặc thêm môn học thủ công.",
+        )
+
     return conflicts, warnings
 
 

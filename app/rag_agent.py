@@ -807,23 +807,36 @@ class PsychologyAgent:
 
         is_legacy_compare = (answer_mode in ("compare", "comparison"))
         compare_concepts = extract_compare_concepts(query, is_legacy_compare=is_legacy_compare)
-        if not compare_concepts and answer_mode == "compare":
-            first_concept = re.sub(r"^(?:hãy\s+)?(?:so\s+sánh|đối\s+chiếu|phân\s+biệt)\s+(?:giữa\s+)?", "", query, flags=re.I).strip()
-            clarification_msg = (
-                f"Chế độ so sánh cần hai khái niệm để đối chiếu. "
-                f"Bạn muốn so sánh «{first_concept}» với khái niệm thứ hai nào? "
-                f"Vui lòng nêu cả hai khái niệm để thực hiện so sánh đối chiếu."
+        has_multi_compare_cue = bool(
+            "," in query
+            or ";" in query
+            or re.search(
+                r"\b(?:và|với|vs\.?|versus|and|or|hay|khác\s+(?:gì|nhau)|from)\b",
+                query,
+                flags=re.I,
             )
-            yield {"type": "token", "content": clarification_msg}
-            yield {
-                "type": "done",
-                "citations": [],
-                "response_kind": "clarification",
-                "generation_calls": 0,
-                "answer_mode": "compare",
-                "search_scope": search_scope,
-            }
-            return
+        )
+        if not compare_concepts and answer_mode == "compare":
+            if has_multi_compare_cue:
+                is_broad = True
+                effective_top_k = min(12, max(top_k, 10))
+            else:
+                first_concept = re.sub(r"^(?:hãy\s+)?(?:so\s+sánh|đối\s+chiếu|phân\s+biệt)\s+(?:giữa\s+)?", "", query, flags=re.I).strip()
+                clarification_msg = (
+                    f"Chế độ so sánh cần hai khái niệm để đối chiếu. "
+                    f"Bạn muốn so sánh «{first_concept}» với khái niệm thứ hai nào? "
+                    f"Vui lòng nêu cả hai khái niệm để thực hiện so sánh đối chiếu."
+                )
+                yield {"type": "token", "content": clarification_msg}
+                yield {
+                    "type": "done",
+                    "citations": [],
+                    "response_kind": "clarification",
+                    "generation_calls": 0,
+                    "answer_mode": "compare",
+                    "search_scope": search_scope,
+                }
+                return
 
         from app.reasoning_policy import (
             resolve_processing_level,
@@ -839,10 +852,10 @@ class PsychologyAgent:
         )
         # Only a request about the document as a whole may bypass keyword
         # relevance. A named topic still needs evidence in the selected source.
-        is_attached_doc_query = bool(attachment_filename or source_document_id) and bool(
+        is_attached_doc_query = bool(attachment_filename or source_document_id or material_id) and bool(
             re.fullmatch(
-                r"(?:hãy\s+|vui lòng\s+)?(?:tóm tắt|tổng hợp|tổng quan|trình bày|cho biết|nêu|giải thích|phân tích)"
-                r"(?:\s+(?:lý thuyết|kiến thức|nội dung|chủ đề|chương mục|chính|trọng tâm|khái quát|có|trong|của|ở|tài liệu|file|tệp|đính kèm|này|được chọn|đã tải lên))*[?.!]*",
+                r"(?:hãy\s+|vui lòng\s+|please\s+)?(?:tóm tắt|tóm lược|tổng hợp|tổng quan|trình bày|cho biết|nêu|giải thích|phân tích|summarize|summary|overview)"
+                r"(?:\s+(?:toàn bộ|toàn|bộ|tất cả|mọi|lý thuyết|kiến thức|nội dung|chủ đề|chương mục|chính|chính yếu|học thuật|chuyên môn|quan trọng|cốt lõi|chi tiết|ngắn gọn|đầy đủ|tổng quát|trọng tâm|khái quát|có|trong|của|ở|về|tài liệu|file|tệp|đính kèm|này|đó|được chọn|đã tải lên|the|this|document|file|main|key|academic|important|core|points|of))*[?.!]*",
                 query.strip(), re.I,
             )
         )
@@ -2641,6 +2654,43 @@ class PsychologyAgent:
                 failure_reason = "citation_invalid" if has_bad_codes else "citation_missing"
         else:
             cleaned = clean_answer(raw_answer)
+            # Collapse consecutive duplicate sentences/paragraphs while preserving original formatting when unchanged
+            if cleaned:
+                _para_parts = re.split(r"(\n+)", cleaned)
+                _dedup_paras: List[str] = []
+                _prev_para_cf: Optional[str] = None
+                _dedup_changed = False
+                for _pp in _para_parts:
+                    if not _pp:
+                        continue
+                    if _pp.startswith("\n"):
+                        if _dedup_paras and not _dedup_paras[-1].startswith("\n"):
+                            _dedup_paras.append(_pp)
+                        else:
+                            _dedup_changed = True
+                        continue
+                    _sent_parts = re.split(r"(?<=[.!?])\s+", _pp.strip())
+                    _dedup_sents: List[str] = []
+                    for _sp in _sent_parts:
+                        _sp_norm = re.sub(r"\s+", " ", _sp).strip()
+                        if not _sp_norm:
+                            continue
+                        if _dedup_sents and _dedup_sents[-1].casefold() == _sp_norm.casefold():
+                            _dedup_changed = True
+                            continue
+                        _dedup_sents.append(_sp.strip())
+                    _joined_para = " ".join(_dedup_sents)
+                    _joined_cf = re.sub(r"\s+", " ", _joined_para).strip().casefold()
+                    if _joined_cf and _prev_para_cf == _joined_cf:
+                        _dedup_changed = True
+                        continue
+                    if _joined_cf:
+                        _prev_para_cf = _joined_cf
+                        _dedup_paras.append(_joined_para)
+                while _dedup_paras and _dedup_paras[-1].startswith("\n"):
+                    _dedup_paras.pop()
+                if _dedup_changed and _dedup_paras:
+                    cleaned = "".join(_dedup_paras)
             if not cleaned or not re.search(r"\w", cleaned, re.UNICODE):
                 logger.warning("Model answer is empty or punctuation-only after cleaning: %r", raw_answer)
                 answer = "Tôi chưa có đủ thông tin để trả lời chắc chắn. Bạn có thể nói rõ hơn câu hỏi không?"
@@ -2796,6 +2846,30 @@ class PsychologyAgent:
             only_abstention = True
             citations = []
             failure_reason = None
+
+        if citations:
+            deduped_citations: List[Dict[str, Any]] = []
+            seen_cit_pages: Dict[tuple[Any, Any, Any, Any], int] = {}
+            for cit in citations:
+                doc_key = cit.get("document_id") or cit.get("doc_id")
+                mat_key = cit.get("material_id")
+                page_key = cit.get("page_num")
+                if (doc_key is not None or mat_key is not None) and page_key is not None:
+                    p_key = (cit.get("id"), doc_key, mat_key, page_key)
+                    if p_key in seen_cit_pages:
+                        existing = deduped_citations[seen_cit_pages[p_key]]
+                        existing_claims = existing.setdefault("claims", [])
+                        for cl in cit.get("claims") or []:
+                            if cl not in existing_claims:
+                                existing_claims.append(cl)
+                        existing_quotes = existing.setdefault("evidence_quotes", [])
+                        for eq in cit.get("evidence_quotes") or []:
+                            if eq not in existing_quotes:
+                                existing_quotes.append(eq)
+                        continue
+                    seen_cit_pages[p_key] = len(deduped_citations)
+                deduped_citations.append(cit)
+            citations = deduped_citations
 
         review_notice = None
         if any(c.get("page_quality", {}).get("needs_review") for c in citations):

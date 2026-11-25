@@ -425,6 +425,33 @@ _FOCUS_STOPWORDS = frozenset({
     "nang", "cao", "of", "and", "in", "for", "the", "with", "on", "to",
 })
 
+# Query-time-only dedicated-document hints (never alter TOPIC_TREE/TOPICS hashes in retrieval_tree.db).
+_DEDICATED_DOC_HINTS: Dict[str, Tuple[str, ...]] = {
+    "Kinh tế học": (
+        "macroeconomics",
+        "microeconomics",
+        "kinh te vi mo",
+        "kinh te vy mo",
+        "baeco",
+        "ktdc",
+    ),
+    "Cơ học": (
+        "vldc1",
+        "dong hoc",
+        "dong luc hoc",
+        "co hoc vat ran",
+    ),
+}
+
+
+def dedicated_aliases_for(label: str, aliases: Tuple[str, ...]) -> Tuple[str, ...]:
+    """Combine authored topic aliases with query-time dedicated-document hints."""
+    extra = _DEDICATED_DOC_HINTS.get(label, ())
+    if not extra:
+        return aliases
+    return tuple(dict.fromkeys([*aliases, *extra]))
+
+
 # Query-time-only topic routing hints (never alter TOPIC_TREE/TOPICS hashes in retrieval_tree.db).
 _QUERY_TOPIC_HINTS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     (
@@ -491,8 +518,9 @@ _QUERY_HINT_PATTERNS: Dict[str, re.Pattern[str]] = {
 _QUERY_FOCUS_SYNONYMS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("giai tich", ("calculus", "differential", "integral", "derivative", "mean value", "lagrange", "rolle")),
     ("vi phan", ("calculus", "differential", "derivative")),
-    ("lagrange", ("lagrange", "mean value", "calculus")),
-    ("rolle", ("rolle", "mean value", "calculus")),
+    ("lagrange", ("lagrange", "mean value theorem", "mean value")),
+    ("gia tri trung binh", ("mean value theorem", "mean value", "lagrange")),
+    ("rolle", ("rolle", "rolle's theorem", "mean value theorem", "mean value")),
     ("da luong", ("concurrency", "multithreading", "thread", "mutex", "deadlock")),
     ("c++", ("c++", "cplusplus", "cpp")),
     ("than kinh", ("neuroanatomy", "neuroscience", "neurobiology", "neural", "neuron", "action potential", "synapse")),
