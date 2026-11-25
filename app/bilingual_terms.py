@@ -118,6 +118,8 @@ ACADEMIC_BILINGUAL_EQUIVALENTS: tuple[tuple[str, str], ...] = (
     ("ptsd", "rối loạn căng thẳng sau sang chấn"),
     ("dissociation", "phân ly"),
     ("stress response", "phản ứng stress"),
+    ("system 1", "hệ thống 1"),
+    ("system 2", "hệ thống 2"),
     # Psychology / Economics
     ("working memory", "trí nhớ làm việc"),
     ("short-term memory", "trí nhớ ngắn hạn"),

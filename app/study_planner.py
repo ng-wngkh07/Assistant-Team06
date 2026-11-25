@@ -216,6 +216,14 @@ def validate_routine_data(data: Dict[str, Any]) -> Dict[str, Any]:
 
     is_recurring = 1 if data.get("is_recurring", True) else 0
     note = str(data.get("note") or "").strip()
+    raw_routine_date = str(data.get("routine_date") or "").strip() or None
+    if raw_routine_date:
+        try:
+            parsed_rd = date.fromisoformat(raw_routine_date)
+        except ValueError:
+            raise ValueError("Ngày áp dụng lịch sinh hoạt phải có định dạng YYYY-MM-DD.")
+        if parsed_rd.isoweekday() != weekday:
+            raise ValueError("Ngày áp dụng và thứ trong tuần của lịch sinh hoạt không khớp.")
 
     return {
         "weekday": weekday,
@@ -225,8 +233,28 @@ def validate_routine_data(data: Dict[str, Any]) -> Dict[str, Any]:
         "activity_type": activity_type,
         "flexibility": flexibility,
         "is_recurring": is_recurring,
+        "routine_date": raw_routine_date,
         "note": note,
     }
+
+
+def _resolve_onetime_routine_date(
+    weekday: int,
+    is_recurring: int,
+    explicit_date: Optional[str],
+    db_path: Optional[Path | str] = None,
+) -> Optional[str]:
+    if is_recurring:
+        return None
+    if explicit_date:
+        return explicit_date
+    prefs = get_preferences(db_path=db_path)
+    tasks = get_tasks(db_path=db_path)
+    week_start = _infer_week_monday(prefs, tasks)
+    if week_start is None:
+        today = datetime.now(_get_vn_timezone()).date()
+        week_start = today - timedelta(days=today.weekday())
+    return (week_start + timedelta(days=weekday - 1)).isoformat()
 
 
 def _enrich_routine(row_dict: Dict[str, Any]) -> Dict[str, Any]:
@@ -235,13 +263,14 @@ def _enrich_routine(row_dict: Dict[str, Any]) -> Dict[str, Any]:
     d["activity_type_label"] = ACTIVITY_TYPES.get(d["activity_type"], d["activity_type"])
     d["flexibility_label"] = FLEXIBILITY_TYPES.get(d["flexibility"], d["flexibility"])
     d["is_recurring"] = bool(d.get("is_recurring", 1))
+    d["routine_date"] = d.get("routine_date") or None
     return d
 
 
 def get_routines(db_path: Optional[Path | str] = None) -> List[Dict[str, Any]]:
     with timetable_store.get_connection(db_path=db_path) as conn:
         rows = conn.execute("""
-            SELECT id, weekday, start_time, end_time, title, activity_type, flexibility, is_recurring, note, created_at
+            SELECT id, weekday, start_time, end_time, title, activity_type, flexibility, is_recurring, routine_date, note, created_at
             FROM personal_routines
             ORDER BY weekday ASC, start_time ASC, id ASC
         """).fetchall()
@@ -291,13 +320,16 @@ def check_routine_conflicts_with_classes(
 
 def add_routine(data: Dict[str, Any], db_path: Optional[Path | str] = None) -> Dict[str, Any]:
     clean = validate_routine_data(data)
+    clean["routine_date"] = _resolve_onetime_routine_date(
+        clean["weekday"], clean["is_recurring"], clean.get("routine_date"), db_path=db_path
+    )
     now_iso = datetime.now(timezone.utc).isoformat()
     with timetable_store.get_connection(db_path=db_path) as conn:
         cursor = conn.execute(
             """
             INSERT INTO personal_routines
-            (weekday, start_time, end_time, title, activity_type, flexibility, is_recurring, note, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (weekday, start_time, end_time, title, activity_type, flexibility, is_recurring, routine_date, note, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 clean["weekday"],
@@ -307,6 +339,7 @@ def add_routine(data: Dict[str, Any], db_path: Optional[Path | str] = None) -> D
                 clean["activity_type"],
                 clean["flexibility"],
                 clean["is_recurring"],
+                clean["routine_date"],
                 clean["note"],
                 now_iso,
             ),
@@ -329,6 +362,9 @@ def add_routine(data: Dict[str, Any], db_path: Optional[Path | str] = None) -> D
 
 def update_routine(routine_id: int, data: Dict[str, Any], db_path: Optional[Path | str] = None) -> Dict[str, Any]:
     clean = validate_routine_data(data)
+    clean["routine_date"] = _resolve_onetime_routine_date(
+        clean["weekday"], clean["is_recurring"], clean.get("routine_date"), db_path=db_path
+    )
     with timetable_store.get_connection(db_path=db_path) as conn:
         row = conn.execute("SELECT id, created_at FROM personal_routines WHERE id = ?", (routine_id,)).fetchone()
         if not row:
@@ -336,7 +372,7 @@ def update_routine(routine_id: int, data: Dict[str, Any], db_path: Optional[Path
         conn.execute(
             """
             UPDATE personal_routines
-            SET weekday = ?, start_time = ?, end_time = ?, title = ?, activity_type = ?, flexibility = ?, is_recurring = ?, note = ?
+            SET weekday = ?, start_time = ?, end_time = ?, title = ?, activity_type = ?, flexibility = ?, is_recurring = ?, routine_date = ?, note = ?
             WHERE id = ?
             """,
             (
@@ -347,6 +383,7 @@ def update_routine(routine_id: int, data: Dict[str, Any], db_path: Optional[Path
                 clean["activity_type"],
                 clean["flexibility"],
                 clean["is_recurring"],
+                clean["routine_date"],
                 clean["note"],
                 routine_id,
             ),
@@ -376,6 +413,10 @@ def delete_routine(routine_id: int, db_path: Optional[Path | str] = None) -> boo
 def replace_routines_bulk(items: List[Dict[str, Any]], db_path: Optional[Path | str] = None) -> Dict[str, Any]:
     """Replace the entire weekly personal routine table with validated rows."""
     validated = [validate_routine_data(item) for item in items]
+    for clean in validated:
+        clean["routine_date"] = _resolve_onetime_routine_date(
+            clean["weekday"], clean["is_recurring"], clean.get("routine_date"), db_path=db_path
+        )
     now_iso = datetime.now(timezone.utc).isoformat()
     with timetable_store.get_connection(db_path=db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -384,8 +425,8 @@ def replace_routines_bulk(items: List[Dict[str, Any]], db_path: Optional[Path | 
             conn.execute(
                 """
                 INSERT INTO personal_routines
-                (weekday, start_time, end_time, title, activity_type, flexibility, is_recurring, note, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (weekday, start_time, end_time, title, activity_type, flexibility, is_recurring, routine_date, note, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     clean["weekday"],
@@ -395,6 +436,7 @@ def replace_routines_bulk(items: List[Dict[str, Any]], db_path: Optional[Path | 
                     clean["activity_type"],
                     clean["flexibility"],
                     clean["is_recurring"],
+                    clean["routine_date"],
                     clean["note"],
                     now_iso,
                 ),
@@ -586,9 +628,10 @@ def parse_ai_preference_notes(ai_notes: str, base_prefs: Dict[str, Any]) -> Dict
                 insights.append(desc)
 
     # Detect earliest start constraint ("chỉ học từ HH:MM", "không học trước HH:MM", "bắt đầu từ HH:MM")
-    # Detect explicit daily window ranges like "chỉ học từ 19:00 đến 22:00" or "học từ 08:00 đến 11:30"
+    # Detect explicit daily window ranges like "chỉ học từ 19:00 đến 22:00" or "chỉ học buổi tối từ 19:00 đến 21:30"
     m_range = re.search(
-        r"(?:chỉ\s+(?:xếp\s+)?học|học(?:\s+(?:sáng|chiều|tối|đêm))?|khung\s+giờ\s+(?:tự\s+)?học)\s+(?:từ\s*)?"
+        r"(?:chỉ\s+(?:xếp\s+)?học|học(?:\s+(?:vào\s+)?(?:buổi\s+)?(?:sáng|chiều|tối|đêm))?|khung\s+giờ\s+(?:tự\s+)?học)"
+        r"(?:\s+(?:vào\s+)?(?:buổi\s+)?(?:sáng|chiều|tối|đêm))?\s+(?:từ\s*)?"
         r"(\d{1,2})(?:[:h](\d{2}))?\s*(?:h|giờ|sáng|chiều|tối)?\s*(?:đến|tới|-|–)\s*"
         r"(\d{1,2})(?:[:h](\d{2}))?\s*(?:h|giờ|chiều|tối|đêm)?\b",
         lower,
@@ -747,6 +790,9 @@ def _merge_llm_planner_strategy(
     parsed_ai: Dict[str, Any],
     strategy: Dict[str, Any],
     known_courses: List[str],
+    *,
+    clean_notes: str = "",
+    study_windows: Optional[List[Tuple[int, int, int]]] = None,
 ) -> Dict[str, Any]:
     """Safely merge and clamp LLM-extracted scheduling constraints with deterministic regex baseline."""
     allowed_windows = list(parsed_ai.get("allowed_day_windows") or [])
@@ -762,6 +808,10 @@ def _merge_llm_planner_strategy(
     }
     known_by_cf = {c.strip().casefold(): c.strip() for c in known_courses if c and c.strip()}
 
+    notes_lower = (clean_notes or "").lower()
+    has_any_busy_cue = bool(
+        re.search(r"\b(?:bận|không\s+(?:xếp\s+)?học|nghỉ|tránh|đi\s+làm|làm\s+thêm|chỉ\s+rảnh|chỉ\s+học)\b", notes_lower)
+    )
     blocked_weekdays = {
         w.get("weekday")
         for w in (merged.get("blocked_day_windows") or []) + (strategy.get("blocked_day_windows") or [])
@@ -772,9 +822,12 @@ def _merge_llm_planner_strategy(
         if isinstance(raw_w, int) and 1 <= raw_w <= 7 and raw_w not in merged["avoided_weekdays"]:
             if raw_w in allowed_weekdays or (raw_w in blocked_weekdays and raw_w not in parsed_avoided):
                 continue
+            if notes_lower and not has_any_busy_cue:
+                continue
             merged["avoided_weekdays"].append(raw_w)
 
     llm_windows: List[Dict[str, Any]] = []
+    sw_list = list(study_windows or [])
     for win in strategy.get("blocked_day_windows") or []:
         if not isinstance(win, dict):
             continue
@@ -790,6 +843,25 @@ def _merge_llm_planner_strategy(
         except ValueError:
             continue
         if e_min > s_min:
+            # Guard against LLM copying an existing study_window into blocked_day_windows (e.g., "Tối T3 bận")
+            if notes_lower and not has_any_busy_cue:
+                continue
+            overlaps_study_win = any(
+                sw_w == w and max(sw_s, s_min) < min(sw_e, e_min)
+                for sw_w, sw_s, sw_e in sw_list
+            )
+            if overlaps_study_win and notes_lower:
+                # Only permit blocking an existing study_window if notes mention that weekday or a global time bound
+                day_pat = _WEEKDAY_CLAUSE_PATTERNS[w - 1][0]
+                mentions_day = bool(re.search(rf"\b{day_pat}\b", notes_lower))
+                mentions_time_excl = bool(
+                    re.search(r"\b(?:chỉ\s+học|không\s+(?:xếp\s+)?học|nghỉ|tránh|bận)\b", notes_lower)
+                )
+                if not mentions_day and not mentions_time_excl:
+                    continue
+                if re.search(rf"\bt[2-7]\b|\bthứ\s*[2-7]|\bcn\b|\bchủ\s+nhật\b", reason_txt.lower()) and not mentions_day:
+                    # LLM fabricated a day-specific busy reason (e.g. "Tối T3 bận") not stated in ai_notes
+                    continue
             day_allowed = [
                 (int(aw["start_min"]), int(aw["end_min"]))
                 for aw in allowed_windows
@@ -960,11 +1032,19 @@ def _enhance_preferences_with_local_llm(
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()
+    study_window_tuples = [
+        (int(r["weekday"]), time_to_minutes(str(r["start_time"])), time_to_minutes(str(r["end_time"])))
+        for r in routines
+        if r.get("flexibility") == "study_window"
+    ]
     with _AI_NOTES_LLM_CACHE_LOCK:
         cached_strategy = _AI_NOTES_LLM_CACHE.get(cache_key)
         if cached_strategy is not None:
             _AI_NOTES_LLM_CACHE.move_to_end(cache_key)
-            return _merge_llm_planner_strategy(parsed_ai, cached_strategy, known_courses)
+            return _merge_llm_planner_strategy(
+                parsed_ai, cached_strategy, known_courses,
+                clean_notes=clean_notes, study_windows=study_window_tuples,
+            )
 
     if not is_mlx_model(DEFAULT_CHAT_MODEL) or not TrainedModelClient.available(DEFAULT_CHAT_MODEL):
         return parsed_ai
@@ -991,6 +1071,17 @@ def _enhance_preferences_with_local_llm(
                 "flexibility": r.get("flexibility"),
             }
             for r in routines[:24]
+            if r.get("flexibility") != "study_window"
+        ],
+        "available_study_windows": [
+            {
+                "title": r.get("title"),
+                "weekday": r.get("weekday"),
+                "start_time": r.get("start_time"),
+                "end_time": r.get("end_time"),
+            }
+            for r in routines[:24]
+            if r.get("flexibility") == "study_window"
         ],
         "pending_tasks": [
             {
@@ -1041,7 +1132,10 @@ def _enhance_preferences_with_local_llm(
             _AI_NOTES_LLM_CACHE.move_to_end(cache_key)
             while len(_AI_NOTES_LLM_CACHE) > _AI_NOTES_LLM_CACHE_MAX:
                 _AI_NOTES_LLM_CACHE.popitem(last=False)
-        return _merge_llm_planner_strategy(parsed_ai, strategy, known_courses)
+        return _merge_llm_planner_strategy(
+            parsed_ai, strategy, known_courses,
+            clean_notes=clean_notes, study_windows=study_window_tuples,
+        )
     except (GPUBusyError, ValueError, RuntimeError, OSError) as exc:
         logger.debug("Local LLM planner extraction skipped/fallback: %s", exc)
         return parsed_ai
@@ -1813,6 +1907,11 @@ def generate_study_plan(
     ]
     has_any_study_windows = len(total_study_windows) > 0
 
+    avoided_set = {
+        int(aw)
+        for aw in (parsed_ai.get("avoided_weekdays") or [])
+        if isinstance(aw, int) or (isinstance(aw, str) and aw.isdigit())
+    }
     for w in range(1, 8):
         if week_monday is not None and now_date is not None:
             day_date = week_monday + timedelta(days=w - 1)
@@ -1867,6 +1966,8 @@ def generate_study_plan(
             for bw in (parsed_ai.get("blocked_day_windows") or [])
             if int(bw["weekday"]) == w and int(bw["end_min"]) > int(bw["start_min"])
         ]
+        if w in avoided_set:
+            user_blocked_w.append((0, 1440))
         effective_blocked = (
             blocked_by_day[w]
             + user_blocked_w

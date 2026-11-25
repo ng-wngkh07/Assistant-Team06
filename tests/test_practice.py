@@ -3961,6 +3961,21 @@ def test_prefilter_rejects_stem_answer_leak_pure_recall_and_bounds_hard_mlx_dead
     assert _deterministic_prefilter_reject_reason(recall_q, src_text, difficulty="medium") == "prefilter_recall_stem_not_medium_or_hard"  # nosec B101
     assert _deterministic_prefilter_reject_reason(recall_q, src_text, difficulty="easy") is None  # nosec B101
 
+    vague_q = {
+        "question": "Theo đoạn trích, khi sử dụng phải lưu ý điều kiện gì?",
+        "choices": {"A": "Kiểm tra con trỏ null", "B": "Giải phóng mảng", "C": "Gọi hàm đệ quy", "D": "Ép kiểu"},
+        "answer": "A",
+        "explanation": "Đáp án đúng là A.",
+    }
+    assert _deterministic_prefilter_reject_reason(vague_q, src_text, difficulty="medium") == "prefilter_recall_stem_not_medium_or_hard"  # nosec B101
+    cond_recall_q = {
+        "question": "Theo đoạn trích, điều kiện cần để bệnh nhân bắt đầu giảm lo lắng là gì?",
+        "choices": {"A": "Đối diện an toàn", "B": "Tránh né hoàn toàn", "C": "Uống thuốc ngủ", "D": "Ngưng điều trị"},
+        "answer": "A",
+        "explanation": "Đáp án đúng là A.",
+    }
+    assert _deterministic_prefilter_reject_reason(cond_recall_q, src_text, difficulty="medium") == "prefilter_recall_stem_not_medium_or_hard"  # nosec B101
+
     monkeypatch.setattr(resolver, "is_mlx_model", lambda model: True)
     p = passage(chunk_id=1201, text="Nếu điều kiện kép thỏa mãn thì áp dụng bước kiểm tra thứ nhất rồi mới tính bước hai.")
     service = PracticeService(FakeSearcher([p]), FakeDocumentLookup(), db_path=tmp_path / "prac_deadline_cap.db")

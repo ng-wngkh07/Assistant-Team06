@@ -18,6 +18,7 @@ from app.topic_catalog import (
     CHILD_TO_PARENT,
     TOPICS,
     PATTERNS,
+    dedicated_aliases_for,
     expand_topic_focus_terms,
     get_topic_tree_catalog,
     matches,
@@ -601,6 +602,7 @@ class LearningService:
         file_norm = normalized(doc.get("filename") or "")
         label_norm = normalized(label)
         pattern = PATTERNS.get(label)
+        eff_aliases = dedicated_aliases_for(label, aliases)
         for raw_field in (
             title_norm,
             file_norm,
@@ -613,7 +615,7 @@ class LearningService:
                 return True
             if pattern is not None and pattern.search(raw_field):
                 return True
-            if aliases and matches(raw_field, aliases):
+            if eff_aliases and matches(raw_field, eff_aliases):
                 return True
         return False
 
@@ -1688,7 +1690,12 @@ class LearningService:
         # Markdown headings may occupy their own indexed section. Keep their
         # number separately, then bind content to its actual body chunk/page.
         pending_markdown = None
-        in_exercise_section = False
+        doc_hdr_norm = normalized(f"{clean_title} {filename}")
+        is_exercise_doc_by_title = bool(
+            re.search(r"\b(?:bai tap|exercises?|workbook|practice problems?)\b", doc_hdr_norm)
+            and not re.search(r"\b(?:macroeconomics|microeconomics)\b", doc_hdr_norm)
+        )
+        in_exercise_section = is_exercise_doc_by_title
         prev_chunk_emitted_exercise = False
         prev_chunk_header = ""
         def markdown_blocks():
@@ -1789,7 +1796,7 @@ class LearningService:
                     ex_pattern = re.compile(
                         r"(?im)(?:^|\n)[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?"
                         r"(?:(?:bài|câu|exercise|problem)\s+(\d+(?:[.:]\d+)*)[\.:]?[ \t]*"
-                        r"|(\d+\.\d+)(?=\s+[^\n]{15,}))"
+                        r"|(\d+\.\d+)[.:]?(?=\s+[^\n]{15,}))"
                     )
                 else:
                     ex_pattern = re.compile(
@@ -1817,8 +1824,18 @@ class LearningService:
                         clean_title=clean_title,
                         recurring_footers=recurring_footers,
                     )
-                    if dotted_id and not explicit_id and len(clean_text) < 30:
-                        continue
+                    if dotted_id and not explicit_id:
+                        # Exclude thousands-formatted numbers like "1.500 người tham gia"
+                        if re.match(r"^\d+\.\d{3}$", dotted_id):
+                            continue
+                        # Exclude Table of Contents / section-title summary lines (e.g. "1.2 Mathematical Models ... 23")
+                        first_line = clean_text.splitlines()[0].strip() if clean_text else ""
+                        if (
+                            len(clean_text) < 30
+                            or re.search(r"\b(?:is reviewed in appendix|catalog of essential functions|preface|diagnostic tests)\b", clean_text, re.I)
+                            or re.match(r"^\d+\.\d+\s+[A-Z][^\n]{5,80}\s+\d{1,4}\s*$", first_line)
+                        ):
+                            continue
                     if is_checkpoint:
                         body_txt = re.sub(r"^\s*\d+(?:\.\d+)*[\.:]?\s*", "", clean_text).strip()
                         first_word = (re.findall(r"\w+", body_txt) or [""])[0].lower()
@@ -1940,7 +1957,12 @@ class LearningService:
                     else:
                         in_exercise_section = False
             else:
-                if not is_repeated_running_header and re.search(r"(?im)^[ \t]*(?:#+\s*)?(?:chương\s+\d+|phần\s+[ivx\d]+\s*[.:]\s*(?:hướng\s+dẫn|lý\s+thuyết|tóm\s+tắt)|hướng\s+dẫn|lý\s+thuyết|tóm\s+tắt)\b", text):
+                if not is_repeated_running_header and re.search(
+                    r"(?im)^[ \t]*(?:#+\s*)?(?:phần\s+[ivx\d]+\s*[.:]\s*(?:hướng\s+dẫn|lý\s+thuyết|tóm\s+tắt)|hướng\s+dẫn|lý\s+thuyết|tóm\s+tắt"
+                    + (r"" if is_exercise_doc_by_title else r"|chương\s+\d+")
+                    + r")\b",
+                    text,
+                ):
                     in_exercise_section = False
                 if re.search(r"(?im)^[ \t]*(?:[\uE000-\uF8FF•●○▪▫■□◆◇▶►▸➤➔→➜–—\-*+~›»][ \t]*)?(?:đáp\s+án|lời\s+giải|answer|solution)\b", text):
                     in_exercise_section = False
@@ -2309,10 +2331,12 @@ class LearningService:
                 re.sub(r"[-_]+", " ", ext_topic),
             )
             if authored:
-                return any(matches(field, authored[1]) for field in d_fields if field)
+                eff_aliases = dedicated_aliases_for(authored[0], authored[1])
+                return any(matches(field, eff_aliases) for field in d_fields if field)
             return any(topic_norm in field for field in d_fields if field)
 
         doc_is_dedicated = {doc["id"]: _is_doc_dedicated(doc) for doc in matching_docs}
+        has_dedicated_docs = any(doc_is_dedicated.values())
         matching_docs = sorted(matching_docs, key=lambda d: not doc_is_dedicated.get(d["id"], False))
 
         cached_extracts_by_doc: dict[int, tuple[list, dict, dict]] = {}
@@ -2368,8 +2392,17 @@ class LearningService:
                             matched_ex_texts_by_doc.setdefault(int(row[0]), []).append(str(row[1] or ""))
 
                 docs_to_load: list[int] = []
+                docs_by_id_ex = {d["id"]: d for d in matching_docs}
                 for did in uncached_doc_ids:
-                    if has_fts:
+                    d_meta = docs_by_id_ex.get(did, {})
+                    is_ded_ex_doc = bool(
+                        doc_is_dedicated.get(did)
+                        and re.search(
+                            r"\b(?:bai tap|exercises?|workbook|practice problems?)\b",
+                            normalized(f"{d_meta.get('clean_title', '')} {d_meta.get('filename', '')}"),
+                        )
+                    )
+                    if has_fts and not is_ded_ex_doc:
                         if did not in fts_hit_docs:
                             skipped_uncached_ids.add(did)
                             continue
@@ -2557,11 +2590,13 @@ class LearningService:
                     else:
                         dedicated_fallback_items.append(item)
                 else:
+                    if authored and has_dedicated_docs and not direct_match:
+                        continue
                     if focus_match:
                         other_prioritized_items.append(item)
                         if len(other_prioritized_items) >= limit:
                             break
-                    else:
+                    elif not (authored and has_dedicated_docs):
                         other_fallback_items.append(item)
             if len(dedicated_prioritized_items) >= limit:
                 break
@@ -2570,7 +2605,7 @@ class LearningService:
             dedicated_prioritized_items
             + dedicated_fallback_items
             + other_prioritized_items
-            + other_fallback_items
+            + ([] if (authored and has_dedicated_docs) else other_fallback_items)
         )[:limit]
         if solve_missing and all_items:
             solve_start = time.monotonic()

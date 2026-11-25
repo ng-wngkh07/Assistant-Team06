@@ -688,15 +688,24 @@ _PREFILTER_RECALL_LEAD_RE = re.compile(
 _PREFILTER_PURE_RECALL_TAIL_RE = re.compile(
     r"(?:là\s+gì|được\s+gọi\s+là(?:\s+gì)?|gồm\s+(?:những|các)\s+gì"
     r"|có\s+nghĩa\s+là\s+gì|nhận\s+định\s+nào\s+(?:sau\s+đây\s+)?(?:là\s+)?(?:đúng|chính\s+xác)"
-    r"|nội\s+dung\s+nào\s+được\s+nêu|nêu\s+(?:ra\s+)?gì)\s*\??$",
+    r"|nội\s+dung\s+nào\s+được\s+nêu|nêu\s+(?:ra\s+)?gì"
+    r"|(?:có\s+|lưu\s+ý\s+)?điều\s+kiện\s+(?:gì|nào)|(?:dẫn\s+đến\s+|gây\s+ra\s+)?hệ\s+quả\s+gì)\s*\??$",
     re.I,
 )
 _PREFILTER_REASONING_CUE_RE = re.compile(
-    r"(?:\b(?:nếu|giả\s+sử|trong\s+trường\s+hợp|điều\s+kiện\b(?!\s+nào\b)|khi\s+thay\s+đổi"
+    r"(?:\b(?:nếu|giả\s+sử|trong\s+trường\s+hợp|điều\s+kiện\b(?!\s+(?:nào|gì|cần(?:\s+và\s+đủ)?(?:\s+để)?)\b)|khi\s+thay\s+đổi"
     r"|tính\s+giá\s+trị|tính\s+toán\s+.*=|bao\s+nhiêu|bằng\s+mấy"
-    r"|khác\s+(?:nhau\s+ở|gì\s+(?:so\s+)?với)|phân\s+biệt|so\s+sánh|áp\s+dụng|suy\s+ra|hệ\s+quả"
+    r"|khác\s+(?:nhau\s+ở|gì\s+(?:so\s+)?với)|phân\s+biệt|so\s+sánh|áp\s+dụng|suy\s+ra"
     r"|ngoại\s+trừ|không\s+(?:đúng|áp\s+dụng|thể)\s+khi|tăng\s+hay\s+giảm|nếu\s+tăng|nếu\s+giảm)\b"
     r"|[=<>+\-*/]|\d)",
+    re.I,
+)
+_PREFILTER_VAGUE_USAGE_RE = re.compile(
+    r"^(?:theo\s+(?:đoạn\s+trích|tài\s+liệu),\s*)?khi\s+(?:sử\s+dụng|dùng|áp\s+dụng)\s+(?:phải|cần|thì)\b",
+    re.I,
+)
+_PREFILTER_APPLIED_SCENARIO_RE = re.compile(
+    r"(?:\b(?:nếu|giả\s+sử|khi\s+(?:thay\s+đổi|tăng|giảm|vượt)|so\s+sánh|phân\s+biệt|khác\s+gì)\b|[=<>+\-*/])",
     re.I,
 )
 
@@ -770,8 +779,14 @@ def _deterministic_prefilter_reject_reason(
 
     if not is_cloze and difficulty in ("medium", "hard") and q_text:
         q_compact = " ".join(q_text.split())
-        if _PREFILTER_RECALL_LEAD_RE.match(q_compact) and not _PREFILTER_REASONING_CUE_RE.search(q_compact):
+        if _PREFILTER_VAGUE_USAGE_RE.match(q_compact):
             return "prefilter_recall_stem_not_medium_or_hard"
+        if _PREFILTER_RECALL_LEAD_RE.match(q_compact):
+            has_pure_tail = bool(_PREFILTER_PURE_RECALL_TAIL_RE.search(q_compact))
+            has_reasoning = bool(_PREFILTER_REASONING_CUE_RE.search(q_compact))
+            has_applied_scenario = bool(_PREFILTER_APPLIED_SCENARIO_RE.search(q_compact))
+            if (has_pure_tail and not has_applied_scenario) or not has_reasoning:
+                return "prefilter_recall_stem_not_medium_or_hard"
 
     if expl_text and ans_letter in {"A", "B", "C", "D"}:
         for match in _PREFILTER_ANSWER_CLAIM_RE.finditer(expl_text):

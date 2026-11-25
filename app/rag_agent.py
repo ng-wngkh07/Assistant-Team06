@@ -855,7 +855,7 @@ class PsychologyAgent:
         is_attached_doc_query = bool(attachment_filename or source_document_id or material_id) and bool(
             re.fullmatch(
                 r"(?:hãy\s+|vui lòng\s+|please\s+)?(?:tóm tắt|tóm lược|tổng hợp|tổng quan|trình bày|cho biết|nêu|giải thích|phân tích|summarize|summary|overview)"
-                r"(?:\s+(?:toàn bộ|toàn|bộ|tất cả|mọi|lý thuyết|kiến thức|nội dung|chủ đề|chương mục|chính|trọng tâm|khái quát|có|trong|của|ở|về|tài liệu|file|tệp|đính kèm|này|đó|được chọn|đã tải lên|the|this|document|file|main|points|of))*[?.!]*",
+                r"(?:\s+(?:toàn bộ|toàn|bộ|tất cả|mọi|lý thuyết|kiến thức|nội dung|chủ đề|chương mục|chính|chính yếu|học thuật|chuyên môn|quan trọng|cốt lõi|chi tiết|ngắn gọn|đầy đủ|tổng quát|trọng tâm|khái quát|có|trong|của|ở|về|tài liệu|file|tệp|đính kèm|này|đó|được chọn|đã tải lên|the|this|document|file|main|key|academic|important|core|points|of))*[?.!]*",
                 query.strip(), re.I,
             )
         )

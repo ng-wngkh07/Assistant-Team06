@@ -217,6 +217,12 @@ def extract_compare_concepts(query: str, is_legacy_compare: bool = False) -> Opt
         q_cleaned,
         flags=re.I,
     ).strip()
+    q_cleaned = re.sub(
+        r"\s+(?:trong|theo)\s+[^?.,;]{4,80}\??$",
+        "",
+        q_cleaned,
+        flags=re.I,
+    ).strip()
 
     split_patterns = [
         r"\s+và\s+",

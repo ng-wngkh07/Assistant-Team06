@@ -351,3 +351,56 @@ def test_exercises_prioritizes_dedicated_doc_over_focus_token_in_unrelated_doc(t
     assert len(res['items']) == 1
     assert res['items'][0]['source']['doc_id'] == 2
     assert res['items'][0]['source']['filename'] == 'calculus.pdf'
+
+
+def test_exercises_dotted_physics_workbook_and_skips_toc_and_thousands(tmp_path):
+    """Dotted workbook exercises extract cleanly while TOC summaries and thousands numbers are filtered."""
+    module = importlib.import_module('app.learning')
+    src = tmp_path / 'src'
+    src.mkdir()
+    db = tmp_path / 'kb_ex_filter.db'
+    KnowledgeIndexer(db, src)
+    for name in ('bai_tap_dong_luc_hoc.pdf', 'sample_calculus.pdf', 'habit_study.pdf'):
+        (src / name).write_bytes(b'%PDF fixture')
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            'INSERT INTO documents(id,filename,clean_title,filepath,file_size,file_hash,total_pages,extracted_pages_count,status) VALUES(?,?,?,?,?,?,?,?,?)',
+            (1, 'bai_tap_dong_luc_hoc.pdf', 'Bài tập Chương 2 - Động lực học chất điểm', str(src / 'bai_tap_dong_luc_hoc.pdf'), 1, 'h1', 1, 1, 'indexed'),
+        )
+        conn.execute(
+            'INSERT INTO documents(id,filename,clean_title,filepath,file_size,file_hash,total_pages,extracted_pages_count,status) VALUES(?,?,?,?,?,?,?,?,?)',
+            (2, 'sample_calculus.pdf', 'Calculus Early Transcendentals', str(src / 'sample_calculus.pdf'), 1, 'h2', 1, 1, 'indexed'),
+        )
+        conn.execute(
+            'INSERT INTO documents(id,filename,clean_title,filepath,file_size,file_hash,total_pages,extracted_pages_count,status) VALUES(?,?,?,?,?,?,?,?,?)',
+            (3, 'habit_study.pdf', 'Kinh tế hành vi và thói quen', str(src / 'habit_study.pdf'), 1, 'h3', 1, 1, 'indexed'),
+        )
+        rows = [
+            (1, 1, 1, 'Bài tập Động lực học', 'bai_tap_dong_luc_hoc.pdf',
+             'CHƯƠNG 2. ĐỘNG LỰC HỌC CHẤT ĐIỂM\n2.1. Một ô tô tải khối lượng 5 tấn đang chuyển động với vận tốc 25 m/s thì phanh gấp trong 10s. Tính lực phanh.'),
+            (2, 2, 1, 'Calculus Early Transcendentals', 'sample_calculus.pdf',
+             'BÀI TẬP\n1.2 Mathematical Models: A Catalog of Essential Functions 23\n1.5. Tính đạo hàm của hàm số f(x) = x^2 + 3x tại x = 2.'),
+            (3, 3, 1, 'Kinh tế hành vi', 'habit_study.pdf',
+             'BÀI TẬP\n1.500 người tham gia khảo sát đã hoàn thành bảng hỏi hành vi.\nBài 2. Tính chi phí cơ hội khi chọn phương án B.'),
+        ]
+        for cid, did, page, title, fn, text in rows:
+            cur = conn.execute(
+                'INSERT INTO chunks(id,doc_id,book_title,filename,page_num,chunk_index,text) VALUES(?,?,?,?,?,?,?)',
+                (cid, did, title, fn, page, 0, text),
+            )
+            conn.execute('INSERT INTO chunks_fts(rowid, text) VALUES(?, ?)', (cur.lastrowid, text))
+
+    lookup = DocumentLookup(db, src)
+    searcher = HybridSearcher(db)
+    learning = module.LearningService(document_lookup=lookup, practice_service=None, searcher=searcher)
+
+    mech_res = learning.exercises(topic='Cơ học', limit=5, solve_missing=False)
+    assert len(mech_res['items']) == 1  # nosec B101
+    assert mech_res['items'][0]['source']['doc_id'] == 1  # nosec B101
+
+    calc_res = learning.exercises(topic='Giải tích và vi tích phân', limit=5, solve_missing=False)
+    assert len(calc_res['items']) == 1  # nosec B101
+    assert 'Catalog of Essential Functions' not in calc_res['items'][0]['question']  # nosec B101
+
+    eco_res = learning.exercises(topic='Kinh tế học', limit=5, solve_missing=False)
+    assert all('1.500 người tham gia' not in it['question'] for it in eco_res['items'])  # nosec B101

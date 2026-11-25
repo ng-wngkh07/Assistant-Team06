@@ -1744,3 +1744,37 @@ def test_theory_filter_rejects_copyright_toc_and_exercises_prioritize_dedicated_
     assert ex_res["items"][0]["source"]["doc_id"] == 2  # nosec B101
     assert "NỘI DUNG NGUỒN ĐÃ ĐỐI CHIẾU ẢNH" not in (ex_res["items"][0].get("source_context") or "")  # nosec B101
     assert "NỘI DUNG NGUỒN ĐÃ ĐỐI CHIẾU ẢNH" not in (ex_res["items"][0]["source"].get("snippet") or "")  # nosec B101
+
+
+def test_dedicated_economics_hints_preserve_taxonomy_hash(tmp_path):
+    from app.retrieval_tree import compute_taxonomy_hash
+    from app.topic_tree import dedicated_aliases_for
+
+    base_hash = compute_taxonomy_hash()
+    assert isinstance(base_hash, str) and len(base_hash) == 64  # nosec B101
+    assert "macroeconomics" in dedicated_aliases_for("Kinh tế học", ("kinh tế học",))  # nosec B101
+
+    src = tmp_path / "src"
+    src.mkdir()
+    db = tmp_path / "econ_catalog.db"
+    KnowledgeIndexer(db, src)
+    (src / "macro_textbook.pdf").write_bytes(b"%PDF-1.4\n")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO documents(id,filename,clean_title,filepath,file_size,file_hash,total_pages,extracted_pages_count,status) VALUES(?,?,?,?,?,?,?,?,?)",
+            (1, "macro_textbook.pdf", "Introductory Macroeconomics Textbook", str(src / "macro_textbook.pdf"), 100, "hm", 1, 1, "indexed"),
+        )
+        txt = "Kinh tế học vĩ mô nghiên cứu tổng cầu, lạm phát và chính sách tiền tệ."
+        cur = conn.execute(
+            "INSERT INTO chunks(doc_id,filename,book_title,page_num,chunk_index,text) VALUES(?,?,?,?,?,?)",
+            (1, "macro_textbook.pdf", "Introductory Macroeconomics Textbook", 1, 0, txt),
+        )
+        conn.execute("INSERT INTO chunks_fts(rowid, text) VALUES(?, ?)", (cur.lastrowid, txt))
+
+    svc = LearningService(DocumentLookup(db, src), None)
+    topics_resp = svc.topics()
+    econ = next((t for t in topics_resp["topics"] if t["id"] == "Kinh tế học"), None)
+    assert econ is not None  # nosec B101
+    assert econ["dedicated_document_count"] == 1  # nosec B101
+    assert econ["coverage"] == "dedicated"  # nosec B101
+    assert compute_taxonomy_hash() == base_hash  # nosec B101

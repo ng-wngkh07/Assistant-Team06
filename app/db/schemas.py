@@ -411,6 +411,12 @@ def _migrate_timetable_v7(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE study_sessions ADD COLUMN session_date TEXT")
 
 
+def _migrate_timetable_v8(conn: sqlite3.Connection) -> None:
+    routine_cols = {row[1] for row in conn.execute("PRAGMA table_info(personal_routines)").fetchall()}
+    if "routine_date" not in routine_cols and "id" in routine_cols:
+        conn.execute("ALTER TABLE personal_routines ADD COLUMN routine_date TEXT")
+
+
 timetable_migrations = MigrationManager(
     store_name="timetable",
     migrations=[
@@ -421,6 +427,7 @@ timetable_migrations = MigrationManager(
         Migration(5, "005_session_practice_linkage", _migrate_timetable_v5),
         Migration(6, "006_session_weekly_lesson_linkage", _migrate_timetable_v6),
         Migration(7, "007_session_date", _migrate_timetable_v7),
+        Migration(8, "008_routine_date", _migrate_timetable_v8),
     ],
 )
 

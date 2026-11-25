@@ -264,3 +264,39 @@ def test_attached_summary_compare_fallback_and_sentence_citation_dedup(monkeypat
     assert sum_res["response_kind"] == "answer"  # nosec B101
     assert sum_res["answer"].count("bài tập làm tròn số") == 1  # nosec B101
     assert len(sum_res["citations"]) == 1  # nosec B101
+
+
+def test_attached_academic_summary_and_system12_compare_parsing(monkeypatch):
+    from app import server as _srv
+    from app.rag_agent import PsychologyAgent
+    from app.rag_evidence_validator import concept_has_evidence
+    from app.rag_query_analyzer import extract_compare_concepts
+    from test_study_agent_c_f_g import NoTranslation, RecordingModel, RecordingSearcher, make_chunk
+
+    assert extract_compare_concepts(  # nosec B101
+        "So sánh Hệ thống 1 và Hệ thống 2 trong tư duy nhanh và chậm theo Daniel Kahneman?"
+    ) == ("Hệ thống 1", "Hệ thống 2")
+    sys_chunks = [make_chunk("System 1 operates automatically while System 2 allocates attention.", doc_id=9, page_num=5)]
+    assert concept_has_evidence("Hệ thống 1", sys_chunks) is True  # nosec B101
+    assert concept_has_evidence("Hệ thống 2", sys_chunks) is True  # nosec B101
+
+    heap_chunk = {
+        **make_chunk("Trong Max-Heap nhị phân gồm n phần tử, gốc lưu phần tử lớn nhất trong O(1).", doc_id=None, page_num=1),
+        "is_private": True,
+        "material_id": "mat-academic-summary",
+    }
+    monkeypatch.setattr(_srv.study_material_manager, "search_private", lambda **kw: [heap_chunk])
+    res = PsychologyAgent(
+        searcher=RecordingSearcher([]),
+        ollama=RecordingModel(answer="Tài liệu trình bày cấu trúc Max-Heap với phần tử lớn nhất ở gốc [S1]."),
+        translator=NoTranslation(),
+    ).process_query_sync(
+        "Tóm tắt nội dung học thuật chính của tài liệu đính kèm này.",
+        embed_model=None,
+        model="test",
+        answer_mode="summary",
+        material_id="mat-academic-summary",
+        processing_level="standard",
+    )
+    assert res["response_kind"] == "answer"  # nosec B101
+    assert len(res["citations"]) == 1  # nosec B101
