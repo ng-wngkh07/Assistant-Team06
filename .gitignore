@@ -14,7 +14,6 @@
 !/constraints-web-py312.txt
 !/constraints-mlx-py313.txt
 !/README_MAC.md
-!/pytest.ini
 !/run.py
 !/start_app.command
 !/Start Study Agent.command
@@ -26,18 +25,14 @@
 !/DEFINITION_OF_DONE.md
 !/AGENT.md
 !/requirements-windows.txt
-!/pytest.windows.ini
 !/setup_windows.ps1
 !/start_windows.ps1
-!/test_windows.ps1
 !/app/
 !/static/
 !/ui/
 !/scripts/
 !/launchers/
-!/tests/
 !/resources/
-!/eval/
 !/docs/
 !/corpus/
 !/data/
@@ -120,10 +115,12 @@ tmp_verify_*
 /.agents/rules/*
 !/.agents/rules/study-agent.md
 /lab02/
-!/eval/
-/eval/*
-!/eval/cases.csv
-!/eval/run.py
+# Keep local tests, evaluation suites, and runner scripts out of public Git.
+/tests/
+/eval/
+/pytest.ini
+/pytest.windows.ini
+/test_windows.ps1
 
 # Calendar/timetable screenshot samples
 !/calendar_src/

@@ -1,6 +1,0 @@
-{
-  "kind": "synthetic_demo",
-  "image": "demo.png",
-  "entries": [{"course": "DEMO MATH", "weekday": 1, "start_time": "09:00", "end_time": "10:00", "room": "A101"}],
-  "note": "Monday in the application is weekday 1. Vision output still requires human confirmation."
-}
