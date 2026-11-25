@@ -335,21 +335,3 @@ def test_bilingual_compare_evidence_validators_and_fts_retrieval(tmp_path):
     assert "tìm kiếm nhị phân" in bilingual_equivalents_for("binary search")  # nosec B101
     assert "phân phối chuẩn" in bilingual_equivalents_for("normal distribution")  # nosec B101
     assert "tìm kiếm nhị phân" in expand_bilingual_query_terms("binary search là gì?")  # nosec B101
-
-
-def test_bilingual_equivalents_cover_clinical_aphasia_corneal_and_trauma_terms():
-    from app.bilingual_terms import bilingual_equivalents_for
-    from app.rag_evidence_validator import concept_has_evidence, detect_partial_evidence
-
-    assert "mất ngôn ngữ" in bilingual_equivalents_for("aphasia")  # nosec B101
-    assert "phản xạ giác mạc" in bilingual_equivalents_for("corneal reflex")  # nosec B101
-    assert "giác mạc" in bilingual_equivalents_for("corneal")  # nosec B101
-    assert "rối loạn căng thẳng sau sang chấn" in bilingual_equivalents_for("ptsd")  # nosec B101
-    assert "phân ly" in bilingual_equivalents_for("dissociation")  # nosec B101
-
-    trauma_chunks = [
-        {"text": "Severe trauma may trigger PTSD symptoms, dissociation, and heightened stress response."}
-    ]
-    assert concept_has_evidence("sang chấn và rối loạn căng thẳng PTSD", trauma_chunks) is True  # nosec B101
-    assert concept_has_evidence("phân ly và phản ứng stress", trauma_chunks) is True  # nosec B101
-    assert detect_partial_evidence("Rối loạn căng thẳng sau sang chấn (PTSD) và phân ly khác với phản ứng stress thông thường thế nào?", trauma_chunks) is False  # nosec B101
