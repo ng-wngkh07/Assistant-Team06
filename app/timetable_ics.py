@@ -241,8 +241,16 @@ def generate_ics(
             f"DESCRIPTION:{_escape_text(description)}",
             *extra_pdf_lines,
             "STATUS:CONFIRMED",
-            "END:VEVENT",
         ])
+        if reminder_minutes:
+            event_lines.extend([
+                "BEGIN:VALARM",
+                "ACTION:DISPLAY",
+                f"TRIGGER:-PT{reminder_minutes}M",
+                f"DESCRIPTION:{_escape_text(description)}",
+                "END:VALARM",
+            ])
+        event_lines.append("END:VEVENT")
         lines.extend(event_lines)
         events_count += 1
 

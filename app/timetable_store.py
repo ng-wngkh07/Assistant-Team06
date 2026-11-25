@@ -230,6 +230,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             title TEXT NOT NULL,
             course TEXT NOT NULL,
             weekday INTEGER NOT NULL,
+            session_date TEXT,
             start_time TEXT NOT NULL,
             end_time TEXT NOT NULL,
             duration_minutes INTEGER NOT NULL,

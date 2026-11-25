@@ -274,6 +274,7 @@ def _routine_ics_entries(routines: List[Dict[str, Any]], week_start) -> List[Dic
         st = str(r["start_time"])
         et = str(r["end_time"])
         is_rec = bool(r.get("is_recurring", True))
+        fixed_date = None if is_rec else (str(r.get("routine_date") or "").strip() or (week_start + timedelta(days=w - 1)).isoformat())
         base = {
             "course": f"[Cá nhân] {r['title']}",
             "room": r.get("activity_type_label") or "",
@@ -283,7 +284,7 @@ def _routine_ics_entries(routines: List[Dict[str, Any]], week_start) -> List[Dic
             out.append({
                 **base,
                 "uid": f"routine:{r['id']}",
-                "event_date": None if is_rec else (week_start + timedelta(days=w - 1)).isoformat(),
+                "event_date": fixed_date,
                 "weekday": w,
                 "start_time": st,
                 "end_time": et,
@@ -292,17 +293,23 @@ def _routine_ics_entries(routines: List[Dict[str, Any]], week_start) -> List[Dic
             out.append({
                 **base,
                 "uid": f"routine:{r['id']}:pm",
-                "event_date": None if is_rec else (week_start + timedelta(days=w - 1)).isoformat(),
+                "event_date": fixed_date,
                 "weekday": w,
                 "start_time": st,
                 "end_time": "23:59",
             })
             if et > "00:00":
                 next_w = (w % 7) + 1
+                next_fixed_date = None
+                if not is_rec:
+                    try:
+                        next_fixed_date = (date.fromisoformat(fixed_date) + timedelta(days=1)).isoformat()
+                    except ValueError:
+                        next_fixed_date = (week_start + timedelta(days=next_w - 1)).isoformat()
                 out.append({
                     **base,
                     "uid": f"routine:{r['id']}:am",
-                    "event_date": None if is_rec else (week_start + timedelta(days=next_w - 1)).isoformat(),
+                    "event_date": next_fixed_date,
                     "weekday": next_w,
                     "start_time": "00:00",
                     "end_time": et,
@@ -348,7 +355,7 @@ async def export_timetable_ics(
             for s in sessions:
                 entries.append({
                     "uid": f"study:{s['id']}",
-                    "event_date": (week_start + timedelta(days=s["weekday"]-1)).isoformat(),
+                    "event_date": s.get("session_date") or (week_start + timedelta(days=s["weekday"]-1)).isoformat(),
                     "course": f"[Tự học - {s['course']}] {s['title']}",
                     "weekday": s["weekday"],
                     "start_time": s["start_time"],
@@ -1094,7 +1101,7 @@ async def export_timetable_bundle_zip(
         for s in sessions:
             entries.append({
                 "uid": f"study:{s['id']}",
-                "event_date": (week_start + timedelta(days=s["weekday"] - 1)).isoformat(),
+                "event_date": s.get("session_date") or (week_start + timedelta(days=s["weekday"] - 1)).isoformat(),
                 "course": f"[Tự học - {s['course']}] {s['title']}",
                 "weekday": s["weekday"],
                 "start_time": s["start_time"],

@@ -13,6 +13,7 @@ from app.bilingual_terms import (
     ACADEMIC_BILINGUAL_EQUIVALENTS,
     _fold_bilingual_phrase,
     bilingual_equivalents_for,
+    expand_bilingual_query_terms,
 )
 from app.evaluation_metrics import has_repetition
 from app.rag_query_analyzer import COMPARE_SCOPE_SPLIT_RE, DIRECTIVE_STOPWORDS, QUERY_STOPWORDS
@@ -394,9 +395,13 @@ def _single_concept_has_evidence(concept: str, chunks: List[Dict[str, Any]]) -> 
 def concept_has_evidence(concept: str, chunks: List[Dict[str, Any]]) -> bool:
     if _single_concept_has_evidence(concept, chunks):
         return True
+    expanded = dict.fromkeys(
+        (*bilingual_equivalents_for(concept), *expand_bilingual_query_terms(concept))
+    )
     return any(
         _single_concept_has_evidence(eq, chunks)
-        for eq in bilingual_equivalents_for(concept)
+        for eq in expanded
+        if eq and eq.strip()
     )
 
 
@@ -443,13 +448,24 @@ def detect_partial_evidence(query: str, chunks: List[Dict[str, Any]]) -> bool:
     shared = left & right
     left_distinct = left - shared or left
     right_distinct = right - shared or right
+
+    def _expand_side_words(side_text: str, seed_words: set[str]) -> set[str]:
+        expanded_words = set(seed_words)
+        for eq in dict.fromkeys((*bilingual_equivalents_for(side_text), *expand_bilingual_query_terms(side_text))):
+            for tok in re.findall(r"\w+", _normalize_loanword_terms_cf(eq)):
+                if (len(tok) >= 2 or tok.isdigit()) and tok not in stopwords:
+                    expanded_words.add(tok)
+        return expanded_words
+
+    left_candidates = _expand_side_words(left_text, left_distinct)
+    right_candidates = _expand_side_words(right_text, right_distinct)
     source_words = {
         word
         for chunk in chunks
         for word in re.findall(r"\w+", _normalize_loanword_terms_cf(str(chunk.get("text", ""))))
     }
-    left_found = bool(left_distinct & source_words)
-    right_found = bool(right_distinct & source_words)
+    left_found = bool(left_candidates & source_words)
+    right_found = bool(right_candidates & source_words)
     return left_found != right_found
 
 
