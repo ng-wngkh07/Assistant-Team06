@@ -24,15 +24,13 @@ PUBLIC_DOC_PATHS = ("docs", "README.md", "CONTRIBUTING.md", "CHANGELOG.md")
 
 _FORBIDDEN_PUBLIC_PATH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("internal eval directory", re.compile(r"^eval/")),
+    ("public test directory", re.compile(r"^tests/")),
+    ("root test runner config/script", re.compile(r"^(?:pytest(?:\.windows)?\.ini|test_windows\.ps1)$")),
     ("archived script directory", re.compile(r"^scripts/archive/")),
     ("local packet or scratch directory", re.compile(r"^(?:review_packets|scratch)/")),
     (
         "internal curation/evaluation/training script",
         re.compile(r"^scripts/(?:curate|evaluate|rejudge|prepare_.*training|test_live_).*\.py$"),
-    ),
-    (
-        "ticket/packet/codex-scoped test file sprawl",
-        re.compile(r"^tests/test_(?:codex_.*|.*_yc\d+|ui_audit_packet.*)\.py$"),
     ),
     (
         "internal scorecard/comparison/eval/training artifact",

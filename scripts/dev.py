@@ -59,7 +59,20 @@ def configure(profile: str = "local") -> None:
                 value = value[1:-1]
             os.environ.setdefault(key, value)
     if profile == "demo":
-        os.environ["AGENT_SRC_DIR"] = str(ROOT / "tests/fixtures/documents")
+        fixture_docs = ROOT / "tests/fixtures/documents"
+        if fixture_docs.is_dir():
+            os.environ["AGENT_SRC_DIR"] = str(fixture_docs)
+        else:
+            demo_docs = ROOT / "data/team-demo/demo_docs"
+            demo_docs.mkdir(parents=True, exist_ok=True)
+            sample_doc = demo_docs / "demo_study_note.md"
+            if not any(demo_docs.iterdir()):
+                sample_doc.write_text(
+                    "# Study Agent Synthetic Demo Note\n\n"
+                    "If P(B) > 0, Bayes theorem gives P(A|B) = P(B|A) * P(A) / P(B).\n",
+                    encoding="utf-8",
+                )
+            os.environ["AGENT_SRC_DIR"] = str(demo_docs)
         os.environ["AGENT_DATA_DIR"] = str(ROOT / "data/team-demo")
         os.environ["HISTORY_DB_PATH"] = str(ROOT / "data/team-demo/history.db")
         os.environ["TIMETABLE_DB_PATH"] = str(ROOT / "data/team-demo/timetable.db")
